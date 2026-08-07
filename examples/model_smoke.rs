@@ -11,8 +11,13 @@
 //! ```text
 //! cargo run --example model_smoke -- --protocol openai-chat --model gpt-5-mini --prompt "Say hello."
 //! cargo run --example model_smoke -- --protocol openai-responses --model gpt-5-mini --prompt "Say hello."
-//! cargo run --example model_smoke -- --protocol anthropic --model claude-sonnet-4-5 --prompt "Say hello."
+//! cargo run --example model_smoke -- --protocol anthropic --model claude-sonnet-4-6 --prompt "Say hello."
 //! ```
+//!
+//! The Anthropic smoke request sends adaptive thinking plus
+//! `output_config.effort`; pick a model that accepts that configuration
+//! (Claude Sonnet 4.6 / Claude Opus 4.6 and later), never a model that
+//! rejects adaptive thinking.
 
 use futures_util::StreamExt;
 use rustx::model::{
@@ -160,7 +165,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,
-        max_output_tokens: Some(512),
+        max_output_tokens: 512,
         continuation: None,
     }
 }

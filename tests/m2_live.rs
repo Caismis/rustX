@@ -9,9 +9,14 @@
 //! ```
 //!
 //! Model names are read from `RUSTX_OPENAI_CHAT_MODEL`,
-//! `RUSTX_OPENAI_RESPONSES_MODEL`, and `RUSTX_ANTHROPIC_MODEL`; no model name
-//! is hardcoded into test semantics. Deterministic fixture tests remain the
-//! authoritative correctness tests.
+//! `RUSTX_OPENAI_RESPONSES_MODEL`, and `RUSTX_ANTHROPIC_MODEL` (the latter
+//! explicitly required). The `OpenAI`
+//! tests fall back to a conservative default; the Anthropic test requires
+//! `RUSTX_ANTHROPIC_MODEL` explicitly, because no single model can be
+//! assumed to accept the request configuration (adaptive thinking plus
+//! `output_config.effort`) — a missing model is skipped and reported, never
+//! silently assumed. Deterministic fixture tests remain the authoritative
+//! correctness tests.
 
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelEvent, ModelProtocol,
@@ -52,7 +57,7 @@ fn live_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,
-        max_output_tokens: Some(256),
+        max_output_tokens: 256,
         continuation: None,
     }
 }
@@ -149,14 +154,26 @@ async fn live_openai_responses_stateless() {
 }
 
 /// Live `Anthropic` Messages.
+///
+/// The model must be supplied explicitly via `RUSTX_ANTHROPIC_MODEL`: the
+/// request shape (adaptive thinking + `output_config.effort`) is not
+/// supported by every model, so no model is silently assumed. When the
+/// variable is missing the test skips and reports that clearly; it never
+/// claims to have passed.
 #[tokio::test]
-#[ignore = "requires ANTHROPIC_API_KEY and network access"]
+#[ignore = "requires ANTHROPIC_API_KEY, RUSTX_ANTHROPIC_MODEL, and network access"]
 async fn live_anthropic_messages() {
     let Some(key) = anthropic_key() else {
         eprintln!("skipping live_anthropic_messages: ANTHROPIC_API_KEY is not set");
         return;
     };
-    let model = env_or("RUSTX_ANTHROPIC_MODEL", Some("claude-sonnet-4-5")).expect("model");
+    let Some(model) = env_or("RUSTX_ANTHROPIC_MODEL", None) else {
+        eprintln!(
+            "skipping live_anthropic_messages: RUSTX_ANTHROPIC_MODEL is not set; \
+             no model is silently assumed for the adaptive-thinking request shape"
+        );
+        return;
+    };
     let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(key));
     run_live(
         &adapter,
@@ -208,7 +225,7 @@ async fn live_openai_chat_tool_call() {
             origin: ToolOrigin::Builtin,
         }],
         reasoning: ReasoningEffort::Medium,
-        max_output_tokens: Some(256),
+        max_output_tokens: 256,
         continuation: None,
     };
     let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));

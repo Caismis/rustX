@@ -152,7 +152,7 @@ mod tests {
             messages: Vec::new(),
             tools: Vec::new(),
             reasoning: crate::model::types::ReasoningEffort::Medium,
-            max_output_tokens: None,
+            max_output_tokens: 512,
             continuation: None,
         }
     }

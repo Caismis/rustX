@@ -20,11 +20,14 @@ use tokio::net::{TcpListener, TcpStream};
 
 /// One response to serve, described as a sequence of body chunks. A chunk
 /// with a delay lets tests hold a connection open (cancellation tests) or
-/// simulate a slow stream.
+/// simulate a slow stream. A `header_delay_ms` delays the response status
+/// line and headers, letting tests cancel while the client is waiting for
+/// the response headers.
 pub struct FixtureReply {
     pub status: u16,
     pub reason: &'static str,
     pub headers: Vec<(String, String)>,
+    pub header_delay_ms: u64,
     pub chunks: Vec<FixtureChunk>,
 }
 
@@ -56,11 +59,20 @@ impl FixtureReply {
             status,
             reason,
             headers: vec![("Content-Type".to_owned(), content_type.to_owned())],
+            header_delay_ms: 0,
             chunks: chunks
                 .into_iter()
                 .map(|(delay_ms, bytes)| FixtureChunk { delay_ms, bytes })
                 .collect(),
         }
+    }
+
+    /// Delays the response status line and headers by `delay_ms`; the client
+    /// observes the connection accepted but no response headers yet.
+    #[must_use]
+    pub fn with_header_delay(mut self, delay_ms: u64) -> Self {
+        self.header_delay_ms = delay_ms;
+        self
     }
 
     /// A provider error body as JSON.
@@ -176,6 +188,9 @@ where
     drop(reader);
 
     let reply = responder(attempt, &head_text);
+    if reply.header_delay_ms > 0 {
+        tokio::time::sleep(Duration::from_millis(reply.header_delay_ms)).await;
+    }
     let mut response = Vec::new();
     response
         .extend_from_slice(format!("HTTP/1.1 {} {}\r\n", reply.status, reply.reason).as_bytes());
@@ -285,7 +300,7 @@ pub fn simple_request(
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,
-        max_output_tokens: None,
+        max_output_tokens: 512,
         continuation: None,
     }
 }
