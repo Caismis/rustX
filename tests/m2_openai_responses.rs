@@ -155,11 +155,11 @@ async fn reasoning_then_text_stays_separate() {
     .await;
     assert!(matches!(
         events[1],
-        ModelEvent::ReasoningDelta { block_index: _, .. }
+        ModelEvent::ReasoningDelta { .. }
     ));
     assert!(matches!(
         events[2],
-        ModelEvent::TextDelta { block_index: _, .. }
+        ModelEvent::TextDelta { .. }
     ));
     assert!(matches!(
         events.last(),
@@ -227,19 +227,19 @@ async fn multiple_output_blocks_keep_stable_indexes() {
     .await;
     assert!(matches!(
         events[1],
-        ModelEvent::TextDelta { block_index: _, .. }
+        ModelEvent::TextDelta { .. }
     ));
     assert!(matches!(
         events[2],
-        ModelEvent::RefusalDelta { block_index: _, .. }
+        ModelEvent::RefusalDelta { .. }
     ));
     assert!(matches!(
         events[3],
-        ModelEvent::RefusalDelta { block_index: _, .. }
+        ModelEvent::RefusalDelta { .. }
     ));
     assert!(matches!(
         events[4],
-        ModelEvent::ToolCallStarted { block_index: _, .. }
+        ModelEvent::ToolCallStarted { .. }
     ));
     assert!(matches!(
         events.last(),
@@ -264,7 +264,7 @@ async fn refusal_derives_refusal_finish() {
     .await;
     assert!(matches!(
         events[1],
-        ModelEvent::RefusalDelta { block_index: _, .. }
+        ModelEvent::RefusalDelta { .. }
     ));
     assert!(matches!(
         events.last(),
