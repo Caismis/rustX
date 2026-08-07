@@ -8,11 +8,12 @@
 //! attempt-level cancel terminates the in-flight provider request through
 //! the existing adapter contract.
 //!
-//! A running tool is not force-aborted: the tool interface exposes no
-//! cancellation handle in M3. The loop observes cancellation at its check
-//! points (before each model event, between tool calls, and after the tool
-//! batch) and refuses all further execution progress afterwards, which keeps
-//! cancellation deterministic at the runtime boundary.
+//! The loop races tool execution against this signal: once cancellation is
+//! observable while a tool is pending, the loop stops awaiting the tool,
+//! drops the pending tool future, and settles cancelled. Dropping the future
+//! does not guarantee that external work is physically killed; the tool
+//! interface exposes no cancellation handle in M3, and executor-specific
+//! cancellation is a later milestone.
 
 use crate::model::ModelCancellation;
 use crate::runtime::types::CancellationReason;

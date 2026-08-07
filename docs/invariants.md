@@ -48,8 +48,12 @@ stream and exactly one terminal `RuntimeEvent`:
 
 - The attempt lifecycle is an explicit state machine
   (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`),
-  and failure or cancellation settles from any active state. Impossible
-  transitions are rejected; a terminal state is absorbing.
+  and failure or cancellation settles from any active state. The machine
+  is the settlement authority: it settles (`complete()` for success,
+  `fail()` for failure and cancellation) immediately before the single
+  attempt terminal `RuntimeEvent` is emitted, so the terminal event and
+  the terminal execution state represent the same settlement boundary.
+  Impossible transitions are rejected; a terminal state is absorbing.
 
 - The loop owns tool execution: every model-issued tool call resolves
   against the attempt's immutable tool registry and executes in
@@ -57,7 +61,7 @@ stream and exactly one terminal `RuntimeEvent`:
   continues only after every requested tool call produced a result. A
   failing tool produces a normalized failed result that is passed back to
   the model; an unknown tool has no result and fails the attempt
-  explicitly.
+  explicitly without emitting any tool-execution event.
 
 - The loop assembles one canonical `AgentMessageBlock` per model turn from
   the canonical stream and commits it only when the generation completed.
@@ -74,11 +78,16 @@ stream and exactly one terminal `RuntimeEvent`:
   model that requires state the stream did not report fails explicitly.
 
 - Cancellation is observed at deterministic check points (before each
-  model event, between tool calls, after the tool batch), and every model
-  invocation observes a child signal of the attempt signal. Cancellation
-  is always a terminal cancellation outcome, never completion, and no
-  continuation starts after cancellation is observed. A running tool is
-  not force-aborted; the loop rejects all further execution progress.
+  model event, between tool calls) and races every tool execution (biased
+  toward cancellation). Once cancellation is observable while a tool is
+  pending, the loop stops awaiting the tool, drops the pending tool
+  future, records no completion and no tool message, executes no later
+  call, and settles cancelled — the loop never waits for the tool to
+  return. Dropping the future does not guarantee that external work is
+  physically killed; executor-specific cancellation is a later milestone.
+  Every model invocation observes a child signal of the attempt signal.
+  Cancellation is always a terminal cancellation outcome, never
+  completion, and no continuation starts after cancellation is observed.
 
 - Given identical model events, identical tools, identical input, and
   identical cancellation conditions, the loop produces an identical

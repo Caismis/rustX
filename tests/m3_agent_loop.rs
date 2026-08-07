@@ -758,7 +758,62 @@ async fn tool_result_passed_back_verbatim() {
     assert_eq!(tool_message.tool_call_id, ToolCallId::new("call-1"));
 }
 
-/// An unknown tool fails the attempt explicitly with a typed runtime error.
+/// The exact trace of an attempt that requests an unknown tool.
+fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
+    vec![
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("attempt-1"),
+        },
+        RuntimeEvent::TurnStarted,
+        RuntimeEvent::ModelRequestStarted {
+            model: "fake-model".to_owned(),
+        },
+        RuntimeEvent::AgentMessageStarted {
+            message_id: agent_message_id(1),
+        },
+        RuntimeEvent::ToolCallStarted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: rustx::tools::types::ToolCallStart {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-missing"),
+                name: "missing".to_owned(),
+            },
+        },
+        RuntimeEvent::ToolCallArgumentsDelta {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call_id: ToolCallId::new("call-1"),
+            arguments_delta: "{}".to_owned(),
+        },
+        RuntimeEvent::ToolCallCompleted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: ToolCall {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-missing"),
+                name: "missing".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        },
+        RuntimeEvent::ModelRequestCompleted {
+            finish_reason: ModelFinishReason::ToolCalls,
+            usage: None,
+        },
+        RuntimeEvent::AttemptFailed {
+            attempt_id: AttemptId::new("attempt-1"),
+            error: AttemptFailure::Runtime {
+                error: RuntimeError::UnknownTool {
+                    name: "missing".to_owned(),
+                },
+            },
+        },
+    ]
+}
+
+/// An unknown tool fails the attempt explicitly with a typed runtime error
+/// and produces no tool-execution event: nothing was resolved and nothing
+/// executed, so no execution fact may claim otherwise.
 #[tokio::test]
 async fn unknown_tool_fails_deterministically() {
     let call = ScriptedCall {
@@ -778,13 +833,18 @@ async fn unknown_tool_fails_deterministically() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
+    assert_trace(&result.events, &expected_unknown_tool_trace());
     assert_single_terminal(&result.events);
     assert!(
-        result
-            .events
-            .iter()
-            .any(|event| matches!(event, RuntimeEvent::ToolExecutionFailed { .. })),
-        "no tool result exists, so the execution failure is recorded"
+        result.events.iter().all(|event| {
+            !matches!(
+                event,
+                RuntimeEvent::ToolExecutionStarted { .. }
+                    | RuntimeEvent::ToolExecutionCompleted { .. }
+                    | RuntimeEvent::ToolExecutionFailed { .. }
+            )
+        }),
+        "an unresolved tool must never produce a tool-execution event"
     );
     assert_outcome(
         &result,
@@ -797,9 +857,19 @@ async fn unknown_tool_fails_deterministically() {
         },
     );
     assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "the machine settles failed"
+    );
+    assert_eq!(
         model.requests().len(),
         1,
         "no continuation is attempted after an unknown tool"
+    );
+    assert_eq!(
+        result.messages.len(),
+        2,
+        "the completed agent message is committed; no tool message exists"
     );
 }
 
@@ -1024,10 +1094,63 @@ async fn cancellation_during_generation_after_partial_text() {
     );
 }
 
-/// Cancellation while a tool is executing records the tool completion fact
-/// but never continues the model.
+/// The exact trace of a tool call interrupted by cancellation.
+fn expected_interrupted_tool_trace() -> Vec<RuntimeEvent> {
+    vec![
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("attempt-1"),
+        },
+        RuntimeEvent::TurnStarted,
+        RuntimeEvent::ModelRequestStarted {
+            model: "fake-model".to_owned(),
+        },
+        RuntimeEvent::AgentMessageStarted {
+            message_id: agent_message_id(1),
+        },
+        RuntimeEvent::ToolCallStarted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: rustx::tools::types::ToolCallStart {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+            },
+        },
+        RuntimeEvent::ToolCallArgumentsDelta {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call_id: ToolCallId::new("call-1"),
+            arguments_delta: "{}".to_owned(),
+        },
+        RuntimeEvent::ToolCallCompleted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: ToolCall {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        },
+        RuntimeEvent::ModelRequestCompleted {
+            finish_reason: ModelFinishReason::ToolCalls,
+            usage: None,
+        },
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
+        RuntimeEvent::AttemptCancelled {
+            attempt_id: AttemptId::new("attempt-1"),
+            reason: CancellationReason::UserRequested,
+        },
+    ]
+}
+
+/// Cancellation interrupts waiting for a tool: the loop stops awaiting the
+/// parked tool, settles cancelled promptly, and never records a completion.
 #[tokio::test]
-async fn cancellation_while_waiting_for_tool() {
+async fn cancellation_interrupts_waiting_for_tool() {
     let call = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -1041,7 +1164,9 @@ async fn cancellation_while_waiting_for_tool() {
         FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
         FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
     ]]);
-    let (tool, release) =
+    // The parked tool is never released: `run()` must terminate without the
+    // tool voluntarily returning.
+    let (tool, _never_released) =
         FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
     let mut tool_started = tool.started();
     let mut tools = ToolRegistry::new();
@@ -1054,27 +1179,39 @@ async fn cancellation_while_waiting_for_tool() {
             .await
             .expect("tool started");
         controller_cancellation.cancel();
-        release.notify_one();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run(&model, &tools, &cancellation),
+    )
+    .await
+    .expect("run must terminate without the tool returning");
     controller.await.expect("controller task");
 
+    assert_trace(&result.events, &expected_interrupted_tool_trace());
+    assert_single_terminal(&result.events);
+    assert!(
+        result
+            .events
+            .iter()
+            .all(|event| { !matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }) }),
+        "no completion is recorded for the interrupted tool"
+    );
     assert_eq!(
         model.requests().len(),
         1,
         "no continuation starts after cancellation"
     );
-    assert_single_terminal(&result.events);
-    assert!(matches!(
-        result.events.last(),
-        Some(RuntimeEvent::AttemptCancelled { .. })
-    ));
     assert!(
         result
-            .events
+            .messages
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. })),
-        "the tool completion fact is recorded"
+            .all(|message| !matches!(message, MessageBlock::Tool(_))),
+        "no tool message is appended for the interrupted tool"
+    );
+    assert!(
+        !matches!(result.outcome, AttemptOutcome::Completed { .. }),
+        "cancellation never completes"
     );
     assert_outcome(
         &result,
@@ -1082,55 +1219,107 @@ async fn cancellation_while_waiting_for_tool() {
             reason: CancellationReason::UserRequested,
         },
     );
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "cancellation settles the machine through the failure path"
+    );
 }
 
-/// Cancellation observed at the tool-batch boundary prevents the
-/// continuation model invocation.
+/// Cancellation while waiting for a later tool call of the batch: earlier
+/// results stay recorded, the pending tool is interrupted, and no further
+/// execution progress happens.
 #[tokio::test]
-async fn cancellation_before_continuation_invokes_no_model() {
-    let call = ScriptedCall {
+async fn cancellation_interrupts_later_tool_call() {
+    let first = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
         name: "alpha",
-        arguments: serde_json::json!({}),
+        arguments: serde_json::json!({"n": 1}),
+    };
+    let second = ScriptedCall {
+        id: "call-2",
+        tool_id: "tool-beta",
+        name: "beta",
+        arguments: serde_json::json!({"n": 2}),
     };
     let model = FakeModel::new(vec![vec![
         FakeStep::Emit(started()),
-        FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
-        FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
-        FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+        FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
+        FakeStep::Emit(tool_call_events(0, &first)[1].clone()),
+        FakeStep::Emit(tool_call_events(0, &first)[2].clone()),
+        FakeStep::Emit(tool_call_events(1, &second)[0].clone()),
+        FakeStep::Emit(tool_call_events(1, &second)[1].clone()),
+        FakeStep::Emit(tool_call_events(1, &second)[2].clone()),
         FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
     ]]);
-    let (tool, release) =
-        FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
-    let mut tool_started = tool.started();
+    let first_tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("a"));
+    let (second_tool, _never_released) =
+        FakeTool::parking(common::tool("beta", "tool-beta"), success_result("b"));
+    let mut second_started = second_tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tools.insert(first_tool);
+    tools.insert(second_tool);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        tool_started
+        second_started
             .wait_for(|running| *running)
             .await
-            .expect("tool started");
+            .expect("second tool started");
         controller_cancellation.cancel();
-        release.notify_one();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run(&model, &tools, &cancellation),
+    )
+    .await
+    .expect("run must terminate without the second tool returning");
     controller.await.expect("controller task");
 
-    assert_eq!(
-        model.requests().len(),
-        1,
-        "the continuation request is never sent"
+    let executed: Vec<&str> = result
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. } => {
+                Some(tool_call_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(executed, vec!["call-1"], "only the first tool completed");
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } if tool_call_id.as_str() == "call-2")),
+        "the second tool started before cancellation"
     );
     assert_single_terminal(&result.events);
     assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Cancelled {
-            reason: CancellationReason::UserRequested
-        }
+        result.events.last(),
+        Some(RuntimeEvent::AttemptCancelled { .. })
     ));
+    let tool_messages: Vec<&MessageBlock> = result
+        .messages
+        .iter()
+        .filter(|message| matches!(message, MessageBlock::Tool(_)))
+        .collect();
+    assert_eq!(
+        tool_messages.len(),
+        1,
+        "only the first tool result is recorded"
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no continuation after cancellation"
+    );
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "the machine settles failed from WaitingForTool"
+    );
 }
 
 /// Cancellation during continuation generation settles cancelled after the
@@ -1480,43 +1669,83 @@ async fn unsupported_capability_stays_terminal_failure() {
     );
 }
 
-/// Usage reported by the terminal model event reaches the trace.
+/// The canonical final usage folds into `ModelRequestCompleted`: the
+/// terminal event's reported usage wins, else the latest usage update.
+/// Cumulative snapshots are never summed.
 #[tokio::test]
-async fn usage_is_reported_on_model_request_completed() {
-    let usage = ModelUsage {
+async fn usage_folds_updates_and_terminal_usage() {
+    let u1 = ModelUsage {
+        input_tokens: 10,
+        output_tokens: 5,
+        total_tokens: 15,
+        details: None,
+    };
+    let u2 = ModelUsage {
         input_tokens: 12,
         output_tokens: 7,
         total_tokens: 19,
-        details: Some(rustx::model::types::UsageDetails {
-            reasoning_tokens: Some(3),
-            cached_input_tokens: None,
-        }),
+        details: None,
     };
-    let model = FakeModel::new(vec![vec![
-        FakeStep::Emit(started()),
-        FakeStep::Emit(ModelEvent::UsageUpdate {
-            usage: usage.clone(),
-        }),
-        FakeStep::Emit(text(0, "done")),
-        FakeStep::Emit(ModelEvent::Completed {
-            finish_reason: ModelFinishReason::Stop,
-            usage: Some(usage.clone()),
-        }),
-    ]]);
-    let tools = ToolRegistry::new();
-    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
-
-    let reported = result
-        .events
-        .iter()
-        .find_map(|event| match event {
-            RuntimeEvent::ModelRequestCompleted { usage, .. } => usage.clone(),
-            _ => None,
-        })
-        .expect("model request completion event");
-    assert_eq!(reported, usage);
-    assert_single_terminal(&result.events);
+    // A: only a usage update, terminal usage absent.
+    // B: two updates, terminal usage absent: the latest update wins, never
+    //    a sum.
+    // C: an update plus terminal reported usage: the terminal usage wins.
+    let cases: Vec<(Vec<FakeStep>, Option<ModelUsage>)> = vec![
+        (
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(ModelEvent::UsageUpdate { usage: u1.clone() }),
+                FakeStep::Emit(text(0, "done")),
+                FakeStep::Emit(done(ModelFinishReason::Stop)),
+            ],
+            Some(u1.clone()),
+        ),
+        (
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(ModelEvent::UsageUpdate { usage: u1.clone() }),
+                FakeStep::Emit(ModelEvent::UsageUpdate { usage: u2.clone() }),
+                FakeStep::Emit(done(ModelFinishReason::Stop)),
+            ],
+            Some(u2.clone()),
+        ),
+        (
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(ModelEvent::UsageUpdate { usage: u1.clone() }),
+                FakeStep::Emit(ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: Some(u2.clone()),
+                }),
+            ],
+            Some(u2.clone()),
+        ),
+        // A stream with no usage at all reports none.
+        (
+            vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(text(0, "done")),
+                FakeStep::Emit(done(ModelFinishReason::Stop)),
+            ],
+            None,
+        ),
+    ];
+    for (script, expected) in cases {
+        let model = FakeModel::new(vec![script]);
+        let tools = ToolRegistry::new();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = run(&model, &tools, &cancellation).await;
+        let reported = result
+            .events
+            .iter()
+            .find_map(|event| match event {
+                RuntimeEvent::ModelRequestCompleted { usage, .. } => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("model request completion event");
+        assert_eq!(reported, expected, "folded final usage");
+        assert_single_terminal(&result.events);
+    }
 }
 
 /// A refusal is a successful stop: the committed message holds only the
@@ -1691,6 +1920,227 @@ async fn identical_inputs_produce_identical_traces() {
     assert_eq!(result_first.events, result_second.events);
     assert_eq!(result_first.messages, result_second.messages);
     assert_eq!(result_first.outcome, result_second.outcome);
+    assert_eq!(result_first.terminal_state, result_second.terminal_state);
+}
+
+/// Successful settlement completes the real state machine exactly once, and
+/// the terminal event is always the last recorded event.
+#[tokio::test]
+async fn successful_settlement_completes_the_machine() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "done")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = run(&model, &tools, &cancellation).await;
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Completed,
+        "success settles the machine to Completed"
+    );
+    assert!(result.terminal_state.is_terminal());
+    assert_single_terminal(&result.events);
+}
+
+/// Model failure settles the real machine to Failed.
+#[tokio::test]
+async fn model_failure_settles_the_machine_to_failed() {
+    let model = FakeModel::new(vec![vec![FakeStep::Emit(fail(
+        rustx::model::ModelErrorKind::Timeout,
+        "boom",
+    ))]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = run(&model, &tools, &cancellation).await;
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "model failure settles the real machine to Failed"
+    );
+    assert!(result.terminal_state.is_terminal());
+}
+
+/// Runtime contract failure settles the real machine to Failed.
+#[tokio::test]
+async fn contract_failure_settles_the_machine_to_failed() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "hi")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+        FakeStep::Emit(text(0, "late")),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = run(&model, &tools, &cancellation).await;
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "contract failure settles the real machine to Failed"
+    );
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Runtime {
+                error: RuntimeError::ContractViolation { .. }
+            }
+        }
+    ));
+}
+
+/// Cancellation from `RunningModel` settles the real machine to Failed.
+#[tokio::test]
+async fn cancellation_from_running_model_settles_the_machine_to_failed() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "partial")),
+        FakeStep::ParkUntilCancelled,
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mut emitted = model.emitted();
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        emitted
+            .wait_for(|count| *count >= 2)
+            .await
+            .expect("emitted");
+        controller_cancellation.cancel();
+    });
+    let result = run(&model, &tools, &cancellation).await;
+    controller.await.expect("controller task");
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "cancellation from RunningModel settles the real machine to Failed"
+    );
+    assert!(result.terminal_state.is_terminal());
+}
+
+/// Cancellation from `WaitingForTool` settles the real machine to Failed.
+#[tokio::test]
+async fn cancellation_from_waiting_for_tool_settles_the_machine_to_failed() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    };
+    let mut tool_turn = vec![FakeStep::Emit(started())];
+    tool_turn.extend(tool_call_events(0, &call).into_iter().map(FakeStep::Emit));
+    tool_turn.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
+    let model = FakeModel::new(vec![tool_turn]);
+    let (tool, _never_released) =
+        FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
+    let mut tool_started = tool.started();
+    let mut tools = ToolRegistry::new();
+    tools.insert(tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        tool_started
+            .wait_for(|running| *running)
+            .await
+            .expect("tool started");
+        controller_cancellation.cancel();
+    });
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run(&model, &tools, &cancellation),
+    )
+    .await
+    .expect("run must terminate without the tool returning");
+    controller.await.expect("controller task");
+    assert_eq!(
+        result.terminal_state,
+        ExecutionState::Failed,
+        "cancellation from WaitingForTool settles the real machine to Failed"
+    );
+    assert!(result.terminal_state.is_terminal());
+}
+
+/// The replay state sequence and the actual state-machine settlement can
+/// never diverge: the replay's terminal phase equals the machine settlement
+/// for every execution scenario.
+#[tokio::test]
+async fn replay_settlement_cannot_diverge_from_machine() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    };
+    let tool_call = vec![
+        FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+        FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+        FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+    ];
+    let scenarios: Vec<(FakeModel, ToolRegistry)> = vec![
+        // Text execution completes.
+        (
+            FakeModel::new(vec![vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(text(0, "done")),
+                FakeStep::Emit(done(ModelFinishReason::Stop)),
+            ]]),
+            ToolRegistry::new(),
+        ),
+        // Tool execution completes.
+        (
+            {
+                let mut tool_turn = vec![FakeStep::Emit(started())];
+                tool_turn.extend(tool_call.clone());
+                tool_turn.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
+                FakeModel::new(vec![
+                    tool_turn,
+                    vec![
+                        FakeStep::Emit(started()),
+                        FakeStep::Emit(done(ModelFinishReason::Stop)),
+                    ],
+                ])
+            },
+            {
+                let mut tools = ToolRegistry::new();
+                tools.insert(FakeTool::new(
+                    common::tool("alpha", "tool-alpha"),
+                    success_result("ok"),
+                ));
+                tools
+            },
+        ),
+        // Model failure.
+        (
+            FakeModel::new(vec![vec![FakeStep::Emit(fail(
+                rustx::model::ModelErrorKind::RateLimit,
+                "boom",
+            ))]]),
+            ToolRegistry::new(),
+        ),
+        // Contract violation.
+        (
+            FakeModel::new(vec![vec![
+                FakeStep::Emit(started()),
+                FakeStep::Emit(done(ModelFinishReason::Stop)),
+                FakeStep::Emit(fail(rustx::model::ModelErrorKind::Timeout, "late")),
+            ]]),
+            ToolRegistry::new(),
+        ),
+    ];
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    for (model, tools) in scenarios {
+        let result = run(&model, &tools, &cancellation).await;
+        let replay = replay_execution_states(&result.events).expect("valid trace");
+        assert_eq!(
+            replay.last(),
+            Some(&result.terminal_state),
+            "replay terminal phase must equal the machine settlement"
+        );
+        assert!(
+            result.terminal_state.is_terminal(),
+            "the machine must settle terminally"
+        );
+    }
 }
 
 /// The replay fold rejects invalid event sequences explicitly.

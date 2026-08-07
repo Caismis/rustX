@@ -80,18 +80,6 @@ impl ModelEventAssembler {
         Self::default()
     }
 
-    /// Whether the stream started.
-    #[must_use]
-    pub fn started(&self) -> bool {
-        self.started
-    }
-
-    /// Whether a terminal event was already accepted.
-    #[must_use]
-    pub fn terminal(&self) -> bool {
-        self.terminal
-    }
-
     /// Accepts one model event, validating the canonical stream contract.
     ///
     /// # Errors
@@ -674,8 +662,8 @@ mod tests {
                 },
             })
             .expect("legal rejected request");
-        assert!(assembler.terminal());
-        assert!(!assembler.started());
+        assert!(assembler.terminal);
+        assert!(!assembler.started);
     }
 
     /// Tool-call deltas for unknown calls and duplicate completions are

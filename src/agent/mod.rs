@@ -16,7 +16,7 @@
 //! The kernel operates only on canonical contracts: it never references a
 //! provider protocol, a provider SDK type, or a provider concept.
 
-pub mod assembly;
+mod assembly;
 pub mod cancellation;
 pub mod execution;
 pub mod state;

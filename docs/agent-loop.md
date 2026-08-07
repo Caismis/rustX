@@ -21,7 +21,11 @@ Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
 failure and cancellation settling from any active state) enforces that
 tools run only after the model requested them and that the model continues
-only after the requested tool calls completed.
+only after the requested tool calls completed. The machine is the
+settlement authority: it settles (`complete()` for success, `fail()` for
+failure and cancellation) immediately before the single attempt terminal
+`RuntimeEvent` is emitted, so the terminal event and the terminal
+execution state always represent the same settlement boundary.
 
 ## 2. What provider adapters own
 
@@ -38,7 +42,8 @@ input schema contract) and the execution of one call into a normalized
 `ToolExecutionResult`. The loop records the returned result verbatim and
 feeds it back to the model inside a `ToolMessageBlock`; it never
 fabricates, modifies, or reinterprets a result. An unknown tool has no
-result, so the attempt fails explicitly with `RuntimeError::UnknownTool`.
+result, so the attempt fails explicitly with `RuntimeError::UnknownTool`
+and without emitting any tool-execution event.
 
 A failing tool is a normal outcome: the failed `ToolExecutionResult` is
 passed back to the model, which decides the next action.
@@ -60,19 +65,29 @@ Exactly one terminal `RuntimeEvent` settles an attempt:
 `AttemptCompleted`, `AttemptCancelled`, or `AttemptFailed`. The terminal
 event is always the last recorded event, the platform outcome maps
 one-to-one from it (`AttemptOutcome::from_terminal_event`), and the loop
-structure makes later events impossible.
+structure makes later events impossible. The execution state machine is
+settled immediately before the terminal event is emitted, so the machine's
+terminal state (`Completed` or `Failed`) and the terminal event describe
+the same settlement.
 
 ## 6. Cancellation
 
 Cancellation is observed at deterministic check points (before each model
-event, between tool calls, and after the tool batch). Every model
-invocation observes a child signal of the attempt signal through the
-existing adapter cancellation mechanism, so an in-flight generation
-terminates with `Failed(Cancelled)` and is converted into
-`AttemptCancelled`. Cancellation is always terminal failure — never
-completion. A running tool is not force-aborted (the tool interface
-exposes no cancellation handle in M3); the loop rejects all further
-execution progress once it observes the cancellation.
+event and between tool calls) and races every tool execution: the loop
+`select`s between the tool future and the attempt cancellation signal
+(biased toward cancellation, so cancellation wins deterministically once
+observable). When cancellation wins while a tool is pending, the loop
+stops awaiting the tool, drops the pending tool future, records no
+completion and no tool message, executes no later call, and settles
+cancelled — `AgentExecution::run()` terminates without waiting for the
+tool to return. Every model invocation observes a child signal of the
+attempt signal through the existing adapter cancellation mechanism, so an
+in-flight generation terminates with `Failed(Cancelled)` and is converted
+into `AttemptCancelled`. Cancellation is always terminal failure — never
+completion. Dropping a pending tool future does not guarantee that
+external work is physically killed; the tool interface exposes no
+cancellation handle in M3, and executor-specific cancellation is a later
+milestone.
 
 ## 7. Deterministic execution
 

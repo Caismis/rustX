@@ -41,7 +41,7 @@ use crate::tools::types::ToolCall;
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
-use super::state::ExecutionStateMachine;
+use super::state::{ExecutionState, ExecutionStateMachine};
 
 /// Everything the loop needs to know about one attempt.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,13 +70,19 @@ pub struct AgentExecutionRequest {
 /// The recorded [`RuntimeEvent`] trace is the authoritative execution
 /// record; the platform-level outcome maps one-to-one with the single
 /// terminal event, and the committed messages are the final conversation
-/// state of the attempt.
+/// state of the attempt. The terminal execution state is the state-machine
+/// settlement that produced the terminal event: they always represent the
+/// same settlement boundary.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentExecutionResult {
     /// The executed attempt.
     pub attempt_id: AttemptId,
     /// The one-to-one platform outcome of the single terminal event.
     pub outcome: AttemptOutcome,
+    /// The terminal state-machine settlement that produced the terminal
+    /// event: [`ExecutionState::Completed`] for successful settlement and
+    /// [`ExecutionState::Failed`] for failure and cancellation settlement.
+    pub terminal_state: ExecutionState,
     /// The ordered runtime event trace, ending with exactly one terminal
     /// event.
     pub events: Vec<RuntimeEvent>,
@@ -148,11 +154,18 @@ impl<'a> AgentExecution<'a> {
 
     /// Runs the attempt to its single terminal outcome.
     ///
+    /// The execution state machine is the settlement authority: the machine
+    /// is settled (`complete()` for success, `fail()` for failure and
+    /// cancellation) immediately before the single attempt terminal
+    /// `RuntimeEvent` is emitted, so the terminal event and the terminal
+    /// state represent the same settlement boundary.
+    ///
     /// # Panics
     ///
-    /// Panics only when the loop violates its own invariants (an attempt
-    /// that never settles, or a terminal event that does not map to an
-    /// outcome); these are unreachable by construction.
+    /// Panics only when the loop violates its own invariants (the state
+    /// machine rejects the settlement, an attempt that never settles, or a
+    /// terminal event that does not map to an outcome); these are
+    /// unreachable by construction.
     pub async fn run(mut self) -> AgentExecutionResult {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
@@ -175,6 +188,7 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         };
+        self.settle(&terminal);
         self.emit_terminal(&terminal);
         let terminal_event = self.events.last().expect("terminal event emitted");
         let outcome =
@@ -182,9 +196,20 @@ impl<'a> AgentExecution<'a> {
         AgentExecutionResult {
             attempt_id: self.request.attempt_id,
             outcome,
+            terminal_state: self.state.state(),
             events: self.events,
             messages: self.history,
         }
+    }
+
+    /// Settles the execution state machine for the computed terminal
+    /// outcome, immediately before the terminal event is emitted.
+    fn settle(&mut self, terminal: &Terminal) {
+        let settlement = match terminal {
+            Terminal::Completed { .. } => self.state.complete(),
+            Terminal::Cancelled { .. } | Terminal::Failed { .. } => self.state.fail(),
+        };
+        settlement.expect("the execution state machine must accept the settlement");
     }
 
     /// Executes one turn: one model request, its tool calls, and their
@@ -226,6 +251,13 @@ impl<'a> AgentExecution<'a> {
                         });
                     }
                 };
+                // The model request completion is reported with the canonical
+                // final usage: the terminal event's reported usage, else the
+                // latest usage update, never a sum of snapshots.
+                self.emit(RuntimeEvent::ModelRequestCompleted {
+                    finish_reason: finish_reason.clone(),
+                    usage: turn_assembly.usage,
+                });
                 self.pending_continuation = turn_assembly.continuation;
                 let has_tool_calls = !turn_assembly.tool_calls.is_empty();
                 if let Err(error) = self.state.model_finished(has_tool_calls) {
@@ -284,10 +316,6 @@ impl<'a> AgentExecution<'a> {
                     finish_reason,
                     usage,
                 } => {
-                    self.emit(RuntimeEvent::ModelRequestCompleted {
-                        finish_reason: finish_reason.clone(),
-                        usage: usage.clone(),
-                    });
                     stream_terminal = Some(StreamTerminal::Completed {
                         finish_reason: finish_reason.clone(),
                         usage: usage.clone(),
@@ -324,9 +352,16 @@ impl<'a> AgentExecution<'a> {
     ///
     /// Returns a terminal outcome when the attempt must settle: an unknown
     /// tool (no result exists, so the attempt fails explicitly) or a
-    /// cancellation observed between calls. A failing tool still produces a
-    /// normalized [`ToolExecutionResult`] with a failure status and is
-    /// passed back to the model like any other result.
+    /// cancellation observed while waiting for a tool. A failing tool still
+    /// produces a normalized [`ToolExecutionResult`] with a failure status
+    /// and is passed back to the model like any other result.
+    ///
+    /// Tool execution races against attempt cancellation: once cancellation
+    /// is observable, the loop stops awaiting the tool, drops the pending
+    /// tool future, records no completion and no tool message, executes no
+    /// later call, and settles cancelled. Dropping the future does not
+    /// guarantee that external work is physically killed; executor-specific
+    /// cancellation is a later milestone.
     ///
     /// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
     async fn execute_tools(&mut self, calls: &[ToolCall]) -> Option<Terminal> {
@@ -336,12 +371,10 @@ impl<'a> AgentExecution<'a> {
                     reason: self.cancellation.reason(),
                 });
             }
+            // An unresolved tool has no executable and no result: the
+            // attempt fails with the typed UnknownTool runtime error. No
+            // tool-execution event is emitted because no tool executed.
             let Some(tool) = self.tools.resolve(call) else {
-                self.emit(RuntimeEvent::ToolExecutionFailed {
-                    tool_call_id: call.id.clone(),
-                    tool_id: call.tool_id.clone(),
-                    error: format!("unknown tool {}", call.name),
-                });
                 return Some(Terminal::Failed {
                     failure: AttemptFailure::Runtime {
                         error: RuntimeError::UnknownTool {
@@ -355,7 +388,19 @@ impl<'a> AgentExecution<'a> {
                 tool_call_id: call.id.clone(),
                 tool_id: tool_id.clone(),
             });
-            let result = tool.execute(call).await;
+            // The race is biased: when both the cancellation signal and the
+            // tool future are ready, cancellation wins deterministically, so
+            // cancellation always prevents new execution progress once it is
+            // observable.
+            let result = tokio::select! {
+                biased;
+                () = self.cancellation.cancelled() => {
+                    return Some(Terminal::Cancelled {
+                        reason: self.cancellation.reason(),
+                    });
+                }
+                result = tool.execute(call) => result,
+            };
             self.emit(RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id.clone(),
                 tool_id: tool_id.clone(),

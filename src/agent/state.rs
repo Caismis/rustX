@@ -7,18 +7,25 @@
 //! Idle
 //!   ↓ start()
 //! RunningModel
-//!   ↓ model_finished(pending_tools)
-//! WaitingForTool ──or── Completed
-//!   ↓ tools_finished()
+//!   ↓ model_finished(true)
+//! WaitingForTool ──tools_finished()──▶ RunningModel ──model_finished──▶ ...
 //! RunningModel
-//!   ↓ ...
-//! Completed | Failed
+//!   ↓ complete()
+//! Completed        (immediately before the attempt terminal event)
+//!
+//! any active state
+//!   ↓ fail()
+//! Failed           (failure and cancellation settle here)
 //! ```
 //!
-//! A terminal state is absorbing: no transition leaves it, so the loop
-//! cannot accidentally emit execution facts after the attempt settled.
-//! Cancellation terminates through the failure path ([`ExecutionState::fail`])
-//! and is reported distinctly by the terminal runtime event.
+//! The machine is the settlement authority: the loop settles the machine
+//! (`complete()` or `fail()`) immediately before emitting the attempt
+//! terminal `RuntimeEvent`, so the terminal event and the terminal state
+//! always represent the same settlement boundary. A terminal state is
+//! absorbing: no transition leaves it, so execution facts cannot be
+//! produced after the attempt settled. Cancellation terminates through the
+//! failure path ([`ExecutionState::fail`]) and is reported distinctly by
+//! the terminal runtime event.
 
 use crate::runtime::types::RuntimeError;
 
@@ -93,9 +100,15 @@ impl ExecutionStateMachine {
         self.transition(ExecutionState::Idle, ExecutionState::RunningModel)
     }
 
-    /// The model turn ended: [`ExecutionState::RunningModel`] →
-    /// [`ExecutionState::WaitingForTool`] when the turn requested tool calls,
-    /// otherwise → [`ExecutionState::Completed`].
+    /// The model turn ended.
+    ///
+    /// With pending tool calls the machine moves
+    /// [`ExecutionState::RunningModel`] → [`ExecutionState::WaitingForTool`].
+    /// Without tool calls the machine stays in [`ExecutionState::RunningModel`]:
+    /// the attempt is not settled until [`ExecutionStateMachine::complete`]
+    /// runs immediately before the attempt terminal event, so the machine
+    /// never reports `Completed` while non-terminal execution facts (message
+    /// commit, turn completion) are still being produced.
     ///
     /// # Errors
     ///
@@ -106,14 +119,12 @@ impl ExecutionStateMachine {
             return Err(self.invalid_transition(if pending_tools {
                 ExecutionState::WaitingForTool
             } else {
-                ExecutionState::Completed
+                ExecutionState::RunningModel
             }));
         }
-        self.state = if pending_tools {
-            ExecutionState::WaitingForTool
-        } else {
-            ExecutionState::Completed
-        };
+        if pending_tools {
+            self.state = ExecutionState::WaitingForTool;
+        }
         Ok(())
     }
 
@@ -128,8 +139,24 @@ impl ExecutionStateMachine {
         self.transition(ExecutionState::WaitingForTool, ExecutionState::RunningModel)
     }
 
-    /// The attempt settled by failure or cancellation: any active state →
-    /// [`ExecutionState::Failed`].
+    /// Settles the attempt successfully: [`ExecutionState::RunningModel`] →
+    /// [`ExecutionState::Completed`]. This is the only successful settlement
+    /// transition and must run immediately before the attempt terminal
+    /// event, so the terminal event and the terminal state coincide.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeError::InvalidState`] unless the machine is running
+    /// the model, which would mean the attempt settled twice or settled
+    /// from a phase that cannot complete.
+    pub fn complete(&mut self) -> Result<(), RuntimeError> {
+        self.transition(ExecutionState::RunningModel, ExecutionState::Completed)
+    }
+
+    /// Settles the attempt by failure or cancellation: any active state →
+    /// [`ExecutionState::Failed`]. Cancellation terminates through this
+    /// failure path; the terminal runtime event reports the distinct
+    /// cancellation reason.
     ///
     /// # Errors
     ///
@@ -192,15 +219,30 @@ mod tests {
         assert!(!machine.state().is_terminal());
     }
 
-    /// The happy path reaches `Completed` and rejects further transitions.
+    /// The happy path stays non-terminal after the model finishes and
+    /// settles only through `complete`, which is then absorbing.
     #[test]
-    fn happy_path_completes_and_is_absorbing() {
+    fn happy_path_settles_only_through_complete() {
         let mut machine = ExecutionStateMachine::new();
         machine.start().expect("start");
         assert_eq!(machine.state(), ExecutionState::RunningModel);
         machine.model_finished(false).expect("finish without tools");
+        assert_eq!(
+            machine.state(),
+            ExecutionState::RunningModel,
+            "a turn without tools must not settle the machine yet"
+        );
+        assert!(
+            !machine.is_terminal(),
+            "non-terminal turn facts are still being produced"
+        );
+        machine.complete().expect("successful settlement");
         assert_eq!(machine.state(), ExecutionState::Completed);
         assert!(machine.is_terminal());
+        assert!(
+            machine.complete().is_err(),
+            "successful settlement must happen exactly once"
+        );
         assert!(
             machine.model_finished(false).is_err(),
             "a completed machine must reject further model turns"
@@ -215,7 +257,8 @@ mod tests {
         );
     }
 
-    /// A tool turn goes through `WaitingForTool` and back into the model.
+    /// A tool turn goes through `WaitingForTool` and back into the model;
+    /// only `complete` settles the final turn.
     #[test]
     fn tool_turn_returns_to_running_model() {
         let mut machine = ExecutionStateMachine::new();
@@ -223,13 +266,34 @@ mod tests {
         machine.model_finished(true).expect("finish with tools");
         assert_eq!(machine.state(), ExecutionState::WaitingForTool);
         assert!(
-            machine.model_finished(false).is_err(),
+            machine.model_finished(true).is_err(),
             "a second model turn cannot start before the tools completed"
         );
         machine.tools_finished().expect("tools completed");
         assert_eq!(machine.state(), ExecutionState::RunningModel);
         machine.model_finished(false).expect("final turn");
+        assert_eq!(
+            machine.state(),
+            ExecutionState::RunningModel,
+            "the final turn still does not settle the machine"
+        );
+        machine.complete().expect("settle");
         assert_eq!(machine.state(), ExecutionState::Completed);
+    }
+
+    /// `complete` requires the model phase: it cannot settle from `Idle` or
+    /// `WaitingForTool`.
+    #[test]
+    fn complete_requires_running_model() {
+        let mut idle = ExecutionStateMachine::new();
+        assert!(idle.complete().is_err(), "an idle machine cannot complete");
+        let mut waiting = ExecutionStateMachine::new();
+        waiting.start().expect("start");
+        waiting.model_finished(true).expect("finish with tools");
+        assert!(
+            waiting.complete().is_err(),
+            "a machine waiting for tools cannot complete"
+        );
     }
 
     /// Tools cannot run before the model requested them.
@@ -247,9 +311,9 @@ mod tests {
         );
     }
 
-    /// A model turn cannot complete before the attempt started.
+    /// A model turn cannot finish before the attempt started.
     #[test]
-    fn model_turn_cannot_complete_before_start() {
+    fn model_turn_cannot_finish_before_start() {
         let mut machine = ExecutionStateMachine::new();
         let error = machine.model_finished(false).expect_err("must be rejected");
         assert!(matches!(error, RuntimeError::InvalidState { .. }));
@@ -281,6 +345,10 @@ mod tests {
             assert!(
                 machine.fail().is_err(),
                 "a second terminal settlement must be rejected"
+            );
+            assert!(
+                machine.complete().is_err(),
+                "a failed attempt must never complete afterwards"
             );
         }
     }
