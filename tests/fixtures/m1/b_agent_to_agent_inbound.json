@@ -1,0 +1,16 @@
+{
+  "role": "user",
+  "id": "msg-agent-b-to-a-5",
+  "content": [
+    {
+      "type": "text",
+      "text": "Task completed on my side. Handing the workspace state over to you."
+    }
+  ],
+  "source": {
+    "agent": {
+      "agent_id": "agent-b"
+    }
+  },
+  "kind": "message"
+}

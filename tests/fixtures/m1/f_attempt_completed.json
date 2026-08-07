@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-5",
+  "sequence": 5,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "timestamp": "2026-08-07T12:00:04Z",
+  "event": {
+    "type": "attempt_completed",
+    "attempt_id": "attempt-1",
+    "finish_reason": {
+      "type": "stop"
+    }
+  }
+}

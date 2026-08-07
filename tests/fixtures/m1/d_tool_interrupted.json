@@ -1,0 +1,13 @@
+{
+  "role": "tool",
+  "id": "msg-tool-2",
+  "tool_call_id": "call_07",
+  "tool_id": "tool-bash",
+  "result": {
+    "status": {
+      "type": "interrupted"
+    },
+    "content": [],
+    "duration_ms": 0
+  }
+}

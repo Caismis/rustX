@@ -1,0 +1,12 @@
+{
+  "role": "user",
+  "id": "msg-user-1",
+  "content": [
+    {
+      "type": "text",
+      "text": "Summarize the repository layout."
+    }
+  ],
+  "source": "human",
+  "kind": "message"
+}

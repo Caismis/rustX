@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "runtime_version": "0.1.0",
+  "agent": {
+    "id": "agent-a",
+    "version_id": "agent-v1",
+    "instructions": "You are a helpful agent operating on a local workspace."
+  },
+  "model": {
+    "protocol": "openai_responses",
+    "model": "gpt-5-mini",
+    "reasoning": "high"
+  },
+  "capabilities": {
+    "revision": 42,
+    "skills": [
+      {
+        "skill_id": "skill-readme",
+        "version_id": "skill-v3"
+      }
+    ],
+    "tools": [
+      {
+        "tool_id": "tool-bash",
+        "name": "bash"
+      },
+      {
+        "tool_id": "tool-list",
+        "name": "list_directory"
+      }
+    ],
+    "mcp": [
+      {
+        "server_id": "mcp-fs"
+      }
+    ]
+  },
+  "context": {
+    "reserve_tokens": 16384,
+    "keep_recent_tokens": 20000
+  },
+  "limits": {
+    "max_turns": 64,
+    "max_tool_calls": 128,
+    "max_runtime_seconds": 1800
+  }
+}

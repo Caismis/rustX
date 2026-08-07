@@ -21,6 +21,131 @@ This layer contains runtime-owned data contracts only:
 
 It must not depend on provider SDKs, MCP SDKs, databases, HTTP frameworks, or process implementations.
 
+## 2.1 Implemented Layer 0 contracts (M1)
+
+The canonical contracts defined in M1 live in the `src` module tree as follows:
+
+```text
+runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
+                           AgentVersionId, AttemptId, TurnId, EventId, ToolId,
+                           ToolCallId, ToolVersionId, McpServerId, SkillId,
+                           SkillVersionId, ArtifactId) and CapabilityRevision
+runtime/types.rs           CancellationReason, RuntimeError
+runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
+                           stored/stateless, Anthropic opaque state)
+message/content.rs         TextBlock, ImageReference, FileReference
+message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
+                           (SystemAuthority, UserSource, InboundKind),
+                           ContentBlockIndex, content enums per role
+tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
+                           ToolExecutionResult, ToolExecutionStatus,
+                           ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
+                           TruncationState
+model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
+                           ReasoningEffort
+model/finish.rs            ModelFinishReason
+model/error.rs             ModelError, ModelErrorKind
+model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
+events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome,
+                           AttemptFailure
+protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
+```
+
+Dependency direction between the modules points inward toward the shared
+runtime-owned types:
+
+```text
+protocol → model, runtime
+events   → message, model, tools, runtime
+model    → message, tools, runtime
+message  → tools, runtime
+tools    → runtime
+```
+
+Serialization conventions for persistence-facing types:
+
+- Enums use explicit discriminators with stable snake_case values
+  (`"role"` for `MessageBlock`, `"type"` for events and content blocks).
+- Strong IDs serialize as transparent JSON strings; `CapabilityRevision`
+  serializes as a plain JSON number.
+- Timestamps are UTC RFC 3339 strings (`chrono::DateTime<Utc>`).
+- Durations are integer milliseconds (`duration_ms`, `retry_after_ms`).
+- `serde_json::Value` is used only for genuinely arbitrary JSON: JSON
+  Schema, tool-call arguments, structured tool output, and opaque provider
+  continuation payloads.
+- Persistence-facing structures never use `HashMap`; ordering is explicit.
+
+The three execution layers each consume these contracts: the agent kernel
+operates on them, the context engine assembles them into provider context,
+and the model plane translates them to and from provider protocols.
+
+### 2.2 Attempt settlement invariant
+
+Exactly one terminal runtime event settles an attempt, and each terminal
+event carries only the data valid for that state:
+
+```text
+AttemptCompleted      finish reason
+AttemptCancelled      cancellation reason
+AttemptTimedOut       -
+AttemptLimitExceeded  exceeded limit
+AttemptFailed         normalized AttemptFailure
+```
+
+`AttemptCompleted` never carries a failure outcome, and unknown event
+payload fields are rejected on deserialization, so contradictory terminal
+encodings are impossible by construction. The platform-level `AttemptOutcome`
+type maps one-to-one with these terminal events via
+`AttemptOutcome::from_terminal_event`. When an attempt fails because a model
+request exhausted its retry policy, `AttemptFailure::Model` preserves the
+normalized `ModelError` without degrading it to a runtime error string.
+
+### 2.3 Streaming assembly identity
+
+`ModelEvent` (and the corresponding `RuntimeEvent` deltas) target content
+blocks by the rustX-owned `ContentBlockIndex`: the position of the block
+within the ordered `AgentContentBlock[]` of the message being assembled.
+Interleaved text, reasoning, refusal, tool-call, and provider
+continuation-state streaming therefore assembles unambiguously without
+exposing any provider block id type. Refusal streams as refusal
+(`RefusalDelta` / `AgentRefusalDelta`) and assembles into
+`AgentContentBlock::Refusal`, never into plain text. `ToolCallStarted`
+carries only the data known at start (`ToolCallStart`: call id, tool id,
+name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
+fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
+
+### 2.4 Tool execution event identity
+
+Every tool execution event carries the executing tool call identity:
+`ToolExecutionStarted`, `ToolExecutionProgress`, `ToolExecutionCompleted`,
+and `ToolExecutionFailed` all carry `tool_call_id` and `tool_id`. With
+parallel execution, completion order may differ from call order, and each
+completion remains attributable to its originating call. `ToolExecutionResult`
+itself stays reusable and carries no call identity; identity is attached at
+the event and message boundary only.
+
+### 2.5 Message content single source of truth
+
+The durable Message Ledger (M8) is the only authoritative store for canonical
+message content. `AgentMessageCommitted` and `ToolMessageCommitted` are
+execution facts that reference the committed message by its stable
+`MessageId` and never embed the message body, so the Event Journal never
+holds a competing copy.
+
+A committed-message event must not be emitted before the corresponding
+`MessageBlock` has been durably committed to the Message Ledger. Message
+Ledger persistence and Event Journal persistence are separate durable
+operations unless a backend provides a shared atomic transaction; M8 owns
+the atomicity or crash-reconciliation boundary between these stores. If a
+crash occurs after the `MessageBlock` is durably committed but before the
+corresponding committed-message event is appended, recovery must recognize
+and reconcile that state rather than treating the message as absent or
+duplicating its content.
+
+Persist-before-publish applies to `RuntimeEvent` publication only: append
+the event durably before publishing it externally. It does not by itself
+provide a transaction with the Message Ledger.
+
 ### Layer 1: Agent kernel
 
 The kernel owns deterministic execution semantics:
@@ -160,6 +285,13 @@ Semantics:
 
 Identity and provenance are metadata. Message role does not encode real-world identity.
 
+Provenance is implemented as typed runtime-owned metadata: `UserSource`
+distinguishes human, agent, fleet, external-system, and runtime sources;
+`SystemAuthority` distinguishes platform, agent, runtime, skill, and fleet
+authority for system blocks. A future compaction summary is represented as a
+`UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
+no fifth message role exists.
+
 Agent-to-agent communication uses a durable mailbox model. A `send_message` tool result reports only whether delivery was durably accepted or rejected. The recipient later receives the content as a `UserMessageBlock`.
 
 ## 5. Turn model
@@ -187,7 +319,21 @@ MessageBlock = model-context fact
 
 Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
 
-Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled.
+Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AgentMessageBlock` from it.
+
+Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
+
+Persist-before-publish is the frozen event-publication invariant:
+
+```text
+generate RuntimeEvent
+→ durably append / commit sequence
+→ publish externally
+```
+
+It applies to `RuntimeEvent` publication only and does not by itself provide
+a transaction with the Message Ledger; cross-store atomicity or crash
+reconciliation between the Message Ledger and Event Journal is owned by M8.
 
 ## 7. Recovery model
 

@@ -1,0 +1,30 @@
+{
+  "role": "tool",
+  "id": "msg-tool-1",
+  "tool_call_id": "call_01",
+  "tool_id": "tool-list",
+  "result": {
+    "status": {
+      "type": "success"
+    },
+    "content": [
+      {
+        "type": "text",
+        "text": "Cargo.toml\nLICENSE\nREADME.md\ndocs\nsrc\ntests"
+      }
+    ],
+    "duration_ms": 12,
+    "exit_code": 0,
+    "artifacts": [
+      {
+        "artifact_id": "artifact-1",
+        "name": "listing.txt",
+        "mime_type": "text/plain"
+      }
+    ],
+    "truncation": {
+      "truncated": true,
+      "original_bytes": 51200
+    }
+  }
+}

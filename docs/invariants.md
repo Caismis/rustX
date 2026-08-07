@@ -33,6 +33,14 @@ A `ToolMessageBlock` must correspond to a tool call produced by the current agen
 
 Runtime events describe execution. Message blocks describe model-context history. Streaming deltas, retries, progress updates, container state, and similar facts do not become message blocks merely because they are observable.
 
+Committed-message events reference the committed message by its stable message identity; they never embed canonical message content, which lives only in the durable Message Ledger.
+
+A committed-message event must never precede the durable MessageBlock it references. Cross-store atomicity or crash reconciliation between the Message Ledger and Event Journal is owned by M8.
+
+## Attempt settlement
+
+Exactly one terminal runtime event settles an attempt: `AttemptCompleted`, `AttemptCancelled`, `AttemptTimedOut`, `AttemptLimitExceeded`, or `AttemptFailed`. Each terminal event carries only the data valid for that state and maps one-to-one to an `AttemptOutcome`. A completed attempt can never encode a failed, cancelled, or timed-out outcome. When an attempt fails because a model request exhausted its retry policy, the normalized model error is preserved.
+
 ## Turn atomicity
 
 A turn consists of one model response plus all tool calls and corresponding tool results from that response.

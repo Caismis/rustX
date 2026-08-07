@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-4",
+  "sequence": 4,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "turn_id": "turn-1",
+  "timestamp": "2026-08-07T12:00:03Z",
+  "event": {
+    "type": "agent_message_committed",
+    "message_id": "msg-agent-a-gen-3"
+  }
+}

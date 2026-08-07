@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-2",
+  "sequence": 2,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "turn_id": "turn-1",
+  "timestamp": "2026-08-07T12:00:01Z",
+  "event": {
+    "type": "agent_text_delta",
+    "message_id": "msg-agent-a-gen-3",
+    "block_index": 0,
+    "delta": "The repository contains a Cargo manifest, a docs directory, "
+  }
+}
