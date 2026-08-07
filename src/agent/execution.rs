@@ -27,9 +27,7 @@
 use futures_util::StreamExt;
 
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
-use crate::message::types::{
-    AgentMessageBlock, MessageBlock, ToolMessageBlock,
-};
+use crate::message::types::{AgentMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::{ModelAdapter, ModelEventStream};
 use crate::model::error::ModelError;
 use crate::model::event::ModelEvent;
@@ -119,15 +117,9 @@ enum StreamTerminal {
 
 /// The terminal outcome of the whole attempt.
 enum Terminal {
-    Completed {
-        finish_reason: ModelFinishReason,
-    },
-    Cancelled {
-        reason: CancellationReason,
-    },
-    Failed {
-        failure: AttemptFailure,
-    },
+    Completed { finish_reason: ModelFinishReason },
+    Cancelled { reason: CancellationReason },
+    Failed { failure: AttemptFailure },
 }
 
 impl<'a> AgentExecution<'a> {
@@ -166,11 +158,9 @@ impl<'a> AgentExecution<'a> {
             attempt_id: self.request.attempt_id.clone(),
         });
         let terminal = match self.state.start() {
-            Err(error) => {
-                Terminal::Failed {
-                    failure: AttemptFailure::Runtime { error },
-                }
-            }
+            Err(error) => Terminal::Failed {
+                failure: AttemptFailure::Runtime { error },
+            },
             Ok(()) => {
                 if self.cancellation.is_cancelled() {
                     Terminal::Cancelled {
@@ -201,10 +191,8 @@ impl<'a> AgentExecution<'a> {
     /// results. Returns the terminal outcome when the attempt settled.
     async fn run_turn(&mut self) -> Option<Terminal> {
         self.turn += 1;
-        let agent_message_id = MessageId::new(format!(
-            "{}-agent-{}",
-            self.request.attempt_id, self.turn
-        ));
+        let agent_message_id =
+            MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
         self.emit(RuntimeEvent::TurnStarted);
 
         let request = self.model_request();
@@ -309,7 +297,9 @@ impl<'a> AgentExecution<'a> {
                     self.emit(RuntimeEvent::ModelRequestFailed {
                         error: error.clone(),
                     });
-                    stream_terminal = Some(StreamTerminal::Failed { error: error.clone() });
+                    stream_terminal = Some(StreamTerminal::Failed {
+                        error: error.clone(),
+                    });
                 }
                 _ => {
                     if stream_terminal.is_none() {

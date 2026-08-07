@@ -93,11 +93,8 @@ mod tests {
         assert!(!invocation.is_cancelled());
         signal.cancel();
         assert!(invocation.is_cancelled());
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            invocation.cancelled(),
-        )
-        .await
-        .expect("invocation must be cancelled with the attempt");
+        tokio::time::timeout(std::time::Duration::from_secs(1), invocation.cancelled())
+            .await
+            .expect("invocation must be cancelled with the attempt");
     }
 }

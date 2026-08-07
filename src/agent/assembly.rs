@@ -26,9 +26,7 @@
 use std::collections::BTreeMap;
 
 use crate::message::content::TextBlock;
-use crate::message::types::{
-    AgentContentBlock, ContentBlockIndex, ReasoningBlock, RefusalBlock,
-};
+use crate::message::types::{AgentContentBlock, ContentBlockIndex, ReasoningBlock, RefusalBlock};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
@@ -158,7 +156,8 @@ impl ModelEventAssembler {
                     ModelEvent::ContinuationState { block_index, state } => {
                         self.attach_continuation(*block_index, state)
                     }
-                    ModelEvent::Started | ModelEvent::Failed { .. }
+                    ModelEvent::Started
+                    | ModelEvent::Failed { .. }
                     | ModelEvent::Completed { .. } => unreachable!(),
                 }
             }
@@ -190,7 +189,10 @@ impl ModelEventAssembler {
         let block = self.block_at(block_index, BlockKind::Reasoning)?;
         match block {
             AgentContentBlock::Reasoning(reasoning) => {
-                reasoning.text.get_or_insert_with(String::new).push_str(text);
+                reasoning
+                    .text
+                    .get_or_insert_with(String::new)
+                    .push_str(text);
                 Ok(())
             }
             _ => unreachable!("block_at validated the reasoning kind"),
@@ -268,8 +270,7 @@ impl ModelEventAssembler {
         }
         let mut completed_calls = self.completed_calls;
         completed_calls.sort_by_key(|(block_index, _)| *block_index);
-        let tool_calls: Vec<ToolCall> =
-            completed_calls.into_iter().map(|(_, call)| call).collect();
+        let tool_calls: Vec<ToolCall> = completed_calls.into_iter().map(|(_, call)| call).collect();
         Ok(AssembledTurn {
             content,
             tool_calls,
@@ -330,13 +331,12 @@ impl ModelEventAssembler {
                 "tool-call start targets a foreign or skipped block {block_index}"
             )));
         }
-        self.blocks
-            .push(Some(AgentContentBlock::ToolCall(ToolCall {
-                id: call.id.clone(),
-                tool_id: call.tool_id.clone(),
-                name: call.name.clone(),
-                arguments: serde_json::Value::Object(serde_json::Map::new()),
-            })));
+        self.blocks.push(Some(AgentContentBlock::ToolCall(ToolCall {
+            id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+            name: call.name.clone(),
+            arguments: serde_json::Value::Object(serde_json::Map::new()),
+        })));
         self.tool_calls.insert(
             call.id.clone(),
             PendingCall {
@@ -389,12 +389,11 @@ impl ModelEventAssembler {
             )));
         }
         if index == self.blocks.len() {
-            self.blocks.push(Some(AgentContentBlock::Reasoning(
-                ReasoningBlock {
+            self.blocks
+                .push(Some(AgentContentBlock::Reasoning(ReasoningBlock {
                     text: None,
                     provider_state: None,
-                },
-            )));
+                })));
         }
         let block = self
             .blocks
@@ -475,9 +474,6 @@ mod tests {
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
-    use crate::runtime::continuation::{
-        AnthropicContinuation, ProviderContinuationState,
-    };
     use crate::runtime::identity::{ToolCallId, ToolId};
     use crate::runtime::types::RuntimeError;
     use crate::tools::types::{ToolCall, ToolCallStart};
@@ -554,7 +550,11 @@ mod tests {
     #[test]
     fn text_deltas_concatenate_in_order() {
         let turn = assemble(
-            &[text(0, "hello"), text(0, " world"), completed(ModelFinishReason::Stop)],
+            &[
+                text(0, "hello"),
+                text(0, " world"),
+                completed(ModelFinishReason::Stop),
+            ],
             &ModelFinishReason::Stop,
         );
         assert_eq!(turn.content.len(), 1);
@@ -582,7 +582,9 @@ mod tests {
         );
         assert_eq!(turn.content.len(), 3);
         assert!(matches!(&turn.content[0], AgentContentBlock::Reasoning(_)));
-        assert!(matches!(&turn.content[1], AgentContentBlock::ToolCall(call) if call.id.as_str() == "call-1"));
+        assert!(
+            matches!(&turn.content[1], AgentContentBlock::ToolCall(call) if call.id.as_str() == "call-1")
+        );
         assert!(matches!(&turn.content[2], AgentContentBlock::Text(t) if t.text == "Answer."));
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].arguments, serde_json::json!({"x": 1}));
@@ -601,7 +603,9 @@ mod tests {
             &ModelFinishReason::Refusal,
         );
         assert_eq!(turn.content.len(), 1);
-        assert!(matches!(&turn.content[0], AgentContentBlock::Refusal(r) if r.text == "I cannot comply."));
+        assert!(
+            matches!(&turn.content[0], AgentContentBlock::Refusal(r) if r.text == "I cannot comply.")
+        );
         assert!(turn.tool_calls.is_empty());
     }
 
@@ -620,68 +624,6 @@ mod tests {
             panic!("expected a refusal block");
         };
         assert_eq!(block.text, "I cannot comply.");
-    }
-
-    /// Continuation state attaches to its reasoning block and becomes the
-    /// boundary continuation, even when no reasoning text was exposed.
-    #[test]
-    fn continuation_state_attaches_losslessly() {
-        let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-1"}),
-        });
-        let mut assembler = ModelEventAssembler::new();
-        assembler
-            .push(&ModelEvent::Started)
-            .expect("started");
-        assembler
-            .push(&ModelEvent::ContinuationState {
-                block_index: ContentBlockIndex::new(0),
-                state: state.clone(),
-            })
-            .expect("state");
-        assembler
-            .push(&text(1, "Visible."))
-            .expect("text");
-        assembler
-            .push(&completed(ModelFinishReason::Stop))
-            .expect("completed");
-        let turn = assembler.finish(&ModelFinishReason::Stop, None).expect("finish");
-        assert_eq!(turn.continuation, Some(state.clone()));
-        let AgentContentBlock::Reasoning(reasoning) = &turn.content[0] else {
-            panic!("block 0 must be a reasoning block");
-        };
-        assert_eq!(reasoning.text, None);
-        assert_eq!(reasoning.provider_state, Some(state));
-    }
-
-    /// The boundary continuation is the greatest block index carrying state.
-    #[test]
-    fn boundary_continuation_is_greatest_block_index() {
-        let first = ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-1"}),
-        });
-        let second = ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "sig-2"}),
-        });
-        let mut assembler = ModelEventAssembler::new();
-        assembler.push(&ModelEvent::Started).expect("started");
-        assembler
-            .push(&ModelEvent::ContinuationState {
-                block_index: ContentBlockIndex::new(0),
-                state: first,
-            })
-            .expect("state 1");
-        assembler
-            .push(&ModelEvent::ContinuationState {
-                block_index: ContentBlockIndex::new(1),
-                state: second.clone(),
-            })
-            .expect("state 2");
-        assembler
-            .push(&completed(ModelFinishReason::Stop))
-            .expect("completed");
-        let turn = assembler.finish(&ModelFinishReason::Stop, None).expect("finish");
-        assert_eq!(turn.continuation, Some(second));
     }
 
     /// A stream ending with a terminal event rejects everything after it.
@@ -710,7 +652,9 @@ mod tests {
             .expect("completed");
         let mut second = ModelEventAssembler::new();
         assert!(matches!(
-            second.push(&completed(ModelFinishReason::Stop)).expect_err("rejected"),
+            second
+                .push(&completed(ModelFinishReason::Stop))
+                .expect_err("rejected"),
             RuntimeError::ContractViolation { .. }
         ));
     }

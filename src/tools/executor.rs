@@ -97,7 +97,7 @@ mod tests {
         ToolCall, ToolDefinition, ToolExecutionMode, ToolExecutionResult, ToolExecutionStatus,
         ToolOrigin, ToolReplayPolicy,
     };
-    use futures_util::future::{ready, BoxFuture};
+    use futures_util::future::{BoxFuture, ready};
     use serde_json::json;
 
     fn definition(id: &str, name: &str) -> ToolDefinition {
@@ -129,10 +129,7 @@ mod tests {
             &self.definition
         }
 
-        fn execute<'a>(
-            &'a self,
-            _call: &'a ToolCall,
-        ) -> BoxFuture<'a, ToolExecutionResult> {
+        fn execute<'a>(&'a self, _call: &'a ToolCall) -> BoxFuture<'a, ToolExecutionResult> {
             Box::pin(ready(ToolExecutionResult {
                 status: ToolExecutionStatus::Success,
                 content: Vec::new(),
@@ -168,7 +165,9 @@ mod tests {
     fn falls_back_to_name() {
         let mut registry = ToolRegistry::new();
         registry.insert(StubTool::new("tool-a", "alpha"));
-        let resolved = registry.resolve(&call("missing", "alpha")).expect("resolve");
+        let resolved = registry
+            .resolve(&call("missing", "alpha"))
+            .expect("resolve");
         assert_eq!(resolved.definition().id.as_str(), "tool-a");
     }
 

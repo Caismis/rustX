@@ -1480,6 +1480,45 @@ async fn unsupported_capability_stays_terminal_failure() {
     );
 }
 
+/// Usage reported by the terminal model event reaches the trace.
+#[tokio::test]
+async fn usage_is_reported_on_model_request_completed() {
+    let usage = ModelUsage {
+        input_tokens: 12,
+        output_tokens: 7,
+        total_tokens: 19,
+        details: Some(rustx::model::types::UsageDetails {
+            reasoning_tokens: Some(3),
+            cached_input_tokens: None,
+        }),
+    };
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(ModelEvent::UsageUpdate {
+            usage: usage.clone(),
+        }),
+        FakeStep::Emit(text(0, "done")),
+        FakeStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: Some(usage.clone()),
+        }),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let result = run(&model, &tools, &cancellation).await;
+
+    let reported = result
+        .events
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ModelRequestCompleted { usage, .. } => usage.clone(),
+            _ => None,
+        })
+        .expect("model request completion event");
+    assert_eq!(reported, usage);
+    assert_single_terminal(&result.events);
+}
+
 /// A refusal is a successful stop: the committed message holds only the
 /// refusal block and provisional content is rolled back.
 #[tokio::test]
