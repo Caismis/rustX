@@ -32,6 +32,16 @@ impl ModelCancellation {
         self.token.cancel();
     }
 
+    /// Creates a child signal: cancelling this signal cancels the child, so
+    /// an attempt-level signal can fan out one invocation signal per model
+    /// request while all of them terminate together.
+    #[must_use]
+    pub fn child(&self) -> Self {
+        Self {
+            token: self.token.child_token(),
+        }
+    }
+
     /// Whether cancellation has been requested.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -78,5 +88,19 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), signal.cancelled())
             .await
             .expect("cancelled must resolve without waiting");
+    }
+
+    /// A child signal is cancelled when its parent is cancelled, so one
+    /// attempt-level signal governs every model invocation of the attempt.
+    #[tokio::test]
+    async fn child_signals_follow_parent_cancellation() {
+        let parent = ModelCancellation::new();
+        let child = parent.child();
+        assert!(!child.is_cancelled());
+        parent.cancel();
+        assert!(child.is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(1), child.cancelled())
+            .await
+            .expect("child must be cancelled with its parent");
     }
 }

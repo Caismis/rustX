@@ -41,6 +41,63 @@ A committed-message event must never precede the durable MessageBlock it referen
 
 Exactly one terminal runtime event settles an attempt: `AttemptCompleted`, `AttemptCancelled`, `AttemptTimedOut`, `AttemptLimitExceeded`, or `AttemptFailed`. Each terminal event carries only the data valid for that state and maps one-to-one to an `AttemptOutcome`. A completed attempt can never encode a failed, cancelled, or timed-out outcome. When an attempt fails because a model request exhausted its retry policy, the normalized model error is preserved.
 
+## Agent loop (M3)
+
+The agent loop executes one attempt against the canonical `ModelEvent`
+stream and exactly one terminal `RuntimeEvent`:
+
+- The attempt lifecycle is an explicit state machine
+  (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`),
+  and failure or cancellation settles from any active state. The machine
+  is the settlement authority: it settles (`complete()` for success,
+  `fail()` for failure and cancellation) immediately before the single
+  attempt terminal `RuntimeEvent` is emitted, so the terminal event and
+  the terminal execution state represent the same settlement boundary.
+  Impossible transitions are rejected; a terminal state is absorbing.
+
+- The loop owns tool execution: every model-issued tool call resolves
+  against the attempt's immutable tool registry and executes in
+  deterministic block order with no hidden concurrency. The model
+  continues only after every requested tool call produced a result. A
+  failing tool produces a normalized failed result that is passed back to
+  the model; an unknown tool has no result and fails the attempt
+  explicitly without emitting any tool-execution event.
+
+- The loop assembles one canonical `AgentMessageBlock` per model turn from
+  the canonical stream and commits it only when the generation completed.
+  A refusal terminal rolls back provisional content: the committed message
+  holds only refusal blocks. Malformed streams (content before `Started`,
+  events after the terminal event, a second terminal, orphaned or
+  duplicated tool-call deltas, unfinished tool calls at the terminal) are
+  explicit contract-violation failures, never silently accepted.
+
+- Continuation is canonical conversation state: the next model request
+  carries the full committed history plus the opaque provider continuation
+  state the previous turn reported, propagated losslessly. The loop never
+  fabricates, inspects, or reconstructs provider continuation state; a
+  model that requires state the stream did not report fails explicitly.
+
+- Cancellation is observed at deterministic check points (before each
+  model event, between tool calls) and races every tool execution (biased
+  toward cancellation). Once cancellation is observable while a tool is
+  pending, the loop stops awaiting the tool, drops the pending tool
+  future, records no completion and no tool message, executes no later
+  call, and settles cancelled — the loop never waits for the tool to
+  return. Dropping the future does not guarantee that external work is
+  physically killed; executor-specific cancellation is a later milestone.
+  Every model invocation observes a child signal of the attempt signal.
+  Cancellation is always a terminal cancellation outcome, never
+  completion, and no continuation starts after cancellation is observed.
+
+- `ModelRequestCompleted.usage` reports the canonical final usage: the
+  terminal `Completed.usage` when present, otherwise the latest
+  `UsageUpdate`, otherwise `None`. Cumulative usage snapshots are never
+  summed and missing counters are never fabricated.
+
+- Given identical model events, identical tools, identical input, and
+  identical cancellation conditions, the loop produces an identical
+  ordered `RuntimeEvent` stream and an identical terminal outcome.
+
 ## Turn atomicity
 
 A turn consists of one model response plus all tool calls and corresponding tool results from that response.

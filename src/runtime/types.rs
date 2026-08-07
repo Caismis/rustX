@@ -39,6 +39,21 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// The model requested a tool that is not present in the attempt's
+    /// immutable tool registry. No tool result exists for the request, so
+    /// the runtime fails explicitly instead of fabricating one.
+    UnknownTool {
+        /// The tool name the model called.
+        name: String,
+    },
+    /// The canonical model stream violated its contract (for example a
+    /// non-terminal event after the terminal event, or a tool-call delta
+    /// referencing an unknown call). The runtime rejects the stream
+    /// explicitly instead of silently accepting impossible state.
+    ContractViolation {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -64,5 +79,30 @@ mod tests {
         let json = serde_json::to_string(&value).expect("serialize error");
         let decoded: RuntimeError = serde_json::from_str(&json).expect("deserialize error");
         assert_eq!(decoded, value);
+    }
+
+    /// Tool-resolution and stream-contract errors have stable discriminators.
+    #[test]
+    fn runtime_error_discriminators_are_stable() {
+        let cases = [
+            (
+                RuntimeError::UnknownTool {
+                    name: "missing".to_owned(),
+                },
+                "unknown_tool",
+            ),
+            (
+                RuntimeError::ContractViolation {
+                    message: "event after terminal".to_owned(),
+                },
+                "contract_violation",
+            ),
+        ];
+        for (error, expected) in cases {
+            let value = serde_json::to_value(&error).expect("serialize error");
+            assert_eq!(value["type"], expected);
+            let decoded: RuntimeError = serde_json::from_value(value).expect("deserialize error");
+            assert_eq!(decoded, error);
+        }
     }
 }
