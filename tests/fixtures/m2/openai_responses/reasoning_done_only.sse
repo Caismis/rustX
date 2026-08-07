@@ -1,0 +1,6 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","summary":[]}}
+
+data: {"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Only in done."}],"encrypted_content":"opaque"}}
+
+data: {"type":"response.completed","sequence_number":3,"response":{"id":"resp_d","object":"response","status":"completed","model":"gpt-test","output":[{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Only in done."}],"encrypted_content":"opaque"}],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}
+

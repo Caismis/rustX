@@ -106,6 +106,92 @@ Runtime process memory is disposable.
 
 Recovery is based on durable message history, runtime events, capability revision, context checkpoints, and workspace state.
 
+## Model plane
+
+The model plane converts between canonical `ModelRequest`/`ModelEvent`
+contracts and provider protocols. These invariants are frozen by M2:
+
+- One adapter invocation is exactly one provider request attempt. Runtime
+  policy owns retries; adapters perform no automatic retry, no reconnect,
+  and no failover, and return a normalized `ModelError` instead. The OpenAI
+  adapters bypass `async-openai`'s retry layer by construction, and the
+  Anthropic transport performs one HTTP request per invocation.
+
+- Provider SDK and wire types terminate inside adapter modules
+  (`src/model/adapter/openai`, `src/model/adapter/anthropic`). No provider
+  type appears in a canonical contract or in the agent kernel.
+
+- One `ModelEvent` stream has exactly one terminal outcome (`Completed` or
+  `Failed`), no events after the terminal event, and never both.
+
+- Canonical content block identity is assigned by rustX, not by providers.
+  Provider block indexes, tool indexes, control markers, and content-part
+  layers are adapter-local keys that never leak into `ContentBlockIndex`.
+
+- Anthropic server-side fallback blocks are `Unsupported`. They carry
+  provider positional/replay semantics that rustX cannot preserve losslessly
+  with the current canonical continuation model, so the adapter fails
+  explicitly (`ModelErrorKind::Unsupported`) rather than silently discarding
+  them, and no canonical block or continuation state is fabricated for them.
+
+- Provider content deltas stream as canonical deltas when received:
+  `text_delta` → `TextDelta`, `thinking_delta` → `ReasoningDelta`, and
+  `input_json_delta` → `ToolCallArgumentsDelta` immediately, never buffered
+  until the terminal provider event. `ModelEvent` is provisional adapter
+  output; completed `AgentMessageBlock` assembly (including any rollback of
+  partial output after a refusal) is owned by the future Agent Loop, never
+  by M2.
+
+- Provider content-block indexes are required for deterministic block
+  association: a missing, negative, non-integer, or overflowing `index` on
+  `content_block_start` / `content_block_delta` / `content_block_stop` is a
+  normalized provider protocol error and is never reinterpreted as `0`.
+
+- Partial tool JSON is never parsed. Argument fragments stream raw and the
+  complete JSON is parsed exactly once at completion; malformed completed
+  JSON is a normalized failure and is never executed.
+
+- Provider continuation state must be emitted through the canonical
+  `ProviderContinuationState` boundary, never retained only in hidden
+  adapter memory. Anthropic `redacted_thinking.data` is preserved losslessly
+  as its full provider object and replayed verbatim; canonical reasoning
+  text alone is never sufficient to reconstruct provider reasoning state.
+
+- Provider reasoning semantics map only when an exact semantic match
+  exists. Anthropic effort maps to `output_config.effort`
+  (`low`/`medium`/`high`), never to `thinking.display`; `Minimal` is
+  `Unsupported`, never remapped. OpenAI Responses never fabricates reasoning
+  items from canonical text without preserved provider-native state.
+
+- Usage is normalized without inventing counts and without summing
+  snapshots over time. Anthropic effective input tokens are
+  `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+  from the latest cumulative snapshot; reported `thinking_tokens` map to
+  `UsageDetails::reasoning_tokens`; `cache_read_input_tokens` maps to
+  `UsageDetails::cached_input_tokens` and is never double counted.
+
+- A provider refusal is a successful stop condition: the finish reason is
+  `Refusal`, never `Failed`, and a reported `stop_details.explanation`
+  streams as `RefusalDelta` (never as `TextDelta`). Refusal text is never
+  fabricated when the provider reports none.
+
+- Cancellation propagates through the common adapter interface: the
+  network-opening await is itself cancellation-aware (a cancellation while
+  the provider connection is open but headers are delayed aborts the
+  in-flight request), the underlying provider stream is dropped, no retry
+  occurs, and the invocation terminates with `Failed(Cancelled)`.
+  Cancellation before any network request creates no provider request and
+  emits no `Started`.
+
+- Provider-hosted tools (OpenAI web/file search, computer use, code
+  interpreter, MCP, image generation; Anthropic server tools, tool runner)
+  are never exposed as rustX tools and never converted into canonical
+  `ToolCall` values.
+
+- The runtime resolves an effective output-token limit before invoking any
+  adapter: `ModelRequest.max_output_tokens` is a required `u32` and no
+  adapter-local default exists.
+
 ## Cancellation
 
 Cancellation is hierarchical.

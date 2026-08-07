@@ -60,9 +60,14 @@ pub struct ModelRequest {
     pub tools: Vec<ToolDefinition>,
     /// Reasoning effort for the generation.
     pub reasoning: ReasoningEffort,
-    /// Maximum output tokens, when the runtime enforces one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
+    /// The runtime-resolved effective maximum output tokens.
+    ///
+    /// Real provider integration proved that an adapter cannot faithfully
+    /// represent "no runtime output limit" when the provider requires an
+    /// explicit generation maximum (Anthropic requires `max_tokens`). The
+    /// runtime must therefore resolve an effective output-token limit before
+    /// entering the adapter boundary; no adapter-local default exists.
+    pub max_output_tokens: u32,
     /// Provider continuation state, when continuing an earlier generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<ProviderContinuationState>,

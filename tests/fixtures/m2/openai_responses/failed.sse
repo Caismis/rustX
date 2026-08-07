@@ -1,0 +1,2 @@
+data: {"type":"response.failed","sequence_number":1,"response":{"id":"resp_f","object":"response","status":"failed","error":{"code":"server_error","message":"upstream failure"},"model":"gpt-test","output":[],"usage":null}}
+

@@ -1,0 +1,4 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+data: {"type":"error","code":"server_error","message":"upstream failure"}
+
