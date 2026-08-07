@@ -250,7 +250,11 @@ the current Messages API. The Anthropic adapter therefore talks to
 - correct current streaming semantics (incremental `text_delta`,
   `thinking_delta`, `signature_delta`, and `input_json_delta` deltas emit
   canonical events as they arrive; cumulative `message_delta` usage;
-  `fallback` blocks; `pause_turn`; `model_context_window_exceeded`);
+  `pause_turn`; `model_context_window_exceeded`);
+- explicit rejection of server-side fallback: a provider `fallback` block is
+  `Unsupported` (never silently discarded), because its position carries
+  replay semantics rustX cannot preserve losslessly with the current
+  canonical continuation model;
 - current request semantics (adaptive thinking via `thinking.type`,
   effort via `output_config.effort` — never `thinking.display`;
   `redacted_thinking.data` preserved losslessly as opaque provider state);
@@ -280,9 +284,12 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
 
 - `ContentBlockIndex` is assigned by rustX, never by the provider. A
   provider-index-to-canonical-index allocator maps provider block identity to
-  canonical positions in first-appearance order, so provider-only blocks
-  (Anthropic `fallback`), provider tool indexes, and different content-part
-  layers never shift canonical indexes.
+  canonical positions in first-appearance order, so provider tool indexes and
+  different content-part layers never shift canonical indexes. Anthropic
+  server-side fallback blocks are rejected as `Unsupported` before any
+  canonical allocation: their provider positional/replay semantics cannot be
+  preserved losslessly with the current canonical continuation model, so
+  they are never silently dropped.
 - Tool names resolve deterministically to canonical `ToolId` values before a
   request is sent; duplicate model-facing names are rejected before any
   provider request. Provider call ids remain `ToolCallId`; they are never

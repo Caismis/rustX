@@ -421,10 +421,14 @@ async fn multiple_tool_calls_keep_independent_indexes() {
     assert_eq!(completed[1].1, "list_directory");
 }
 
-/// A fallback block consumes no canonical index: provider index 1 (fallback)
-/// does not shift canonical indexes 0 and 1.
+/// A provider `fallback` block is not disposable transport metadata: it
+/// carries positional/replay semantics rustX cannot preserve losslessly, so
+/// the adapter terminates immediately with `Unsupported`. Prior streamed
+/// content stays provisional output; no canonical fallback block exists, no
+/// continuation state is fabricated, and nothing is emitted after the
+/// terminal event.
 #[tokio::test]
-async fn fallback_block_does_not_shift_canonical_indexes() {
+async fn fallback_block_is_unsupported() {
     let server =
         common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "fallback.sse"))
             .await;
@@ -433,21 +437,50 @@ async fn fallback_block_does_not_shift_canonical_indexes() {
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
     )
     .await;
-    let text: Vec<(ContentBlockIndex, &str)> = events
+    assert_eq!(events[0], ModelEvent::Started);
+    assert_eq!(
+        events[1],
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "Before fallback.".to_owned(),
+        },
+        "prior streamed output remains provisional adapter output"
+    );
+    assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+    assert_eq!(
+        events.len(),
+        3,
+        "Started, TextDelta, Failed — nothing after the terminal event: {}",
+        describe_events(&events)
+    );
+    assert!(
+        !events.iter().any(
+            |event| matches!(event, ModelEvent::TextDelta { text, .. } if text == "After fallback.")
+        ),
+        "no canonical content after the fallback block"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Completed { .. })),
+        "no Completed after an Unsupported fallback"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::ContinuationState { .. })),
+        "no fabricated continuation state for the fallback block"
+    );
+    let terminals: Vec<&ModelEvent> = events
         .iter()
-        .filter_map(|event| match event {
-            ModelEvent::TextDelta { block_index, text } => Some((*block_index, text.as_str())),
-            _ => None,
+        .filter(|event| {
+            matches!(
+                event,
+                ModelEvent::Completed { .. } | ModelEvent::Failed { .. }
+            )
         })
         .collect();
-    assert_eq!(
-        text,
-        vec![
-            (ContentBlockIndex::new(0), "Before fallback."),
-            (ContentBlockIndex::new(1), "After fallback."),
-        ],
-        "provider fallback indexes must not shift canonical indexes"
-    );
+    assert_eq!(terminals.len(), 1, "exactly one terminal event");
 }
 
 /// `stop_sequence` and `max_tokens` finish mapping.
@@ -1210,5 +1243,51 @@ async fn invalid_block_index_is_a_provider_failure() {
         !events
             .iter()
             .any(|event| matches!(event, ModelEvent::TextDelta { .. }))
+    );
+}
+
+/// A `redacted_thinking` block without its required opaque `data` field is a
+/// provider protocol error; an empty fabricated opaque value is never
+/// preserved.
+#[tokio::test]
+async fn redacted_thinking_without_data_is_a_provider_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "redacted_missing_data.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::ContinuationState { .. })),
+        "no fabricated opaque continuation state"
+    );
+}
+
+/// A thinking block that stops without a `signature_delta` is a provider
+/// protocol error: without its provider signature the block cannot be
+/// replayed losslessly, so a state-less reasoning block is never emitted.
+#[tokio::test]
+async fn thinking_without_signature_is_a_provider_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "thinking_missing_signature.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Compute"),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::ContinuationState { .. })),
+        "no continuation state without a provider signature"
     );
 }

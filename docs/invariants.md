@@ -125,8 +125,14 @@ contracts and provider protocols. These invariants are frozen by M2:
   `Failed`), no events after the terminal event, and never both.
 
 - Canonical content block identity is assigned by rustX, not by providers.
-  Provider block indexes, tool indexes, fallback markers, and content-part
+  Provider block indexes, tool indexes, control markers, and content-part
   layers are adapter-local keys that never leak into `ContentBlockIndex`.
+
+- Anthropic server-side fallback blocks are `Unsupported`. They carry
+  provider positional/replay semantics that rustX cannot preserve losslessly
+  with the current canonical continuation model, so the adapter fails
+  explicitly (`ModelErrorKind::Unsupported`) rather than silently discarding
+  them, and no canonical block or continuation state is fabricated for them.
 
 - Provider content deltas stream as canonical deltas when received:
   `text_delta` → `TextDelta`, `thinking_delta` → `ReasoningDelta`, and

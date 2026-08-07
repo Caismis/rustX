@@ -1,7 +1,7 @@
 //! Adapter-private canonical content block index allocation.
 //!
 //! Provider streams identify output blocks with provider-owned indexes that
-//! may include provider-only blocks, fallback markers, different content-part
+//! may include provider-only blocks, control markers, different content-part
 //! layers, tool indexes, and reasoning indexes. Those indexes are never
 //! reused as canonical [`ContentBlockIndex`] values. This allocator maps a
 //! provider block identity to a canonical index, allocating indexes
@@ -97,13 +97,13 @@ mod tests {
         assert_eq!(allocator.allocate(5u32), ContentBlockIndex::new(1));
     }
 
-    /// Sparse or skipped provider keys (for example Anthropic fallback
-    /// blocks) never consume canonical indexes: only allocated keys do.
+    /// Sparse or skipped provider keys never consume canonical indexes:
+    /// only allocated keys do.
     #[test]
     fn skipped_provider_indexes_do_not_shift_canonical_indexes() {
         let mut allocator = BlockAllocator::new();
         assert_eq!(allocator.allocate(0u32), ContentBlockIndex::new(0));
-        // Provider index 1 (a fallback block) is never allocated.
+        // Provider index 1 is never allocated.
         assert_eq!(allocator.allocate(2u32), ContentBlockIndex::new(1));
         assert_eq!(allocator.allocate(0u32), ContentBlockIndex::new(0));
     }

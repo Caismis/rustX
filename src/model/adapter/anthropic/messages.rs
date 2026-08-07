@@ -522,12 +522,21 @@ impl AnthropicStreamNormalizer {
                 Ok(Vec::new())
             }
             Some("redacted_thinking") => {
+                // `data` is the block's required opaque content; a block
+                // without it cannot be preserved or replayed losslessly, so
+                // it is a provider protocol error rather than an empty
+                // fabricated opaque value.
+                let Some(data) = block.data.clone() else {
+                    return Err(provider_error(
+                        "provider redacted_thinking block lacks the opaque data field".to_owned(),
+                    ));
+                };
                 let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
                 self.block_states.insert(
                     index,
                     AnthropicBlockState::RedactedThinking {
                         canonical_index,
-                        data: block.data.clone().unwrap_or_default(),
+                        data,
                         state_emitted: false,
                     },
                 );
@@ -568,10 +577,20 @@ impl AnthropicStreamNormalizer {
                 }])
             }
             Some("fallback") => {
-                // Provider transport/control metadata: no canonical content
-                // block is allocated and provider indexes do not shift
-                // canonical indexes.
-                Ok(Vec::new())
+                // A provider `fallback` block is not disposable transport
+                // metadata: it carries provider positional/replay semantics
+                // (its position validates the thinking blocks around a model
+                // handoff, and it must be echoed back unchanged in later
+                // requests). rustX cannot preserve that losslessly with the
+                // current canonical continuation model, so the adapter fails
+                // explicitly rather than silently discarding the block. No
+                // canonical index is allocated and no continuation state is
+                // fabricated for it.
+                Err(unsupported(
+                    "Anthropic fallback blocks require lossless positional \
+                     replay; server-side fallback is not supported by the M2 \
+                     adapter",
+                ))
             }
             Some("server_tool_use" | "mcp_tool_use" | "web_search_tool_result") => {
                 Err(unsupported(format!(
@@ -685,8 +704,8 @@ impl AnthropicStreamNormalizer {
 
     fn push_content_block_stop(&mut self, index: u32) -> Result<Vec<ModelEvent>, ModelError> {
         let Some(state) = self.block_states.get_mut(&index) else {
-            // Unknown blocks (for example a fallback block pair) stop without
-            // allocating any canonical content.
+            // A stop for a block that never opened a canonical state (for
+            // example a provider control block) has nothing to finalize.
             return Ok(Vec::new());
         };
         match state {
@@ -700,8 +719,20 @@ impl AnthropicStreamNormalizer {
                 if *state_emitted {
                     return Ok(Vec::new());
                 }
-                let Some(signature) = signature.clone() else {
-                    return Ok(Vec::new());
+                // The streaming protocol always sends a `signature_delta`
+                // before the thinking block stops (the signature is the
+                // encrypted provider state that makes replay possible). A
+                // block without one (including the empty placeholder from
+                // `content_block_start`) cannot be replayed losslessly, so
+                // it is a provider protocol error instead of a reasoning
+                // block without continuation state.
+                let Some(signature) = signature.clone().filter(|s| !s.is_empty()) else {
+                    return Err(provider_error(
+                        "provider thinking block stopped without a signature; a \
+                         thinking block without provider state cannot be replayed \
+                         losslessly"
+                            .to_owned(),
+                    ));
                 };
                 *state_emitted = true;
                 let opaque = serde_json::json!({
