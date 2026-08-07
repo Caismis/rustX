@@ -1,0 +1,12 @@
+/target
+/.idea
+/.vscode
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Local runtime state
+/.rustx
+/runtime-data
+/workspace
