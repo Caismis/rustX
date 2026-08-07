@@ -51,9 +51,10 @@ fn anthropic_state_of(event: &ModelEvent) -> &AnthropicContinuation {
     continuation
 }
 
-/// Basic text streaming: buffered text flushes at the terminal stop reason,
-/// usage combines the cumulative snapshots, and the stream completes with
-/// Stop.
+/// Basic text streaming: provider `text_delta` fragments stream incrementally
+/// as they arrive (never buffered until `message_stop`), usage combines the
+/// cumulative snapshots including every provider input-token category, and
+/// the stream completes with Stop.
 #[tokio::test]
 async fn text_stream_normalizes() {
     let server =
@@ -68,25 +69,35 @@ async fn text_stream_normalizes() {
         events[1],
         ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(0),
-            text: "Hello world".to_owned(),
-        }
+            text: "Hello".to_owned(),
+        },
+        "the first provider fragment streams immediately"
     );
     assert_eq!(
         events[2],
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: " world".to_owned(),
+        },
+        "the second provider fragment streams as its own delta"
+    );
+    assert_eq!(
+        events[3],
         ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: Some(ModelUsage {
-                input_tokens: 25,
+                input_tokens: 30,
                 output_tokens: 15,
-                total_tokens: 40,
+                total_tokens: 45,
                 details: Some(rustx::model::UsageDetails {
                     reasoning_tokens: None,
                     cached_input_tokens: Some(5),
                 }),
             }),
-        }
+        },
+        "input = 25 base + 0 cache creation + 5 cache read; snapshots never summed"
     );
-    assert_eq!(events.len(), 3, "{}", describe_events(&events));
+    assert_eq!(events.len(), 4, "{}", describe_events(&events));
 }
 
 /// Multiple text blocks keep distinct canonical indexes.
@@ -222,6 +233,46 @@ async fn multiple_thinking_blocks_stay_separate() {
     assert_eq!(states[0].1.opaque["signature"], "sig-1");
     assert_eq!(*states[1].0, ContentBlockIndex::new(1));
     assert_eq!(states[1].1.opaque["signature"], "sig-2");
+}
+
+/// Thinking deltas stream incrementally; the signature closes the block and
+/// the continuation state is emitted at block stop.
+#[tokio::test]
+async fn thinking_deltas_stream_incrementally() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "thinking_streaming.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Compute"),
+    )
+    .await;
+    assert_eq!(
+        events[1],
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "Let ".to_owned(),
+        }
+    );
+    assert_eq!(
+        events[2],
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "me think".to_owned(),
+        }
+    );
+    let state = anthropic_state_of(&events[3]);
+    assert_eq!(state.opaque["type"], "thinking");
+    assert_eq!(state.opaque["thinking"], "Let me think");
+    assert_eq!(state.opaque["signature"], "sig-stream-1");
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            ..
+        })
+    ));
 }
 
 /// `thinking -> tool_use -> thinking -> text` keeps canonical order and
@@ -451,9 +502,11 @@ async fn pause_turn_is_other_not_stop() {
     ));
 }
 
-/// A refusal is a successful stop condition, not a failure: partial text
-/// output is discarded per provider semantics and the finish reason is
-/// Refusal.
+/// A refusal is a successful stop condition, not a failure. The provider's
+/// partial streamed output is reported as provisional `TextDelta` output (M2
+/// never becomes a commit/rollback agent loop), the `stop_details.explanation`
+/// streams as `RefusalDelta` on its own deterministic block, and the finish
+/// reason is Refusal.
 #[tokio::test]
 async fn refusal_is_a_successful_stop_condition() {
     let server =
@@ -464,11 +517,22 @@ async fn refusal_is_a_successful_stop_condition() {
         simple_request(ModelProtocol::AnthropicMessages, "claude-test", "No"),
     )
     .await;
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, ModelEvent::TextDelta { .. })),
-        "partial refusal output must be discarded, never emitted as text"
+    assert_eq!(events[0], ModelEvent::Started);
+    assert_eq!(
+        events[1],
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "Partial output that must be discarded.".to_owned(),
+        },
+        "the provider actually streamed this text; M2 reports what it streamed"
+    );
+    assert_eq!(
+        events[2],
+        ModelEvent::RefusalDelta {
+            block_index: ContentBlockIndex::new(1),
+            text: "declined".to_owned(),
+        },
+        "the refusal explanation streams as refusal, never as ordinary text"
     );
     assert!(matches!(
         events.last(),
@@ -477,7 +541,47 @@ async fn refusal_is_a_successful_stop_condition() {
             ..
         })
     ));
-    assert_eq!(events.len(), 2, "{}", describe_events(&events));
+    assert_eq!(events.len(), 4, "{}", describe_events(&events));
+}
+
+/// A refusal without a `stop_details.explanation` emits no fabricated refusal
+/// text; only the Refusal finish reason is reported.
+#[tokio::test]
+async fn refusal_without_explanation_does_not_fabricate_text() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        let mut reply = sse_fixture("anthropic", "refusal.sse");
+        reply.chunks.clear();
+        reply.chunks.push(common::FixtureChunk {
+            delay_ms: 0,
+            bytes: [
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_14\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":412,\"output_tokens\":1}}}\n\n".to_string(),
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"refusal\",\"stop_sequence\":null},\"stop_details\":{\"type\":\"refusal\",\"category\":null,\"explanation\":null},\"usage\":{\"output_tokens\":0,\"input_tokens\":412}}\n\n".to_string(),
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_string(),
+            ]
+            .concat()
+            .into_bytes(),
+        });
+        reply
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "No"),
+    )
+    .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::RefusalDelta { .. })),
+        "no refusal text is fabricated when the provider reports none"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Refusal,
+            ..
+        })
+    ));
 }
 
 /// An error SSE event fails the invocation with the provider code preserved.
@@ -682,23 +786,35 @@ async fn http_errors_normalize() {
     }
 }
 
-/// The Anthropic request carries only model-facing tool fields, an exact
-/// reasoning effort mapping, and the required `max_tokens` default.
+/// The Anthropic request carries only model-facing tool fields, maps effort
+/// to `output_config.effort` (never `thinking.display`), and sends the
+/// runtime-resolved `max_tokens` explicitly.
 #[tokio::test]
 async fn request_serialization_is_model_facing_only() {
     let server =
         common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
     let mut request = request_with_tools("hi");
     request.reasoning = rustx::model::ReasoningEffort::High;
+    request.max_output_tokens = 4096;
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert_eq!(body["model"], "claude-test");
     assert_eq!(body["stream"], true);
-    assert_eq!(body["max_tokens"], 4096, "documented default when unset");
+    assert_eq!(
+        body["max_tokens"], 4096,
+        "the runtime-resolved output limit is sent explicitly"
+    );
     assert_eq!(body["thinking"]["type"], "adaptive");
-    assert_eq!(body["thinking"]["display"], "high");
+    assert_eq!(
+        body["output_config"]["effort"], "high",
+        "effort is an output_config value, not a thinking display value"
+    );
+    assert!(
+        body["thinking"].get("display").is_none(),
+        "low/medium/high are never written to thinking.display"
+    );
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][0]["content"][0]["type"], "text");
     let tool = &body["tools"][0];
@@ -708,6 +824,35 @@ async fn request_serialization_is_model_facing_only() {
         assert!(
             tool.get(runtime_field).is_none(),
             "runtime-only field {runtime_field} must not reach the provider"
+        );
+    }
+}
+
+/// Every canonical effort level maps to the exact provider `effort` field.
+#[tokio::test]
+async fn effort_levels_map_to_output_config_effort() {
+    for (effort, expected) in [
+        (rustx::model::ReasoningEffort::Low, "low"),
+        (rustx::model::ReasoningEffort::Medium, "medium"),
+        (rustx::model::ReasoningEffort::High, "high"),
+    ] {
+        let server =
+            common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
+                .await;
+        let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
+        request.reasoning = effort;
+        let events = collect_events(&adapter(&server), request).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let body: serde_json::Value =
+            serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+        assert_eq!(
+            body["output_config"]["effort"], expected,
+            "effort {effort:?}"
+        );
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        assert!(
+            body["thinking"].get("display").is_none(),
+            "effort {effort:?} must not leak into thinking.display"
         );
     }
 }
@@ -895,4 +1040,175 @@ async fn lifecycle_has_one_terminal_event() {
         })
         .collect();
     assert_eq!(terminals.len(), 1);
+}
+
+/// `redacted_thinking.data` survives losslessly into the opaque Anthropic
+/// continuation state: the provider block becomes a canonical reasoning block
+/// with no fabricated visible text, and the full provider object replays
+/// verbatim on a later request.
+#[tokio::test]
+async fn redacted_thinking_preserves_opaque_data() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "redacted_thinking.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "Compute"),
+    )
+    .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::ReasoningDelta { .. })),
+        "no visible reasoning text is fabricated for a redacted block"
+    );
+    let state = anthropic_state_of(&events[1]);
+    assert_eq!(
+        state.opaque,
+        serde_json::json!({
+            "type": "redacted_thinking",
+            "data": "opaque-redacted-provider-data",
+        }),
+        "the provider block is preserved losslessly as its full provider object"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            ..
+        })
+    ));
+}
+
+/// The preserved `redacted_thinking` provider object replays verbatim in the
+/// next request's assistant message: opaque state → canonical serialization →
+/// provider replay, without loss.
+#[tokio::test]
+async fn redacted_thinking_replays_losslessly() {
+    let server =
+        common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+    let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
+    let opaque = serde_json::json!({
+        "type": "redacted_thinking",
+        "data": "opaque-redacted-provider-data",
+    });
+    request.messages.insert(
+        0,
+        rustx::message::types::MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+            id: rustx::runtime::identity::MessageId::new("msg-redacted"),
+            content: vec![rustx::message::types::AgentContentBlock::Reasoning(
+                rustx::message::types::ReasoningBlock {
+                    text: None,
+                    provider_state: Some(ProviderContinuationState::Anthropic(
+                        AnthropicContinuation {
+                            opaque: opaque.clone(),
+                        },
+                    )),
+                },
+            )],
+        }),
+    );
+    let events = collect_events(&adapter(&server), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let assistant = &body["messages"][0];
+    assert_eq!(assistant["role"], "assistant");
+    let block = &assistant["content"][0];
+    assert_eq!(
+        block["type"], "redacted_thinking",
+        "the provider block type is preserved"
+    );
+    assert_eq!(
+        block["data"], "opaque-redacted-provider-data",
+        "the opaque provider state replays verbatim"
+    );
+    assert_eq!(
+        block, &opaque,
+        "the replayed block is the exact preserved provider object"
+    );
+}
+
+/// Effective input usage includes every provider input-token category
+/// (`input_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`),
+/// thinking tokens map to `UsageDetails.reasoning_tokens`, and cumulative
+/// `message_delta` snapshots are used as-is, never summed over time.
+#[tokio::test]
+async fn usage_accounts_for_cache_categories_and_thinking_tokens() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "usage_cached_thinking.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let ModelEvent::Completed { usage, .. } = events.last().expect("terminal") else {
+        panic!("expected Completed");
+    };
+    let usage = usage.as_ref().expect("usage reported");
+    assert_eq!(
+        usage.input_tokens,
+        2095 + 2051 + 2051,
+        "input = base + cache creation + cache read"
+    );
+    assert_eq!(usage.output_tokens, 510);
+    assert_eq!(usage.total_tokens, usage.input_tokens + usage.output_tokens);
+    let details = usage.details.as_ref().expect("details reported");
+    assert_eq!(
+        details.reasoning_tokens,
+        Some(128),
+        "thinking_tokens mapped"
+    );
+    assert_eq!(
+        details.cached_input_tokens,
+        Some(2051),
+        "cache_read mapped once, not double counted"
+    );
+}
+
+/// A provider content-block event with a missing index is a hard protocol
+/// failure: it is never reinterpreted as index 0 and no canonical block
+/// events are emitted.
+#[tokio::test]
+async fn missing_block_index_is_a_provider_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "missing_index.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::TextDelta { .. })),
+        "no canonical block events may follow an index violation"
+    );
+}
+
+/// A provider content-block event with a non-integer index is a hard protocol
+/// failure with the same guarantees.
+#[tokio::test]
+async fn invalid_block_index_is_a_provider_failure() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "invalid_index.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::TextDelta { .. }))
+    );
 }

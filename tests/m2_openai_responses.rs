@@ -667,6 +667,91 @@ async fn http_errors_normalize() {
     }
 }
 
+/// Canonical reasoning text without lossless provider-native state cannot be
+/// reconstructed as an `OpenAI` Responses reasoning item: the request fails
+/// before the network instead of fabricating provider ids, summary structure,
+/// or encrypted content.
+#[tokio::test]
+async fn reasoning_without_provider_state_is_unsupported() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
+    request.messages.insert(
+        0,
+        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+            id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
+            content: vec![AgentContentBlock::Reasoning(
+                rustx::message::types::ReasoningBlock {
+                    text: Some("Visible reasoning text.".to_owned()),
+                    provider_state: None,
+                },
+            )],
+        }),
+    );
+    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    assert_eq!(events.len(), 1, "rejected before the network");
+    assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+    assert_eq!(server.attempt_count(), 0);
+}
+
+/// Reasoning with preserved provider-native stateless items replays those
+/// items verbatim instead of fabricating a summary item.
+#[tokio::test]
+async fn reasoning_with_provider_state_replays_items_verbatim() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
+    let preserved = vec![serde_json::json!({
+        "type": "reasoning",
+        "id": "rs_preserved",
+        "summary": [{"type": "summary_text", "text": "Preserved."}],
+        "encrypted_content": "opaque-blob",
+        "extra": {"kept": true},
+    })];
+    request.messages.insert(
+        0,
+        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+            id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
+            content: vec![AgentContentBlock::Reasoning(
+                rustx::message::types::ReasoningBlock {
+                    text: None,
+                    provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                        OpenAiResponsesContinuation::Stateless {
+                            items: preserved.clone(),
+                        },
+                    )),
+                },
+            )],
+        }),
+    );
+    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let input = body["input"].as_array().expect("input items");
+    let reasoning = input
+        .iter()
+        .find(|item| item["type"] == "reasoning")
+        .expect("reasoning item present");
+    assert_eq!(
+        reasoning, &preserved[0],
+        "the preserved provider-native item replays verbatim"
+    );
+    let reasoning_items: Vec<&serde_json::Value> = input
+        .iter()
+        .filter(|item| item["type"] == "reasoning")
+        .collect();
+    assert_eq!(
+        reasoning_items.len(),
+        1,
+        "exactly the preserved item, no fabricated duplicate"
+    );
+}
+
 /// The serialized fresh request carries only model-facing tool fields and the
 /// exact reasoning effort.
 #[tokio::test]

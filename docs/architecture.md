@@ -87,6 +87,17 @@ The three execution layers each consume these contracts: the agent kernel
 operates on them, the context engine assembles them into provider context,
 and the model plane translates them to and from provider protocols.
 
+#### M1 contract correction discovered by M2 integration
+
+`ModelRequest.max_output_tokens` is a required `u32`, not an
+`Option<u32>`. Real Anthropic integration proved that an adapter cannot
+faithfully represent "no runtime output limit" when the provider requires an
+explicit generation maximum (`max_tokens`), and hiding an arbitrary
+adapter-local default behind `None` was rejected as hidden runtime policy.
+The runtime must therefore resolve an effective output-token limit before
+entering the adapter boundary; no adapter-local default exists. This is a
+deliberate pre-1.0 canonical correction, not a compatibility shim.
+
 ### 2.2 Attempt settlement invariant
 
 Exactly one terminal runtime event settles an attempt, and each terminal
@@ -236,12 +247,21 @@ Anthropic has no official Rust SDK, and the evaluated community SDK
 the current Messages API. The Anthropic adapter therefore talks to
 `/v1/messages` directly with `reqwest` and `eventsource-stream`:
 
-- correct current streaming semantics (cumulative `message_delta` usage,
-  `fallback` blocks, `pause_turn`, `model_context_window_exceeded`);
+- correct current streaming semantics (incremental `text_delta`,
+  `thinking_delta`, `signature_delta`, and `input_json_delta` deltas emit
+  canonical events as they arrive; cumulative `message_delta` usage;
+  `fallback` blocks; `pause_turn`; `model_context_window_exceeded`);
+- current request semantics (adaptive thinking via `thinking.type`,
+  effort via `output_config.effort` — never `thinking.display`;
+  `redacted_thinking.data` preserved losslessly as opaque provider state);
+- current refusal semantics (`stop_reason = refusal` with top-level
+  `stop_details`; a human-readable `explanation` streams as `RefusalDelta`
+  before `Completed(Refusal)`, never as plain text);
 - current stop-reason coverage (`end_turn`, `stop_sequence`, `tool_use`,
   `max_tokens`, `model_context_window_exceeded`, `refusal`, `pause_turn`);
 - forward-compatible event parsing (unknown top-level events never crash the
-  parser);
+  parser; content-block events with a missing or invalid `index` are hard
+  provider protocol errors, never reinterpreted as `0`);
 - transparent retry ownership (the transport performs exactly one HTTP
   request per invocation; no retry, no reconnect, no failover);
 - no SDK type leakage (there is no Anthropic SDK dependency at all).
@@ -249,6 +269,12 @@ the current Messages API. The Anthropic adapter therefore talks to
 The Anthropic wire representation is private to
 `src/model/adapter/anthropic/wire.rs`; no alternative canonical Anthropic
 model exists.
+
+Canonical deltas are provisional adapter output: M2 reports what the provider
+actually streamed, including partial output that a later refusal may
+invalidate. Whether provisional content becomes a completed canonical
+`AgentMessageBlock` is owned by the future Agent Loop, never by M2, so no
+adapter-local terminal buffering exists for Anthropic text or thinking.
 
 #### Normalization rules
 
@@ -269,10 +295,22 @@ model exists.
   OpenAI Responses supports both `Stored` (provider storage,
   `previous_response_id`) and `Stateless` (`store: false`, preserved output
   items including opaque encrypted reasoning). Anthropic thinking signatures
-  are preserved as rustX-owned opaque JSON on the reasoning block.
+  and `redacted_thinking.data` are preserved as rustX-owned opaque JSON on
+  the reasoning block and replayed verbatim; canonical reasoning text alone
+  is never sufficient to reconstruct a provider reasoning item (OpenAI
+  Responses fails with `Unsupported` instead of fabricating one).
+- Usage is normalized without inventing counts: Anthropic effective input is
+  `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+  from the latest cumulative snapshot (never summed over time), reported
+  `output_tokens_details.thinking_tokens` maps to
+  `UsageDetails::reasoning_tokens`, and `cache_read_input_tokens` maps to
+  `UsageDetails::cached_input_tokens` without double counting.
 - Cancellation is a rustX-owned signal (`ModelCancellation`) flowing through
-  the common interface; an in-flight invocation stops consuming the provider
-  stream, performs no retry, and terminates with `Failed(Cancelled)`.
+  the common interface; the network-opening await itself is
+  cancellation-aware (a cancellation while waiting for response headers
+  aborts the in-flight request), an in-flight invocation stops consuming the
+  provider stream, no retry ever occurs, and the invocation terminates with
+  `Failed(Cancelled)`.
 - Live integration tests are opt-in (`#[ignore]`): ordinary CI runs
   `cargo test --all-targets --all-features` without credentials or network.
   A developer CLI smoke tool (`examples/model_smoke.rs`) streams one response
