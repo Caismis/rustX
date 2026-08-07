@@ -9,12 +9,16 @@
 
 #![allow(dead_code)] // every helper is used only by some test binaries
 
+pub mod fake;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use rustx::agent::state::ExecutionState;
+use rustx::events::types::RuntimeEvent;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -320,4 +324,51 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
             server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
         },
     }
+}
+
+/// Reconstructs the observable execution-phase sequence from a runtime
+/// event trace.
+///
+/// The fold maps each event to the execution phase it implies and rejects
+/// invalid sequences explicitly (a second `AttemptStarted`, an attempt
+/// settlement from the wrong phase, or any event after the terminal event).
+/// Consecutive equal phases are collapsed, so a text-only trace
+/// reconstructs `[Idle, RunningModel, Completed]` and a tool trace
+/// `[Idle, RunningModel, WaitingForTool, RunningModel, Completed]`.
+pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionState>, String> {
+    let mut phases = vec![ExecutionState::Idle];
+    for event in events {
+        let current = *phases.last().expect("at least the idle phase");
+        if !current.is_active() {
+            return Err(format!("event after the terminal phase: {event:?}"));
+        }
+        let next = match event {
+            RuntimeEvent::AttemptStarted { .. } if current == ExecutionState::Idle => {
+                ExecutionState::RunningModel
+            }
+            RuntimeEvent::AttemptStarted { .. } => {
+                return Err("attempt started twice".to_owned());
+            }
+            RuntimeEvent::AttemptCompleted { .. } if current == ExecutionState::RunningModel => {
+                ExecutionState::Completed
+            }
+            RuntimeEvent::AttemptCompleted { .. } => {
+                return Err(format!(
+                    "attempt completed outside a running-model phase: {event:?}"
+                ));
+            }
+            RuntimeEvent::AttemptFailed { .. } | RuntimeEvent::AttemptCancelled { .. } => {
+                ExecutionState::Failed
+            }
+            RuntimeEvent::ModelRequestStarted { .. } => ExecutionState::RunningModel,
+            RuntimeEvent::ToolExecutionStarted { .. }
+            | RuntimeEvent::ToolExecutionCompleted { .. }
+            | RuntimeEvent::ToolExecutionFailed { .. } => ExecutionState::WaitingForTool,
+            _ => current,
+        };
+        if phases.last() != Some(&next) {
+            phases.push(next);
+        }
+    }
+    Ok(phases)
 }
