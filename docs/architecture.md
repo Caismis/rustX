@@ -179,6 +179,40 @@ The kernel owns deterministic execution semantics:
 
 The kernel operates only on rustX canonical types and interfaces.
 
+#### M3 implementation (agent loop)
+
+The M3 implementation freezes the agent-loop boundary in `src/agent` and
+the tool execution contract in `src/tools/executor.rs`:
+
+```text
+canonical input state
+        |
+ModelAdapter (canonical ModelRequest in, ModelEvent stream out)
+        |
+ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel -> Completed
+        |
+ModelEventAssembler: stream validation + ordered AgentMessageBlock assembly
+        |
+ToolRegistry: deterministic call resolution and Tool::execute
+        |
+RuntimeEvent trace, ending in exactly one terminal event
+```
+
+The loop owns execution semantics, message assembly, tool execution,
+continuation state, cancellation observation, and the runtime event
+trace. Adapters own provider protocol translation only, and tools own
+their definitions and single-call execution. Tool calls of one turn
+execute in deterministic block order with no hidden concurrency or retry,
+continuation state propagates losslessly without fabrication, cancellation
+always settles as a terminal cancellation, and every attempt emits exactly
+one terminal `RuntimeEvent`. See `docs/agent-loop.md` for the full
+boundary description.
+
+The M3 test suite drives the loop with scripted fixture models and tools
+(`tests/common/fake.rs`), asserts behavior through the recorded
+`RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
+execution phases from traces (`tests/common/mod.rs`).
+
 ### Layer 2: Context engine
 
 The context engine owns what the model sees:
@@ -212,7 +246,7 @@ ModelAdapter
         |
 ModelEvent
         |
-future M3 Agent Loop
+M3 Agent Loop
 ```
 
 Provider SDK and wire types terminate inside the adapter modules
