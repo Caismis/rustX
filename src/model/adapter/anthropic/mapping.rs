@@ -13,10 +13,6 @@ use crate::runtime::identity::ToolId;
 
 use super::wire::WireUsage;
 
-/// Default `max_tokens` when the canonical request carries none. Anthropic
-/// requires the field; rustX policy (M3+) will own the real budget.
-pub(crate) const DEFAULT_MAX_TOKENS: u32 = 4096;
-
 /// Maps an Anthropic stop reason to the canonical finish reason.
 pub(crate) fn map_finish_reason(stop_reason: Option<&str>) -> ModelFinishReason {
     match stop_reason {
@@ -44,24 +40,55 @@ pub(crate) fn is_refusal(stop_reason: Option<&str>) -> bool {
 }
 
 /// Combines usage from `message_start` and the latest cumulative
-/// `message_delta` snapshot without summing snapshots.
+/// `message_delta` snapshot without summing snapshots over time.
+///
+/// Canonical effective input consumption accounts for every provider
+/// input-token category that contributes to total provider input:
+///
+/// ```text
+/// canonical input_tokens
+///     = input_tokens
+///       + cache_creation_input_tokens
+///       + cache_read_input_tokens
+/// ```
+///
+/// where reported, per the current Messages API usage semantics.
+/// `cache_read_input_tokens` is additionally reported as
+/// [`UsageDetails::cached_input_tokens`]; it is never double counted.
 pub(crate) fn normalize_usage(
     message_start_usage: Option<&WireUsage>,
     latest_delta_usage: Option<&WireUsage>,
 ) -> ModelUsage {
-    let input_tokens = latest_delta_usage
+    let input_base = latest_delta_usage
         .and_then(|u| u.input_tokens)
         .or_else(|| message_start_usage.and_then(|u| u.input_tokens))
         .unwrap_or(0);
-    let output_tokens = latest_delta_usage
-        .and_then(|u| u.output_tokens)
+    let cache_creation = latest_delta_usage
+        .and_then(|u| u.cache_creation_input_tokens)
+        .or_else(|| message_start_usage.and_then(|u| u.cache_creation_input_tokens))
         .unwrap_or(0);
-    let cached_input_tokens = latest_delta_usage
+    let cache_read = latest_delta_usage
         .and_then(|u| u.cache_read_input_tokens)
         .or_else(|| message_start_usage.and_then(|u| u.cache_read_input_tokens));
-    let details = cached_input_tokens.map(|cached| UsageDetails {
-        reasoning_tokens: None,
-        cached_input_tokens: Some(cached),
+    let output_tokens = latest_delta_usage
+        .and_then(|u| u.output_tokens)
+        .or_else(|| message_start_usage.and_then(|u| u.output_tokens))
+        .unwrap_or(0);
+    let reasoning_tokens = latest_delta_usage
+        .and_then(|u| {
+            u.output_tokens_details
+                .as_ref()
+                .and_then(|d| d.thinking_tokens)
+        })
+        .or_else(|| {
+            message_start_usage
+                .and_then(|u| u.output_tokens_details.as_ref())
+                .and_then(|d| d.thinking_tokens)
+        });
+    let input_tokens = input_base + cache_creation + cache_read.unwrap_or(0);
+    let details = (reasoning_tokens.is_some() || cache_read.is_some()).then_some(UsageDetails {
+        reasoning_tokens,
+        cached_input_tokens: cache_read,
     });
     ModelUsage {
         input_tokens,
@@ -155,7 +182,17 @@ pub(crate) struct WireRequest {
     pub tools: Option<Vec<WireTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<WireOutputConfig>,
     pub stream: bool,
+}
+
+/// The `output_config` request object; only the rustX-supported `effort`
+/// level is ever written. This wire representation is private to the
+/// Anthropic adapter.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct WireOutputConfig {
+    pub effort: &'static str,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -179,11 +216,18 @@ pub(crate) struct WireTool {
 }
 
 /// Translates a canonical request into the Anthropic wire request.
+///
+/// Current Anthropic semantics separate the two controls: `thinking` selects
+/// the thinking mode (`adaptive`) and `output_config.effort` steers how much
+/// work the model puts into the response. `low` / `medium` / `high` are
+/// `output_config.effort` values, never `thinking.display` values, and
+/// `Minimal` is rejected because the provider exposes no exact semantic
+/// match.
 pub(crate) fn translate_request(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
 ) -> Result<WireRequest, ModelError> {
-    let thinking = match request.reasoning {
+    let (output_config, thinking) = match request.reasoning {
         ReasoningEffort::Minimal => {
             return Err(ModelError {
                 kind: ModelErrorKind::Unsupported,
@@ -194,9 +238,18 @@ pub(crate) fn translate_request(
                 provider_code: None,
             });
         }
-        ReasoningEffort::Low => serde_json::json!({"type": "adaptive", "display": "low"}),
-        ReasoningEffort::Medium => serde_json::json!({"type": "adaptive", "display": "medium"}),
-        ReasoningEffort::High => serde_json::json!({"type": "adaptive", "display": "high"}),
+        ReasoningEffort::Low => (
+            Some(WireOutputConfig { effort: "low" }),
+            serde_json::json!({"type": "adaptive"}),
+        ),
+        ReasoningEffort::Medium => (
+            Some(WireOutputConfig { effort: "medium" }),
+            serde_json::json!({"type": "adaptive"}),
+        ),
+        ReasoningEffort::High => (
+            Some(WireOutputConfig { effort: "high" }),
+            serde_json::json!({"type": "adaptive"}),
+        ),
     };
 
     let (system, messages) = translate_messages(request, tools)?;
@@ -213,11 +266,12 @@ pub(crate) fn translate_request(
 
     Ok(WireRequest {
         model: request.model.clone(),
-        max_tokens: request.max_output_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        max_tokens: request.max_output_tokens,
         messages,
         system: (!system.is_empty()).then_some(system),
         tools: (!tools.is_empty()).then_some(tools),
         thinking: Some(thinking),
+        output_config,
         stream: true,
     })
 }
@@ -535,29 +589,80 @@ mod tests {
         );
     }
 
-    /// Cumulative usage snapshots are combined, not summed.
+    /// Cumulative usage snapshots are combined, not summed; effective input
+    /// consumption includes every provider input-token category.
     #[test]
     fn usage_combines_cumulative_snapshots() {
         use super::{WireUsage, normalize_usage};
+        use crate::model::adapter::anthropic::wire::WireOutputTokensDetails;
         let start = WireUsage {
             input_tokens: Some(100),
             output_tokens: Some(1),
             cache_read_input_tokens: Some(10),
             cache_creation_input_tokens: Some(0),
+            output_tokens_details: None,
         };
         let delta = WireUsage {
             input_tokens: Some(100),
             output_tokens: Some(42),
             cache_read_input_tokens: Some(12),
-            cache_creation_input_tokens: Some(0),
+            cache_creation_input_tokens: Some(8),
+            output_tokens_details: Some(WireOutputTokensDetails {
+                thinking_tokens: Some(7),
+            }),
         };
         let usage = normalize_usage(Some(&start), Some(&delta));
-        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.input_tokens, 120, "100 base + 8 creation + 12 read");
         assert_eq!(usage.output_tokens, 42);
-        assert_eq!(usage.total_tokens, 142);
+        assert_eq!(usage.total_tokens, 162);
+        let details = usage.details.expect("details present");
+        assert_eq!(details.cached_input_tokens, Some(12));
+        assert_eq!(details.reasoning_tokens, Some(7));
+    }
+
+    /// Cache categories are never double counted and are not summed across
+    /// snapshots: the latest cumulative snapshot wins.
+    #[test]
+    fn usage_never_sums_snapshots() {
+        use super::{WireUsage, normalize_usage};
+        let start = WireUsage {
+            input_tokens: Some(40),
+            output_tokens: Some(1),
+            cache_read_input_tokens: Some(4),
+            cache_creation_input_tokens: Some(1),
+            output_tokens_details: None,
+        };
+        let delta = WireUsage {
+            input_tokens: Some(40),
+            output_tokens: Some(9),
+            cache_read_input_tokens: Some(5),
+            cache_creation_input_tokens: Some(2),
+            output_tokens_details: None,
+        };
+        let usage = normalize_usage(Some(&start), Some(&delta));
+        assert_eq!(usage.input_tokens, 47, "40 base + 2 creation + 5 read");
+        assert_eq!(usage.total_tokens, 56);
         assert_eq!(
             usage.details.as_ref().and_then(|d| d.cached_input_tokens),
-            Some(12)
+            Some(5)
         );
+    }
+
+    /// Thinking-token details map when reported; absent counts are never
+    /// invented.
+    #[test]
+    fn usage_maps_thinking_tokens_only_when_reported() {
+        use super::{WireUsage, normalize_usage};
+        let plain = WireUsage {
+            input_tokens: Some(10),
+            output_tokens: Some(3),
+            cache_read_input_tokens: None,
+            cache_creation_input_tokens: None,
+            output_tokens_details: None,
+        };
+        let usage = normalize_usage(Some(&plain), None);
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.total_tokens, 13);
+        assert!(usage.details.is_none(), "no details without provider data");
     }
 }
