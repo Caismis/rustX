@@ -24,7 +24,16 @@ use rustx::model::{
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (protocol, model, prompt) = parse_args(&args);
-    let request = build_request(protocol.as_str(), &model, &prompt);
+    if !matches!(
+        protocol.as_str(),
+        "openai-chat" | "openai-responses" | "anthropic"
+    ) {
+        eprintln!(
+            "unknown protocol {protocol:?}; expected openai-chat, openai-responses, or anthropic"
+        );
+        std::process::exit(2);
+    }
+    let request = build_request(&protocol, &model, &prompt);
     let adapter: Box<dyn ModelAdapter> = match protocol.as_str() {
         "openai-chat" => Box::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
             read_secret("OPENAI_API_KEY"),
@@ -35,12 +44,7 @@ fn main() {
         "anthropic" => Box::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
             read_secret("ANTHROPIC_API_KEY"),
         ))),
-        other => {
-            eprintln!(
-                "unknown protocol {other:?}; expected openai-chat, openai-responses, or anthropic"
-            );
-            std::process::exit(2);
-        }
+        _ => unreachable!("protocol validated above"),
     };
 
     let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime");
