@@ -87,7 +87,7 @@ The three execution layers each consume these contracts: the agent kernel
 operates on them, the context engine assembles them into provider context,
 and the model plane translates them to and from provider protocols.
 
-#### M1 contract correction discovered by M2 integration
+#### M1 contract corrections discovered by later milestones
 
 `ModelRequest.max_output_tokens` is a required `u32`, not an
 `Option<u32>`. Real Anthropic integration proved that an adapter cannot
@@ -97,6 +97,14 @@ adapter-local default behind `None` was rejected as hidden runtime policy.
 The runtime must therefore resolve an effective output-token limit before
 entering the adapter boundary; no adapter-local default exists. This is a
 deliberate pre-1.0 canonical correction, not a compatibility shim.
+
+`ContextManifest` gained `context_window_tokens` in M4. The model context
+window is runtime-owned configuration, never a hard-coded per-model catalog
+in the context engine; the soft input limit is
+`context_window_tokens - reserve_tokens - max_output_tokens` (checked,
+impossible configurations rejected). This is an additive pre-1.0 contract
+change: the M1 manifest fixture and round-trip tests were updated
+accordingly.
 
 ### 2.2 Attempt settlement invariant
 
@@ -226,6 +234,70 @@ The context engine owns what the model sees:
 - Provider-context compilation
 
 Compaction is a projection of durable conversation history. It must never delete or rewrite the canonical history.
+
+#### M4 implementation (context engine)
+
+The M4 implementation freezes the context-plane boundary in `src/context`
+and its integration point in `src/agent/execution.rs`:
+
+```text
+canonical history
+    ↓
+ContextEngine (build_projection, plan_compaction, apply_compaction)
+    ↓
+ContextProjection { items, estimated_input, checkpoint_generation }
+    ↓
+compile_projection → canonical ModelRequest.messages
+    ↓
+ModelAdapter → provider
+```
+
+The engine is a deterministic pure function of (canonical history, latest
+checkpoint, tool definitions, observed provider usage): the same inputs
+always produce the same projection, plan, and estimate. It owns no provider
+knowledge — the window/reserve/recent-token configuration is runtime-owned
+(`ContextConfig`, mirrored additively into the M1 `ContextManifest`), token
+estimation is pluggable (`TokenEstimator`, with a default
+`ceil(bytes / 4)` formula), and no model name catalog exists.
+
+Key contracts:
+
+- `ContextProjection` is the model-visible projection; a projection-only
+  `AgentSlice` (split-turn content) is materialized transiently under its
+  source `MessageId` when compiled and is never persisted, never emitted as
+  `AgentMessageCommitted`, and never returned in
+  `AgentExecutionResult.messages`.
+- `SystemMessageBlock` values are pinned: everything through the last
+  system message stays literal and is outside summary coverage; summaries
+  are `UserMessageBlock` values with `UserSource::Runtime` and
+  `InboundKind::CompactionSummary` — no fifth message role exists.
+- Token measurements carry explicit provenance
+  (`ProviderReported`/`Estimated`); provider-reported `input_tokens` apply
+  only to the exact measured projection (deterministic fingerprint), and
+  estimates never become provider usage.
+- Cut selection is structural: a deterministic index of tool-call/result
+  edges rejects orphan tool messages and never separates a call from its
+  result; whole-turn boundaries are preferred, and oversized turns are
+  split at complete content-block boundaries.
+- Checkpoints (`ContextCheckpoint`) carry stable `MessageId`-based
+  boundaries and deterministic summary ids; the `ContextCheckpointStore`
+  abstraction (with an in-memory development/test implementation) is the M4
+  persistence contract, M8 owns the durable backend.
+- The `ContextSummarizer` service is provider-neutral; the production
+  `ModelBackedSummarizer` issues a canonical one-off `ModelRequest` (no
+  tools, no continuation) through the existing `ModelAdapter` boundary.
+- The mandatory progress rule (coverage advances and projected estimate
+  strictly decreases) is the anti-loop invariant; successful compaction
+  invalidates the pending provider continuation, and
+  `ContextWindowExceeded` is recovered through exactly one bounded
+  compact-and-retry
+  (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
+
+`AgentExecution::new(...)` remains the explicit no-context/unbounded
+compatibility path; the M4 path is additive via
+`AgentExecution::with_context_runtime(ContextRuntime { engine, summarizer,
+checkpoint_store })`. See `docs/context-engine.md` for the full boundary
+description.
 
 ### Layer 3: Model plane
 

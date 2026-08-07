@@ -73,9 +73,13 @@ stream and exactly one terminal `RuntimeEvent`:
 
 - Continuation is canonical conversation state: the next model request
   carries the full committed history plus the opaque provider continuation
-  state the previous turn reported, propagated losslessly. The loop never
-  fabricates, inspects, or reconstructs provider continuation state; a
-  model that requires state the stream did not report fails explicitly.
+  state the previous turn reported, propagated losslessly. With the M4
+  context runtime enabled the request carries the deterministic context
+  projection of that history instead; a successful compaction establishes a
+  new context boundary and invalidates the pending continuation, and the
+  continuation-owning turn is retired completely (never split). The loop
+  never fabricates, inspects, or reconstructs provider continuation state;
+  a model that requires state the stream did not report fails explicitly.
 
 - Cancellation is observed at deterministic check points (before each
   model event, between tool calls) and races every tool execution (biased
@@ -145,11 +149,37 @@ Delivery acceptance means the message was durably committed for delivery; it doe
 
 Compaction is a context projection, not a history mutation.
 
-Canonical conversation history remains intact.
+Canonical conversation history remains intact: no summary, no
+projection-only agent slice, and no rewrite ever appears in the canonical
+`MessageBlock` history or in `AgentExecutionResult.messages`.
 
-Compaction must not cut at a tool-result boundary that separates a tool result from its requesting agent message.
+Compaction must not cut at a tool-result boundary that separates a tool
+result from its requesting agent message. Tool-call/result edges are
+resolved from a deterministic structural index; orphan tool messages are
+malformed history and are rejected, never guessed around. An oversized turn
+may be split only between complete content blocks, with retired tool calls
+and their results always covered together.
 
-Repeated compaction updates a durable context checkpoint and retains a recent uncompressed suffix.
+System messages are pinned: everything through the last
+`SystemMessageBlock` stays literal and is outside summary coverage. A
+compaction summary is a `UserMessageBlock` with runtime provenance and
+`InboundKind::CompactionSummary`; it is never a fifth role and never
+replaces system authority.
+
+A successful compaction must make measurable progress: the new checkpoint
+covers at least one additional compactable unit and the projected estimate
+strictly decreases. Without progress, no checkpoint is saved and no model
+retry follows.
+
+Repeated compaction updates a durable context checkpoint (via the
+`ContextCheckpointStore` abstraction) and retains a recent uncompressed
+suffix; later compactions feed the previous summary plus only the newly
+retired material.
+
+A successful compaction invalidates the pending provider continuation; the
+continuation-owning turn is retired completely. `ContextWindowExceeded` is
+recovered through exactly one bounded compact-and-retry; a recoverable
+overflow never settles the attempt.
 
 ## Durability
 
