@@ -153,14 +153,8 @@ async fn reasoning_then_text_stays_separate() {
         simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
     )
     .await;
-    assert!(matches!(
-        events[1],
-        ModelEvent::ReasoningDelta { .. }
-    ));
-    assert!(matches!(
-        events[2],
-        ModelEvent::TextDelta { .. }
-    ));
+    assert!(matches!(events[1], ModelEvent::ReasoningDelta { .. }));
+    assert!(matches!(events[2], ModelEvent::TextDelta { .. }));
     assert!(matches!(
         events.last(),
         Some(ModelEvent::Completed {
@@ -225,22 +219,10 @@ async fn multiple_output_blocks_keep_stable_indexes() {
         request_with_tools("Mixed"),
     )
     .await;
-    assert!(matches!(
-        events[1],
-        ModelEvent::TextDelta { .. }
-    ));
-    assert!(matches!(
-        events[2],
-        ModelEvent::RefusalDelta { .. }
-    ));
-    assert!(matches!(
-        events[3],
-        ModelEvent::RefusalDelta { .. }
-    ));
-    assert!(matches!(
-        events[4],
-        ModelEvent::ToolCallStarted { .. }
-    ));
+    assert!(matches!(events[1], ModelEvent::TextDelta { .. }));
+    assert!(matches!(events[2], ModelEvent::RefusalDelta { .. }));
+    assert!(matches!(events[3], ModelEvent::RefusalDelta { .. }));
+    assert!(matches!(events[4], ModelEvent::ToolCallStarted { .. }));
     assert!(matches!(
         events.last(),
         Some(ModelEvent::Completed {
@@ -262,10 +244,7 @@ async fn refusal_derives_refusal_finish() {
         simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "No"),
     )
     .await;
-    assert!(matches!(
-        events[1],
-        ModelEvent::RefusalDelta { .. }
-    ));
+    assert!(matches!(events[1], ModelEvent::RefusalDelta { .. }));
     assert!(matches!(
         events.last(),
         Some(ModelEvent::Completed {
