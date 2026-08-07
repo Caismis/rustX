@@ -92,11 +92,13 @@ Terminal input
 
 Container integration, production storage, orchestration, and control-plane integration come after the local runtime semantics are stable.
 
-See [Architecture](docs/architecture.md), [Development Plan](docs/development-plan.md), and [Runtime Invariants](docs/invariants.md).
+See [Architecture](docs/architecture.md), [Development Plan](docs/development-plan.md), [Runtime Invariants](docs/invariants.md), and [Repository Policy](docs/repository-policy.md).
 
-## Repository language
+## Repository governance
 
-All repository content must be written in English, including source code, comments, documentation, tests, CLI output, errors, issues, pull requests, and commit messages.
+All repository content must be written in English. Non-trivial work should use the repository Issue Forms and be linked from a focused pull request. Merge-ready pull requests must pass formatting, Clippy, and test checks. During pre-1.0 development, breaking changes are preferred over compatibility shims when they improve the architecture.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow.
 
 ## License
 
