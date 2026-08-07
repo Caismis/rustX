@@ -150,38 +150,42 @@ async fn anthropic_one_attempt_on_500() {
 /// the terminal event is Failed(Cancelled) without Started.
 #[tokio::test]
 async fn cancellation_before_network_creates_no_request() {
-    for (name, adapter, request) in [
+    let chat_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let responses_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "plain_text.sse")
+    })
+    .await;
+    let anthropic_server =
+        common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+    let cases: Vec<(
+        &str,
+        Box<dyn ModelAdapter>,
+        ModelRequest,
+        &common::FixtureServer,
+    )> = vec![
         (
             "openai-chat",
-            Box::new(openai_chat(
-                &common::FixtureServer::start(|_attempt, _head| {
-                    sse_fixture("openai_chat", "plain_text.sse")
-                })
-                .await,
-            )) as Box<dyn ModelAdapter>,
+            Box::new(openai_chat(&chat_server)),
             chat_request(),
+            &chat_server,
         ),
         (
             "openai-responses",
-            Box::new(openai_responses(
-                &common::FixtureServer::start(|_attempt, _head| {
-                    sse_fixture("openai_responses", "plain_text.sse")
-                })
-                .await,
-            )) as Box<dyn ModelAdapter>,
+            Box::new(openai_responses(&responses_server)),
             responses_request(),
+            &responses_server,
         ),
         (
             "anthropic",
-            Box::new(anthropic(
-                &common::FixtureServer::start(|_attempt, _head| {
-                    sse_fixture("anthropic", "text.sse")
-                })
-                .await,
-            )) as Box<dyn ModelAdapter>,
+            Box::new(anthropic(&anthropic_server)),
             anthropic_request(),
+            &anthropic_server,
         ),
-    ] {
+    ];
+    for (name, adapter, request, server) in cases {
         let cancellation = ModelCancellation::new();
         cancellation.cancel();
         let mut stream = adapter.stream(request, cancellation);
@@ -198,6 +202,11 @@ async fn cancellation_before_network_creates_no_request() {
             last_error_kind(&events),
             ModelErrorKind::Cancelled,
             "{name}"
+        );
+        assert_eq!(
+            server.attempt_count(),
+            0,
+            "{name}: no provider request on pre-network cancellation"
         );
     }
 }

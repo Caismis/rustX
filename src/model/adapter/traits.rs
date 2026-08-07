@@ -49,17 +49,3 @@ pub fn model_event_stream_of_failure(error: ModelError) -> ModelEventStream {
         ModelEvent::Failed { error }
     }))
 }
-
-/// A single-event stream that completes with the given finish reason.
-#[must_use]
-pub fn model_event_stream_of_completion(
-    finish_reason: crate::model::finish::ModelFinishReason,
-    usage: Option<crate::model::types::ModelUsage>,
-) -> ModelEventStream {
-    Box::pin(futures_util::stream::once(async move {
-        ModelEvent::Completed {
-            finish_reason,
-            usage,
-        }
-    }))
-}
