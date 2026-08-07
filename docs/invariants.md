@@ -89,6 +89,11 @@ stream and exactly one terminal `RuntimeEvent`:
   Cancellation is always a terminal cancellation outcome, never
   completion, and no continuation starts after cancellation is observed.
 
+- `ModelRequestCompleted.usage` reports the canonical final usage: the
+  terminal `Completed.usage` when present, otherwise the latest
+  `UsageUpdate`, otherwise `None`. Cumulative usage snapshots are never
+  summed and missing counters are never fabricated.
+
 - Given identical model events, identical tools, identical input, and
   identical cancellation conditions, the loop produces an identical
   ordered `RuntimeEvent` stream and an identical terminal outcome.

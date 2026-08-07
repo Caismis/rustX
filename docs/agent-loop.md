@@ -59,7 +59,14 @@ verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
 
-## 5. Terminal state guarantee
+## 5. Usage
+
+`ModelRequestCompleted.usage` reports the canonical final usage of the
+turn: the terminal `Completed.usage` when present, otherwise the latest
+`UsageUpdate`, otherwise `None`. Cumulative snapshots are never summed and
+missing counters are never fabricated.
+
+## 6. Terminal state guarantee
 
 Exactly one terminal `RuntimeEvent` settles an attempt:
 `AttemptCompleted`, `AttemptCancelled`, or `AttemptFailed`. The terminal
@@ -70,7 +77,7 @@ settled immediately before the terminal event is emitted, so the machine's
 terminal state (`Completed` or `Failed`) and the terminal event describe
 the same settlement.
 
-## 6. Cancellation
+## 7. Cancellation
 
 Cancellation is observed at deterministic check points (before each model
 event and between tool calls) and races every tool execution: the loop
@@ -89,7 +96,7 @@ external work is physically killed; the tool interface exposes no
 cancellation handle in M3, and executor-specific cancellation is a later
 milestone.
 
-## 7. Deterministic execution
+## 8. Deterministic execution
 
 Given identical model events, identical tools, and identical input, the
 loop produces an identical ordered `RuntimeEvent` stream and an identical
@@ -98,7 +105,7 @@ model stream, the tool results, and the cancellation signal. Tool calls
 of one turn execute in block order; there is no hidden concurrency, no
 hidden retry, and no hidden state.
 
-## 8. Unsupported behavior (non-goals)
+## 9. Unsupported behavior (non-goals)
 
 The M3 loop does not implement: multi-agent execution, agent delegation,
 long-term memory, RAG, provider fallback routing or load balancing,

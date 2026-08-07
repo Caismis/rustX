@@ -1,10 +1,11 @@
 //! The runtime-owned tool execution contract (M3).
 //!
-//! M1 defined the declarative tool data contracts in [`types`]; M5 builds the
-//! native/MCP/Python executors behind the interface defined here. The agent
-//! loop (M3) owns tool execution: it resolves each model-issued
-//! [`ToolCall`] against a [`ToolRegistry`] and invokes [`Tool::execute`].
-//! Provider adapters describe tool calls; they never execute tools.
+//! M1 defined the declarative tool data contracts in [`crate::tools::types`];
+//! M5 builds the native/MCP/Python executors behind the interface defined
+//! here. The agent loop (M3) owns tool execution: it resolves each
+//! model-issued [`ToolCall`] against a [`ToolRegistry`] and invokes
+//! [`Tool::execute`]. Provider adapters describe tool calls; they never
+//! execute tools.
 //!
 //! The contract is intentionally minimal: a tool exposes its immutable
 //! [`ToolDefinition`] (name and input schema contract) and executes one call

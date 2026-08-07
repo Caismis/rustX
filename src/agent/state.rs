@@ -24,8 +24,8 @@
 //! always represent the same settlement boundary. A terminal state is
 //! absorbing: no transition leaves it, so execution facts cannot be
 //! produced after the attempt settled. Cancellation terminates through the
-//! failure path ([`ExecutionState::fail`]) and is reported distinctly by
-//! the terminal runtime event.
+//! failure path ([`ExecutionStateMachine::fail`]) and is reported
+//! distinctly by the terminal runtime event.
 
 use crate::runtime::types::RuntimeError;
 
