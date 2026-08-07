@@ -2,9 +2,10 @@
 //!
 //! M1 implements the canonical model contracts: `ModelRequest`, `ModelEvent`,
 //! `ModelUsage`, normalized finish reasons, normalized errors, and the model
-//! protocol enum. Provider adapters for `OpenAI` Chat Completions, `OpenAI`
-//! Responses, and `Anthropic` Messages are milestone M2 and are not
-//! implemented here. The provider continuation-state boundary lives in
+//! protocol enum. M2 implements the provider adapters for `OpenAI` Chat
+//! Completions, `OpenAI` Responses, and `Anthropic` Messages in
+//! `crate::model::adapter`, speaking the runtime-owned `ModelAdapter`
+//! interface. The provider continuation-state boundary lives in
 //! `crate::runtime::continuation`.
 
 pub mod adapter;

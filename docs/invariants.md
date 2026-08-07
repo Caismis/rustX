@@ -106,6 +106,46 @@ Runtime process memory is disposable.
 
 Recovery is based on durable message history, runtime events, capability revision, context checkpoints, and workspace state.
 
+## Model plane
+
+The model plane converts between canonical `ModelRequest`/`ModelEvent`
+contracts and provider protocols. These invariants are frozen by M2:
+
+- One adapter invocation is exactly one provider request attempt. Runtime
+  policy owns retries; adapters perform no automatic retry, no reconnect,
+  and no failover, and return a normalized `ModelError` instead. The OpenAI
+  adapters bypass `async-openai`'s retry layer by construction, and the
+  Anthropic transport performs one HTTP request per invocation.
+
+- Provider SDK and wire types terminate inside adapter modules
+  (`src/model/adapter/openai`, `src/model/adapter/anthropic`). No provider
+  type appears in a canonical contract or in the agent kernel.
+
+- One `ModelEvent` stream has exactly one terminal outcome (`Completed` or
+  `Failed`), no events after the terminal event, and never both.
+
+- Canonical content block identity is assigned by rustX, not by providers.
+  Provider block indexes, tool indexes, fallback markers, and content-part
+  layers are adapter-local keys that never leak into `ContentBlockIndex`.
+
+- Partial tool JSON is never parsed. Argument fragments stream raw and the
+  complete JSON is parsed exactly once at completion; malformed completed
+  JSON is a normalized failure and is never executed.
+
+- Provider continuation state must be emitted through the canonical
+  `ProviderContinuationState` boundary, never retained only in hidden
+  adapter memory.
+
+- Cancellation propagates through the common adapter interface: the
+  underlying provider stream is dropped, no retry occurs, and the invocation
+  terminates with `Failed(Cancelled)`. Cancellation before any network
+  request creates no provider request.
+
+- Provider-hosted tools (OpenAI web/file search, computer use, code
+  interpreter, MCP, image generation; Anthropic server tools, tool runner)
+  are never exposed as rustX tools and never converted into canonical
+  `ToolCall` values.
+
 ## Cancellation
 
 Cancellation is hierarchical.
