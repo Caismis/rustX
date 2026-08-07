@@ -31,7 +31,7 @@ use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
-use crate::runtime::continuation::OpenAiResponsesContinuation;
+use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
 
@@ -105,26 +105,61 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
                     ResponsesPhase::Finished,
                 ));
             }
-            match client.responses().create_stream_byot(&request).await {
-                Ok(stream) => Some((
-                    ModelEvent::Started,
-                    ResponsesPhase::Streaming {
-                        stream,
-                        normalizer,
-                        cancellation,
-                        pending: VecDeque::new(),
-                    },
-                )),
+            // The provider request attempt begins: Started is emitted before
+            // the network-opening await so the lifecycle stays consistent
+            // when cancellation interrupts that await.
+            Some((
+                ModelEvent::Started,
+                ResponsesPhase::Opening {
+                    client,
+                    request,
+                    normalizer,
+                    cancellation,
+                },
+            ))
+        }
+        ResponsesPhase::Opening {
+            client,
+            request,
+            mut normalizer,
+            cancellation,
+        } => {
+            let api = client.responses();
+            let outcome = tokio::select! {
+                outcome = api.create_stream_byot(&request) => outcome,
+                () = cancellation.cancelled() => {
+                    return Some((
+                        ModelEvent::Failed {
+                            error: cancelled_error(),
+                        },
+                        ResponsesPhase::Finished,
+                    ));
+                }
+            };
+            match outcome {
+                Ok(mut stream) => {
+                    let mut pending = VecDeque::new();
+                    responses_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
+                    let event = pending.pop_front().expect("pending is non-empty here");
+                    let next_phase = if is_terminal(&event) {
+                        ResponsesPhase::Finished
+                    } else {
+                        ResponsesPhase::Streaming {
+                            stream,
+                            normalizer,
+                            cancellation,
+                            pending,
+                        }
+                    };
+                    Some((event, next_phase))
+                }
                 Err(error) => Some((
-                    ModelEvent::Started,
-                    ResponsesPhase::Failing {
+                    ModelEvent::Failed {
                         error: normalize_error(error),
                     },
+                    ResponsesPhase::Finished,
                 )),
             }
-        }
-        ResponsesPhase::Failing { error } => {
-            Some((ModelEvent::Failed { error }, ResponsesPhase::Finished))
         }
         ResponsesPhase::Streaming {
             mut stream,
@@ -132,37 +167,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
             cancellation,
             mut pending,
         } => {
-            while pending.is_empty() {
-                let item = tokio::select! {
-                    item = stream.next() => item,
-                    () = cancellation.cancelled() => {
-                        pending.push_back(ModelEvent::Failed {
-                            error: cancelled_error(),
-                        });
-                        break;
-                    }
-                };
-                match item {
-                    Some(Ok(event)) => match normalizer.push(&event) {
-                        Ok(events) => pending.extend(events),
-                        Err(error) => pending.push_back(ModelEvent::Failed { error }),
-                    },
-                    Some(Err(error)) => {
-                        if is_done_marker(&error) {
-                            finish_responses(&mut normalizer, &mut pending);
-                        } else {
-                            pending.push_back(ModelEvent::Failed {
-                                error: normalize_error(error),
-                            });
-                        }
-                        break;
-                    }
-                    None => {
-                        finish_responses(&mut normalizer, &mut pending);
-                        break;
-                    }
-                }
-            }
+            responses_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
             let event = pending.pop_front().expect("pending is non-empty here");
             let next_phase = if is_terminal(&event) {
                 ResponsesPhase::Finished
@@ -177,6 +182,47 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
             Some((event, next_phase))
         }
         ResponsesPhase::Finished => None,
+    }
+}
+
+/// Pulls provider events into `pending` until at least one event is ready or
+/// the invocation is over.
+async fn responses_pull(
+    stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
+    normalizer: &mut ResponsesNormalizer,
+    cancellation: &ModelCancellation,
+    pending: &mut VecDeque<ModelEvent>,
+) {
+    while pending.is_empty() {
+        let item = tokio::select! {
+            item = stream.next() => item,
+            () = cancellation.cancelled() => {
+                pending.push_back(ModelEvent::Failed {
+                    error: cancelled_error(),
+                });
+                break;
+            }
+        };
+        match item {
+            Some(Ok(event)) => match normalizer.push(&event) {
+                Ok(events) => pending.extend(events),
+                Err(error) => pending.push_back(ModelEvent::Failed { error }),
+            },
+            Some(Err(error)) => {
+                if is_done_marker(&error) {
+                    finish_responses(normalizer, pending);
+                } else {
+                    pending.push_back(ModelEvent::Failed {
+                        error: normalize_error(error),
+                    });
+                }
+                break;
+            }
+            None => {
+                finish_responses(normalizer, pending);
+                break;
+            }
+        }
     }
 }
 
@@ -214,8 +260,11 @@ enum ResponsesPhase {
         normalizer: ResponsesNormalizer,
         cancellation: ModelCancellation,
     },
-    Failing {
-        error: ModelError,
+    Opening {
+        client: Client<OpenAIConfig>,
+        request: serde_json::Value,
+        normalizer: ResponsesNormalizer,
+        cancellation: ModelCancellation,
     },
     Streaming {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
@@ -743,9 +792,7 @@ fn translate_request(
     if !instructions.is_empty() {
         request_value["instructions"] = instructions.join("\n\n").into();
     }
-    if let Some(max_output_tokens) = request.max_output_tokens {
-        request_value["max_output_tokens"] = max_output_tokens.into();
-    }
+    request_value["max_output_tokens"] = request.max_output_tokens.into();
     if !request.tools.is_empty() {
         request_value["tools"] = serde_json::json!(translate_tools(&request.tools));
     }
@@ -873,13 +920,25 @@ fn translate_agent_inputs(
                 }));
             }
             AgentContentBlock::Reasoning(reasoning) => {
-                if let Some(text) = &reasoning.text {
-                    // Responses explicitly supports reasoning items in input;
-                    // canonical reasoning stays reasoning, never text.
-                    items.push(serde_json::json!({
-                        "type": "reasoning",
-                        "summary": [{"type": "summary_text", "text": text}],
-                    }));
+                // Canonical readable reasoning text is not sufficient evidence
+                // to reconstruct a provider-native reasoning item: provider
+                // ids, summary structure, and encrypted content cannot be
+                // fabricated. Only lossless preserved provider-native state
+                // is replayed; anything else fails explicitly instead of
+                // degrading into a fabricated summary item.
+                match &reasoning.provider_state {
+                    Some(ProviderContinuationState::OpenAiResponses(
+                        OpenAiResponsesContinuation::Stateless { items: preserved },
+                    )) => {
+                        items.extend(preserved.iter().cloned());
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            "canonical reasoning text alone is not sufficient to reconstruct \
+                             an OpenAI Responses reasoning item; preserved provider-native \
+                             reasoning state is required for replay",
+                        ));
+                    }
                 }
             }
             AgentContentBlock::ToolCall(call) => {

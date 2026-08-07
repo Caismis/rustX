@@ -110,58 +110,59 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
             if cancellation.is_cancelled() {
                 return Some((failed(cancelled_error()), ChatPhase::Finished));
             }
-            match client.chat().create_stream_byot(&request).await {
-                Ok(stream) => Some((
-                    ModelEvent::Started,
-                    ChatPhase::Streaming {
-                        stream,
-                        normalizer,
-                        cancellation,
-                        pending: VecDeque::new(),
-                    },
-                )),
-                Err(error) => Some((
-                    ModelEvent::Started,
-                    ChatPhase::Failing {
-                        error: normalize_error(error),
-                    },
-                )),
+            // The provider request attempt begins: Started is emitted before
+            // the network-opening await so the lifecycle stays consistent
+            // when cancellation interrupts that await.
+            Some((
+                ModelEvent::Started,
+                ChatPhase::Opening {
+                    client,
+                    request,
+                    normalizer,
+                    cancellation,
+                },
+            ))
+        }
+        ChatPhase::Opening {
+            client,
+            request,
+            mut normalizer,
+            cancellation,
+        } => {
+            let api = client.chat();
+            let outcome = tokio::select! {
+                outcome = api.create_stream_byot(&request) => outcome,
+                () = cancellation.cancelled() => {
+                    return Some((failed(cancelled_error()), ChatPhase::Finished));
+                }
+            };
+            match outcome {
+                Ok(mut stream) => {
+                    let mut pending = VecDeque::new();
+                    chat_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
+                    let event = pending.pop_front().expect("pending is non-empty here");
+                    let next_phase = if is_terminal(&event) {
+                        ChatPhase::Finished
+                    } else {
+                        ChatPhase::Streaming {
+                            stream,
+                            normalizer,
+                            cancellation,
+                            pending,
+                        }
+                    };
+                    Some((event, next_phase))
+                }
+                Err(error) => Some((failed(normalize_error(error)), ChatPhase::Finished)),
             }
         }
-        ChatPhase::Failing { error } => Some((failed(error), ChatPhase::Finished)),
         ChatPhase::Streaming {
             mut stream,
             mut normalizer,
             cancellation,
             mut pending,
         } => {
-            while pending.is_empty() {
-                let item = tokio::select! {
-                    item = stream.next() => item,
-                    () = cancellation.cancelled() => {
-                        pending.push_back(failed(cancelled_error()));
-                        break;
-                    }
-                };
-                match item {
-                    Some(Ok(chunk)) => match normalizer.push(&chunk) {
-                        Ok(events) => pending.extend(events),
-                        Err(error) => pending.push_back(failed(error)),
-                    },
-                    Some(Err(error)) if is_done_marker(&error) => {
-                        finish(&mut normalizer, &mut pending);
-                        break;
-                    }
-                    Some(Err(error)) => {
-                        pending.push_back(failed(normalize_error(error)));
-                        break;
-                    }
-                    None => {
-                        finish(&mut normalizer, &mut pending);
-                        break;
-                    }
-                }
-            }
+            chat_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
             let event = pending.pop_front().expect("pending is non-empty here");
             let next_phase = if is_terminal(&event) {
                 ChatPhase::Finished
@@ -176,6 +177,43 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
             Some((event, next_phase))
         }
         ChatPhase::Finished => None,
+    }
+}
+
+/// Pulls provider events into `pending` until at least one event is ready or
+/// the invocation is over.
+async fn chat_pull(
+    stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
+    normalizer: &mut ChatStreamNormalizer,
+    cancellation: &ModelCancellation,
+    pending: &mut VecDeque<ModelEvent>,
+) {
+    while pending.is_empty() {
+        let item = tokio::select! {
+            item = stream.next() => item,
+            () = cancellation.cancelled() => {
+                pending.push_back(failed(cancelled_error()));
+                break;
+            }
+        };
+        match item {
+            Some(Ok(chunk)) => match normalizer.push(&chunk) {
+                Ok(events) => pending.extend(events),
+                Err(error) => pending.push_back(failed(error)),
+            },
+            Some(Err(error)) if is_done_marker(&error) => {
+                finish(normalizer, pending);
+                break;
+            }
+            Some(Err(error)) => {
+                pending.push_back(failed(normalize_error(error)));
+                break;
+            }
+            None => {
+                finish(normalizer, pending);
+                break;
+            }
+        }
     }
 }
 
@@ -224,8 +262,11 @@ enum ChatPhase {
         normalizer: ChatStreamNormalizer,
         cancellation: ModelCancellation,
     },
-    Failing {
-        error: ModelError,
+    Opening {
+        client: Client<OpenAIConfig>,
+        request: CreateChatCompletionRequest,
+        normalizer: ChatStreamNormalizer,
+        cancellation: ModelCancellation,
     },
     Streaming {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
@@ -508,9 +549,7 @@ fn translate_request(request: &ModelRequest) -> Result<CreateChatCompletionReque
             include_usage: Some(true),
             include_obfuscation: None,
         });
-    if let Some(max) = request.max_output_tokens {
-        builder.max_completion_tokens(max);
-    }
+    builder.max_completion_tokens(request.max_output_tokens);
     builder.reasoning_effort(match request.reasoning {
         crate::model::types::ReasoningEffort::Minimal => ReasoningEffort::Minimal,
         crate::model::types::ReasoningEffort::Low => ReasoningEffort::Low,
