@@ -920,7 +920,7 @@ fn translate_tool_result(
     for content in &tool.result.content {
         match content {
             crate::tools::types::ToolResultContent::Text(text) => {
-                text_parts.push(text.text.clone())
+                text_parts.push(text.text.clone());
             }
             crate::tools::types::ToolResultContent::Json { value } => {
                 text_parts.push(serde_json::to_string(value).map_err(|e| {

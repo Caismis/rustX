@@ -380,6 +380,7 @@ async fn unknown_tool_name_fails() {
 /// HTTP error mapping: authentication, rate limit with Retry-After, invalid
 /// request, context overflow, 5xx, timeout.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one table-driven error matrix per test file
 async fn http_errors_normalize() {
     type ErrorCase = (
         &'static str,
