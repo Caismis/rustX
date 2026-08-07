@@ -9,6 +9,7 @@
   "event": {
     "type": "agent_text_delta",
     "message_id": "msg-agent-a-gen-3",
+    "block_index": 0,
     "delta": "The repository contains a Cargo manifest, a docs directory, "
   }
 }

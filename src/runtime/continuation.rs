@@ -25,13 +25,35 @@ pub enum ProviderContinuationState {
 }
 
 /// Continuation state for the `OpenAI` Responses protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OpenAiResponsesContinuation {
-    /// The provider-assigned response id of the previous response to continue.
-    pub previous_response_id: String,
+///
+/// The Responses protocol supports two continuation modes, and the canonical
+/// boundary preserves either one without depending on a provider SDK:
+///
+/// - [`OpenAiResponsesContinuation::Stored`]: stateful operation, continued
+///   by referencing the provider-stored previous response.
+/// - [`OpenAiResponsesContinuation::Stateless`]: stateless operation
+///   (`store: false`, zero-data-retention), continued by preserving the
+///   previous response's output/reasoning items and passing them back on
+///   later requests. This includes opaque encrypted reasoning content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiResponsesContinuation {
+    /// Stateful continuation by reference to the stored previous response.
+    Stored {
+        /// The provider-assigned response id of the previous response to
+        /// continue.
+        previous_response_id: String,
+    },
+    /// Stateless continuation by preserved opaque response state.
+    Stateless {
+        /// Ordered output/reasoning items from the previous response that
+        /// must be passed back on the next request, including opaque
+        /// encrypted reasoning content.
+        items: Vec<serde_json::Value>,
+    },
 }
 
-/// Continuation state for the Anthropic Messages protocol.
+/// Continuation state for the `Anthropic` Messages protocol.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicContinuation {
     /// Opaque provider state preserved verbatim by the adapter.
@@ -42,15 +64,41 @@ pub struct AnthropicContinuation {
 mod tests {
     use super::{AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState};
 
-    /// `OpenAI` Responses continuation state round-trips with its provider id.
+    /// Stored continuation round-trips with its provider response id.
     #[test]
-    fn openai_responses_continuation_round_trip() {
-        let value = ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation {
-            previous_response_id: "resp_abc123".to_owned(),
-        });
+    fn openai_responses_stored_continuation_round_trip() {
+        let value =
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                previous_response_id: "resp_abc123".to_owned(),
+            });
         let json = serde_json::to_string(&value).expect("serialize state");
         assert!(json.contains("\"openai_responses\""));
+        assert!(json.contains("\"stored\""));
         assert!(json.contains("resp_abc123"));
+        let decoded: ProviderContinuationState =
+            serde_json::from_str(&json).expect("deserialize state");
+        assert_eq!(decoded, value);
+    }
+
+    /// Stateless continuation preserves opaque reasoning/output items.
+    #[test]
+    fn openai_responses_stateless_continuation_round_trip() {
+        let value =
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+                items: vec![
+                    serde_json::json!({
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [
+                            {"type": "encrypted_content", "data": "opaque-reasoning"}
+                        ]
+                    }),
+                    serde_json::json!({"type": "output_text", "text": "hello"}),
+                ],
+            });
+        let json = serde_json::to_string(&value).expect("serialize state");
+        assert!(json.contains("\"stateless\""));
+        assert!(json.contains("opaque-reasoning"));
         let decoded: ProviderContinuationState =
             serde_json::from_str(&json).expect("deserialize state");
         assert_eq!(decoded, value);

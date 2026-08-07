@@ -1,0 +1,22 @@
+{
+  "openai_responses": {
+    "stateless": {
+      "items": [
+        {
+          "type": "reasoning",
+          "id": "rs_1",
+          "summary": [
+            {
+              "type": "encrypted_content",
+              "data": "opaque-encrypted-reasoning"
+            }
+          ]
+        },
+        {
+          "type": "output_text",
+          "text": "The repository contains a Cargo manifest, a docs directory, and the Rust source tree."
+        }
+      ]
+    }
+  }
+}

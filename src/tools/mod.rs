@@ -7,6 +7,6 @@
 pub mod types;
 
 pub use types::{
-    ToolCall, ToolDefinition, ToolExecutionMode, ToolExecutionResult, ToolExecutionStatus,
-    ToolOrigin, ToolReplayPolicy, ToolResultContent, TruncationState,
+    ToolCall, ToolCallStart, ToolDefinition, ToolExecutionMode, ToolExecutionResult,
+    ToolExecutionStatus, ToolOrigin, ToolReplayPolicy, ToolResultContent, TruncationState,
 };

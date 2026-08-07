@@ -8,11 +8,8 @@
   "event": {
     "type": "attempt_completed",
     "attempt_id": "attempt-1",
-    "outcome": {
-      "type": "completed",
-      "finish_reason": {
-        "type": "stop"
-      }
+    "finish_reason": {
+      "type": "stop"
     }
   }
 }

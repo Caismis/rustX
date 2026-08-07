@@ -157,7 +157,11 @@ impl Default for CapabilityRevision {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttemptId, CapabilityRevision, ConversationId, MessageId};
+    use super::{
+        AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
+        EventId, McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolId,
+        ToolVersionId, TurnId,
+    };
 
     /// Strong identifiers serialize as plain strings, not as structs.
     #[test]
@@ -167,19 +171,35 @@ mod tests {
         assert_eq!(json, "\"conv-1\"");
     }
 
-    /// Strong identifiers survive a JSON round trip unchanged.
+    /// Every strong identifier type round-trips against its own type; IDs
+    /// from different domains must never deserialize interchangeably.
     #[test]
-    fn strong_id_round_trip() {
-        let cases: Vec<serde_json::Value> = vec![
-            serde_json::to_value(ConversationId::new("conv-1")).expect("serialize id"),
-            serde_json::to_value(MessageId::new("msg-1")).expect("serialize id"),
-            serde_json::to_value(AttemptId::new("attempt-1")).expect("serialize id"),
-        ];
-        for value in cases {
-            let json = serde_json::to_string(&value).expect("serialize id value");
-            let decoded: ConversationId = serde_json::from_str(&json).expect("deserialize id");
-            let _ = decoded;
+    fn strong_ids_round_trip_against_their_own_type() {
+        fn round_trip<T>(value: &T) -> T
+        where
+            T: Clone + PartialEq + std::fmt::Debug + serde::Serialize + serde::de::DeserializeOwned,
+        {
+            let json = serde_json::to_string(value).expect("serialize id");
+            let decoded: T = serde_json::from_str(&json).expect("deserialize id");
+            assert_eq!(&decoded, value, "id must round-trip as its own type");
+            decoded
         }
+
+        let _ = round_trip(&ConversationId::new("conv-1"));
+        let _ = round_trip(&MessageId::new("msg-1"));
+        let _ = round_trip(&AgentId::new("agent-a"));
+        let _ = round_trip(&AgentVersionId::new("agent-v1"));
+        let _ = round_trip(&AttemptId::new("attempt-1"));
+        let _ = round_trip(&TurnId::new("turn-1"));
+        let _ = round_trip(&EventId::new("evt-1"));
+        let _ = round_trip(&ToolId::new("tool-bash"));
+        let _ = round_trip(&ToolCallId::new("call_01"));
+        let _ = round_trip(&ToolVersionId::new("tool-v2"));
+        let _ = round_trip(&McpServerId::new("mcp-fs"));
+        let _ = round_trip(&SkillId::new("skill-readme"));
+        let _ = round_trip(&SkillVersionId::new("skill-v3"));
+        let _ = round_trip(&ArtifactId::new("artifact-1"));
+        let _ = round_trip(&CapabilityRevision::new(42));
     }
 
     /// A typed id remains distinct from a raw string representation.

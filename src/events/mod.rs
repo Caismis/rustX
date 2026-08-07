@@ -6,5 +6,6 @@
 pub mod types;
 
 pub use types::{
-    AttemptLimit, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
+    AttemptFailure, AttemptLimit, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent,
+    RuntimeEventEnvelope,
 };

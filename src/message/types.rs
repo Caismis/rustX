@@ -36,6 +36,37 @@ pub enum MessageBlock {
     Tool(ToolMessageBlock),
 }
 
+/// A stable index identifying one content block within the ordered content
+/// list of the canonical message being assembled.
+///
+/// Streaming facts (text deltas, reasoning deltas, provider continuation
+/// state, tool-call content) reference the block they belong to by this
+/// index, so interleaved and multiple blocks remain unambiguous without
+/// exposing any provider-specific block id type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContentBlockIndex(u32);
+
+impl ContentBlockIndex {
+    /// Creates an index from a raw value.
+    #[must_use]
+    pub const fn new(index: u32) -> Self {
+        Self(index)
+    }
+
+    /// Returns the raw index value.
+    #[must_use]
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for ContentBlockIndex {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Trusted system/runtime instructions or context.
 ///
 /// The authority records who supplied the trusted content, as a typed

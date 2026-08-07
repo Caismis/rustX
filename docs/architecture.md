@@ -31,21 +31,23 @@ runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            ToolCallId, ToolVersionId, McpServerId, SkillId,
                            SkillVersionId, ArtifactId) and CapabilityRevision
 runtime/types.rs           CancellationReason, RuntimeError
-runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses,
-                           Anthropic opaque state)
+runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
+                           stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
 message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
-                           (SystemAuthority, UserSource, InboundKind), content
-                           enums per role
-tools/types.rs             ToolDefinition, ToolCall, ToolExecutionResult,
-                           ToolExecutionStatus, ToolExecutionMode,
-                           ToolReplayPolicy, ToolOrigin, TruncationState
+                           (SystemAuthority, UserSource, InboundKind),
+                           ContentBlockIndex, content enums per role
+tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
+                           ToolExecutionResult, ToolExecutionStatus,
+                           ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
+                           TruncationState
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
                            ReasoningEffort
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
 model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
-events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome
+events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome,
+                           AttemptFailure
 protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
 ```
 
@@ -76,6 +78,58 @@ Serialization conventions for persistence-facing types:
 The three execution layers each consume these contracts: the agent kernel
 operates on them, the context engine assembles them into provider context,
 and the model plane translates them to and from provider protocols.
+
+### 2.2 Attempt settlement invariant
+
+Exactly one terminal runtime event settles an attempt, and each terminal
+event carries only the data valid for that state:
+
+```text
+AttemptCompleted      finish reason
+AttemptCancelled      cancellation reason
+AttemptTimedOut       -
+AttemptLimitExceeded  exceeded limit
+AttemptFailed         normalized AttemptFailure
+```
+
+`AttemptCompleted` never carries a failure outcome, and unknown event
+payload fields are rejected on deserialization, so contradictory terminal
+encodings are impossible by construction. The platform-level `AttemptOutcome`
+type maps one-to-one with these terminal events via
+`AttemptOutcome::from_terminal_event`. When an attempt fails because a model
+request exhausted its retry policy, `AttemptFailure::Model` preserves the
+normalized `ModelError` without degrading it to a runtime error string.
+
+### 2.3 Streaming assembly identity
+
+`ModelEvent` (and the corresponding `RuntimeEvent` deltas) target content
+blocks by the rustX-owned `ContentBlockIndex`: the position of the block
+within the ordered `AgentContentBlock[]` of the message being assembled.
+Interleaved text, reasoning, tool-call, and provider continuation-state
+streaming therefore assembles unambiguously without exposing any provider
+block id type. `ToolCallStarted` carries only the data known at start
+(`ToolCallStart`: call id, tool id, name); raw argument fragments stream via
+`ToolCallArgumentsDelta`, and the fully assembled `ToolCall` is emitted only
+at `ToolCallCompleted`.
+
+### 2.4 Tool execution event identity
+
+Every tool execution event carries the executing tool call identity:
+`ToolExecutionStarted`, `ToolExecutionProgress`, `ToolExecutionCompleted`,
+and `ToolExecutionFailed` all carry `tool_call_id` and `tool_id`. With
+parallel execution, completion order may differ from call order, and each
+completion remains attributable to its originating call. `ToolExecutionResult`
+itself stays reusable and carries no call identity; identity is attached at
+the event and message boundary only.
+
+### 2.5 Message content single source of truth
+
+The durable Message Ledger (M8) is the only authoritative store for canonical
+message content. `AgentMessageCommitted` and `ToolMessageCommitted` are
+execution facts that reference the committed message by its stable
+`MessageId` and never embed the message body, so the Event Journal never
+holds a competing copy. M8 persists the ledger write before the commit event
+(persist-before-publish), keeping the two stores consistent.
 
 ### Layer 1: Agent kernel
 
@@ -251,6 +305,8 @@ MessageBlock = model-context fact
 Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
 
 Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AgentMessageBlock` from it.
+
+Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
 
 ## 7. Recovery model
 

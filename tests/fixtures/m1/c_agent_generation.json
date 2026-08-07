@@ -11,7 +11,9 @@
       "text": "The user asked for the repository layout, so the most direct action is to list the top-level directory contents before summarizing.",
       "provider_state": {
         "openai_responses": {
-          "previous_response_id": "resp_abc123"
+          "stored": {
+            "previous_response_id": "resp_abc123"
+          }
         }
       }
     },

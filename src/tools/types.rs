@@ -26,7 +26,7 @@ pub struct ToolDefinition {
     /// JSON Schema document describing the accepted `ToolCall` arguments.
     pub input_schema: serde_json::Value,
     /// Declarative execution mode; scheduling is not implemented in M1.
-    #[serde(default)]
+    /// Required: a missing mode is never silently interpreted as parallel.
     pub execution_mode: ToolExecutionMode,
     /// Replay policy; `Never` is the safe default.
     #[serde(default)]
@@ -38,14 +38,16 @@ pub struct ToolDefinition {
 /// Whether a batch of tool calls may run in parallel.
 ///
 /// This is declarative metadata only in M1; no scheduling is implemented.
+/// The explicit `Default` is `Sequential`: when a mode is not stated, the
+/// runtime must not assume parallel execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolExecutionMode {
-    /// Multiple calls may execute concurrently.
-    #[default]
-    Parallel,
     /// Calls execute one at a time in the order issued.
+    #[default]
     Sequential,
+    /// Multiple calls may execute concurrently.
+    Parallel,
 }
 
 /// Whether the runtime may automatically re-execute a tool after a crash.
@@ -98,6 +100,21 @@ pub struct ToolCall {
     pub name: String,
     /// Arbitrary JSON arguments for the tool call.
     pub arguments: serde_json::Value,
+}
+
+/// The data known when a tool call starts, before its arguments stream.
+///
+/// Streaming protocols expose the call identity, tool identity, and name
+/// before any argument JSON is available. The fully assembled `ToolCall`
+/// (including `arguments`) is emitted only when the call completes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallStart {
+    /// Identity of this specific call.
+    pub id: ToolCallId,
+    /// Identity of the tool being called within the capability set.
+    pub tool_id: ToolId,
+    /// Name of the tool at call time.
+    pub name: String,
 }
 
 /// The normalized outcome of one tool execution.
@@ -182,10 +199,10 @@ pub enum ToolResultContent {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCall, ToolExecutionMode, ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy,
-        TruncationState,
+        ToolCall, ToolCallStart, ToolDefinition, ToolExecutionMode, ToolExecutionResult,
+        ToolExecutionStatus, ToolReplayPolicy, TruncationState,
     };
-    use crate::runtime::identity::{ToolCallId, ToolId};
+    use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
     use serde_json::json;
 
     /// The safe replay default is `Never`.
@@ -194,10 +211,65 @@ mod tests {
         assert_eq!(ToolReplayPolicy::default(), ToolReplayPolicy::Never);
     }
 
-    /// The declarative execution default is parallel.
+    /// The conservative execution-mode default is sequential, never parallel.
     #[test]
-    fn execution_mode_default_is_parallel() {
-        assert_eq!(ToolExecutionMode::default(), ToolExecutionMode::Parallel);
+    fn execution_mode_default_is_sequential() {
+        assert_eq!(ToolExecutionMode::default(), ToolExecutionMode::Sequential);
+    }
+
+    /// A missing execution mode must not silently deserialize as parallel.
+    #[test]
+    fn tool_definition_requires_explicit_execution_mode() {
+        let json = r#"{
+            "id": "tool-bash",
+            "name": "bash",
+            "description": "Run a shell command",
+            "input_schema": {"type": "object"},
+            "replay_policy": "never",
+            "origin": "builtin"
+        }"#;
+        let result = serde_json::from_str::<ToolDefinition>(json);
+        assert!(
+            result.is_err(),
+            "missing execution_mode must fail deserialization"
+        );
+    }
+
+    /// An explicitly declared execution mode round-trips.
+    #[test]
+    fn tool_definition_with_explicit_execution_mode_round_trips() {
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            description: "Run a shell command".to_owned(),
+            input_schema: json!({"type": "object"}),
+            execution_mode: ToolExecutionMode::Parallel,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: crate::tools::types::ToolOrigin::Mcp {
+                server_id: McpServerId::new("mcp-fs"),
+            },
+        };
+        let json = serde_json::to_string(&definition).expect("serialize definition");
+        let decoded: ToolDefinition = serde_json::from_str(&json).expect("deserialize definition");
+        assert_eq!(decoded, definition);
+    }
+
+    /// Tool call starts carry only the data known before arguments stream.
+    #[test]
+    fn tool_call_start_carries_only_known_identity() {
+        let start = ToolCallStart {
+            id: ToolCallId::new("call_01"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+        };
+        let json = serde_json::to_string(&start).expect("serialize start");
+        let decoded: ToolCallStart = serde_json::from_str(&json).expect("deserialize start");
+        assert_eq!(decoded, start);
+        let value = serde_json::to_value(&start).expect("serialize start value");
+        assert!(
+            value.get("arguments").is_none(),
+            "no arguments exist at start"
+        );
     }
 
     /// Tool calls round-trip arbitrary JSON arguments untouched.

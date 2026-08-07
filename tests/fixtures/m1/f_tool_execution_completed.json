@@ -8,6 +8,8 @@
   "timestamp": "2026-08-07T12:00:02Z",
   "event": {
     "type": "tool_execution_completed",
+    "tool_call_id": "call_01",
+    "tool_id": "tool-list",
     "result": {
       "status": {
         "type": "success"

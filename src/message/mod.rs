@@ -9,7 +9,7 @@ pub mod types;
 
 pub use content::{FileReference, ImageReference, TextBlock};
 pub use types::{
-    AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, ReasoningBlock, RefusalBlock,
-    SystemAuthority, SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
-    UserSource,
+    AgentContentBlock, AgentMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+    ReasoningBlock, RefusalBlock, SystemAuthority, SystemMessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };

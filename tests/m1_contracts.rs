@@ -6,11 +6,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use rustx::message::types::{
-    AgentContentBlock, InboundKind, MessageBlock, ToolMessageBlock, UserSource,
-};
+use rustx::message::types::{AgentContentBlock, InboundKind, MessageBlock, UserSource};
 use rustx::protocol::manifest::RuntimeManifest;
-use rustx::runtime::continuation::ProviderContinuationState;
+use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{CapabilityRevision, EventId, MessageId};
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use serde::Serialize;
@@ -76,7 +74,7 @@ fn agent_to_agent_inbound_remains_user() {
 }
 
 /// Fixture C: one completed generation with text, reasoning (including
-/// provider continuation state), and a tool call.
+/// stateful `OpenAI` Responses continuation state), and a tool call.
 #[test]
 fn agent_generation_round_trip() {
     let block: MessageBlock =
@@ -101,12 +99,15 @@ fn agent_generation_round_trip() {
                         "The user asked for the repository layout, so the most direct action is to list the top-level directory contents before summarizing."
                     )
                 );
-                let Some(ProviderContinuationState::OpenAiResponses(state)) =
-                    &reasoning.provider_state
+                let Some(ProviderContinuationState::OpenAiResponses(
+                    OpenAiResponsesContinuation::Stored {
+                        previous_response_id,
+                    },
+                )) = &reasoning.provider_state
                 else {
-                    panic!("fixture C reasoning must carry OpenAI continuation state");
+                    panic!("fixture C reasoning must carry stored OpenAI continuation state");
                 };
-                assert_eq!(state.previous_response_id, "resp_abc123");
+                assert_eq!(previous_response_id, "resp_abc123");
                 saw_reasoning_with_state = true;
             }
             AgentContentBlock::ToolCall(call) => {
@@ -196,6 +197,27 @@ fn manifest_round_trip() {
     let _ = round_trip(&manifest);
 }
 
+/// Fixture G: stateless `OpenAI` Responses continuation preserves opaque
+/// reasoning/output items for zero-data-retention operation.
+#[test]
+fn openai_stateless_continuation_round_trip() {
+    let state: ProviderContinuationState =
+        serde_json::from_str(&read_fixture("g_openai_stateless_continuation.json"))
+            .expect("parse fixture");
+    let ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+        items,
+    }) = &state
+    else {
+        panic!("fixture G must deserialize as stateless OpenAI continuation");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["type"], "reasoning");
+    assert_eq!(items[0]["summary"][0]["type"], "encrypted_content");
+    assert_eq!(items[0]["summary"][0]["data"], "opaque-encrypted-reasoning");
+    assert_eq!(items[1]["type"], "output_text");
+    let _ = round_trip(&state);
+}
+
 /// Fixtures F: runtime event envelopes.
 #[test]
 fn attempt_started_envelope_round_trip() {
@@ -226,8 +248,13 @@ fn agent_text_delta_envelope_round_trip() {
         serde_json::from_str(&read_fixture("f_agent_text_delta.json")).expect("parse fixture");
     assert!(matches!(
         envelope.event,
-        RuntimeEvent::AgentTextDelta { ref message_id, ref delta }
-            if message_id.as_str() == "msg-agent-a-gen-3" && delta.contains("Cargo manifest")
+        RuntimeEvent::AgentTextDelta {
+            ref message_id,
+            block_index,
+            ref delta
+        } if message_id.as_str() == "msg-agent-a-gen-3"
+            && block_index.get() == 0
+            && delta.contains("Cargo manifest")
     ));
     assert_eq!(
         envelope
@@ -244,53 +271,71 @@ fn agent_text_delta_envelope_round_trip() {
     let _ = round_trip(&envelope);
 }
 
-/// Tool execution completion is an event carrying the normalized result.
+/// Tool execution completion is an event that stays attributable to its
+/// originating tool call and carries the normalized result.
 #[test]
 fn tool_execution_completed_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
         serde_json::from_str(&read_fixture("f_tool_execution_completed.json"))
             .expect("parse fixture");
-    let RuntimeEvent::ToolExecutionCompleted { result } = &envelope.event else {
+    let RuntimeEvent::ToolExecutionCompleted {
+        tool_call_id,
+        tool_id,
+        result,
+    } = &envelope.event
+    else {
         panic!("fixture F-tool must deserialize as ToolExecutionCompleted");
     };
+    assert_eq!(tool_call_id.as_str(), "call_01");
+    assert_eq!(tool_id.as_str(), "tool-list");
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(result.duration_ms, 12);
     let _ = round_trip(&envelope);
 }
 
-/// A committed agent message is an event whose payload is the canonical
-/// `AgentMessageBlock`.
+/// A committed agent message is an execution fact referencing the message by
+/// identity; the event never embeds message content.
 #[test]
 fn agent_message_committed_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
         serde_json::from_str(&read_fixture("f_agent_message_committed.json"))
             .expect("parse fixture");
-    let RuntimeEvent::AgentMessageCommitted { message } = &envelope.event else {
+    let RuntimeEvent::AgentMessageCommitted { message_id } = &envelope.event else {
         panic!("fixture F-commit must deserialize as AgentMessageCommitted");
     };
-    assert_eq!(message.id, MessageId::new("msg-agent-a-gen-3"));
-    assert!(message.content.iter().any(|block| matches!(
-        block,
-        AgentContentBlock::Reasoning(reasoning)
-            if reasoning.provider_state.is_some()
-    )));
+    assert_eq!(message_id, &MessageId::new("msg-agent-a-gen-3"));
+    let value = serde_json::to_value(&envelope.event).expect("serialize event");
+    assert!(
+        value.get("message").is_none(),
+        "committed-message events must not embed message content"
+    );
     let _ = round_trip(&envelope);
 }
 
-/// A completed attempt carries a typed platform-level outcome.
+/// A completed attempt carries its finish reason directly; no outcome
+/// payload exists on the terminal event.
 #[test]
 fn attempt_completed_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
         serde_json::from_str(&read_fixture("f_attempt_completed.json")).expect("parse fixture");
-    let RuntimeEvent::AttemptCompleted { outcome, .. } = &envelope.event else {
+    let RuntimeEvent::AttemptCompleted {
+        attempt_id,
+        finish_reason,
+    } = &envelope.event
+    else {
         panic!("fixture F-complete must deserialize as AttemptCompleted");
     };
-    assert!(matches!(
-        outcome,
-        rustx::events::types::AttemptOutcome::Completed {
-            finish_reason: rustx::model::finish::ModelFinishReason::Stop
-        }
-    ));
+    assert_eq!(attempt_id.as_str(), "attempt-1");
+    assert_eq!(
+        finish_reason,
+        &rustx::model::finish::ModelFinishReason::Stop
+    );
+    assert_eq!(
+        rustx::events::types::AttemptOutcome::from_terminal_event(&envelope.event),
+        Some(rustx::events::types::AttemptOutcome::Completed {
+            finish_reason: rustx::model::finish::ModelFinishReason::Stop,
+        })
+    );
     let _ = round_trip(&envelope);
 }
 
@@ -322,6 +367,8 @@ fn additional_event_variants_round_trip() {
     assert_eq!(decoded, cancelled);
 
     let interrupted = RuntimeEvent::ToolExecutionCompleted {
+        tool_call_id: rustx::runtime::identity::ToolCallId::new("call_07"),
+        tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         result: ToolExecutionResult {
             status: ToolExecutionStatus::Interrupted,
             content: Vec::new(),
@@ -338,26 +385,26 @@ fn additional_event_variants_round_trip() {
 }
 
 /// A `ToolMessageBlock` composes `ToolExecutionResult` as the single source
-/// of truth: the same result value round-trips both standalone and inside a
-/// committed tool message.
+/// of truth, while the committed-message event references the message by
+/// identity only.
 #[test]
 fn tool_message_composes_execution_result() {
-    let result: ToolExecutionResult = {
-        let block: MessageBlock =
-            serde_json::from_str(&read_fixture("d_tool_result.json")).expect("parse fixture");
-        let MessageBlock::Tool(tool) = &block else {
-            panic!("fixture D must deserialize as a Tool message");
-        };
-        tool.result.clone()
+    let block: MessageBlock =
+        serde_json::from_str(&read_fixture("d_tool_result.json")).expect("parse fixture");
+    let MessageBlock::Tool(tool_message) = &block else {
+        panic!("fixture D must deserialize as a Tool message");
     };
+    assert_eq!(tool_message.result.status, ToolExecutionStatus::Success);
+
     let committed = RuntimeEvent::ToolMessageCommitted {
-        message: ToolMessageBlock {
-            id: MessageId::new("msg-tool-1"),
-            tool_call_id: rustx::runtime::identity::ToolCallId::new("call_01"),
-            tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
-            result,
-        },
+        message_id: tool_message.id.clone(),
+        tool_call_id: tool_message.tool_call_id.clone(),
     };
+    let value = serde_json::to_value(&committed).expect("serialize event");
+    assert!(
+        value.get("message").is_none(),
+        "committed-message events must not embed message content"
+    );
     let decoded: RuntimeEvent =
         serde_json::from_str(&serde_json::to_string(&committed).expect("serialize"))
             .expect("deserialize");
