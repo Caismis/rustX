@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-4",
+  "sequence": 4,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "turn_id": "turn-1",
+  "timestamp": "2026-08-07T12:00:03Z",
+  "event": {
+    "type": "agent_message_committed",
+    "message": {
+      "id": "msg-agent-a-gen-3",
+      "content": [
+        {
+          "type": "text",
+          "text": "The repository contains a Cargo manifest, a docs directory, and the Rust source tree. I will list the top-level entries now."
+        },
+        {
+          "type": "reasoning",
+          "text": "The user asked for the repository layout, so the most direct action is to list the top-level directory contents before summarizing.",
+          "provider_state": {
+            "openai_responses": {
+              "previous_response_id": "resp_abc123"
+            }
+          }
+        },
+        {
+          "type": "tool_call",
+          "id": "call_01",
+          "tool_id": "tool-list",
+          "name": "list_directory",
+          "arguments": {
+            "path": "."
+          }
+        }
+      ]
+    }
+  }
+}

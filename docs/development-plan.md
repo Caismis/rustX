@@ -32,6 +32,11 @@ Implement runtime-owned types for:
 - `RuntimeEvent`
 - `RuntimeManifest`
 
+Implemented in M1 as the Layer 0 contracts described in
+[`docs/architecture.md`](architecture.md) section 2.1, with deterministic
+serialization fixtures under `tests/fixtures/m1/` and round-trip contract
+tests in `tests/m1_contracts.rs`.
+
 Exit criteria:
 
 - No provider SDK type appears in the canonical model.

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-1",
+  "sequence": 1,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "timestamp": "2026-08-07T12:00:00Z",
+  "event": {
+    "type": "attempt_started",
+    "attempt_id": "attempt-1"
+  }
+}

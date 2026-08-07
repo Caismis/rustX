@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "event_id": "evt-3",
+  "sequence": 3,
+  "conversation_id": "conv-1",
+  "attempt_id": "attempt-1",
+  "turn_id": "turn-1",
+  "timestamp": "2026-08-07T12:00:02Z",
+  "event": {
+    "type": "tool_execution_completed",
+    "result": {
+      "status": {
+        "type": "success"
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "Cargo.toml\nLICENSE\nREADME.md\ndocs\nsrc\ntests"
+        }
+      ],
+      "duration_ms": 12,
+      "exit_code": 0,
+      "artifacts": [
+        {
+          "artifact_id": "artifact-1",
+          "name": "listing.txt",
+          "mime_type": "text/plain"
+        }
+      ]
+    }
+  }
+}

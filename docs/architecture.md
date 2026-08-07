@@ -21,6 +21,62 @@ This layer contains runtime-owned data contracts only:
 
 It must not depend on provider SDKs, MCP SDKs, databases, HTTP frameworks, or process implementations.
 
+## 2.1 Implemented Layer 0 contracts (M1)
+
+The canonical contracts defined in M1 live in the `src` module tree as follows:
+
+```text
+runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
+                           AgentVersionId, AttemptId, TurnId, EventId, ToolId,
+                           ToolCallId, ToolVersionId, McpServerId, SkillId,
+                           SkillVersionId, ArtifactId) and CapabilityRevision
+runtime/types.rs           CancellationReason, RuntimeError
+runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses,
+                           Anthropic opaque state)
+message/content.rs         TextBlock, ImageReference, FileReference
+message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
+                           (SystemAuthority, UserSource, InboundKind), content
+                           enums per role
+tools/types.rs             ToolDefinition, ToolCall, ToolExecutionResult,
+                           ToolExecutionStatus, ToolExecutionMode,
+                           ToolReplayPolicy, ToolOrigin, TruncationState
+model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
+                           ReasoningEffort
+model/finish.rs            ModelFinishReason
+model/error.rs             ModelError, ModelErrorKind
+model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
+events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome
+protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
+```
+
+Dependency direction between the modules points inward toward the shared
+runtime-owned types:
+
+```text
+protocol → model, runtime
+events   → message, model, tools, runtime
+model    → message, tools, runtime
+message  → tools, runtime
+tools    → runtime
+```
+
+Serialization conventions for persistence-facing types:
+
+- Enums use explicit discriminators with stable snake_case values
+  (`"role"` for `MessageBlock`, `"type"` for events and content blocks).
+- Strong IDs serialize as transparent JSON strings; `CapabilityRevision`
+  serializes as a plain JSON number.
+- Timestamps are UTC RFC 3339 strings (`chrono::DateTime<Utc>`).
+- Durations are integer milliseconds (`duration_ms`, `retry_after_ms`).
+- `serde_json::Value` is used only for genuinely arbitrary JSON: JSON
+  Schema, tool-call arguments, structured tool output, and opaque provider
+  continuation payloads.
+- Persistence-facing structures never use `HashMap`; ordering is explicit.
+
+The three execution layers each consume these contracts: the agent kernel
+operates on them, the context engine assembles them into provider context,
+and the model plane translates them to and from provider protocols.
+
 ### Layer 1: Agent kernel
 
 The kernel owns deterministic execution semantics:
@@ -160,6 +216,13 @@ Semantics:
 
 Identity and provenance are metadata. Message role does not encode real-world identity.
 
+Provenance is implemented as typed runtime-owned metadata: `UserSource`
+distinguishes human, agent, fleet, external-system, and runtime sources;
+`SystemAuthority` distinguishes platform, agent, runtime, skill, and fleet
+authority for system blocks. A future compaction summary is represented as a
+`UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
+no fifth message role exists.
+
 Agent-to-agent communication uses a durable mailbox model. A `send_message` tool result reports only whether delivery was durably accepted or rejected. The recipient later receives the content as a `UserMessageBlock`.
 
 ## 5. Turn model
@@ -187,7 +250,7 @@ MessageBlock = model-context fact
 
 Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
 
-Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled.
+Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AgentMessageBlock` from it.
 
 ## 7. Recovery model
 
