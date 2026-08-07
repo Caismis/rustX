@@ -1,0 +1,24 @@
+[package]
+name = "rustx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "A standalone Rust execution runtime for durable, tool-using LLM agents."
+repository = "https://github.com/Caismis/rustX"
+publish = false
+
+[lib]
+name = "rustx"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustx"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
