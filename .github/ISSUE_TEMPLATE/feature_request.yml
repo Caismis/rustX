@@ -1,0 +1,76 @@
+name: Feature request
+description: Propose a new runtime capability or behavior.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use English only. rustX is pre-1.0: do not assume compatibility with existing behavior is required.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the runtime problem or missing capability. Avoid starting with a preferred implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the externally observable result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Define what this proposal includes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: Define what this proposal intentionally does not solve.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Primary layer
+      options:
+        - Canonical model
+        - Agent loop
+        - Context / compaction
+        - Model adapter
+        - Native tools
+        - Skills
+        - MCP
+        - Python tools
+        - Runtime events / durability
+        - Cancellation / supervision
+        - CLI / interface
+        - Cross-layer
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Design constraints
+      description: List invariants, performance constraints, security boundaries, or other requirements.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define testable completion criteria.
+    validations:
+      required: true

@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible defect in rustX runtime behavior.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use English only. Prefer deterministic reproduction over model-dependent behavior.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the defect and why it is incorrect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest deterministic reproduction, fixture, manifest, or command sequence available.
+      placeholder: |
+        1. Start ...
+        2. Send ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: State the expected runtime semantics.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: State the observed behavior, including relevant runtime events or errors.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Affected layer
+      options:
+        - Canonical model
+        - Agent loop
+        - Context / compaction
+        - Model adapter
+        - Native tools
+        - Skills
+        - MCP
+        - Python tools
+        - Runtime events / durability
+        - Cancellation / supervision
+        - CLI / interface
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include rustX commit, Rust version, OS, model protocol, and relevant runtime configuration.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define the observable conditions that would make this issue resolved.
+    validations:
+      required: true

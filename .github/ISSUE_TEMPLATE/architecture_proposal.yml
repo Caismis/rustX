@@ -1,0 +1,72 @@
+name: Architecture proposal
+description: Propose a change to runtime contracts, layer boundaries, invariants, or execution semantics.
+title: "[Architecture] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use English only. Prefer the cleanest long-term design over compatibility with pre-1.0 behavior.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: Describe the architectural problem precisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed design
+      description: Describe the proposed contracts, ownership boundaries, data flow, and execution semantics.
+    validations:
+      required: true
+
+  - type: textarea
+    id: layers
+    attributes:
+      label: Layer impact
+      description: Identify which layers change and confirm the intended dependency direction.
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: Runtime invariants
+      description: List invariants preserved, added, removed, or modified by the proposal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Explain meaningful alternatives and why they are weaker.
+    validations:
+      required: true
+
+  - type: textarea
+    id: breaking
+    attributes:
+      label: Breaking changes
+      description: State all known breaking changes. Do not add compatibility shims by default.
+    validations:
+      required: true
+
+  - type: textarea
+    id: testing
+    attributes:
+      label: Validation strategy
+      description: Describe deterministic tests, fixtures, live tests, and failure-mode validation required for this design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define the conditions required to accept and implement this proposal.
+    validations:
+      required: true
