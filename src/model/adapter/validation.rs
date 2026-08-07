@@ -180,11 +180,9 @@ mod tests {
     #[test]
     fn chat_completions_rejects_any_continuation() {
         for state in [
-            ProviderContinuationState::OpenAiResponses(
-                OpenAiResponsesContinuation::Stored {
-                    previous_response_id: "resp_1".to_owned(),
-                },
-            ),
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stored {
+                previous_response_id: "resp_1".to_owned(),
+            }),
             ProviderContinuationState::Anthropic(AnthropicContinuation {
                 opaque: serde_json::json!({}),
             }),
@@ -192,8 +190,8 @@ mod tests {
             let mut r = request();
             r.protocol = ModelProtocol::OpenAiChatCompletions;
             r.continuation = Some(state);
-            let error = validate_request(&r, ModelProtocol::OpenAiChatCompletions)
-                .expect_err("must fail");
+            let error =
+                validate_request(&r, ModelProtocol::OpenAiChatCompletions).expect_err("must fail");
             assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
         }
     }
@@ -201,9 +199,11 @@ mod tests {
     #[test]
     fn responses_rejects_non_responses_continuation() {
         let mut r = request();
-        r.continuation = Some(ProviderContinuationState::Anthropic(AnthropicContinuation {
-            opaque: serde_json::json!({"signature": "s"}),
-        }));
+        r.continuation = Some(ProviderContinuationState::Anthropic(
+            AnthropicContinuation {
+                opaque: serde_json::json!({"signature": "s"}),
+            },
+        ));
         let error = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("must fail");
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
@@ -215,8 +215,7 @@ mod tests {
         r.continuation = Some(ProviderContinuationState::OpenAiResponses(
             OpenAiResponsesContinuation::Stateless { items: Vec::new() },
         ));
-        let error = validate_request(&r, ModelProtocol::AnthropicMessages)
-            .expect_err("must fail");
+        let error = validate_request(&r, ModelProtocol::AnthropicMessages).expect_err("must fail");
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
 

@@ -11,24 +11,26 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
-use async_openai::Client;
 use futures_util::StreamExt;
 
+use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AgentContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::{OpenAiAdapterConfig, ResponsesStorageMode};
 use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
-use crate::model::adapter::traits::{model_event_stream_of_failure, ModelAdapter, ModelEventStream};
-use crate::model::adapter::validation::{validate_request, ValidatedTools};
+use crate::model::adapter::traits::{
+    ModelAdapter, ModelEventStream, model_event_stream_of_failure,
+};
+use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
-use crate::message::types::ContentBlockIndex;
 use crate::runtime::continuation::OpenAiResponsesContinuation;
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
@@ -64,11 +66,7 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         ModelProtocol::OpenAiResponses
     }
 
-    fn stream(
-        &self,
-        request: ModelRequest,
-        cancellation: ModelCancellation,
-    ) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
@@ -91,9 +89,7 @@ impl ModelAdapter for OpenAiResponsesAdapter {
     }
 }
 
-async fn responses_phase_next(
-    phase: ResponsesPhase,
-) -> Option<(ModelEvent, ResponsesPhase)> {
+async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, ResponsesPhase)> {
     match phase {
         ResponsesPhase::Preparing {
             client,
@@ -127,10 +123,9 @@ async fn responses_phase_next(
                 )),
             }
         }
-        ResponsesPhase::Failing { error } => Some((
-            ModelEvent::Failed { error },
-            ResponsesPhase::Finished,
-        )),
+        ResponsesPhase::Failing { error } => {
+            Some((ModelEvent::Failed { error }, ResponsesPhase::Finished))
+        }
         ResponsesPhase::Streaming {
             mut stream,
             mut normalizer,
@@ -281,10 +276,15 @@ impl ResponsesNormalizer {
     fn push(&mut self, event: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         let event_type = str_field(event, "type").unwrap_or("");
         match event_type {
-            "response.created" | "response.in_progress" | "response.queued"
-            | "response.content_part.added" | "response.content_part.done"
-            | "response.output_text.done" | "response.refusal.done"
-            | "response.reasoning_summary_text.done" | "response.reasoning_text.done"
+            "response.created"
+            | "response.in_progress"
+            | "response.queued"
+            | "response.content_part.added"
+            | "response.content_part.done"
+            | "response.output_text.done"
+            | "response.refusal.done"
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done"
             | "response.function_call_arguments.done" => Ok(Vec::new()),
             "response.output_item.added" => self.push_output_item_added(event),
             "response.output_item.done" => self.push_output_item_done(event),
@@ -322,8 +322,7 @@ impl ResponsesNormalizer {
                 let assembly = self.tool_assembly(output_index);
                 if !assembly.started {
                     // Identity is not yet known; fragments stay buffered.
-                    if let Some(function) = event.get("delta").and_then(serde_json::Value::as_str)
-                    {
+                    if let Some(function) = event.get("delta").and_then(serde_json::Value::as_str) {
                         assembly.arguments.push_str(function);
                     }
                     return Ok(Vec::new());
@@ -332,11 +331,13 @@ impl ResponsesNormalizer {
                 let mut events = Vec::new();
                 if let Some(delta) = event.get("delta").and_then(serde_json::Value::as_str) {
                     assembly.arguments.push_str(delta);
-                    events.push(ModelEvent::ToolCallArgumentsDelta {
-                        block_index: assembly.block_index,
-                        call_id,
-                        arguments_delta: delta.to_owned(),
-                    });
+                    if !delta.is_empty() {
+                        events.push(ModelEvent::ToolCallArgumentsDelta {
+                            block_index: assembly.block_index,
+                            call_id,
+                            arguments_delta: delta.to_owned(),
+                        });
+                    }
                 }
                 Ok(events)
             }
@@ -383,9 +384,7 @@ impl ResponsesNormalizer {
             "message" | "reasoning" | "function_call_output" => Ok(Vec::new()),
             "function_call" => {
                 let output_index = u32_field(event, "output_index")?;
-                let block_index = self
-                    .blocks
-                    .allocate(ResponsesBlockKey::Item(output_index));
+                let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
                 let call_id = item
                     .get("call_id")
                     .and_then(serde_json::Value::as_str)
@@ -416,10 +415,7 @@ impl ResponsesNormalizer {
                         started: true,
                     },
                 );
-                Ok(vec![ModelEvent::ToolCallStarted {
-                    block_index,
-                    call,
-                }])
+                Ok(vec![ModelEvent::ToolCallStarted { block_index, call }])
             }
             other => Err(unsupported(format!(
                 "provider-hosted or unsupported output item type {other:?}; \
@@ -472,9 +468,16 @@ impl ResponsesNormalizer {
                     text: summary,
                 }])
             }
-            "message" | "function_call_output" | "file_search_call" | "web_search_call"
-            | "computer_call" | "computer_call_output" | "code_interpreter_call"
-            | "mcp_call" | "custom_tool_call" | "image_generation_call" => Ok(Vec::new()),
+            "message"
+            | "function_call_output"
+            | "file_search_call"
+            | "web_search_call"
+            | "computer_call"
+            | "computer_call_output"
+            | "code_interpreter_call"
+            | "mcp_call"
+            | "custom_tool_call"
+            | "image_generation_call" => Ok(Vec::new()),
             _other => Ok(Vec::new()),
         }
     }
@@ -526,7 +529,9 @@ impl ResponsesNormalizer {
         incomplete: bool,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let Some(response) = event.get("response") else {
-            return Err(provider_error("terminal event lacks a response object".to_owned()));
+            return Err(provider_error(
+                "terminal event lacks a response object".to_owned(),
+            ));
         };
         let response_id = str_field(response, "id")
             .ok_or_else(|| provider_error("response lacks an id".to_owned()))?;
@@ -551,11 +556,9 @@ impl ResponsesNormalizer {
             derive_completed_finish_reason(response)
         };
         let continuation = match self.storage_mode {
-            ResponsesStorageMode::Stored => {
-                OpenAiResponsesContinuation::Stored {
-                    previous_response_id: response_id.to_owned(),
-                }
-            }
+            ResponsesStorageMode::Stored => OpenAiResponsesContinuation::Stored {
+                previous_response_id: response_id.to_owned(),
+            },
             ResponsesStorageMode::Stateless => {
                 let items = response
                     .get("output")
@@ -580,10 +583,7 @@ impl ResponsesNormalizer {
         Ok(events)
     }
 
-    fn push_response_failed(
-        &mut self,
-        event: &serde_json::Value,
-    ) -> Vec<ModelEvent> {
+    fn push_response_failed(&mut self, event: &serde_json::Value) -> Vec<ModelEvent> {
         self.terminal_emitted = true;
         let response = event.get("response");
         let error = response.and_then(|r| r.get("error"));
@@ -643,9 +643,9 @@ fn derive_completed_finish_reason(response: &serde_json::Value) -> ModelFinishRe
                 .get("output")
                 .and_then(serde_json::Value::as_array)
                 .map_or(&[][..], |items| items.as_slice());
-            let has_tool_call = output.iter().any(|item| {
-                str_field(item, "type").is_some_and(|t| t == "function_call")
-            });
+            let has_tool_call = output
+                .iter()
+                .any(|item| str_field(item, "type").is_some_and(|t| t == "function_call"));
             if has_tool_call {
                 return ModelFinishReason::ToolCalls;
             }
@@ -675,12 +675,11 @@ fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
     let cached_input_tokens = usage
         .get("input_tokens_details")
         .and_then(|d| u64_field(d, "cached_tokens"));
-    let details = (reasoning_tokens.is_some() || cached_input_tokens.is_some()).then_some(
-        UsageDetails {
+    let details =
+        (reasoning_tokens.is_some() || cached_input_tokens.is_some()).then_some(UsageDetails {
             reasoning_tokens,
             cached_input_tokens,
-        },
-    );
+        });
     Some(ModelUsage {
         input_tokens,
         output_tokens,
@@ -705,13 +704,13 @@ fn translate_request(
         (ResponsesStorageMode::Stored, Some(OpenAiResponsesContinuation::Stateless { .. })) => {
             return Err(invalid_request(
                 "configured Responses storage mode is Stored but the continuation \
-                 variant is Stateless"
+                 variant is Stateless",
             ));
         }
         (ResponsesStorageMode::Stateless, Some(OpenAiResponsesContinuation::Stored { .. })) => {
             return Err(invalid_request(
                 "configured Responses storage mode is Stateless but the continuation \
-                 variant is Stored"
+                 variant is Stored",
             ));
         }
         _ => {}
@@ -885,7 +884,9 @@ fn translate_agent_inputs(
             }
             AgentContentBlock::ToolCall(call) => {
                 let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
-                    unsupported(format!("tool call arguments are not JSON-serializable: {e}"))
+                    unsupported(format!(
+                        "tool call arguments are not JSON-serializable: {e}"
+                    ))
                 })?;
                 tool_calls.push(serde_json::json!({
                     "type": "function_call",
@@ -918,7 +919,9 @@ fn translate_tool_result(
     let mut text_parts = Vec::new();
     for content in &tool.result.content {
         match content {
-            crate::tools::types::ToolResultContent::Text(text) => text_parts.push(text.text.clone()),
+            crate::tools::types::ToolResultContent::Text(text) => {
+                text_parts.push(text.text.clone())
+            }
             crate::tools::types::ToolResultContent::Json { value } => {
                 text_parts.push(serde_json::to_string(value).map_err(|e| {
                     unsupported(format!("tool JSON result is not serializable: {e}"))
@@ -1001,4 +1004,3 @@ fn unsupported(message: impl Into<String>) -> ModelError {
         provider_code: None,
     }
 }
-

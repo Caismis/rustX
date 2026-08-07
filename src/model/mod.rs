@@ -13,8 +13,12 @@ pub mod event;
 pub mod finish;
 pub mod types;
 
+pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
+pub use adapter::openai::{
+    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ResponsesStorageMode,
+};
 pub use adapter::{
-    model_event_stream_of_failure, ModelAdapter, ModelCancellation, ModelEventStream,
+    ModelAdapter, ModelCancellation, ModelEventStream, model_event_stream_of_failure,
 };
 pub use error::{ModelError, ModelErrorKind};
 pub use event::ModelEvent;

@@ -11,24 +11,26 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use async_openai::Client;
 use async_openai::config::OpenAIConfig;
 use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
-    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls, ChatCompletionRequestAssistantMessageContent,
-    ChatCompletionRequestAssistantMessageContentPart, ChatCompletionRequestMessage,
-    ChatCompletionRequestMessageContentPartRefusal, ChatCompletionRequestMessageContentPartText,
-    ChatCompletionRequestSystemMessage, ChatCompletionRequestSystemMessageContent,
-    ChatCompletionRequestSystemMessageContentPart, ChatCompletionRequestToolMessage,
-    ChatCompletionRequestToolMessageContent, ChatCompletionRequestToolMessageContentPart,
-    ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
-    ChatCompletionRequestUserMessageContentPart, ChatCompletionStreamOptions, ChatCompletionTool,
-    ChatCompletionTools, CompletionUsage, CreateChatCompletionRequest,
-    CreateChatCompletionRequestArgs, FunctionCall, FunctionObject, ReasoningEffort,
+    ChatCompletionMessageToolCall, ChatCompletionMessageToolCalls,
+    ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestAssistantMessageContentPart,
+    ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartRefusal,
+    ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestSystemMessageContentPart,
+    ChatCompletionRequestToolMessage, ChatCompletionRequestToolMessageContent,
+    ChatCompletionRequestToolMessageContentPart, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
+    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
+    CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
+    ReasoningEffort,
 };
-use async_openai::{Client};
 use futures_util::StreamExt;
 use serde::Deserialize;
 
+use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AgentContentBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::cancellation::ModelCancellation;
@@ -37,12 +39,13 @@ use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
     map_chat_finish_reason, normalize_chat_usage, normalize_error, resolve_tool,
 };
-use crate::model::adapter::traits::{model_event_stream_of_failure, ModelAdapter, ModelEventStream};
-use crate::model::adapter::validation::{validate_request, ValidatedTools};
+use crate::model::adapter::traits::{
+    ModelAdapter, ModelEventStream, model_event_stream_of_failure,
+};
+use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
-use crate::message::types::ContentBlockIndex;
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
 
@@ -53,7 +56,8 @@ pub struct OpenAiChatCompletionsAdapter {
 
 impl std::fmt::Debug for OpenAiChatCompletionsAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenAiChatCompletionsAdapter").finish_non_exhaustive()
+        f.debug_struct("OpenAiChatCompletionsAdapter")
+            .finish_non_exhaustive()
     }
 }
 
@@ -73,11 +77,7 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
         ModelProtocol::OpenAiChatCompletions
     }
 
-    fn stream(
-        &self,
-        request: ModelRequest,
-        cancellation: ModelCancellation,
-    ) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
@@ -99,9 +99,7 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
     }
 }
 
-async fn chat_phase_next(
-    phase: ChatPhase,
-) -> Option<(ModelEvent, ChatPhase)> {
+async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
     match phase {
         ChatPhase::Preparing {
             client,
@@ -110,10 +108,7 @@ async fn chat_phase_next(
             cancellation,
         } => {
             if cancellation.is_cancelled() {
-                return Some((
-                    failed(cancelled_error()),
-                    ChatPhase::Finished,
-                ));
+                return Some((failed(cancelled_error()), ChatPhase::Finished));
             }
             match client.chat().create_stream_byot(&request).await {
                 Ok(stream) => Some((
@@ -333,7 +328,10 @@ impl ChatStreamNormalizer {
         if let Some(error) = chunk.get("error") {
             return Err(provider_error(format!(
                 "OpenAI stream error: {}",
-                error.get("message").and_then(serde_json::Value::as_str).unwrap_or("unknown")
+                error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
             )));
         }
         let chunk: ChatChunkWire = serde_json::from_value(chunk.clone())
@@ -422,12 +420,14 @@ impl ChatStreamNormalizer {
         }
         if let Some(function) = &chunk.function {
             if let Some(arguments) = &function.arguments {
-                let call_id = assembly.call_id.clone().expect("call id known after start");
-                events.push(ModelEvent::ToolCallArgumentsDelta {
-                    block_index: assembly.block_index,
-                    call_id,
-                    arguments_delta: arguments.clone(),
-                });
+                if !arguments.is_empty() {
+                    let call_id = assembly.call_id.clone().expect("call id known after start");
+                    events.push(ModelEvent::ToolCallArgumentsDelta {
+                        block_index: assembly.block_index,
+                        call_id,
+                        arguments_delta: arguments.clone(),
+                    });
+                }
             }
         }
         Ok(())
@@ -477,10 +477,9 @@ impl ChatStreamNormalizer {
                 },
             });
         }
-        let finish_reason = self
-            .finish_reason
-            .take()
-            .ok_or_else(|| provider_error("provider stream ended without a finish reason".to_owned()))?;
+        let finish_reason = self.finish_reason.take().ok_or_else(|| {
+            provider_error("provider stream ended without a finish reason".to_owned())
+        })?;
         events.push(ModelEvent::Completed {
             finish_reason,
             usage: self.usage.take(),
@@ -499,9 +498,7 @@ fn provider_error(message: String) -> ModelError {
 }
 
 /// Translates a canonical request into a typed Chat Completions request.
-fn translate_request(
-    request: &ModelRequest,
-) -> Result<CreateChatCompletionRequest, ModelError> {
+fn translate_request(request: &ModelRequest) -> Result<CreateChatCompletionRequest, ModelError> {
     let messages = translate_messages(request)?;
     let mut builder = CreateChatCompletionRequestArgs::default();
     builder
@@ -534,7 +531,9 @@ fn translate_request(
 /// Translates the canonical message list into typed Chat Completions
 /// messages, rejecting canonical content the protocol cannot represent
 /// without changing its meaning.
-fn translate_messages(request: &ModelRequest) -> Result<Vec<ChatCompletionRequestMessage>, ModelError> {
+fn translate_messages(
+    request: &ModelRequest,
+) -> Result<Vec<ChatCompletionRequestMessage>, ModelError> {
     let mut messages = Vec::new();
     for block in &request.messages {
         messages.push(match block {
@@ -629,7 +628,9 @@ fn translate_agent_message(
             }
             AgentContentBlock::ToolCall(call) => {
                 let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
-                    unsupported(format!("tool call arguments are not JSON-serializable: {e}"))
+                    unsupported(format!(
+                        "tool call arguments are not JSON-serializable: {e}"
+                    ))
                 })?;
                 tool_calls.push(ChatCompletionMessageToolCalls::Function(
                     ChatCompletionMessageToolCall {
@@ -654,11 +655,13 @@ fn translate_agent_message(
             }
         }
     }
-    Ok(async_openai::types::chat::ChatCompletionRequestAssistantMessage {
-        content: Some(ChatCompletionRequestAssistantMessageContent::Array(parts)),
-        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-        ..Default::default()
-    })
+    Ok(
+        async_openai::types::chat::ChatCompletionRequestAssistantMessage {
+            content: Some(ChatCompletionRequestAssistantMessageContent::Array(parts)),
+            tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+            ..Default::default()
+        },
+    )
 }
 
 /// Translates a canonical tool result into a provider tool message. Only the

@@ -12,12 +12,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use async_openai::config::OpenAIConfig;
-use async_openai::middleware::HttpRequestFactory;
-use async_openai::error::OpenAIError;
 use async_openai::Client;
+use async_openai::config::OpenAIConfig;
+use async_openai::error::OpenAIError;
+use async_openai::middleware::HttpRequestFactory;
 use reqwest::{Response, StatusCode};
-
 
 /// A tower service that executes one plain `reqwest` request.
 ///
@@ -49,7 +48,10 @@ impl tower::Service<HttpRequestFactory> for NoRetryService {
         let client = self.client.clone();
         Box::pin(async move {
             let request = request.build().await.map_err(tower::BoxError::from)?;
-            let response = client.execute(request).await.map_err(tower::BoxError::from)?;
+            let response = client
+                .execute(request)
+                .await
+                .map_err(tower::BoxError::from)?;
             if !response.status().is_success() {
                 return Err(tower::BoxError::from(
                     HttpFailure::from_response(response).await,
@@ -94,7 +96,11 @@ impl HttpFailure {
     async fn from_response(response: Response) -> Self {
         let status = response.status();
         let retry_after_ms = parse_retry_after(response.headers());
-        let body = response.bytes().await.map(|b| b.to_vec()).unwrap_or_default();
+        let body = response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .unwrap_or_default();
         let (message, provider_code) = parse_error_body(&body, status);
         Self {
             status,

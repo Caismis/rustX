@@ -136,7 +136,9 @@ struct ErrorDetail {
 
 fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
     match serde_json::from_slice::<ErrorBody>(body) {
-        Ok(ErrorBody { error: Some(detail) }) => (detail.error_type, detail.message),
+        Ok(ErrorBody {
+            error: Some(detail),
+        }) => (detail.error_type, detail.message),
         Ok(_) | Err(_) => (None, None),
     }
 }
@@ -324,8 +326,7 @@ fn translate_agent_content(
             }
             AgentContentBlock::Reasoning(reasoning) => {
                 reasoning_seen = true;
-                let is_boundary =
-                    is_last_agent && Some(position) == last_reasoning_position;
+                let is_boundary = is_last_agent && Some(position) == last_reasoning_position;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
                         if is_boundary {
@@ -471,13 +472,11 @@ fn unsupported(message: &str) -> ModelError {
 }
 
 /// Tool name resolution kept available to the messages module.
-pub(crate) fn resolve_tool(
-    tools: &ValidatedTools,
-    name: &str,
-) -> Result<ToolId, ModelError> {
-    tools.resolve(name).cloned().ok_or_else(|| {
-        invalid_request(&format!("model called unknown tool name {name:?}"))
-    })
+pub(crate) fn resolve_tool(tools: &ValidatedTools, name: &str) -> Result<ToolId, ModelError> {
+    tools
+        .resolve(name)
+        .cloned()
+        .ok_or_else(|| invalid_request(&format!("model called unknown tool name {name:?}")))
 }
 
 #[cfg(test)]
@@ -492,7 +491,10 @@ mod tests {
             (Some("stop_sequence"), ModelFinishReason::Stop),
             (Some("tool_use"), ModelFinishReason::ToolCalls),
             (Some("max_tokens"), ModelFinishReason::Length),
-            (Some("model_context_window_exceeded"), ModelFinishReason::Length),
+            (
+                Some("model_context_window_exceeded"),
+                ModelFinishReason::Length,
+            ),
             (Some("refusal"), ModelFinishReason::Refusal),
             (
                 Some("pause_turn"),
@@ -536,7 +538,7 @@ mod tests {
     /// Cumulative usage snapshots are combined, not summed.
     #[test]
     fn usage_combines_cumulative_snapshots() {
-        use super::{normalize_usage, WireUsage};
+        use super::{WireUsage, normalize_usage};
         let start = WireUsage {
             input_tokens: Some(100),
             output_tokens: Some(1),

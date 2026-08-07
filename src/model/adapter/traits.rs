@@ -38,11 +38,7 @@ pub trait ModelAdapter: Send + Sync {
     ///
     /// The returned stream is the only channel of information about the
     /// invocation; the adapter retains no hidden state afterwards.
-    fn stream(
-        &self,
-        request: ModelRequest,
-        cancellation: ModelCancellation,
-    ) -> ModelEventStream;
+    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream;
 }
 
 /// A single-event stream that fails with the given normalized error, without

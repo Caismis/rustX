@@ -115,18 +115,12 @@ mod tests {
         let mut allocator = BlockAllocator::new();
         let message_text = (1u32, 0u32);
         let message_refusal = (1u32, 1u32);
-        assert_eq!(
-            allocator.allocate(message_text),
-            ContentBlockIndex::new(0)
-        );
+        assert_eq!(allocator.allocate(message_text), ContentBlockIndex::new(0));
         assert_eq!(
             allocator.allocate(message_refusal),
             ContentBlockIndex::new(1)
         );
-        assert_eq!(
-            allocator.allocate(message_text),
-            ContentBlockIndex::new(0)
-        );
+        assert_eq!(allocator.allocate(message_text), ContentBlockIndex::new(0));
     }
 
     /// `peek_next` reports the next unallocated index without allocating.

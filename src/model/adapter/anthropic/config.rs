@@ -51,9 +51,7 @@ impl AnthropicAdapterConfig {
     }
 
     /// Consumes the configuration into its parts.
-    pub(crate) fn into_parts(
-        self,
-    ) -> (String, String, String, Option<ReqwestClient>) {
+    pub(crate) fn into_parts(self) -> (String, String, String, Option<ReqwestClient>) {
         (
             self.api_key,
             self.api_base,
@@ -70,7 +68,10 @@ impl std::fmt::Debug for AnthropicAdapterConfig {
             .field("api_key", &"<redacted>")
             .field("api_base", &self.api_base)
             .field("anthropic_version", &self.anthropic_version)
-            .field("http_client", &self.http_client.as_ref().map(|_| "<injected>"))
+            .field(
+                "http_client",
+                &self.http_client.as_ref().map(|_| "<injected>"),
+            )
             .finish()
     }
 }

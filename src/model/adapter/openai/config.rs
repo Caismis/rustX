@@ -65,7 +65,9 @@ impl OpenAiAdapterConfig {
     }
 
     /// Consumes the configuration into its parts.
-    pub(crate) fn into_parts(self) -> (String, String, ResponsesStorageMode, Option<ReqwestClient>) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (String, String, ResponsesStorageMode, Option<ReqwestClient>) {
         (
             self.api_key,
             self.api_base,
@@ -82,7 +84,10 @@ impl std::fmt::Debug for OpenAiAdapterConfig {
             .field("api_key", &"<redacted>")
             .field("api_base", &self.api_base)
             .field("responses_storage", &self.responses_storage)
-            .field("http_client", &self.http_client.as_ref().map(|_| "<injected>"))
+            .field(
+                "http_client",
+                &self.http_client.as_ref().map(|_| "<injected>"),
+            )
             .finish()
     }
 }

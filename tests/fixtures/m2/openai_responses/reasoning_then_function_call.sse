@@ -1,0 +1,18 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","summary":[]}}
+
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":2,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Use the tool."}
+
+data: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Use the tool."}],"encrypted_content":null}}
+
+data: {"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_7","name":"list_directory","arguments":""}}
+
+data: {"type":"response.function_call_arguments.delta","sequence_number":5,"item_id":"fc_1","output_index":1,"delta":"{\"path\":"}
+
+data: {"type":"response.function_call_arguments.delta","sequence_number":6,"item_id":"fc_1","output_index":1,"delta":" \".\"}"}
+
+data: {"type":"response.function_call_arguments.done","sequence_number":7,"item_id":"fc_1","output_index":1,"arguments":"{\"path\":\".\"}"}
+
+data: {"type":"response.output_item.done","sequence_number":8,"output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_7","name":"list_directory","arguments":"{\"path\":\".\"}"}}
+
+data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_4","object":"response","status":"completed","model":"gpt-test","output":[{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Use the tool."}],"encrypted_content":null},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_7","name":"list_directory","arguments":"{\"path\":\".\"}"}],"usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28}}}
+

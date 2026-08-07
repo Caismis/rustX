@@ -45,7 +45,10 @@ pub(crate) fn parse_event(data: &str) -> Result<WireEvent, serde_json::Error> {
     match event_type {
         Some("message_start") => {
             let message: WireMessage = serde_json::from_value(
-                value.get("message").cloned().unwrap_or(serde_json::json!({})),
+                value
+                    .get("message")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
             )?;
             Ok(WireEvent::MessageStart { message })
         }
@@ -72,10 +75,7 @@ pub(crate) fn parse_event(data: &str) -> Result<WireEvent, serde_json::Error> {
         }
         Some("message_delta") => {
             let delta: WireMessageDelta = serde_json::from_value(
-                value
-                    .get("delta")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({})),
+                value.get("delta").cloned().unwrap_or(serde_json::json!({})),
             )?;
             let usage: Option<WireUsage> = value
                 .get("usage")
@@ -88,10 +88,7 @@ pub(crate) fn parse_event(data: &str) -> Result<WireEvent, serde_json::Error> {
         Some("ping") => Ok(WireEvent::Ping),
         Some("error") => {
             let error: WireError = serde_json::from_value(
-                value
-                    .get("error")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({})),
+                value.get("error").cloned().unwrap_or(serde_json::json!({})),
             )?;
             Ok(WireEvent::Error { error })
         }
@@ -194,7 +191,7 @@ pub(crate) struct WireError {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_event, WireEvent};
+    use super::{WireEvent, parse_event};
 
     /// Unknown top-level event types do not crash the parser.
     #[test]

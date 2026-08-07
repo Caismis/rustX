@@ -1,0 +1,18 @@
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_2","object":"response","status":"in_progress","model":"gpt-test","output":[],"usage":null}}
+
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","summary":[],"encrypted_content":null}}
+
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":2,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":"I need to"}
+
+data: {"type":"response.reasoning_summary_text.delta","sequence_number":3,"item_id":"rs_1","output_index":0,"summary_index":0,"delta":" think first."}
+
+data: {"type":"response.reasoning_text.delta","sequence_number":4,"item_id":"rs_1","output_index":0,"content_index":0,"delta":"Detailed reasoning hidden."}
+
+data: {"type":"response.reasoning_text.done","sequence_number":5,"item_id":"rs_1","output_index":0,"content_index":0,"text":"Detailed reasoning hidden."}
+
+data: {"type":"response.reasoning_summary_text.done","sequence_number":6,"item_id":"rs_1","output_index":0,"summary_index":0,"text":"I need to think first."}
+
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"I need to think first."}],"content":[{"type":"reasoning_text","text":"Detailed reasoning hidden."}],"encrypted_content":null}}
+
+data: {"type":"response.completed","sequence_number":8,"response":{"id":"resp_2","object":"response","status":"completed","model":"gpt-test","output":[{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"I need to think first."}],"content":[{"type":"reasoning_text","text":"Detailed reasoning hidden."}],"encrypted_content":null}],"usage":{"input_tokens":20,"output_tokens":8,"total_tokens":28}}}
+

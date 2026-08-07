@@ -1,0 +1,2 @@
+data: {"type":"response.incomplete","sequence_number":1,"response":{"id":"resp_cf","object":"response","status":"incomplete","incomplete_details":{"reason":"content_filter"},"model":"gpt-test","output":[],"usage":{"input_tokens":5,"output_tokens":0,"total_tokens":5}}}
+

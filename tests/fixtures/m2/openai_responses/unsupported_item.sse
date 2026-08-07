@@ -1,0 +1,2 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ws_1","type":"web_search_call","status":"in_progress","queries":["hello"]}}
+

@@ -241,13 +241,15 @@ pub(crate) fn normalize_chat_usage(usage: &CompletionUsage) -> ModelUsage {
 
 /// Builds optional usage details, mapping only semantically equivalent
 /// provider metrics into the canonical fields.
-fn usage_details(reasoning_tokens: Option<u32>, cached_input_tokens: Option<u32>) -> Option<UsageDetails> {
+fn usage_details(
+    reasoning_tokens: Option<u32>,
+    cached_input_tokens: Option<u32>,
+) -> Option<UsageDetails> {
     let details = UsageDetails {
         reasoning_tokens: reasoning_tokens.map(u64::from),
         cached_input_tokens: cached_input_tokens.map(u64::from),
     };
-    (details.reasoning_tokens.is_some() || details.cached_input_tokens.is_some())
-        .then_some(details)
+    (details.reasoning_tokens.is_some() || details.cached_input_tokens.is_some()).then_some(details)
 }
 
 /// Resolves a provider function name to the canonical tool identity, failing
@@ -309,7 +311,10 @@ mod tests {
             (FinishReason::Stop, ModelFinishReason::Stop),
             (FinishReason::ToolCalls, ModelFinishReason::ToolCalls),
             (FinishReason::Length, ModelFinishReason::Length),
-            (FinishReason::ContentFilter, ModelFinishReason::ContentFilter),
+            (
+                FinishReason::ContentFilter,
+                ModelFinishReason::ContentFilter,
+            ),
             (
                 FinishReason::FunctionCall,
                 ModelFinishReason::Other {

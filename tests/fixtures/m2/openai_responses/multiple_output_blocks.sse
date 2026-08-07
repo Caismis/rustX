@@ -1,0 +1,22 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+data: {"type":"response.content_part.added","sequence_number":2,"item_id":"msg_1","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}
+
+data: {"type":"response.output_text.delta","sequence_number":3,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"Text part"}
+
+data: {"type":"response.content_part.added","sequence_number":4,"item_id":"msg_1","output_index":0,"content_index":1,"part":{"type":"refusal","refusal":""}}
+
+data: {"type":"response.refusal.delta","sequence_number":5,"item_id":"msg_1","output_index":0,"content_index":1,"delta":"I cannot"}
+
+data: {"type":"response.refusal.delta","sequence_number":6,"item_id":"msg_1","output_index":0,"content_index":1,"delta":" do that."}
+
+data: {"type":"response.output_item.done","sequence_number":7,"output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Text part","annotations":[]},{"type":"refusal","refusal":"I cannot do that."}]}}
+
+data: {"type":"response.output_item.added","sequence_number":8,"output_index":1,"item":{"id":"fc_2","type":"function_call","status":"in_progress","call_id":"call_9","name":"bash","arguments":""}}
+
+data: {"type":"response.function_call_arguments.delta","sequence_number":9,"item_id":"fc_2","output_index":1,"delta":"{\"command\":\"ls\"}"}
+
+data: {"type":"response.output_item.done","sequence_number":10,"output_index":1,"item":{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_9","name":"bash","arguments":"{\"command\":\"ls\"}"}}
+
+data: {"type":"response.completed","sequence_number":11,"response":{"id":"resp_5","object":"response","status":"completed","model":"gpt-test","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Text part","annotations":[]},{"type":"refusal","refusal":"I cannot do that."}]},{"id":"fc_2","type":"function_call","status":"completed","call_id":"call_9","name":"bash","arguments":"{\"command\":\"ls\"}"}],"usage":{"input_tokens":30,"output_tokens":12,"total_tokens":42}}}
+

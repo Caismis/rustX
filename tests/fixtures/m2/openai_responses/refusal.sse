@@ -1,0 +1,10 @@
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_r","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+data: {"type":"response.content_part.added","sequence_number":2,"item_id":"msg_r","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}
+
+data: {"type":"response.refusal.delta","sequence_number":3,"item_id":"msg_r","output_index":0,"content_index":0,"delta":"I won't help with that."}
+
+data: {"type":"response.output_item.done","sequence_number":4,"output_index":0,"item":{"id":"msg_r","type":"message","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"I won't help with that."}]}}
+
+data: {"type":"response.completed","sequence_number":5,"response":{"id":"resp_r","object":"response","status":"completed","model":"gpt-test","output":[{"id":"msg_r","type":"message","status":"completed","role":"assistant","content":[{"type":"refusal","refusal":"I won't help with that."}]}],"usage":{"input_tokens":5,"output_tokens":4,"total_tokens":9}}}
+

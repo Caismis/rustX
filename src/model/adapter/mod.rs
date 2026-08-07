@@ -22,4 +22,4 @@ pub mod traits;
 pub mod validation;
 
 pub use cancellation::ModelCancellation;
-pub use traits::{model_event_stream_of_failure, ModelAdapter, ModelEventStream};
+pub use traits::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};
