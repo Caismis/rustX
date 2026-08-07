@@ -89,16 +89,15 @@ mod tests {
                     serde_json::json!({
                         "type": "reasoning",
                         "id": "rs_1",
-                        "summary": [
-                            {"type": "encrypted_content", "data": "opaque-reasoning"}
-                        ]
+                        "summary": [],
+                        "encrypted_content": "opaque-encrypted-reasoning"
                     }),
                     serde_json::json!({"type": "output_text", "text": "hello"}),
                 ],
             });
         let json = serde_json::to_string(&value).expect("serialize state");
         assert!(json.contains("\"stateless\""));
-        assert!(json.contains("opaque-reasoning"));
+        assert!(json.contains("opaque-encrypted-reasoning"));
         let decoded: ProviderContinuationState =
             serde_json::from_str(&json).expect("deserialize state");
         assert_eq!(decoded, value);

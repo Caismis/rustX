@@ -36,8 +36,21 @@
 //! its stable [`MessageId`] and never embed the message content. Canonical
 //! message content lives only in the durable Message Ledger (M8); the Event
 //! Journal records the execution fact. This keeps exactly one authoritative
-//! copy of message content: M8 persists the ledger write before the commit
-//! event (persist-before-publish) so both stores always agree.
+//! copy of message content.
+//!
+//! A committed-message event must not be emitted before the corresponding
+//! `MessageBlock` has been durably committed to the Message Ledger. Message
+//! Ledger persistence and Event Journal persistence are separate durable
+//! operations unless a backend provides a shared atomic transaction; M8 owns
+//! the atomicity or crash-reconciliation boundary between these stores. If a
+//! crash occurs after the `MessageBlock` is durably committed but before the
+//! corresponding committed-message event is appended, recovery must
+//! recognize and reconcile that state rather than treating the message as
+//! absent or duplicating its content.
+//!
+//! Persist-before-publish applies to `RuntimeEvent` publication only:
+//! append the event durably before publishing it externally. It does not by
+//! itself provide a transaction with the Message Ledger.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -181,6 +194,18 @@ pub enum RuntimeEvent {
         /// The reasoning block the delta belongs to.
         block_index: ContentBlockIndex,
         /// The incremental reasoning text.
+        delta: String,
+    },
+    /// A refusal delta of one output block of the in-flight agent message.
+    ///
+    /// Refusal is preserved as refusal, never flattened into text, so the
+    /// completed message assembles a `RefusalBlock`.
+    AgentRefusalDelta {
+        /// The message identity being assembled.
+        message_id: MessageId,
+        /// The refusal block the delta belongs to.
+        block_index: ContentBlockIndex,
+        /// The incremental refusal text.
         delta: String,
     },
     /// A tool call within the in-flight agent message started.

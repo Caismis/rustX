@@ -1,15 +1,20 @@
 //! Normalized adapter-to-kernel model streaming protocol.
 //!
 //! `ModelEvent` is a streaming fact from a model adapter (M2): text deltas,
-//! reasoning deltas, tool-call assembly, usage updates, continuation state,
-//! and final completion or failure. It is not the durable `RuntimeEvent`
-//! journal and it is never placed into the canonical conversation history.
-//! Only the completed generation becomes an `AgentMessageBlock`.
+//! reasoning deltas, refusal deltas, tool-call assembly, usage updates,
+//! continuation state, and final completion or failure. It is not the
+//! durable `RuntimeEvent` journal and it is never placed into the canonical
+//! conversation history. Only the completed generation becomes an
+//! `AgentMessageBlock`.
 //!
 //! Every content-targeted event carries a [`ContentBlockIndex`] identifying
 //! the ordered output block it belongs to, so interleaved text, reasoning,
-//! continuation-state, and tool-call content assemble unambiguously without
-//! exposing any provider block id type.
+//! refusal, continuation-state, and tool-call content assemble
+//! unambiguously without exposing any provider block id type.
+//!
+//! The stream distinguishes every content semantic the canonical message
+//! model distinguishes: a refusal streams through [`ModelEvent::RefusalDelta`]
+//! and assembles into [`AgentContentBlock::Refusal`], never into plain text.
 
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +47,17 @@ pub enum ModelEvent {
         /// The reasoning block the delta belongs to.
         block_index: ContentBlockIndex,
         /// The incremental reasoning text.
+        text: String,
+    },
+    /// A refusal delta of one output block.
+    ///
+    /// Refusal content streams as refusal, never as ordinary text, so the
+    /// completed message can assemble an [`AgentContentBlock::Refusal`]
+    /// without provider-specific hidden state.
+    RefusalDelta {
+        /// The refusal block the delta belongs to.
+        block_index: ContentBlockIndex,
+        /// The incremental refusal text.
         text: String,
     },
     /// A tool call started; only data known at start is present.
@@ -122,6 +138,13 @@ mod tests {
                 "text_delta",
             ),
             (
+                ModelEvent::RefusalDelta {
+                    block_index: ContentBlockIndex::new(1),
+                    text: "I cannot do that.".to_owned(),
+                },
+                "refusal_delta",
+            ),
+            (
                 ModelEvent::Completed {
                     finish_reason: ModelFinishReason::Stop,
                     usage: Some(ModelUsage {
@@ -171,14 +194,21 @@ mod tests {
     /// deserialize as a `MessageBlock`, which requires a `role` discriminator.
     #[test]
     fn model_event_deltas_are_not_message_blocks() {
-        let json = r#"{"type":"text_delta","block_index":0,"text":"hi"}"#;
-        let event: ModelEvent = serde_json::from_str(json).expect("deserialize delta");
-        assert!(matches!(event, ModelEvent::TextDelta { .. }));
-        let result = serde_json::from_str::<MessageBlock>(json);
-        assert!(
-            result.is_err(),
-            "a ModelEvent delta must not be a MessageBlock"
-        );
+        for json in [
+            r#"{"type":"text_delta","block_index":0,"text":"hi"}"#,
+            r#"{"type":"refusal_delta","block_index":1,"text":"I cannot do that."}"#,
+        ] {
+            let event: ModelEvent = serde_json::from_str(json).expect("deserialize delta");
+            assert!(matches!(
+                event,
+                ModelEvent::TextDelta { .. } | ModelEvent::RefusalDelta { .. }
+            ));
+            let result = serde_json::from_str::<MessageBlock>(json);
+            assert!(
+                result.is_err(),
+                "a ModelEvent delta must not be a MessageBlock"
+            );
+        }
     }
 
     /// Assembles ordered content blocks from a streamed event sequence.
@@ -211,6 +241,16 @@ mod tests {
                                 text: Some(text.clone()),
                                 provider_state: None,
                             },
+                        ));
+                    }
+                }
+                ModelEvent::RefusalDelta { block_index, text } => {
+                    let idx = block_index.get() as usize;
+                    if let Some(AgentContentBlock::Refusal(block)) = blocks.get_mut(idx) {
+                        block.text.push_str(text);
+                    } else {
+                        blocks.push(AgentContentBlock::Refusal(
+                            crate::message::types::RefusalBlock { text: text.clone() },
                         ));
                     }
                 }
@@ -335,7 +375,9 @@ mod tests {
                     OpenAiResponsesContinuation::Stateless {
                         items: vec![serde_json::json!({
                             "type": "reasoning",
-                            "summary": [{"type": "encrypted_content", "data": "opaque"}]
+                            "id": "rs_1",
+                            "summary": [],
+                            "encrypted_content": "opaque"
                         })],
                     },
                 ),
@@ -358,5 +400,65 @@ mod tests {
             ))
         ));
         assert!(matches!(&blocks[1], AgentContentBlock::Text(t) if t.text == "Visible answer."));
+    }
+
+    /// Reasoning followed by refusal assembles in order, and the refusal
+    /// becomes `AgentContentBlock::Refusal`, never `Text`.
+    #[test]
+    fn reasoning_then_refusal_assembles_in_order() {
+        let events = [
+            ModelEvent::ReasoningDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "The request cannot be satisfied.".to_owned(),
+            },
+            ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(1),
+                text: "I cannot comply with that request.".to_owned(),
+            },
+        ];
+        let blocks = assemble(&events);
+        assert_eq!(blocks.len(), 2, "reasoning and refusal remain two blocks");
+        assert!(matches!(
+            &blocks[0],
+            AgentContentBlock::Reasoning(r)
+                if r.text.as_deref() == Some("The request cannot be satisfied.")
+        ));
+        assert!(matches!(
+            &blocks[1],
+            AgentContentBlock::Refusal(r) if r.text == "I cannot comply with that request."
+        ));
+        assert!(
+            !matches!(&blocks[1], AgentContentBlock::Text(_)),
+            "refusal must never assemble as plain text"
+        );
+    }
+
+    /// Multiple refusal deltas targeting the same block concatenate
+    /// deterministically into one `RefusalBlock`.
+    #[test]
+    fn multiple_refusal_deltas_concatenate() {
+        let events = [
+            ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "I cannot".to_owned(),
+            },
+            ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: " comply with".to_owned(),
+            },
+            ModelEvent::RefusalDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: " that request.".to_owned(),
+            },
+        ];
+        let blocks = assemble(&events);
+        assert_eq!(blocks.len(), 1);
+        let AgentContentBlock::Refusal(refusal) = &blocks[0] else {
+            panic!("the block must be a refusal block");
+        };
+        assert_eq!(
+            refusal.text, "I cannot comply with that request.",
+            "refusal deltas must concatenate in stream order"
+        );
     }
 }

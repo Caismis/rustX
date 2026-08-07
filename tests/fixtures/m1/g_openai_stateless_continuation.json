@@ -5,12 +5,8 @@
         {
           "type": "reasoning",
           "id": "rs_1",
-          "summary": [
-            {
-              "type": "encrypted_content",
-              "data": "opaque-encrypted-reasoning"
-            }
-          ]
+          "summary": [],
+          "encrypted_content": "opaque-encrypted-reasoning"
         },
         {
           "type": "output_text",

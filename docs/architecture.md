@@ -105,12 +105,14 @@ normalized `ModelError` without degrading it to a runtime error string.
 `ModelEvent` (and the corresponding `RuntimeEvent` deltas) target content
 blocks by the rustX-owned `ContentBlockIndex`: the position of the block
 within the ordered `AgentContentBlock[]` of the message being assembled.
-Interleaved text, reasoning, tool-call, and provider continuation-state
-streaming therefore assembles unambiguously without exposing any provider
-block id type. `ToolCallStarted` carries only the data known at start
-(`ToolCallStart`: call id, tool id, name); raw argument fragments stream via
-`ToolCallArgumentsDelta`, and the fully assembled `ToolCall` is emitted only
-at `ToolCallCompleted`.
+Interleaved text, reasoning, refusal, tool-call, and provider
+continuation-state streaming therefore assembles unambiguously without
+exposing any provider block id type. Refusal streams as refusal
+(`RefusalDelta` / `AgentRefusalDelta`) and assembles into
+`AgentContentBlock::Refusal`, never into plain text. `ToolCallStarted`
+carries only the data known at start (`ToolCallStart`: call id, tool id,
+name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
+fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
 
 ### 2.4 Tool execution event identity
 
@@ -128,8 +130,21 @@ The durable Message Ledger (M8) is the only authoritative store for canonical
 message content. `AgentMessageCommitted` and `ToolMessageCommitted` are
 execution facts that reference the committed message by its stable
 `MessageId` and never embed the message body, so the Event Journal never
-holds a competing copy. M8 persists the ledger write before the commit event
-(persist-before-publish), keeping the two stores consistent.
+holds a competing copy.
+
+A committed-message event must not be emitted before the corresponding
+`MessageBlock` has been durably committed to the Message Ledger. Message
+Ledger persistence and Event Journal persistence are separate durable
+operations unless a backend provides a shared atomic transaction; M8 owns
+the atomicity or crash-reconciliation boundary between these stores. If a
+crash occurs after the `MessageBlock` is durably committed but before the
+corresponding committed-message event is appended, recovery must recognize
+and reconcile that state rather than treating the message as absent or
+duplicating its content.
+
+Persist-before-publish applies to `RuntimeEvent` publication only: append
+the event durably before publishing it externally. It does not by itself
+provide a transaction with the Message Ledger.
 
 ### Layer 1: Agent kernel
 
@@ -307,6 +322,18 @@ Runtime events are append-only. In production, events must be persisted before b
 Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AgentMessageBlock` from it.
 
 Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
+
+Persist-before-publish is the frozen event-publication invariant:
+
+```text
+generate RuntimeEvent
+→ durably append / commit sequence
+→ publish externally
+```
+
+It applies to `RuntimeEvent` publication only and does not by itself provide
+a transaction with the Message Ledger; cross-store atomicity or crash
+reconciliation between the Message Ledger and Event Journal is owned by M8.
 
 ## 7. Recovery model
 

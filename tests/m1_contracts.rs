@@ -212,8 +212,10 @@ fn openai_stateless_continuation_round_trip() {
     };
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["type"], "reasoning");
-    assert_eq!(items[0]["summary"][0]["type"], "encrypted_content");
-    assert_eq!(items[0]["summary"][0]["data"], "opaque-encrypted-reasoning");
+    assert_eq!(
+        items[0]["encrypted_content"], "opaque-encrypted-reasoning",
+        "reasoning items carry top-level opaque encrypted content"
+    );
     assert_eq!(items[1]["type"], "output_text");
     let _ = round_trip(&state);
 }
@@ -268,6 +270,28 @@ fn agent_text_delta_envelope_round_trip() {
         serde_json::from_str::<MessageBlock>(&json).is_err(),
         "an event envelope must never deserialize as a MessageBlock"
     );
+    let _ = round_trip(&envelope);
+}
+
+/// A refusal delta event preserves refusal semantics as an execution fact,
+/// never flattening it into text.
+#[test]
+fn agent_refusal_delta_envelope_round_trip() {
+    let envelope: RuntimeEventEnvelope =
+        serde_json::from_str(&read_fixture("f_agent_refusal_delta.json")).expect("parse fixture");
+    let RuntimeEvent::AgentRefusalDelta {
+        message_id,
+        block_index,
+        delta,
+    } = &envelope.event
+    else {
+        panic!("fixture F-refusal must deserialize as AgentRefusalDelta");
+    };
+    assert_eq!(message_id.as_str(), "msg-agent-a-gen-4");
+    assert_eq!(block_index.get(), 1);
+    assert_eq!(delta, "I cannot comply with that request.");
+    let value = serde_json::to_value(&envelope.event).expect("serialize event");
+    assert_eq!(value["type"], "agent_refusal_delta");
     let _ = round_trip(&envelope);
 }
 
