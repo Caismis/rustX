@@ -10,7 +10,7 @@
 //! The transport performs exactly one HTTP request per adapter invocation:
 //! no retry, no reconnect, no failover.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::pin::Pin;
 
 use eventsource_stream::Eventsource;
@@ -120,7 +120,42 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
             normalizer,
             cancellation,
         } => {
-            match preparing_poll(
+            if cancellation.is_cancelled() {
+                // Cancellation before any network request: no provider
+                // attempt, no Started, exactly one Failed(Cancelled).
+                return Some((
+                    ModelEvent::Failed {
+                        error: cancelled_error(),
+                    },
+                    AnthropicPhase::Finished,
+                ));
+            }
+            // The provider request attempt begins: Started is emitted before
+            // the network-opening await so the lifecycle stays consistent
+            // when cancellation interrupts that await.
+            Some((
+                ModelEvent::Started,
+                AnthropicPhase::Opening {
+                    api_key,
+                    url,
+                    anthropic_version,
+                    http_client,
+                    wire_request,
+                    normalizer,
+                    cancellation,
+                },
+            ))
+        }
+        AnthropicPhase::Opening {
+            api_key,
+            url,
+            anthropic_version,
+            http_client,
+            wire_request,
+            mut normalizer,
+            cancellation,
+        } => {
+            match open_stream(
                 &api_key,
                 &url,
                 &anthropic_version,
@@ -130,28 +165,26 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
             )
             .await
             {
-                Some(PreparationOutcome::Streaming(stream)) => Some((
-                    ModelEvent::Started,
-                    AnthropicPhase::Streaming {
-                        stream,
-                        normalizer,
-                        cancellation,
-                        pending: VecDeque::new(),
-                    },
-                )),
-                Some(PreparationOutcome::Failed(error)) => {
-                    Some((ModelEvent::Started, AnthropicPhase::Failing { error }))
+                OpeningOutcome::Streaming(mut stream) => {
+                    let mut pending = std::collections::VecDeque::new();
+                    streaming_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
+                    let event = pending.pop_front().expect("pending is non-empty here");
+                    let next_phase = if is_terminal(&event) {
+                        AnthropicPhase::Finished
+                    } else {
+                        AnthropicPhase::Streaming {
+                            stream,
+                            normalizer,
+                            cancellation,
+                            pending,
+                        }
+                    };
+                    Some((event, next_phase))
                 }
-                None => Some((
-                    ModelEvent::Failed {
-                        error: cancelled_error(),
-                    },
-                    AnthropicPhase::Finished,
-                )),
+                OpeningOutcome::Failed(error) => {
+                    Some((ModelEvent::Failed { error }, AnthropicPhase::Finished))
+                }
             }
-        }
-        AnthropicPhase::Failing { error } => {
-            Some((ModelEvent::Failed { error }, AnthropicPhase::Finished))
         }
         AnthropicPhase::Streaming {
             mut stream,
@@ -159,7 +192,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
             cancellation,
             mut pending,
         } => {
-            streaming_poll(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
+            streaming_pull(&mut stream, &mut normalizer, &cancellation, &mut pending).await;
             let event = pending.pop_front().expect("pending is non-empty here");
             let next_phase = if is_terminal(&event) {
                 AnthropicPhase::Finished
@@ -179,25 +212,24 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelEvent, Anth
 
 /// Pulls provider events into `pending` until at least one event is ready
 /// or the invocation is over.
-enum PreparationOutcome {
+enum OpeningOutcome {
     Streaming(SseStream),
     Failed(ModelError),
 }
 
-/// Performs the single provider HTTP request attempt. Returns `None` when
-/// cancellation arrived before any network request.
-async fn preparing_poll(
+/// Opens the provider SSE stream. The network-opening await itself is
+/// cancellation-aware: cancellation while waiting for the response headers
+/// drops the in-flight request and terminates with `Failed(Cancelled)`
+/// without retry.
+async fn open_stream(
     api_key: &str,
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
     wire_request: &super::mapping::WireRequest,
     cancellation: ModelCancellation,
-) -> Option<PreparationOutcome> {
-    if cancellation.is_cancelled() {
-        return None;
-    }
-    let response = http_client
+) -> OpeningOutcome {
+    let send = http_client
         .post(url)
         .header(
             reqwest::header::CONTENT_TYPE,
@@ -206,8 +238,14 @@ async fn preparing_poll(
         .header("x-api-key", api_key)
         .header("anthropic-version", anthropic_version)
         .json(wire_request)
-        .send()
-        .await;
+        .send();
+    let response = tokio::select! {
+        response = send => response,
+        () = cancellation.cancelled() => {
+            // The send future is dropped, aborting the in-flight request.
+            return OpeningOutcome::Failed(cancelled_error());
+        }
+    };
     match response {
         Ok(response) if !response.status().is_success() => {
             let status = response.status();
@@ -217,13 +255,11 @@ async fn preparing_poll(
                 .await
                 .map(|bytes| bytes.to_vec())
                 .unwrap_or_default();
-            Some(PreparationOutcome::Failed(normalize_http_error(
-                status, &headers, &body,
-            )))
+            OpeningOutcome::Failed(normalize_http_error(status, &headers, &body))
         }
         Ok(response) => {
             let stream: SseStream = Box::pin(response.bytes_stream().eventsource());
-            Some(PreparationOutcome::Streaming(stream))
+            OpeningOutcome::Streaming(stream)
         }
         Err(reqwest_error) => {
             let kind = if reqwest_error.is_timeout() {
@@ -231,21 +267,23 @@ async fn preparing_poll(
             } else {
                 ModelErrorKind::Transport
             };
-            Some(PreparationOutcome::Failed(ModelError {
+            OpeningOutcome::Failed(ModelError {
                 kind,
                 message: reqwest_error.to_string(),
                 retry_after_ms: None,
                 provider_code: None,
-            }))
+            })
         }
     }
 }
 
-async fn streaming_poll(
+/// Pulls provider events into `pending` until at least one event is ready or
+/// the invocation is over.
+async fn streaming_pull(
     stream: &mut SseStream,
     normalizer: &mut AnthropicStreamNormalizer,
     cancellation: &ModelCancellation,
-    pending: &mut VecDeque<ModelEvent>,
+    pending: &mut std::collections::VecDeque<ModelEvent>,
 ) {
     while pending.is_empty() {
         let item = tokio::select! {
@@ -316,48 +354,80 @@ enum AnthropicPhase {
         normalizer: AnthropicStreamNormalizer,
         cancellation: ModelCancellation,
     },
-    Failing {
-        error: ModelError,
+    Opening {
+        api_key: String,
+        url: String,
+        anthropic_version: String,
+        http_client: reqwest::Client,
+        wire_request: super::mapping::WireRequest,
+        normalizer: AnthropicStreamNormalizer,
+        cancellation: ModelCancellation,
     },
     Streaming {
         stream: SseStream,
         normalizer: AnthropicStreamNormalizer,
         cancellation: ModelCancellation,
-        pending: VecDeque<ModelEvent>,
+        pending: std::collections::VecDeque<ModelEvent>,
     },
     Finished,
 }
 
-/// Per-block assembly state keyed by the provider block index.
+/// Adapter-local canonical block keys for Anthropic content blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum AnthropicBlockKey {
+    /// A provider content block identified by its provider index.
+    Provider(u32),
+    /// The deterministic refusal block allocated for `stop_details`.
+    Refusal,
+}
+
+/// Per-block assembly state, keyed by the provider block index.
 ///
-/// All block events are buffered per block and flushed in canonical order at
-/// the terminal stop reason: Anthropic mandates discarding partial output on
-/// a refusal, and buffering keeps the canonical event order deterministic.
+/// The block kind is explicit type-state: text, thinking, redacted thinking,
+/// and tool use hold only the state their kind needs, so impossible
+/// combinations (for example a text delta on a tool block) fail hard.
 #[derive(Debug)]
-struct BlockState {
-    /// The canonical content block index.
-    canonical_index: ContentBlockIndex,
-    /// Buffered normalized events for this block, flushed in canonical order.
-    pending: Vec<ModelEvent>,
-    /// Text, thinking, or tool-arguments accumulation buffer.
-    buffer: String,
-    /// Thinking signature, when known.
-    signature: Option<String>,
-    /// Redacted thinking marker, when present.
-    redacted: Option<String>,
-    /// Tool use identity (`tool_use` blocks only) and completion flag.
-    tool: Option<(ToolCallId, ToolId, String, bool)>,
+enum AnthropicBlockState {
+    Text {
+        canonical_index: ContentBlockIndex,
+    },
+    Thinking {
+        canonical_index: ContentBlockIndex,
+        /// Accumulated visible thinking text (replayed verbatim inside the
+        /// opaque provider state; never emitted as a whole).
+        buffer: String,
+        /// The provider signature, when received.
+        signature: Option<String>,
+        /// Whether the continuation state has been emitted.
+        state_emitted: bool,
+    },
+    RedactedThinking {
+        canonical_index: ContentBlockIndex,
+        /// The opaque encrypted provider state, preserved verbatim.
+        data: String,
+        state_emitted: bool,
+    },
+    ToolUse {
+        canonical_index: ContentBlockIndex,
+        call_id: ToolCallId,
+        tool_id: ToolId,
+        name: String,
+        argument_buffer: String,
+        completed: bool,
+    },
 }
 
 /// Normalizes the Anthropic stream into canonical events.
 #[derive(Debug)]
 struct AnthropicStreamNormalizer {
     tools: ValidatedTools,
-    blocks: BlockAllocator<u32>,
-    block_states: BTreeMap<u32, BlockState>,
+    blocks: BlockAllocator<AnthropicBlockKey>,
+    block_states: BTreeMap<u32, AnthropicBlockState>,
     message_start_usage: Option<WireUsage>,
     latest_usage: Option<WireUsage>,
     stop_reason: Option<String>,
+    stop_details: Option<super::wire::WireStopDetails>,
+    refusal_block: Option<ContentBlockIndex>,
     terminal_emitted: bool,
 }
 
@@ -370,6 +440,8 @@ impl AnthropicStreamNormalizer {
             message_start_usage: None,
             latest_usage: None,
             stop_reason: None,
+            stop_details: None,
+            refusal_block: None,
             terminal_emitted: false,
         }
     }
@@ -389,9 +461,16 @@ impl AnthropicStreamNormalizer {
                 self.push_content_block_delta(index, &delta)
             }
             WireEvent::ContentBlockStop { index } => self.push_content_block_stop(index),
-            WireEvent::MessageDelta { delta, usage } => {
+            WireEvent::MessageDelta {
+                delta,
+                usage,
+                stop_details,
+            } => {
                 if let Some(stop_reason) = delta.stop_reason {
                     self.stop_reason = Some(stop_reason);
+                }
+                if stop_details.is_some() {
+                    self.stop_details = stop_details;
                 }
                 if usage.is_some() {
                     self.latest_usage = usage;
@@ -424,37 +503,38 @@ impl AnthropicStreamNormalizer {
     ) -> Result<Vec<ModelEvent>, ModelError> {
         match block.block_type.as_deref() {
             Some("text") => {
-                let canonical_index = self.blocks.allocate(index);
+                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
+                self.block_states
+                    .insert(index, AnthropicBlockState::Text { canonical_index });
+                Ok(Vec::new())
+            }
+            Some("thinking") => {
+                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
                 self.block_states.insert(
                     index,
-                    BlockState {
+                    AnthropicBlockState::Thinking {
                         canonical_index,
-                        pending: Vec::new(),
-                        buffer: block.text.clone().unwrap_or_default(),
-                        signature: None,
-                        redacted: None,
-                        tool: None,
+                        buffer: block.thinking.clone().unwrap_or_default(),
+                        signature: block.signature.clone(),
+                        state_emitted: false,
                     },
                 );
                 Ok(Vec::new())
             }
-            Some("thinking" | "redacted_thinking") => {
-                let canonical_index = self.blocks.allocate(index);
+            Some("redacted_thinking") => {
+                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
                 self.block_states.insert(
                     index,
-                    BlockState {
+                    AnthropicBlockState::RedactedThinking {
                         canonical_index,
-                        pending: Vec::new(),
-                        buffer: block.thinking.clone().unwrap_or_default(),
-                        signature: block.signature.clone(),
-                        redacted: block.redacted_thinking.clone(),
-                        tool: None,
+                        data: block.data.clone().unwrap_or_default(),
+                        state_emitted: false,
                     },
                 );
                 Ok(Vec::new())
             }
             Some("tool_use") => {
-                let canonical_index = self.blocks.allocate(index);
+                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
                 let Some(id) = block.id.clone().filter(|id| !id.is_empty()) else {
                     return Err(provider_error(
                         "provider tool_use block lacks an invocation id".to_owned(),
@@ -473,19 +553,19 @@ impl AnthropicStreamNormalizer {
                 };
                 self.block_states.insert(
                     index,
-                    BlockState {
+                    AnthropicBlockState::ToolUse {
                         canonical_index,
-                        pending: vec![ModelEvent::ToolCallStarted {
-                            block_index: canonical_index,
-                            call,
-                        }],
-                        buffer: String::new(),
-                        signature: None,
-                        redacted: None,
-                        tool: Some((ToolCallId::new(id), tool_id, name, false)),
+                        call_id: ToolCallId::new(id),
+                        tool_id,
+                        name,
+                        argument_buffer: String::new(),
+                        completed: false,
                     },
                 );
-                Ok(Vec::new())
+                Ok(vec![ModelEvent::ToolCallStarted {
+                    block_index: canonical_index,
+                    call,
+                }])
             }
             Some("fallback") => {
                 // Provider transport/control metadata: no canonical content
@@ -516,41 +596,55 @@ impl AnthropicStreamNormalizer {
                 let state = self.block_states.get_mut(&index).ok_or_else(|| {
                     provider_error(format!("text delta for unknown block index {index}"))
                 })?;
-                if state.tool.is_some() {
+                let AnthropicBlockState::Text { canonical_index } = state else {
                     return Err(provider_error(format!(
                         "text delta for non-text block index {index}"
                     )));
+                };
+                let text = delta.text.clone().unwrap_or_default();
+                if text.is_empty() {
+                    return Ok(Vec::new());
                 }
-                state
-                    .buffer
-                    .push_str(delta.text.as_deref().unwrap_or_default());
-                Ok(Vec::new())
+                Ok(vec![ModelEvent::TextDelta {
+                    block_index: *canonical_index,
+                    text,
+                }])
             }
             Some("thinking_delta") => {
                 let state = self.block_states.get_mut(&index).ok_or_else(|| {
                     provider_error(format!("thinking delta for unknown block index {index}"))
                 })?;
-                if state.tool.is_some() {
+                let AnthropicBlockState::Thinking {
+                    canonical_index,
+                    buffer,
+                    ..
+                } = state
+                else {
                     return Err(provider_error(format!(
                         "thinking delta for non-thinking block index {index}"
                     )));
+                };
+                let text = delta.thinking.clone().unwrap_or_default();
+                buffer.push_str(&text);
+                if text.is_empty() {
+                    return Ok(Vec::new());
                 }
-                state
-                    .buffer
-                    .push_str(delta.thinking.as_deref().unwrap_or_default());
-                Ok(Vec::new())
+                Ok(vec![ModelEvent::ReasoningDelta {
+                    block_index: *canonical_index,
+                    text,
+                }])
             }
             Some("signature_delta") => {
                 let state = self.block_states.get_mut(&index).ok_or_else(|| {
                     provider_error(format!("signature delta for unknown block index {index}"))
                 })?;
-                if state.tool.is_some() {
+                let AnthropicBlockState::Thinking { signature, .. } = state else {
                     return Err(provider_error(format!(
                         "signature delta for non-thinking block index {index}"
                     )));
-                }
+                };
                 if let Some(new_signature) = delta.signature.clone() {
-                    state.signature = Some(new_signature);
+                    *signature = Some(new_signature);
                 }
                 Ok(Vec::new())
             }
@@ -558,21 +652,27 @@ impl AnthropicStreamNormalizer {
                 let state = self.block_states.get_mut(&index).ok_or_else(|| {
                     provider_error(format!("input delta for unknown block index {index}"))
                 })?;
-                let Some((call_id, _, _, _)) = state.tool.as_ref() else {
+                let AnthropicBlockState::ToolUse {
+                    canonical_index,
+                    call_id,
+                    argument_buffer,
+                    ..
+                } = state
+                else {
                     return Err(provider_error(format!(
                         "input delta for non-tool block index {index}"
                     )));
                 };
                 let partial = delta.partial_json.clone().unwrap_or_default();
-                state.buffer.push_str(&partial);
-                if !partial.is_empty() {
-                    state.pending.push(ModelEvent::ToolCallArgumentsDelta {
-                        block_index: state.canonical_index,
-                        call_id: call_id.clone(),
-                        arguments_delta: partial,
-                    });
+                argument_buffer.push_str(&partial);
+                if partial.is_empty() {
+                    return Ok(Vec::new());
                 }
-                Ok(Vec::new())
+                Ok(vec![ModelEvent::ToolCallArgumentsDelta {
+                    block_index: *canonical_index,
+                    call_id: call_id.clone(),
+                    arguments_delta: partial,
+                }])
             }
             Some(other) => Err(unsupported(format!(
                 "unsupported content block delta type {other:?}"
@@ -589,36 +689,90 @@ impl AnthropicStreamNormalizer {
             // allocating any canonical content.
             return Ok(Vec::new());
         };
-        let Some((call_id, tool_id, name, completed)) = state.tool.as_mut() else {
-            return Ok(Vec::new());
-        };
-        if *completed {
-            return Ok(Vec::new());
+        match state {
+            AnthropicBlockState::Text { .. } => Ok(Vec::new()),
+            AnthropicBlockState::Thinking {
+                canonical_index,
+                buffer,
+                signature,
+                state_emitted,
+            } => {
+                if *state_emitted {
+                    return Ok(Vec::new());
+                }
+                let Some(signature) = signature.clone() else {
+                    return Ok(Vec::new());
+                };
+                *state_emitted = true;
+                let opaque = serde_json::json!({
+                    "type": "thinking",
+                    "thinking": buffer,
+                    "signature": signature,
+                });
+                Ok(vec![ModelEvent::ContinuationState {
+                    block_index: *canonical_index,
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                }])
+            }
+            AnthropicBlockState::RedactedThinking {
+                canonical_index,
+                data,
+                state_emitted,
+            } => {
+                if *state_emitted {
+                    return Ok(Vec::new());
+                }
+                *state_emitted = true;
+                // The provider block is preserved losslessly as its full
+                // provider object; the opaque data is never interpreted,
+                // decrypted, modified, or fabricated.
+                let opaque = serde_json::json!({
+                    "type": "redacted_thinking",
+                    "data": data,
+                });
+                Ok(vec![ModelEvent::ContinuationState {
+                    block_index: *canonical_index,
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                }])
+            }
+            AnthropicBlockState::ToolUse {
+                canonical_index,
+                call_id,
+                tool_id,
+                name,
+                argument_buffer,
+                completed,
+            } => {
+                if *completed {
+                    return Ok(Vec::new());
+                }
+                // The complete JSON is parsed exactly once, at block stop.
+                let parsed = serde_json::from_str(argument_buffer).map_err(|e| {
+                    provider_error(format!(
+                        "malformed complete tool arguments for {name:?} ({call_id}): {e}"
+                    ))
+                })?;
+                *completed = true;
+                Ok(vec![ModelEvent::ToolCallCompleted {
+                    block_index: *canonical_index,
+                    call: ToolCall {
+                        id: call_id.clone(),
+                        tool_id: tool_id.clone(),
+                        name: name.clone(),
+                        arguments: parsed,
+                    },
+                }])
+            }
         }
-        // The complete JSON is parsed exactly once, at block stop.
-        let parsed = serde_json::from_str(&state.buffer).map_err(|e| {
-            provider_error(format!(
-                "malformed complete tool arguments for {name:?} ({call_id}): {e}"
-            ))
-        })?;
-        *completed = true;
-        state.pending.push(ModelEvent::ToolCallCompleted {
-            block_index: state.canonical_index,
-            call: ToolCall {
-                id: call_id.clone(),
-                tool_id: tool_id.clone(),
-                name: name.clone(),
-                arguments: parsed,
-            },
-        });
-        Ok(Vec::new())
     }
 
-    /// Handles `message_stop`: flushes buffered content in canonical block
-    /// order and emits the terminal event.
+    /// Handles `message_stop`: emits refusal semantics when the provider
+    /// terminated with `stop_reason = refusal`, then the terminal event.
     ///
-    /// On a refusal the provider mandates discarding partial output: the
-    /// buffered content is dropped instead of emitted.
+    /// Provider deltas were already streamed as they arrived; `ModelEvent`
+    /// is provisional adapter output and the completed
+    /// `AgentMessageBlock` assembly (including any rollback of partial
+    /// output on a refusal) is owned by the future Agent Loop, not by M2.
     fn terminal(&mut self) -> Result<Vec<ModelEvent>, ModelError> {
         if self.terminal_emitted {
             return Ok(Vec::new());
@@ -628,41 +782,20 @@ impl AnthropicStreamNormalizer {
             provider_error("provider stream reached message_stop without a stop reason".to_owned())
         })?;
         let mut events = Vec::new();
-        if !is_refusal(Some(&stop_reason)) {
-            for state in self.block_states.values_mut() {
-                let mut block_events = std::mem::take(&mut state.pending);
-                if state.tool.is_none() {
-                    // Text and thinking blocks finalize their buffered content
-                    // here; tool blocks were already assembled at stop.
-                    if !state.buffer.is_empty() {
-                        if state.signature.is_none() && state.redacted.is_none() {
-                            block_events.push(ModelEvent::TextDelta {
-                                block_index: state.canonical_index,
-                                text: state.buffer.clone(),
-                            });
-                        } else {
-                            block_events.push(ModelEvent::ReasoningDelta {
-                                block_index: state.canonical_index,
-                                text: state.buffer.clone(),
-                            });
-                        }
-                    }
-                    if state.signature.is_some() || state.redacted.is_some() {
-                        let opaque = serde_json::json!({
-                            "type": if state.redacted.is_some() { "redacted_thinking" } else { "thinking" },
-                            "thinking": state.buffer,
-                            "signature": state.signature,
-                            "redacted_thinking": state.redacted,
-                        });
-                        block_events.push(ModelEvent::ContinuationState {
-                            block_index: state.canonical_index,
-                            state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                                opaque,
-                            }),
-                        });
-                    }
-                }
-                events.extend(block_events);
+        if is_refusal(Some(&stop_reason)) {
+            if let Some(explanation) = self
+                .stop_details
+                .as_ref()
+                .and_then(|details| details.explanation.clone())
+                .filter(|explanation| !explanation.is_empty())
+            {
+                let block_index = *self
+                    .refusal_block
+                    .get_or_insert_with(|| self.blocks.allocate(AnthropicBlockKey::Refusal));
+                events.push(ModelEvent::RefusalDelta {
+                    block_index,
+                    text: explanation,
+                });
             }
         }
         events.push(ModelEvent::Completed {
