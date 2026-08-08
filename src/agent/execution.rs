@@ -6,9 +6,9 @@
 //! ```text
 //! input
 //!  ↓
-//! canonical history + latest context checkpoint
+//! canonical history + latest context checkpoint + pending FreshInboundTurn
 //!  ↓
-//! ContextEngine → ContextProjection (M4, opt-in)
+//! ContextEngine → ContextProjection (+ ephemeral Agent Status attachment)
 //!  ↓
 //! model request (projection + tools + continuation state)
 //!  ↓
@@ -27,22 +27,28 @@
 //!
 //! Ownership: the loop owns execution semantics, message assembly, tool
 //! execution, continuation state, cancellation observation, context
-//! projection integration, safe-boundary inbound consumption, and the
-//! runtime event trace. The adapter owns provider protocol translation only.
-//! No provider protocol concept appears in this module.
+//! projection integration, fresh-inbound lifecycle, safe-boundary inbound
+//! consumption, and the runtime event trace. The adapter owns provider
+//! protocol translation and Agent Status wire placement only. No provider
+//! protocol concept appears in this module.
 //!
-//! The M4 context path is opt-in via [`AgentExecution::with_context_runtime`];
-//! `AgentExecution::new` remains the explicit no-context/unbounded path. The
-//! conversation inbound mailbox is opt-in via
-//! [`AgentExecution::with_inbound_mailbox`], which adds the mailbox
+//! The M4 context path is mandatory: every normal `AgentExecution` is
+//! constructed with a [`ContextRuntime`], and there is exactly one normal
+//! execution model — no no-context/unbounded mode and no Agent Status
+//! disable flag. Agent Status is composed whenever a pending
+//! [`FreshInboundTurn`] exists and is consumed by the first successful model
+//! invocation that observes it. The conversation inbound mailbox is opt-in
+//! via [`AgentExecution::with_inbound_mailbox`], which adds the mailbox
 //! safe-boundary rules. Cancellation is a generic Agent Loop invariant for
 //! every execution: observable cancellation is checked before every model
 //! turn begins.
 
 use futures_util::StreamExt;
 
+use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
+use crate::context::status::AgentStatusAttachment;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{ContextRuntime, compile_projection};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -54,7 +60,7 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
-use crate::runtime::inbound::{ConversationInboundMailbox, MailboxError};
+use crate::runtime::inbound::{ConversationInboundMailbox, FreshInboundTurn, MailboxError};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::executor::ToolRegistry;
 use crate::tools::types::ToolCall;
@@ -62,6 +68,9 @@ use crate::tools::types::ToolCall;
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
 use super::state::{ExecutionState, ExecutionStateMachine};
+
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 
 /// The bounded M4 retry policy for `ContextWindowExceeded`.
 ///
@@ -82,6 +91,17 @@ pub struct AgentExecutionRequest {
     /// The conversation/input state the attempt starts from. The loop owns
     /// the committed history and appends agent and tool messages to it.
     pub initial_messages: Vec<MessageBlock>,
+    /// The explicit fresh inbound trigger of the attempt's first turn, when
+    /// the attempt starts with inbound material the model has not yet
+    /// observed. Fresh inbound identity is explicit execution state, never
+    /// inferred from message role or history shape; omitting it is only
+    /// meaningful when no inbound material exists (a pure continuation
+    /// attempt) and is never an Agent Status disable switch.
+    pub initial_fresh_inbound: Option<FreshInboundTurn>,
+    /// The per-execution/conversation IANA timezone metadata used by the
+    /// temporal Agent Status section, when known. The process/system local
+    /// timezone is never consulted.
+    pub timezone: Option<Tz>,
     /// Provider model identifier for every model request of the attempt.
     pub model: String,
     /// Canonical protocol every model request must use.
@@ -127,11 +147,11 @@ pub struct AgentExecutionResult {
 
 /// One agent attempt execution.
 ///
-/// The loop borrows the model adapter, the immutable tool registry, and the
-/// attempt cancellation signal, and owns the execution state machine, the
-/// committed history, the retained continuation state, the M4 context
-/// runtime (when enabled), the conversation inbound mailbox handle (when
-/// attached), and the runtime event trace.
+/// The loop borrows the model adapter, the immutable tool registry, the
+/// attempt cancellation signal, and owns the mandatory M4 context runtime,
+/// the execution state machine, the committed history, the retained
+/// continuation state, the pending fresh inbound trigger, the conversation
+/// inbound mailbox handle (when attached), and the runtime event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
@@ -144,7 +164,11 @@ pub struct AgentExecution<'a> {
     /// The committed agent message that established the pending
     /// continuation, when one is pending.
     continuation_owner: Option<MessageId>,
-    context_runtime: Option<ContextRuntime<'a>>,
+    /// The pending fresh inbound turn: `Some` until a successful model
+    /// invocation has observed it. One pending fresh inbound turn produces
+    /// at most one Agent Status snapshot per request preparation.
+    pending_fresh_inbound: Option<FreshInboundTurn>,
+    context_runtime: ContextRuntime<'a>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
     /// The conversation inbound mailbox, when attached. The mailbox stays
@@ -195,17 +219,20 @@ enum Terminal {
 
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, tool registry,
-    /// and cancellation signal.
+    /// cancellation signal, and the mandatory M4 context runtime.
     ///
-    /// This is the explicit no-context/unbounded compatibility path: without
-    /// [`AgentExecution::with_context_runtime`], every model request carries
-    /// the full committed history exactly as M3 defined it.
+    /// The context runtime is required: there is exactly one normal
+    /// execution model — canonical history is always projected through the
+    /// context engine, and Agent Status is composed whenever a pending fresh
+    /// inbound turn exists. There is no no-context mode and no Agent Status
+    /// disable flag.
     #[must_use]
     pub fn new(
         request: AgentExecutionRequest,
         adapter: &'a dyn ModelAdapter,
         tools: &'a ToolRegistry,
         cancellation: &'a AgentCancellation,
+        context_runtime: ContextRuntime<'a>,
     ) -> Self {
         Self {
             history: request.initial_messages.clone(),
@@ -217,7 +244,8 @@ impl<'a> AgentExecution<'a> {
             events: Vec::new(),
             pending_continuation: None,
             continuation_owner: None,
-            context_runtime: None,
+            pending_fresh_inbound: None,
+            context_runtime,
             observed: None,
             last_request_fingerprint: None,
             mailbox: None,
@@ -228,20 +256,6 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Enables the M4 context path: the loop projects canonical history
-    /// through the given context runtime before every model request, applies
-    /// automatic proactive compaction, and recovers from
-    /// `ContextWindowExceeded` through exactly one bounded compact-and-retry.
-    ///
-    /// The bundle's engine, summarizer, and checkpoint store are shared, so
-    /// one checkpoint store can be reused across attempts of one
-    /// conversation.
-    #[must_use]
-    pub fn with_context_runtime(mut self, runtime: ContextRuntime<'a>) -> Self {
-        self.context_runtime = Some(runtime);
-        self
-    }
-
     /// Attaches the conversation inbound mailbox of the attempt's
     /// conversation.
     ///
@@ -249,8 +263,11 @@ impl<'a> AgentExecution<'a> {
     /// the execution: at every safe turn boundary the loop performs exactly
     /// one finite atomic drain and appends every drained inbound message as
     /// its own canonical `UserMessageBlock` before the next model request.
-    /// The mailbox must belong to the same conversation as the request;
-    /// a mismatched conversation is rejected explicitly.
+    /// The drained batch becomes one new `FreshInboundTurn`, so the next
+    /// model request carries exactly one Agent Status snapshot targeting the
+    /// final drained message. The mailbox must belong to the same
+    /// conversation as the request; a mismatched conversation is rejected
+    /// explicitly.
     ///
     /// # Errors
     ///
@@ -293,6 +310,9 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             }
         } else {
+            // The attempt's explicit fresh inbound trigger is pending until
+            // the first successful model invocation observes it.
+            self.pending_fresh_inbound = self.request.initial_fresh_inbound.clone();
             let mut terminal = None;
             while terminal.is_none() {
                 // Generic Agent Loop cancellation checkpoint:
@@ -393,7 +413,6 @@ impl<'a> AgentExecution<'a> {
         let overflow_retries: u32 = 0;
         if let StreamTerminal::Failed { error } = &invocation.terminal
             && error.kind == ModelErrorKind::ContextWindowExceeded
-            && self.context_runtime.is_some()
             && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN
         {
             let retry_number = overflow_retries + 1;
@@ -451,6 +470,12 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
+        // The pending fresh inbound turn is consumed by the first successful
+        // model invocation, including a successful ToolCalls response: the
+        // model has already observed the inbound turn, so the following
+        // tool-only continuation carries no Agent Status unless a new
+        // mailbox batch is drained later.
+        self.pending_fresh_inbound = None;
         // The model request completion is reported with the canonical
         // final usage: the terminal event's reported usage, else the
         // latest usage update, never a sum of snapshots.
@@ -531,9 +556,13 @@ impl<'a> AgentExecution<'a> {
     /// drain is performed and, once drained, the complete batch is
     /// appended synchronously as distinct canonical `UserMessageBlock`
     /// values in inbound sequence order — the batch is never partially
-    /// consumed and never requeued. If cancellation becomes observable
-    /// only after the append, the batch stays canonical and the generic
-    /// pre-next-turn checkpoint prevents any further model turn.
+    /// consumed and never requeued. The whole drained batch becomes one
+    /// new [`FreshInboundTurn`] in sequence order, so the next model
+    /// request receives exactly one Agent Status snapshot targeting the
+    /// final drained message (the highest-sequence item). If cancellation
+    /// becomes observable only after the append, the batch stays canonical
+    /// and the generic pre-next-turn checkpoint prevents any further model
+    /// turn.
     ///
     /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
     /// when no mailbox is attached or the snapshot observed an empty
@@ -551,37 +580,54 @@ impl<'a> AgentExecution<'a> {
         let Some(batch) = mailbox.drain() else {
             return Ok(false);
         };
+        let mut message_ids = Vec::with_capacity(batch.items().len());
         for item in batch.into_items() {
+            message_ids.push(item.message().id.clone());
             self.history.push(MessageBlock::User(item.into_message()));
         }
+        let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::ContractViolation {
+                    message: format!(
+                        "a drained mailbox batch cannot form a fresh inbound turn: {error}"
+                    ),
+                },
+            },
+        })?;
+        self.pending_fresh_inbound = Some(fresh);
         Ok(true)
     }
 
     /// Builds the canonical request of the next model invocation.
     ///
-    /// With the M4 context runtime enabled, this is the integration point
-    /// immediately before every agent `ModelRequest`: canonical history plus
-    /// the latest checkpoint flow through the context engine into a
-    /// projection, and the projection is compiled into the request messages.
-    /// Proactive automatic compaction runs when the projected input reaches
-    /// the soft input limit.
+    /// This is the integration point immediately before every agent
+    /// `ModelRequest`: canonical history plus the latest checkpoint flow
+    /// through the context engine into a projection, and the projection is
+    /// compiled into the request messages. The pending fresh inbound turn
+    /// (when one exists) is composed into exactly one Agent Status snapshot
+    /// for this request preparation, and that exact snapshot is reused
+    /// throughout proactive compaction planning and application. Proactive
+    /// automatic compaction runs when the projected input reaches the soft
+    /// input limit.
     async fn prepare_model_request(&mut self) -> Result<ModelRequest, Terminal> {
-        if self.context_runtime.is_none() {
-            return Ok(self.model_request());
-        }
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
             });
         }
-        let projection = match self.current_projection() {
+        // One request preparation composes one status snapshot; the retry
+        // after a ContextWindowExceeded begins a new preparation and
+        // composes a fresh one.
+        let status = match self.compose_status() {
+            Ok(status) => status,
+            Err(error) => return Err(Self::context_failure_terminal(&error)),
+        };
+        let projection = match self.current_projection(status.as_ref()) {
             Ok(projection) => projection,
             Err(terminal) => return Err(terminal),
         };
         let should_compact = match self
             .context_runtime
-            .as_ref()
-            .expect("context runtime enabled")
             .engine
             .should_compact(&projection, self.request.max_output_tokens)
         {
@@ -591,7 +637,11 @@ impl<'a> AgentExecution<'a> {
         if should_compact {
             // Successful compaction invalidates any pending continuation.
             let must_cover = self.continuation_owner.clone();
-            match self.perform_compaction(must_cover.as_ref(), None).await {
+            let fresh = self.pending_fresh_inbound.clone();
+            match self
+                .perform_compaction(must_cover.as_ref(), fresh.as_ref(), status.as_ref(), None)
+                .await
+            {
                 Ok(()) => {}
                 Err(terminal) => return Err(terminal),
             }
@@ -599,35 +649,91 @@ impl<'a> AgentExecution<'a> {
             self.continuation_owner = None;
             self.observed = None;
         }
-        self.context_model_request()
+        self.context_model_request(status.as_ref())
+    }
+
+    /// Composes the Agent Status attachment of the pending fresh inbound
+    /// turn, sampling the runtime clock exactly once.
+    ///
+    /// With no pending fresh inbound turn there is no Agent Status. With a
+    /// pending turn, the turn is validated against canonical history and the
+    /// final message's persisted timestamp drives `inbound_message_time`;
+    /// the composer produces the structured sections and the canonical
+    /// renderer produces the attachment text.
+    ///
+    /// # Errors
+    ///
+    /// Returns a context error for a fresh-inbound contract violation
+    /// (`MalformedHistory`) or a failing status section provider
+    /// (`StatusFailed`).
+    fn compose_status(&self) -> Result<Option<AgentStatusAttachment>, ContextError> {
+        let Some(fresh) = &self.pending_fresh_inbound else {
+            return Ok(None);
+        };
+        fresh.validate_against(&self.history).map_err(|error| {
+            ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                format!("pending fresh inbound turn is inconsistent: {error}"),
+            )
+        })?;
+        let target_message_id = fresh.last_message_id().clone();
+        let inbound_message_time = self.inbound_time_of(&target_message_id).ok_or_else(|| {
+            ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                format!(
+                    "pending fresh inbound message {target_message_id} has no persisted timestamp"
+                ),
+            )
+        })?;
+        let context = crate::context::status::AgentStatusRenderContext {
+            inbound_message_time,
+            timezone: self.request.timezone,
+        };
+        let status = self.context_runtime.status_composer.compose(&context)?;
+        Ok(Some(AgentStatusAttachment {
+            target_message_id,
+            rendered: crate::context::status::render_agent_status(&status),
+        }))
+    }
+
+    /// The persisted timestamp of one committed inbound message.
+    fn inbound_time_of(&self, message_id: &MessageId) -> Option<DateTime<Utc>> {
+        self.history.iter().find_map(|message| match message {
+            MessageBlock::User(user) if &user.id == message_id => user.timestamp,
+            _ => None,
+        })
     }
 
     /// Builds the model request from the current projection of the latest
     /// checkpoint.
-    fn context_model_request(&mut self) -> Result<ModelRequest, Terminal> {
-        let projection = self.current_projection()?;
+    fn context_model_request(
+        &mut self,
+        status: Option<&AgentStatusAttachment>,
+    ) -> Result<ModelRequest, Terminal> {
+        let projection = self.current_projection(status)?;
         self.last_request_fingerprint = Some(projection.fingerprint());
         Ok(self.model_request_from_projection(&projection))
     }
 
     /// The current projection of the latest checkpoint, or the terminal the
     /// attempt must settle with when the context plane failed.
-    fn current_projection(&self) -> Result<ContextProjection, Terminal> {
-        let runtime = self
+    fn current_projection(
+        &self,
+        agent_status: Option<&AgentStatusAttachment>,
+    ) -> Result<ContextProjection, Terminal> {
+        let checkpoint = self
             .context_runtime
-            .as_ref()
-            .expect("context runtime enabled");
-        let checkpoint = runtime
             .checkpoint_store
             .load(&self.request.conversation_id)
             .map_err(|error| Self::context_failure_terminal(&error))?;
-        runtime
+        self.context_runtime
             .engine
             .build_projection(
                 &self.history,
                 checkpoint.as_ref(),
                 &self.tools.definitions(),
                 self.observed.as_ref(),
+                agent_status,
             )
             .map_err(|error| Self::context_failure_terminal(&error))
     }
@@ -653,6 +759,11 @@ impl<'a> AgentExecution<'a> {
     /// overflow as the final model failure (`AttemptFailed(Model(overflow))`)
     /// with the compaction diagnostic carried by `CompactionFailed.error`.
     ///
+    /// The compaction planning receives the pending fresh inbound turn (so
+    /// unobserved fresh inbound can never be retired) and the exact Agent
+    /// Status attachment of this request preparation (so hard-fit estimates
+    /// include the status itself).
+    ///
     /// Cancellation is observed before the compaction, raced (biased)
     /// against the pending summary, checked again before the checkpoint
     /// commit, and checked again before any retry by the callers: once
@@ -661,6 +772,8 @@ impl<'a> AgentExecution<'a> {
     async fn perform_compaction(
         &mut self,
         must_cover_through: Option<&MessageId>,
+        fresh_inbound: Option<&FreshInboundTurn>,
+        agent_status: Option<&AgentStatusAttachment>,
         overflow: Option<&ModelError>,
     ) -> Result<(), Terminal> {
         if self.cancellation.is_cancelled() {
@@ -669,99 +782,123 @@ impl<'a> AgentExecution<'a> {
             });
         }
         self.emit(RuntimeEvent::CompactionStarted);
-        let runtime = self
-            .context_runtime
-            .as_ref()
-            .expect("context runtime enabled");
-        let tools = self.tools.definitions();
-        let checkpoint = match runtime.checkpoint_store.load(&self.request.conversation_id) {
-            Ok(checkpoint) => checkpoint,
+        match self
+            .run_compaction(must_cover_through, fresh_inbound, agent_status)
+            .await
+        {
+            Ok(()) => {}
+            // Cancellation never becomes a compaction failure: no
+            // `CompactionFailed` event is emitted and the attempt settles
+            // cancelled.
+            Err(error) if error.kind == ContextErrorKind::Cancelled => {
+                return Err(Terminal::Cancelled {
+                    reason: self.cancellation.reason(),
+                });
+            }
             Err(error) => return Err(self.compaction_failure(&error, overflow)),
-        };
-        let projection = match runtime.engine.build_projection(
+        }
+        self.emit(RuntimeEvent::CompactionCompleted);
+        Ok(())
+    }
+
+    /// The cancellation-aware compaction pipeline: plan, summarize, verify
+    /// progress, apply, fit-check, and persist.
+    ///
+    /// Cancellation is observed before the compaction, raced (biased)
+    /// against the pending summary, and checked again before the checkpoint
+    /// commit: once cancellation is observable, no summary, no checkpoint,
+    /// and no retry progress may begin, and the pending summary future is
+    /// dropped.
+    async fn run_compaction(
+        &self,
+        must_cover_through: Option<&MessageId>,
+        fresh_inbound: Option<&FreshInboundTurn>,
+        agent_status: Option<&AgentStatusAttachment>,
+    ) -> Result<(), ContextError> {
+        if self.cancellation.is_cancelled() {
+            return Err(ContextError::new(
+                ContextErrorKind::Cancelled,
+                "compaction cancelled before it began",
+            ));
+        }
+        let tools = self.tools.definitions();
+        let checkpoint = self
+            .context_runtime
+            .checkpoint_store
+            .load(&self.request.conversation_id)?;
+        let projection = self.context_runtime.engine.build_projection(
             &self.history,
             checkpoint.as_ref(),
             &tools,
             self.observed.as_ref(),
-        ) {
-            Ok(projection) => projection,
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
-        };
-        let plan = match runtime.engine.plan_compaction(
+            agent_status,
+        )?;
+        let plan = self.context_runtime.engine.plan_compaction(
             &self.history,
             checkpoint.as_ref(),
             &projection,
             &tools,
             self.request.max_output_tokens,
-            must_cover_through,
-        ) {
-            Ok(plan) => plan,
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
-        };
-        let summary_request =
-            match runtime
-                .engine
-                .summary_request(&self.history, checkpoint.as_ref(), &plan)
-            {
-                Ok(request) => request,
-                Err(error) => return Err(self.compaction_failure(&error, overflow)),
-            };
+            &CompactionConstraints {
+                must_cover_through,
+                fresh_inbound,
+            },
+        )?;
+        let summary_request = self.context_runtime.engine.summary_request(
+            &self.history,
+            checkpoint.as_ref(),
+            &plan,
+        )?;
         let summary = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {
-                return Err(Terminal::Cancelled {
-                    reason: self.cancellation.reason(),
-                });
+                return Err(ContextError::new(
+                    ContextErrorKind::Cancelled,
+                    "compaction cancelled while summarizing",
+                ));
             }
-            result = runtime
+            result = self
+                .context_runtime
                 .summarizer
                 .summarize(summary_request, self.cancellation.model_cancellation()) => result,
         };
-        let summary_text = match summary {
-            Ok(text) => text,
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
-        };
+        let summary_text = summary?;
         // Cancellation after the summary returned but before the checkpoint
         // commit: no checkpoint is saved, no completion is emitted.
         if self.cancellation.is_cancelled() {
-            return Err(Terminal::Cancelled {
-                reason: self.cancellation.reason(),
-            });
+            return Err(ContextError::new(
+                ContextErrorKind::Cancelled,
+                "compaction cancelled before the checkpoint commit",
+            ));
         }
-        let (checkpoint, projection) = match runtime.engine.apply_compaction(
+        let (checkpoint, projection) = self.context_runtime.engine.apply_compaction(
             &self.request.conversation_id,
             &self.history,
             checkpoint.as_ref(),
             &plan,
             &summary_text,
             &tools,
-        ) {
-            Ok(applied) => applied,
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
-        };
+        )?;
         // The rebuilt projection must fit under the soft input limit; if
         // pinned context and the actual summary cannot fit, fail explicitly.
-        match runtime
+        match self
+            .context_runtime
             .engine
             .fits_under_soft_limit(&projection, self.request.max_output_tokens)
         {
             Ok(true) => {}
             Ok(false) => {
-                let error = ContextError::new(
+                return Err(ContextError::new(
                     ContextErrorKind::CannotFit,
                     "compacted projection still exceeds the soft input limit",
-                );
-                return Err(self.compaction_failure(&error, overflow));
+                ));
             }
-            Err(error) => return Err(self.compaction_failure(&error, overflow)),
+            Err(error) => return Err(error),
         }
         // The checkpoint commit point: save before emitting
         // CompactionCompleted, so the event means the new checkpoint is
         // committed to the M4 checkpoint store.
-        if let Err(error) = runtime.checkpoint_store.save(&checkpoint) {
-            return Err(self.compaction_failure(&error, overflow));
-        }
-        self.emit(RuntimeEvent::CompactionCompleted);
+        self.context_runtime.checkpoint_store.save(&checkpoint)?;
         Ok(())
     }
 
@@ -820,6 +957,12 @@ impl<'a> AgentExecution<'a> {
     /// provisional/committed message identity
     /// `{attempt}-agent-{turn}-retry-{retry_number}`.
     ///
+    /// The retry is a new request preparation: it composes a fresh Agent
+    /// Status snapshot, and that snapshot is used for the retry's compaction
+    /// hard-fit estimates and its request. The pending fresh inbound turn is
+    /// deliberately not consumed by the failed overflow attempt: the retry
+    /// still represents the same fresh inbound turn.
+    ///
     /// The retry returns the complete retry invocation — provisional
     /// identity, assembler, and terminal together — so a successful retry
     /// replaces the failed invocation wholesale and the failed request's
@@ -837,9 +980,19 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
+        let status = match self.compose_status() {
+            Ok(status) => status,
+            Err(error) => return Err(Self::context_failure_terminal(&error)),
+        };
         let must_cover = self.continuation_owner.clone();
+        let fresh = self.pending_fresh_inbound.clone();
         match self
-            .perform_compaction(must_cover.as_ref(), Some(overflow_error))
+            .perform_compaction(
+                must_cover.as_ref(),
+                fresh.as_ref(),
+                status.as_ref(),
+                Some(overflow_error),
+            )
             .await
         {
             Ok(()) => {}
@@ -866,7 +1019,7 @@ impl<'a> AgentExecution<'a> {
             "{}-agent-{}-retry-{}",
             self.request.attempt_id, self.turn, retry_number
         ));
-        let request = match self.context_model_request() {
+        let request = match self.context_model_request(status.as_ref()) {
             Ok(request) => request,
             Err(terminal) => return Err(terminal),
         };
@@ -1006,32 +1159,21 @@ impl<'a> AgentExecution<'a> {
         None
     }
 
-    /// Builds the canonical request for the next model invocation on the
-    /// no-context path: the full committed history, the immutable tool
-    /// definitions, and the retained continuation state.
-    fn model_request(&self) -> ModelRequest {
-        ModelRequest {
-            model: self.request.model.clone(),
-            protocol: self.request.protocol,
-            messages: self.history.clone(),
-            tools: self.tools.definitions(),
-            reasoning: self.request.reasoning,
-            max_output_tokens: self.request.max_output_tokens,
-            continuation: self.pending_continuation.clone(),
-        }
-    }
-
     /// Builds the canonical request from a compiled context projection.
     ///
     /// Projection-only agent slices are materialized transiently under their
     /// original source `MessageId` as a model-context view; they are never
-    /// authoritative ledger content.
+    /// authoritative ledger content. The ephemeral Agent Status attachment
+    /// of the projection travels alongside the compiled messages; it is
+    /// never encoded as a fake canonical message.
     fn model_request_from_projection(&self, projection: &ContextProjection) -> ModelRequest {
+        let compiled = compile_projection(projection);
         ModelRequest {
             model: self.request.model.clone(),
             protocol: self.request.protocol,
-            messages: compile_projection(projection),
+            messages: compiled.messages,
             tools: self.tools.definitions(),
+            agent_status: compiled.agent_status,
             reasoning: self.request.reasoning,
             max_output_tokens: self.request.max_output_tokens,
             continuation: self.pending_continuation.clone(),
@@ -1230,6 +1372,7 @@ mod tests {
 
     use super::{AgentExecution, AgentExecutionRequest, test_sync::ContinuationBoundaryPause};
     use crate::agent::cancellation::AgentCancellation;
+    use crate::context::ContextRuntime;
 
     /// A scripted model adapter: each invocation pops the next event script
     /// and yields it synchronously, recording every request.
@@ -1324,11 +1467,49 @@ mod tests {
             conversation_id: ConversationId::new("conv-1"),
             attempt_id: AttemptId::new("attempt-1"),
             initial_messages: Vec::new(),
+            initial_fresh_inbound: None,
+            timezone: None,
             model: "scripted-model".to_owned(),
             protocol: chat_protocol(),
             reasoning: ReasoningEffort::Medium,
             max_output_tokens: 512,
         }
+    }
+
+    /// A deterministic context runtime with a window far larger than any
+    /// scripted request, so no compaction ever triggers in these tests.
+    fn runtime() -> ContextRuntime<'static> {
+        use crate::context::checkpoint::InMemoryCheckpointStore;
+        use crate::context::summarizer::{ContextSummarizer, SummaryRequest};
+        use crate::context::{
+            ContextConfig, ContextEngine, ContextError, DefaultTokenEstimator, TokenEstimator,
+        };
+        use crate::model::ModelCancellation;
+        struct NeverSummarizes;
+        impl ContextSummarizer for NeverSummarizes {
+            fn summarize(
+                &self,
+                _request: SummaryRequest,
+                _cancellation: ModelCancellation,
+            ) -> futures_util::future::BoxFuture<'_, Result<String, ContextError>> {
+                unreachable!("no compaction is possible under a huge window")
+            }
+        }
+        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+        let engine = ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 10_000_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            estimator,
+        )
+        .expect("valid context configuration");
+        ContextRuntime::new(
+            engine,
+            Arc::new(NeverSummarizes),
+            Arc::new(InMemoryCheckpointStore::new()),
+        )
     }
 
     fn inbound_message(id: &str, text: &str) -> UserMessageBlock {
@@ -1482,7 +1663,8 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let mut execution = AgentExecution::new(request(), &adapter, &tools, &cancellation);
+        let mut execution =
+            AgentExecution::new(request(), &adapter, &tools, &cancellation, runtime());
         execution.continuation_pause = Some(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
@@ -1554,7 +1736,8 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let mut execution = AgentExecution::new(request(), &adapter, &tools, &cancellation);
+        let mut execution =
+            AgentExecution::new(request(), &adapter, &tools, &cancellation, runtime());
         execution.continuation_pause = Some(pause);
         let result = execution
             .with_inbound_mailbox(mailbox.clone())
