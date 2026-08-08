@@ -108,6 +108,37 @@ A turn consists of one model response plus all tool calls and corresponding tool
 
 Inbound asynchronous messages may be accepted at any time but may enter model context only at a safe turn boundary.
 
+## Conversation inbound mailbox (Issue #22)
+
+The conversation inbound mailbox is an in-memory runtime coordination
+contract, never durable storage and never canonical history:
+
+- one conversation inbound sequence domain (`InboundSequence`), shared by
+  every producer provenance (Human, Runtime, Agent, Fleet, ExternalSystem);
+  it is not the Event Journal sequence and is never allocated from it;
+- sequence allocation and enqueue publication are atomically visible under
+  one mailbox lock: no allocated-but-unpublished sequence ever exists;
+- the mailbox accepts only ordinary inbound messages
+  (`InboundKind::Message`) that carry their persisted UTC timestamp;
+  runtime compaction summaries are rejected at enqueue;
+- a safe-boundary drain performs exactly one finite watermark-bounded
+  snapshot: all items at or below the watermark are consumed together, and
+  post-watermark arrivals are deferred to the next batch;
+- one message still produces one one-item batch, and every drained item
+  becomes its own distinct canonical `UserMessageBlock` in inbound sequence
+  order — never concatenated, never delivered through an intermediate
+  single-message request;
+- no drain may split an incomplete foreground tool-result batch: the safe
+  boundary occurs only after every tool result of the turn is committed;
+- cancellation before batch selection leaves the mailbox untouched; a
+  drained-and-appended batch is never requeued, even when cancellation
+  becomes observable after the append;
+- an empty safe-boundary snapshot permits the attempt to settle; a later
+  enqueue never reopens or reclassifies that attempt;
+- terminal failure paths never drain the mailbox: pending items remain for
+  later conversation processing, and idle attempt creation for them is not
+  implemented by the mailbox contract.
+
 ## Capability immutability
 
 An attempt sees one immutable capability revision for its entire lifetime.
