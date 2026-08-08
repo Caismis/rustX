@@ -132,12 +132,17 @@ contract, never durable storage and never canonical history:
   boundary occurs only after every tool result of the turn is committed;
 - cancellation before batch selection leaves the mailbox untouched; a
   drained-and-appended batch is never requeued, even when cancellation
-  becomes observable after the append;
-- the Issue #22 cancellation check points (the safe-boundary snapshot check
-  and the loop-boundary check before a new model turn) exist only for an
-  execution with an attached inbound mailbox: without a mailbox the loop
-  observes cancellation only at the pre-existing M3/M4 check points and
-  matches the pre-Issue #22 execution exactly;
+  becomes observable after the append; the batch stays canonical exactly
+  once and the generic pre-next-turn checkpoint prevents any further model
+  turn;
+- observable cancellation is checked before every model turn begins for
+  every execution — the first turn and every continuation — regardless of
+  mailbox attachment, mailbox contents, context runtime presence, or
+  provider protocol; when it wins, no `TurnStarted`, no
+  `ModelRequestStarted`, and no adapter invocation occur, and the attempt
+  settles cancelled. Mailbox attachment adds only the mailbox-safe-boundary
+  cancellation-before-selection rule; it does not control generic
+  cancellation timing;
 - an empty safe-boundary snapshot permits the attempt to settle; a later
   enqueue never reopens or reclassifies that attempt;
 - terminal failure paths never drain the mailbox: pending items remain for

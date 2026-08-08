@@ -92,10 +92,8 @@ the same settlement.
 ## 7. Cancellation
 
 Cancellation is observed at deterministic check points (before each model
-event, between tool calls, and — only for an execution with an attached
-inbound mailbox — before each mailbox safe-boundary snapshot and at the
-loop boundary before a new model turn begins after a previous turn returned
-"continue") and races every tool execution: the loop
+event, between tool calls, and before every model turn begins — the first
+turn and every continuation) and races every tool execution: the loop
 `select`s between the tool future and the attempt cancellation signal
 (biased toward cancellation, so cancellation wins deterministically once
 observable). When cancellation wins while a tool is pending, the loop
@@ -111,11 +109,32 @@ external work is physically killed; the tool interface exposes no
 cancellation handle in M3, and executor-specific cancellation is a later
 milestone.
 
-The Issue #22 cancellation check points are additive and mailbox-gated:
-an execution without a mailbox never acquires the safe-boundary snapshot
-check or the loop-boundary check, so its cancellation semantics are the
-exact pre-Issue #22 M3/M4 semantics (cancellation is observed only at the
-pre-existing check points listed above).
+### Generic Agent Loop cancellation
+
+Observable cancellation is checked **before every model turn begins**, for
+every execution, regardless of mailbox attachment, mailbox contents,
+context runtime presence, or provider protocol. This is an intentional
+pre-1.0 Agent Loop contract refinement, not a mailbox feature: the mailbox
+only adds its own safe-boundary selection rule (below); it does not control
+generic cancellation timing.
+
+When cancellation wins at the generic checkpoint:
+
+```text
+no TurnStarted
+no ModelRequestStarted
+no adapter invocation
+AttemptCancelled
+```
+
+The checkpoint applies before the first model turn, before a continuation
+after a foreground tool turn, and before a continuation caused by a drained
+inbound batch. It never replaces a terminal outcome already selected at a
+mailbox safe boundary: a successful no-tool turn whose empty mailbox
+snapshot settled the attempt as `Completed` settles normally, and a later
+cancellation or enqueue never reopens or reclassifies that completed
+attempt. Likewise, with no mailbox attached, a successful no-tool turn
+settles directly because no next model turn is being started.
 
 ## 8. Deterministic execution
 
@@ -133,9 +152,9 @@ The conversation inbound mailbox (`src/runtime/inbound.rs`) is a narrow
 runtime-owned coordination contract: a per-conversation in-memory queue for
 asynchronous user-role messages arriving while an attempt is running. It is
 attached to an execution through `AgentExecution::with_inbound_mailbox`
-(which rejects a mailbox of a different conversation); an execution without
-a mailbox preserves the exact M3/M4 behavior, including the absence of the
-Issue #22 safe-boundary and loop-boundary cancellation check points.
+(which rejects a mailbox of a different conversation) and adds the mailbox
+safe-boundary rules below; generic cancellation timing is unchanged by
+attachment.
 
 Ownership model:
 
@@ -216,21 +235,23 @@ tool results plus the inbound messages.
 
 ### Cancellation and failure ownership
 
-Attempt cancellation is separate from mailbox ownership. At a safe
-boundary, cancellation wins before batch selection: if cancellation is
-already observable, no drain happens, all pending items stay in the
-mailbox, and the attempt settles cancelled. Once a batch has been atomically
-drained it is appended synchronously in full — never partially consumed and
-never requeued merely because cancellation becomes observable afterwards;
-in that case no new model continuation begins (the loop checks cancellation
-before starting another turn) and the attempt settles cancelled with the
-batch canonical. A successful no-tool turn whose empty snapshot already
-settled the attempt as `Completed` is never reopened or reclassified by a
-later enqueue or cancellation. Terminal failures (model request failure,
-unknown tool, malformed stream, cancellation before the boundary) settle
-directly without draining: pending items remain in the conversation mailbox
-for later conversation processing. Idle attempt creation for such later
-messages is not implemented in Issue #22.
+Attempt cancellation is separate from mailbox ownership, and mailbox
+attachment is separate from generic cancellation timing. The mailbox adds
+exactly one cancellation rule of its own — **cancellation before selection**:
+at a safe boundary, if cancellation is already observable before batch
+selection, no drain happens, all pending items stay in the mailbox, and the
+attempt settles cancelled. Once a batch has been atomically drained it is
+appended synchronously in full — never partially consumed and never requeued
+merely because cancellation becomes observable afterwards; the batch stays
+canonical exactly once, the mailbox no longer contains it, and the generic
+pre-next-turn checkpoint prevents any further model turn. A successful
+no-tool turn whose empty snapshot already settled the attempt as
+`Completed` is never reopened or reclassified by a later enqueue or
+cancellation. Terminal failures (model request failure, unknown tool,
+malformed stream, cancellation before the boundary) settle directly without
+draining: pending items remain in the conversation mailbox for later
+conversation processing. Idle attempt creation for such later messages is
+not implemented in Issue #22.
 
 ### Continuation and compaction
 

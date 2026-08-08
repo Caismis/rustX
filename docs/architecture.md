@@ -239,9 +239,10 @@ The Issue #22 inbound batching integration is additive:
 (rejecting a mismatched conversation), and at every safe turn boundary the
 loop performs exactly one finite watermark-bounded drain and appends every
 drained message as its own canonical `UserMessageBlock` before the next
-model request. An execution without a mailbox preserves the exact M3/M4
-behavior. See `docs/agent-loop.md` section 9 for the full boundary
-description.
+model request. Mailbox attachment adds the safe-boundary
+cancellation-before-selection rule; observable cancellation before every
+model turn is a generic Agent Loop invariant for all executions. See
+`docs/agent-loop.md` section 9 for the full boundary description.
 
 ### Layer 2: Context engine
 

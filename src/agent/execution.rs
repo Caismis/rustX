@@ -32,10 +32,12 @@
 //! No provider protocol concept appears in this module.
 //!
 //! The M4 context path is opt-in via [`AgentExecution::with_context_runtime`];
-//! `AgentExecution::new` remains the explicit no-context/unbounded
-//! compatibility path. The conversation inbound mailbox is opt-in via
-//! [`AgentExecution::with_inbound_mailbox`]; an execution without a mailbox
-//! preserves the exact M3/M4 behavior.
+//! `AgentExecution::new` remains the explicit no-context/unbounded path. The
+//! conversation inbound mailbox is opt-in via
+//! [`AgentExecution::with_inbound_mailbox`], which adds the mailbox
+//! safe-boundary rules. Cancellation is a generic Agent Loop invariant for
+//! every execution: observable cancellation is checked before every model
+//! turn begins.
 
 use futures_util::StreamExt;
 
@@ -150,10 +152,12 @@ pub struct AgentExecution<'a> {
     /// performs one finite drain per safe boundary, never the authoritative
     /// conversation queue store.
     mailbox: Option<ConversationInboundMailbox>,
-    /// Test-only control point parked after a drained batch is fully
-    /// appended at a safe boundary; never present outside `#[cfg(test)]`.
+    /// Test-only control point parked at the turn-continuation boundary:
+    /// after a completed turn (and all its mailbox drain/append work)
+    /// returned "continue", before the generic cancellation check of the
+    /// next model turn; never present outside `#[cfg(test)]`.
     #[cfg(test)]
-    drain_pause: Option<test_sync::DrainBoundaryPause>,
+    continuation_pause: Option<test_sync::ContinuationBoundaryPause>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -218,7 +222,7 @@ impl<'a> AgentExecution<'a> {
             last_request_fingerprint: None,
             mailbox: None,
             #[cfg(test)]
-            drain_pause: None,
+            continuation_pause: None,
             turn: 0,
             terminal_emitted: false,
         }
@@ -284,42 +288,52 @@ impl<'a> AgentExecution<'a> {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
         });
-        let terminal = match self.state.start() {
-            Err(error) => Terminal::Failed {
+        let terminal = if let Err(error) = self.state.start() {
+            Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
-            },
-            Ok(()) => {
+            }
+        } else {
+            let mut terminal = None;
+            while terminal.is_none() {
+                // Generic Agent Loop cancellation checkpoint:
+                // observable cancellation is checked before every model
+                // turn begins — the first turn, every continuation
+                // after a foreground tool turn, and every continuation
+                // caused by a drained inbound batch. This is an
+                // intentional pre-1.0 Agent Loop contract refinement:
+                // mailbox attachment, mailbox contents, the context
+                // runtime, and the provider protocol do not control
+                // generic cancellation timing. When cancellation wins
+                // here, no `TurnStarted`, no `ModelRequestStarted`, and
+                // no adapter invocation happen for the next turn.
+                //
+                // The check never replaces a terminal outcome already
+                // selected at a mailbox safe boundary: a successful
+                // no-tool turn whose empty mailbox snapshot settled the
+                // attempt as Completed exits this loop before the check
+                // runs again, so a later cancellation or enqueue never
+                // reopens or reclassifies the completed attempt.
                 if self.cancellation.is_cancelled() {
-                    Terminal::Cancelled {
+                    terminal = Some(Terminal::Cancelled {
                         reason: self.cancellation.reason(),
+                    });
+                    break;
+                }
+                terminal = self.run_turn().await;
+                // TEST-ONLY continuation boundary: the previous turn is
+                // structurally complete (every tool result and every
+                // mailbox drain/append of that turn is done) and the
+                // loop is about to check cancellation again before the
+                // next model turn. Tests park here to make cancellation
+                // observable deterministically between turns.
+                #[cfg(test)]
+                if terminal.is_none() {
+                    if let Some(pause) = &self.continuation_pause {
+                        pause.park_at_continuation_boundary();
                     }
-                } else {
-                    let mut terminal = None;
-                    while terminal.is_none() {
-                        // Issue #22 loop-boundary cancellation check. Only
-                        // an execution with an attached inbound mailbox
-                        // observes cancellation here: once a previous turn
-                        // returned "continue" (a complete tool-result batch
-                        // and/or a drained inbound batch), observable
-                        // cancellation prevents another model turn from
-                        // beginning. Without a mailbox the loop is the exact
-                        // pre-Issue #22 loop, which observes no cancellation
-                        // between turns. The check never replaces a terminal
-                        // outcome already chosen at a safe boundary: a
-                        // successful no-tool turn whose empty mailbox
-                        // snapshot settled the attempt as Completed exits
-                        // this loop before the check runs again.
-                        if self.mailbox.is_some() && self.cancellation.is_cancelled() {
-                            terminal = Some(Terminal::Cancelled {
-                                reason: self.cancellation.reason(),
-                            });
-                            break;
-                        }
-                        terminal = self.run_turn().await;
-                    }
-                    terminal.expect("the attempt must settle")
                 }
             }
+            terminal.expect("the attempt must settle")
         };
         self.settle(&terminal);
         self.emit_terminal(&terminal);
@@ -503,21 +517,23 @@ impl<'a> AgentExecution<'a> {
         self.safe_boundary_drain().err()
     }
 
-    /// The Issue #22 safe boundary: exactly one finite inbound mailbox
-    /// snapshot after the current turn is structurally complete.
+    /// The mailbox-specific safe boundary: exactly one finite inbound
+    /// mailbox snapshot after the current turn is structurally complete.
     ///
-    /// Without an attached mailbox this is the exact pre-Issue #22
-    /// boundary: the function returns `Ok(false)` immediately, observing
-    /// neither cancellation nor mailbox state, so a no-mailbox execution
-    /// never acquires the Issue #22 cancellation check points. With a
-    /// mailbox attached, cancellation wins before batch selection: when
-    /// cancellation is already observable, no drain happens, all pending
-    /// items stay in the mailbox, and the attempt settles cancelled.
-    /// Otherwise one atomic drain is performed and, once drained, the
-    /// complete batch is appended synchronously as distinct canonical
-    /// `UserMessageBlock` values in inbound sequence order — the batch is
-    /// never partially consumed and never requeued, even if cancellation
-    /// becomes observable afterwards.
+    /// This function is mailbox-owned semantics only, separate from the
+    /// generic Agent Loop cancellation checkpoint (which lives in `run()`
+    /// before every model turn). With no mailbox attached there is no
+    /// snapshot work: the function returns `Ok(false)` immediately and
+    /// observes no mailbox state. With a mailbox attached, cancellation
+    /// wins before batch selection: when cancellation is already
+    /// observable, no drain happens, all pending items stay in the
+    /// mailbox, and the attempt settles cancelled. Otherwise one atomic
+    /// drain is performed and, once drained, the complete batch is
+    /// appended synchronously as distinct canonical `UserMessageBlock`
+    /// values in inbound sequence order — the batch is never partially
+    /// consumed and never requeued. If cancellation becomes observable
+    /// only after the append, the batch stays canonical and the generic
+    /// pre-next-turn checkpoint prevents any further model turn.
     ///
     /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
     /// when no mailbox is attached or the snapshot observed an empty
@@ -537,10 +553,6 @@ impl<'a> AgentExecution<'a> {
         };
         for item in batch.into_items() {
             self.history.push(MessageBlock::User(item.into_message()));
-        }
-        #[cfg(test)]
-        if let Some(pause) = &self.drain_pause {
-            pause.park_after_drain_append();
         }
         Ok(true)
     }
@@ -1129,11 +1141,12 @@ impl<'a> AgentExecution<'a> {
 
 /// Test-only synchronization for in-crate unit tests.
 ///
-/// [`DrainBoundaryPause`] parks the execution at a precise control point —
-/// after a drained batch is fully appended to canonical history at a safe
-/// boundary, before the loop may begin another turn — so a unit test can
-/// make cancellation observable strictly between the batch commit and the
-/// next model turn, deterministically, without timing assumptions.
+/// [`ContinuationBoundaryPause`] parks the execution at the turn-continuation
+/// boundary — after a completed turn (including every mailbox drain/append
+/// of that turn) returned "continue", before the generic
+/// cancellation-before-next-turn check — so a unit test can make
+/// cancellation observable deterministically between turns, without timing
+/// assumptions.
 ///
 /// The pause signals `reached` through a watch (observed with `wait_for`)
 /// and blocks the execution task on a `std` channel until the test
@@ -1145,13 +1158,26 @@ mod test_sync {
 
     use tokio::sync::watch;
 
+    /// A test-only control point at the turn-continuation boundary.
+    ///
+    /// The execution parks here exactly when a completed turn returned
+    /// "continue" — the turn is structurally complete and every mailbox
+    /// drain/append of that turn is done — before the generic
+    /// cancellation-before-next-turn check runs. A unit test can therefore
+    /// make cancellation observable deterministically after one turn
+    /// completed but before another starts, without timing assumptions.
+    ///
+    /// The pause signals `reached` through a watch (observed with
+    /// `wait_for`) and blocks the execution task on a `std` channel until
+    /// the test releases it, so the controlling test must run on a
+    /// multi-threaded runtime. This hook exists only under `#[cfg(test)]`.
     #[derive(Debug)]
-    pub(super) struct DrainBoundaryPause {
+    pub(super) struct ContinuationBoundaryPause {
         reached: watch::Sender<bool>,
         release: mpsc::Receiver<()>,
     }
 
-    impl DrainBoundaryPause {
+    impl ContinuationBoundaryPause {
         /// Creates the pause and its observation/release handles.
         #[must_use]
         pub(super) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
@@ -1167,9 +1193,9 @@ mod test_sync {
             )
         }
 
-        /// Signals that the drained batch is fully appended, then blocks
-        /// until the test releases the execution.
-        pub(super) fn park_after_drain_append(&self) {
+        /// Signals that the turn boundary was reached, then blocks until
+        /// the test releases the execution.
+        pub(super) fn park_at_continuation_boundary(&self) {
             self.reached.send_replace(true);
             let _ = self.release.recv();
         }
@@ -1202,7 +1228,7 @@ mod tests {
         ToolExecutionStatus, ToolOrigin, ToolReplayPolicy,
     };
 
-    use super::{AgentExecution, AgentExecutionRequest, test_sync::DrainBoundaryPause};
+    use super::{AgentExecution, AgentExecutionRequest, test_sync::ContinuationBoundaryPause};
     use crate::agent::cancellation::AgentCancellation;
 
     /// A scripted model adapter: each invocation pops the next event script
@@ -1349,8 +1375,9 @@ mod tests {
         ]
     }
 
-    /// The exact expected trace: one completed tool turn, then cancellation
-    /// at the loop boundary before any second model turn.
+    /// The exact expected trace: one completed tool turn, then the generic
+    /// pre-next-turn cancellation checkpoint settles the attempt cancelled
+    /// before any second model turn.
     fn expected_trace() -> Vec<crate::events::types::RuntimeEvent> {
         use crate::events::types::RuntimeEvent;
         vec![
@@ -1417,12 +1444,97 @@ mod tests {
         ]
     }
 
-    /// The exact commit-point interleaving: a tool turn completes, the safe
-    /// boundary atomically drains batch A and appends it to canonical
-    /// history, the test control point pauses the execution, cancellation
-    /// becomes observable there, and after the release no next model turn
-    /// begins — the loop-boundary check settles the attempt cancelled with
-    /// the batch canonical.
+    /// Spawns the controller that parks until the continuation boundary,
+    /// makes cancellation observable there, and releases the execution.
+    fn boundary_controller(
+        mut reached_rx: tokio::sync::watch::Receiver<bool>,
+        release_tx: std::sync::mpsc::Sender<()>,
+        cancellation: AgentCancellation,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            reached_rx
+                .wait_for(|reached| *reached)
+                .await
+                .expect("continuation boundary reached");
+            cancellation.cancel();
+            release_tx.send(()).expect("release the execution");
+        })
+    }
+
+    /// The generic turn-boundary invariant with no mailbox attached: turn 1
+    /// completes with a tool call and its result, the test control point
+    /// makes cancellation observable after the turn (and all of its work)
+    /// completed but before the next turn begins, and the generic
+    /// pre-next-turn checkpoint settles the attempt cancelled — the second
+    /// model turn never starts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_at_turn_boundary_stops_next_model_request_without_mailbox() {
+        let call = ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+            name: "alpha".to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let adapter = ScriptedAdapter::new(vec![tool_call_script(&call)]);
+        let mut tools = ToolRegistry::new();
+        tools.insert(InstantTool::new("tool-alpha", "alpha"));
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
+        let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
+
+        let mut execution = AgentExecution::new(request(), &adapter, &tools, &cancellation);
+        execution.continuation_pause = Some(pause);
+        let result = execution.run().await;
+        controller.await.expect("controller task");
+
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "exactly one model request total: the second model turn never begins"
+        );
+        assert_eq!(
+            result
+                .events
+                .iter()
+                .filter(|event| matches!(event, crate::events::types::RuntimeEvent::TurnStarted))
+                .count(),
+            1,
+            "exactly one TurnStarted total"
+        );
+        assert_eq!(
+            result
+                .events
+                .iter()
+                .filter(|event| {
+                    matches!(
+                        event,
+                        crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+                    )
+                })
+                .count(),
+            1,
+            "exactly one ModelRequestStarted total"
+        );
+        assert_eq!(
+            result.events,
+            expected_trace(),
+            "the exact trace ends with the single AttemptCancelled terminal event"
+        );
+        assert_eq!(
+            result.outcome,
+            crate::events::types::AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested,
+            }
+        );
+    }
+
+    /// The drain+append commit-point interleaving on the generic boundary
+    /// hook: a tool turn completes, the safe boundary atomically drains
+    /// batch A and appends it to canonical history, the continuation
+    /// boundary control point makes cancellation observable there, and
+    /// after the release the generic pre-next-turn checkpoint prevents any
+    /// second model turn — mailbox commit semantics and generic Agent Loop
+    /// cancellation compose.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_after_drain_append_stops_before_the_next_turn() {
         let call = ToolCall {
@@ -1439,19 +1551,11 @@ mod tests {
             .enqueue(inbound_message("msg-a", "A"))
             .expect("enqueue A before the attempt");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let (pause, mut reached_rx, release_tx) = DrainBoundaryPause::install();
-        let controller_cancellation = cancellation.clone();
-        let controller = tokio::spawn(async move {
-            reached_rx
-                .wait_for(|reached| *reached)
-                .await
-                .expect("drained batch fully appended at the safe boundary");
-            controller_cancellation.cancel();
-            release_tx.send(()).expect("release the execution");
-        });
+        let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
+        let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
         let mut execution = AgentExecution::new(request(), &adapter, &tools, &cancellation);
-        execution.drain_pause = Some(pause);
+        execution.continuation_pause = Some(pause);
         let result = execution
             .with_inbound_mailbox(mailbox.clone())
             .expect("mailbox belongs to the request conversation")
