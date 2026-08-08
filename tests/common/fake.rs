@@ -32,6 +32,22 @@ pub enum FakeStep {
     /// Wait until the invocation's cancellation signal fires, then fail
     /// with a cancelled model error, exactly like a real adapter.
     ParkUntilCancelled,
+    /// Wait until the test releases the invocation through the shared watch
+    /// channel, then continue the script without yielding an event. The
+    /// watch retains its value, so a release signalled before the park is
+    /// observed is never lost.
+    ParkUntilReleased(tokio::sync::watch::Receiver<bool>),
+}
+
+/// Creates a release channel for [`FakeStep::ParkUntilReleased`]: the test
+/// keeps the sender to release the model, and the receiver (cloned into the
+/// step and into controller tasks) observes whether the model parked.
+#[must_use]
+pub fn model_release() -> (
+    tokio::sync::watch::Sender<bool>,
+    tokio::sync::watch::Receiver<bool>,
+) {
+    tokio::sync::watch::channel(false)
 }
 
 /// A scripted deterministic model adapter.
@@ -126,27 +142,40 @@ impl ModelAdapter for FakeModel {
             let parked = parked.clone();
             let cancellation = cancellation.clone();
             async move {
-                if script.is_empty() {
-                    return None;
-                }
-                let step = script.remove(0);
-                let event = match step {
-                    FakeStep::Emit(event) => event,
-                    FakeStep::ParkUntilCancelled => {
-                        parked.send_replace(true);
-                        cancellation.cancelled().await;
-                        ModelEvent::Failed {
-                            error: ModelError {
-                                kind: ModelErrorKind::Cancelled,
-                                message: "fake model cancelled".to_owned(),
-                                retry_after_ms: None,
-                                provider_code: None,
-                            },
+                loop {
+                    if script.is_empty() {
+                        return None;
+                    }
+                    let step = script.remove(0);
+                    match step {
+                        FakeStep::Emit(event) => {
+                            emitted.send_modify(|count| *count += 1);
+                            return Some((event, script));
+                        }
+                        FakeStep::ParkUntilCancelled => {
+                            parked.send_replace(true);
+                            cancellation.cancelled().await;
+                            return Some((
+                                ModelEvent::Failed {
+                                    error: ModelError {
+                                        kind: ModelErrorKind::Cancelled,
+                                        message: "fake model cancelled".to_owned(),
+                                        retry_after_ms: None,
+                                        provider_code: None,
+                                    },
+                                },
+                                script,
+                            ));
+                        }
+                        FakeStep::ParkUntilReleased(mut release) => {
+                            parked.send_replace(true);
+                            release
+                                .wait_for(|released| *released)
+                                .await
+                                .expect("model release watch closed");
                         }
                     }
-                };
-                emitted.send_modify(|count| *count += 1);
-                Some((event, script))
+                }
             }
         }))
     }

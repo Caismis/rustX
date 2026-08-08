@@ -6,7 +6,7 @@
 mod common;
 
 use common::{collect_events, describe_events, error_fixture, simple_request, sse_fixture, tool};
-use rustx::message::types::ContentBlockIndex;
+use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
     ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, ModelUsage, OpenAiAdapterConfig,
@@ -582,4 +582,80 @@ async fn lifecycle_has_one_terminal_event() {
         })
         .collect();
     assert_eq!(terminals.len(), 1);
+}
+
+/// `Agent tool call → Tool result → User A → User B` stays representable as
+/// ordered Chat Completions messages: assistant(tool call), tool, user A,
+/// user B — no provider-side merging.
+#[tokio::test]
+async fn tool_then_consecutive_inbound_users_translate_in_order() {
+    use rustx::message::types::{
+        AgentMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+    };
+    use rustx::runtime::identity::MessageId;
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi");
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                text: text.to_owned(),
+            })],
+            source: rustx::message::types::UserSource::Human,
+            kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    request.messages = vec![
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-a1"),
+            content: vec![rustx::message::types::AgentContentBlock::ToolCall(
+                rustx::tools::types::ToolCall {
+                    id: rustx::runtime::identity::ToolCallId::new("call_1"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+                    name: "list_directory".to_owned(),
+                    arguments: serde_json::json!({"path": "."}),
+                },
+            )],
+        }),
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("msg-t1"),
+            tool_call_id: rustx::runtime::identity::ToolCallId::new("call_1"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+            result: rustx::tools::types::ToolExecutionResult {
+                status: rustx::tools::types::ToolExecutionStatus::Success,
+                content: vec![rustx::tools::types::ToolResultContent::Text(
+                    rustx::message::content::TextBlock {
+                        text: "listed".to_owned(),
+                    },
+                )],
+                duration_ms: 1,
+                exit_code: Some(0),
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        }),
+        user("msg-a", "A"),
+        user("msg-b", "B"),
+    ];
+    let events = collect_events(&adapter(&server), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 4, "assistant, tool, user A, user B");
+    assert_eq!(messages[0]["role"], "assistant");
+    assert_eq!(
+        messages[0]["tool_calls"][0]["function"]["name"],
+        "list_directory"
+    );
+    assert_eq!(messages[1]["role"], "tool");
+    assert_eq!(messages[1]["content"][0]["text"], "listed");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["text"], "A");
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages[3]["content"][0]["text"], "B");
 }

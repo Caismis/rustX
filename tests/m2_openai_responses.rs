@@ -778,3 +778,141 @@ async fn request_serialization_is_model_facing_only() {
         );
     }
 }
+
+/// The canonical tail with continuation preserves the provider-tail ordering
+/// `Tool result → User A → User B`: the continuation is retained, the tool
+/// result translates to `function_call_output`, and the two inbound
+/// messages stay separate ordered `message` items.
+#[tokio::test]
+async fn continuation_tail_preserves_tool_then_users_order() {
+    use rustx::message::types::{
+        AgentMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+    };
+    use rustx::runtime::identity::MessageId;
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "stored_completed.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
+    let user = |text: &str| {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("msg-inbound"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+            source: rustx::message::types::UserSource::Human,
+            kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    request.messages = vec![
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-boundary"),
+            content: vec![AgentContentBlock::Text(TextBlock {
+                text: "Old generation.".to_owned(),
+            })],
+        }),
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("msg-tool-1"),
+            tool_call_id: ToolCallId::new("call_1"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+            result: rustx::tools::types::ToolExecutionResult {
+                status: rustx::tools::types::ToolExecutionStatus::Success,
+                content: vec![rustx::tools::types::ToolResultContent::Text(TextBlock {
+                    text: "listed".to_owned(),
+                })],
+                duration_ms: 1,
+                exit_code: Some(0),
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        }),
+        user("A"),
+        user("B"),
+    ];
+    request.continuation = Some(ProviderContinuationState::OpenAiResponses(
+        OpenAiResponsesContinuation::Stored {
+            previous_response_id: "resp_prev".to_owned(),
+        },
+    ));
+    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    assert_eq!(
+        body["previous_response_id"], "resp_prev",
+        "the ordinary inbound tail does not clear the continuation"
+    );
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        3,
+        "tool result then user A then user B, all in one tail"
+    );
+    assert_eq!(input[0]["type"], "function_call_output");
+    assert_eq!(input[0]["call_id"], "call_1");
+    assert_eq!(input[1]["type"], "message");
+    assert_eq!(input[1]["content"][0]["text"], "A");
+    assert_eq!(input[2]["type"], "message");
+    assert_eq!(input[2]["content"][0]["text"], "B");
+    assert_ne!(
+        input[1], input[2],
+        "user A and user B remain distinct provider items"
+    );
+    assert_eq!(
+        input[1]["content"][0]["text"], "A",
+        "A translated at index 1"
+    );
+    assert_eq!(
+        input[2]["content"][0]["text"], "B",
+        "B translated at index 2"
+    );
+}
+/// The no-tool tail form `Agent boundary → User A → User B` with a
+/// continuation keeps both inbound messages as distinct ordered items.
+#[tokio::test]
+async fn continuation_no_tool_tail_preserves_both_users() {
+    use rustx::message::types::{AgentMessageBlock, UserContentBlock, UserMessageBlock};
+    use rustx::runtime::identity::MessageId;
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "stored_completed.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+            source: rustx::message::types::UserSource::Runtime,
+            kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    request.messages = vec![
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-boundary"),
+            content: vec![AgentContentBlock::Text(TextBlock {
+                text: "Old generation.".to_owned(),
+            })],
+        }),
+        user("msg-a", "A"),
+        user("msg-b", "B"),
+    ];
+    request.continuation = Some(ProviderContinuationState::OpenAiResponses(
+        OpenAiResponsesContinuation::Stored {
+            previous_response_id: "resp_prev".to_owned(),
+        },
+    ));
+    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(input.len(), 2, "user A and user B as distinct items");
+    assert_eq!(input[0]["type"], "message");
+    assert_eq!(input[0]["content"][0]["text"], "A");
+    assert_eq!(input[1]["type"], "message");
+    assert_eq!(input[1]["content"][0]["text"], "B");
+}

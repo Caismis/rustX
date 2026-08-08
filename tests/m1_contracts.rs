@@ -6,7 +6,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
-use rustx::message::types::{AgentContentBlock, InboundKind, MessageBlock, UserSource};
+use rustx::message::types::{
+    AgentContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
+};
 use rustx::protocol::manifest::RuntimeManifest;
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{CapabilityRevision, EventId, MessageId};
@@ -434,4 +436,77 @@ fn tool_message_composes_execution_result() {
         serde_json::from_str(&serde_json::to_string(&committed).expect("serialize"))
             .expect("deserialize");
     assert_eq!(decoded, committed);
+}
+
+/// A `UserMessageBlock` with a fixed persisted UTC timestamp round-trips
+/// through the canonical encoding.
+#[test]
+fn user_message_timestamp_round_trips() {
+    let timestamp = chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+        .expect("parse timestamp")
+        .with_timezone(&chrono::Utc);
+    let block = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("msg-user-ts"),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "deploy it".to_owned(),
+            },
+        )],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: Some(timestamp),
+    });
+    let json = serde_json::to_string(&block).expect("serialize block");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert_eq!(
+        value["timestamp"], "2026-08-07T12:00:00Z",
+        "the timestamp is part of the canonical encoding"
+    );
+    let decoded: MessageBlock = serde_json::from_str(&json).expect("deserialize block");
+    assert_eq!(decoded, block, "the timestamp survives the round trip");
+}
+
+/// A `UserMessageBlock` without a timestamp remains compatible with the
+/// existing canonical encoding: the field is absent while `None` and
+/// defaults to `None` on deserialization.
+#[test]
+fn user_message_without_timestamp_stays_compatible() {
+    let block = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("msg-user-no-ts"),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "continue".to_owned(),
+            },
+        )],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    });
+    let json = serde_json::to_string(&block).expect("serialize block");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse json");
+    assert!(
+        value.get("timestamp").is_none(),
+        "a None timestamp is omitted from the canonical encoding"
+    );
+    let decoded: MessageBlock = serde_json::from_str(&json).expect("deserialize block");
+    assert_eq!(decoded, block, "round trip preserves the absent timestamp");
+    // The pre-timestamp canonical encoding remains representable.
+    let legacy = MessageBlock::User(UserMessageBlock {
+        id: MessageId::new("msg-user-legacy"),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "legacy".to_owned(),
+            },
+        )],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: None,
+    });
+    let legacy_json = r#"{"role":"user","id":"msg-user-legacy","content":[{"type":"text","text":"legacy"}],"source":"human","kind":"message"}"#;
+    let decoded_legacy: MessageBlock =
+        serde_json::from_str(legacy_json).expect("legacy encoding deserializes");
+    assert_eq!(
+        decoded_legacy, legacy,
+        "the pre-timestamp canonical encoding remains representable"
+    );
 }

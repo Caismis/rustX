@@ -6,7 +6,7 @@
 mod common;
 
 use common::{collect_events, describe_events, error_fixture, simple_request, sse_fixture, tool};
-use rustx::message::types::ContentBlockIndex;
+use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelErrorKind, ModelEvent, ModelProtocol,
@@ -1290,4 +1290,77 @@ async fn thinking_without_signature_is_a_provider_failure() {
             .any(|event| matches!(event, ModelEvent::ContinuationState { .. })),
         "no continuation state without a provider signature"
     );
+}
+
+/// `Agent tool call → Tool result → User A → User B` translates in logical
+/// order: the complete tool-result group flushes before the inbound
+/// messages, and A/B stay separate wire user messages (never merged).
+#[tokio::test]
+async fn tool_then_consecutive_inbound_users_translate_in_order() {
+    use rustx::message::types::{AgentMessageBlock, ToolMessageBlock, UserMessageBlock};
+    use rustx::runtime::identity::MessageId;
+    let server =
+        common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
+    let mut request = request_with_tools("hi");
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: text.to_owned(),
+                },
+            )],
+            source: rustx::message::types::UserSource::Human,
+            kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    request.messages = vec![
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-a1"),
+            content: vec![rustx::message::types::AgentContentBlock::ToolCall(
+                rustx::tools::types::ToolCall {
+                    id: ToolCallId::new("call_1"),
+                    tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+                    name: "list_directory".to_owned(),
+                    arguments: serde_json::json!({"path": "."}),
+                },
+            )],
+        }),
+        MessageBlock::Tool(ToolMessageBlock {
+            id: MessageId::new("msg-t1"),
+            tool_call_id: ToolCallId::new("call_1"),
+            tool_id: rustx::runtime::identity::ToolId::new("tool-list"),
+            result: rustx::tools::types::ToolExecutionResult {
+                status: rustx::tools::types::ToolExecutionStatus::Success,
+                content: vec![rustx::tools::types::ToolResultContent::Text(
+                    rustx::message::content::TextBlock {
+                        text: "listed".to_owned(),
+                    },
+                )],
+                duration_ms: 1,
+                exit_code: Some(0),
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        }),
+        user("msg-a", "A"),
+        user("msg-b", "B"),
+    ];
+    let events = collect_events(&adapter(&server), request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let messages = body["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 4, "assistant, tool result, user A, user B");
+    assert_eq!(messages[0]["role"], "assistant");
+    assert_eq!(messages[0]["content"][0]["type"], "tool_use");
+    assert_eq!(messages[1]["role"], "user");
+    assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["type"], "text");
+    assert_eq!(messages[2]["content"][0]["text"], "A");
+    assert_eq!(messages[3]["role"], "user");
+    assert_eq!(messages[3]["content"][0]["type"], "text");
+    assert_eq!(messages[3]["content"][0]["text"], "B");
 }

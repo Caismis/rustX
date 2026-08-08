@@ -54,6 +54,7 @@ fn live_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,
@@ -210,6 +211,7 @@ async fn live_openai_chat_tool_call() {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         })],
         tools: vec![ToolDefinition {
             id: ToolId::new("tool-weather"),
