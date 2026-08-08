@@ -9,6 +9,7 @@
 
 #![allow(dead_code)] // every helper is used only by some test binaries
 
+pub mod context;
 pub mod fake;
 
 use std::net::SocketAddr;

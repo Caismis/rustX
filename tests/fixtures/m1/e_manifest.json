@@ -36,6 +36,7 @@
     ]
   },
   "context": {
+    "context_window_tokens": 131072,
     "reserve_tokens": 16384,
     "keep_recent_tokens": 20000
   },

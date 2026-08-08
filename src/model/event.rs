@@ -14,7 +14,9 @@
 //!
 //! The stream distinguishes every content semantic the canonical message
 //! model distinguishes: a refusal streams through [`ModelEvent::RefusalDelta`]
-//! and assembles into [`AgentContentBlock::Refusal`], never into plain text.
+//! and assembles into
+//! [`AgentContentBlock::Refusal`](crate::message::types::AgentContentBlock::Refusal),
+//! never into plain text.
 
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +54,8 @@ pub enum ModelEvent {
     /// A refusal delta of one output block.
     ///
     /// Refusal content streams as refusal, never as ordinary text, so the
-    /// completed message can assemble an [`AgentContentBlock::Refusal`]
+    /// completed message can assemble an
+    /// [`AgentContentBlock::Refusal`](crate::message::types::AgentContentBlock::Refusal)
     /// without provider-specific hidden state.
     RefusalDelta {
         /// The refusal block the delta belongs to.

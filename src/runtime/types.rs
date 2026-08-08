@@ -54,6 +54,14 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// Context compaction failed. This is a runtime-owned context-plane
+    /// failure: it never fabricates a provider error, and it is distinct
+    /// from a normalized model error even when the two coincide (for
+    /// example a context overflow whose recovery compaction failed).
+    ContextCompactionFailed {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -96,6 +104,12 @@ mod tests {
                     message: "event after terminal".to_owned(),
                 },
                 "contract_violation",
+            ),
+            (
+                RuntimeError::ContextCompactionFailed {
+                    message: "no progress".to_owned(),
+                },
+                "context_compaction_failed",
             ),
         ];
         for (error, expected) in cases {

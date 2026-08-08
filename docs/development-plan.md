@@ -85,24 +85,57 @@ Exit criteria:
 
 ## Milestone 4 — Context engine and compaction
 
-Implement:
+Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 
-- Context assembly
-- Token accounting
-- Provider-context compilation
-- Automatic compaction threshold
-- Valid cut-point detection
-- No cuts at tool-result boundaries
-- Split-turn prefix summaries
-- Incremental summary updates
-- Context checkpoints
-- Compact-and-retry flow
+- Context assembly and the explicit `ContextProjection` boundary
+- Token accounting with explicit provenance (provider-reported vs.
+  deterministic estimate) and a pluggable `TokenEstimator` (default
+  `ceil(bytes / 4)`); the anti-loop progress rule compares deterministic
+  estimates on both sides
+- Provider-context compilation into canonical `ModelRequest.messages`
+- Automatic compaction at the derived soft input limit
+  (`window - reserve - max_output_tokens`, checked arithmetic)
+- Valid structural cut-point detection with a tool-call/result edge index
+- No cuts at tool-result boundaries; no orphan tool messages
+- Recent-token retention by token target, not message count, measured over
+  conversation content only (tool definitions never satisfy the target)
+- Whole-turn-before-split cut priority; split-turn prefix summarization
+  with projection-only agent slices
+- Incremental summary updates from a previous compaction checkpoint, with
+  absorbed-checkpoint summary-source suppression
+- `ContextCheckpoint` and the `ContextCheckpointStore` abstraction
+  (in-memory development/test implementation; M8 owns the durable backend)
+- Bounded compact-and-retry on `ContextWindowExceeded` (exactly one retry
+  per model turn)
+- Continuation invalidation after successful compaction; explicit failure
+  when the continuation-owning turn is pinned by system context
+- Opt-in live repeated-compaction validation (`tests/m4_live.rs`)
+
+The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
+contract change; fixture and round-trip tests updated).
+
+Remaining under Issue #7 (not implemented by PR #21, implemented
+separately):
+
+- Mandatory Agent Status projection (temporal section, extension/provider
+  contract)
+- Agent Status integration with Issue #22 inbound batching
+- Later M5-backed background-execution status integration
+- Live acceptance criteria that remain unverified without credentials
+
+Issue #22 (inbound batching) is not implemented in PR #21.
 
 Exit criteria:
 
 - A long local session can compact multiple times and continue correctly.
 - Compaction never rewrites or deletes canonical history.
 - Deterministic fixtures cover normal compaction and split-turn compaction.
+
+Deferred to later milestones: durable checkpoint/event storage (M8),
+conversation summarization in the CLI (M10), and any provider fallback or
+routing. M3's explicitly deferred parallel tool scheduling and
+turn-boundary mailbox draining remain deferred and are not claimed as
+implemented.
 
 ## Milestone 5 — Native tool plane
 

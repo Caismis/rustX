@@ -107,9 +107,18 @@ pub struct McpBinding {
     pub server_id: McpServerId,
 }
 
-/// Context token reservation defaults.
+/// Context token configuration.
+///
+/// The model context window is runtime-owned configuration, never a
+/// hard-coded per-model catalog in the context engine. The effective soft
+/// input limit of a request is
+/// `context_window_tokens - reserve_tokens - max_output_tokens` (checked,
+/// impossible configurations are rejected), where `max_output_tokens` is the
+/// runtime-resolved generation budget of that request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextManifest {
+    /// The model context window in tokens.
+    pub context_window_tokens: u64,
     /// Tokens permanently reserved out of the model context window.
     pub reserve_tokens: u64,
     /// Tokens of recent conversation history kept uncompressed.
@@ -169,6 +178,7 @@ mod tests {
                 }],
             },
             context: ContextManifest {
+                context_window_tokens: 131_072,
                 reserve_tokens: 16_384,
                 keep_recent_tokens: 20_000,
             },

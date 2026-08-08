@@ -52,12 +52,22 @@ passed back to the model, which decides the next action.
 
 Continuation is canonical conversation state: the loop retains the full
 committed history and appends each completed agent message and tool
-result. The next model request carries the full history plus the opaque
+result. The next model request carries the opaque
 `ProviderContinuationState` boundary state reported by the previous turn
 (the state of the greatest-block-index reasoning block, propagated
 verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
+
+With the M4 context runtime enabled (`with_context_runtime`), the request
+carries the *context projection* of that history (pinned system prefix,
+checkpoint summary, retained suffix) instead of the raw committed history,
+and the projection is what continuation state refers to. A successful
+compaction establishes a new context boundary and therefore invalidates
+the pending continuation; the M4 context engine enforces that the
+continuation-owning turn is retired completely, so an old opaque provider
+continuation is never paired with a new projection. See
+`docs/context-engine.md` section 14.
 
 ## 5. Usage
 
