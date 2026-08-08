@@ -78,17 +78,47 @@ and an Agent Status attachment never clear the pending continuation.
 ## 4.1 Fresh inbound lifecycle
 
 Fresh inbound identity is explicit execution state, never inferred from
-message role or history shape. The attempt starts with the request's
-`initial_fresh_inbound` trigger pending; the first successfully completed
-model invocation consumes it (including a successful `ToolCalls` response:
-the model has already observed the turn). A safe-boundary mailbox drain
-appends the whole batch to canonical history and establishes one new
-`FreshInboundTurn` from the drained ids in sequence order. The next model
-request composes exactly one Agent Status snapshot targeting the final
-fresh inbound message; a `ContextWindowExceeded` overflow does not consume
-the trigger, and the retry composes a freshly sampled snapshot. A
-foreground-tool-only continuation with no new drain carries no Agent
-Status.
+message role or history shape, and the first-turn execution mode is an
+explicit trigger, never an `Option` used as a status switch:
+
+```rust
+pub enum InitialTurnTrigger {
+    FreshInbound(FreshInboundTurn),
+    Continuation,
+}
+```
+
+`AgentExecutionRequest` carries exactly one `initial_turn_trigger`:
+
+- `FreshInbound(fresh)`: the model has not yet observed the referenced
+  inbound turn. Validation against canonical history is mandatory (including
+  strictly increasing canonical order — the runtime never sorts or
+  reinterprets caller-supplied order), Agent Status is mandatory, and
+  fresh-inbound compaction protection applies. The trigger stays pending
+  until one successful model invocation observes it: a provider
+  `ContextWindowExceeded` overflow does not consume it, while a successful
+  `ToolCalls` response does.
+- `Continuation`: there is intentionally no new inbound user turn for the
+  first model invocation, so no Agent Status is attached. This is the
+  explicit expression of a pure continuation, never a configuration switch
+  for disabling status on inbound messages.
+
+There is no `disable_status`, no optional status mode, and no legacy
+no-context execution path: Agent Status can never be silently suppressed by
+omitting an optional field.
+
+The first successfully completed model invocation consumes the fresh
+trigger (including a successful `ToolCalls` response: the model has already
+observed the turn). A safe-boundary mailbox drain appends the whole batch to
+canonical history and establishes one new `FreshInboundTurn` from the
+drained ids in sequence order. The next model request composes exactly one
+Agent Status snapshot targeting the final fresh inbound message; a
+`ContextWindowExceeded` overflow does not consume the trigger, and the retry
+composes a freshly sampled snapshot. A foreground-tool-only continuation
+with no new drain carries no Agent Status. A failure while composing or
+preparing that status is a context preparation failure
+(`AttemptFailed(Runtime(ContextPreparationFailed))`), never a compaction
+failure.
 
 ## 5. Usage
 

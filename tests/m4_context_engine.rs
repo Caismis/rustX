@@ -3046,20 +3046,15 @@ impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
 
 /// A fresh-inbound request: the first turn carries a pending fresh inbound
 /// turn, so Agent Status composition is mandatory.
-fn fresh_request(
-    attempt: &str,
-    initial_messages: Vec<MessageBlock>,
-) -> AgentExecutionRequest {
+fn fresh_request(attempt: &str, initial_messages: Vec<MessageBlock>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: conversation(),
         attempt_id: AttemptId::new(attempt),
         initial_messages,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::FreshInbound(
-            rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new(
-                "msg-inbound-1",
-            )])
-            .expect("valid fresh turn"),
+            rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
+                .expect("valid fresh turn"),
         ),
         timezone: None,
         model: "fake-model".to_owned(),
@@ -3097,8 +3092,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
-    let mut composer =
-        rustx::context::AgentStatusComposer::new(Arc::new(FixedClock(fixed_time())));
+    let mut composer = rustx::context::AgentStatusComposer::new(Arc::new(FixedClock(fixed_time())));
     composer
         .register(Arc::new(FailingStatusProvider))
         .expect("register");
@@ -3147,11 +3141,17 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         panic!("the terminal must be a runtime failure, got {error:?}");
     };
     assert!(
-        matches!(error, rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }),
+        matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
+        ),
         "a status provider failure classifies as context preparation failure"
     );
     assert!(
-        !matches!(error, rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }),
+        !matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
+        ),
         "a status provider failure must never be mislabeled as a compaction failure"
     );
     if let rustx::runtime::types::RuntimeError::ContextPreparationFailed { message } = error {
@@ -3221,11 +3221,17 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         panic!("the terminal must be a runtime failure");
     };
     assert!(
-        matches!(error, rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }),
+        matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
+        ),
         "an actual compaction pipeline failure keeps the compaction classification"
     );
     assert!(
-        !matches!(error, rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }),
+        !matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
+        ),
         "an actual compaction failure is not a preparation failure"
     );
     assert!(

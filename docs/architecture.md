@@ -47,7 +47,12 @@ tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
                            ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
                            TruncationState
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
-                           ReasoningEffort
+                           ReasoningEffort, AgentStatusAttachment (the
+                           cross-layer model-request attachment contract of
+                           the Agent Status projection: the context plane
+                           produces it, `ModelRequest` and adapters consume
+                           it, and model contracts never depend on context
+                           implementation modules)
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
 model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
@@ -323,6 +328,46 @@ Key contracts:
   and the projection fingerprint, is excluded from recent-conversation
   retention, and is protected from compaction until a successful model
   invocation observes it. Adapters own its wire placement.
+- The cross-layer `AgentStatusAttachment` is a Layer 0 contract owned by
+  `model/types.rs`: it holds only the request-level data adapters need (the
+  target canonical `MessageId` and the rendered status text). The context
+  plane (`src/context/status.rs`) *produces* the attachment, but `ModelRequest`
+  uses only Layer 0 runtime-owned attachment data — `model` never depends on
+  `context`. `ContextProjection`, `CompiledContext`, `ModelRequest`, token
+  accounting, and every provider adapter refer to the Layer 0 type.
+- The initial-turn trigger is an explicit execution mode, never an `Option`
+  used as a status switch: `AgentExecutionRequest` carries one
+  `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation,
+  Agent Status, and fresh-inbound compaction protection mandatory and keeps
+  the trigger pending until one successful model invocation observes it;
+  `Continuation` expresses an intentional pure continuation with no new
+  inbound turn and therefore no Agent Status on the first request. There is
+  no `disable_status`, no optional status mode, and no legacy no-context
+  execution path.
+- A `FreshInboundTurn` is ordered according to canonical history/inbound
+  sequence: `validate_against` requires the referenced messages to occur in
+  strictly increasing canonical position in `message_ids` order
+  (`OutOfCanonicalOrder` otherwise); the runtime never sorts or reinterprets
+  a caller-supplied turn order.
+- A provider's section identity is captured at registration and frozen as
+  runtime-owned metadata: `section_id()` is called exactly once, validated
+  against reserved and duplicate ids, and never queried again; composition,
+  ordering, diagnostics, and provider listing all use the stored identity, so
+  a stateful provider can never shadow a reserved id or mutate into a
+  duplicate.
+- Extension providers contribute structured runtime facts
+  (`AgentStatusFact` label/value pairs); the canonical context renderer owns
+  labels, separators, and layout, and providers never hand over pre-rendered
+  footer lines.
+- Context failure semantics are separated at the attempt boundary: failures
+  that occur while preparing model context **before compaction starts**
+  (invalid pending fresh-inbound state, a failing status provider, a
+  projection preparation failure) classify as
+  `RuntimeError::ContextPreparationFailed`, while an actual proactive
+  compaction pipeline failure keeps `RuntimeError::ContextCompactionFailed`.
+  An overflow whose recovery compaction fails still preserves the normalized
+  `ContextWindowExceeded` as the final model failure with the compaction
+  diagnostic carried by `CompactionFailed`.
 - A fresh inbound turn that has not been observed may never be compacted
   away; when preserving it makes the projection impossible, planning fails
   with `CannotFit` rather than summarizing the unobserved instruction.

@@ -255,6 +255,17 @@ message role, history shape, or timestamps:
   `MessageBlock::User` with `InboundKind::Message`, and carries a persisted
   timestamp. A compaction summary is user-role history and can never be
   marked fresh.
+- A `FreshInboundTurn` must name canonical messages in strictly increasing
+  canonical position in `message_ids` order
+  (`FreshInboundError::OutOfCanonicalOrder` otherwise); the runtime never
+  sorts or reinterprets a caller-supplied turn order, and canonical inbound
+  order — never a timestamp maximum — is authoritative for the final
+  message.
+- The first-turn execution mode is an explicit trigger
+  (`InitialTurnTrigger::FreshInbound(fresh)` vs `Continuation`), never an
+  `Option` used as a status switch: Agent Status can never be silently
+  suppressed by omitting an optional field, and no `disable_status`,
+  optional status mode, or legacy no-context execution path exists.
 - One pending fresh inbound turn produces at most one Agent Status snapshot
   per request preparation; the trigger is consumed by the first successful
   model invocation (including a `ToolCalls` response) and is not consumed by
@@ -270,6 +281,23 @@ message role, history shape, or timestamps:
   sections with stable section ids (`temporal` and `background_execution`
   reserved), rendered by a canonical deterministic renderer, and placed on
   provider wire structures by the adapter only.
+- The cross-layer `AgentStatusAttachment` is a Layer 0 contract in
+  `src/model/types.rs`: the context plane produces it, `ModelRequest` and
+  every adapter consume it, and model contracts never depend on context
+  implementation modules.
+- A provider's section identity is captured exactly once at registration and
+  frozen as runtime-owned metadata: `section_id()` is never queried again
+  after registration, so post-registration identity changes can never shadow
+  a reserved id or create duplicate registered identities.
+- Extension providers contribute structured runtime facts (`label`/`value`),
+  never pre-rendered footer lines; the canonical renderer owns all text
+  formatting.
+- Context failures are classified at the attempt boundary: failures while
+  preparing model context before any compaction starts (invalid pending
+  fresh-inbound state, a failing status provider, a projection preparation
+  failure) are `RuntimeError::ContextPreparationFailed`; only an actual
+  proactive compaction pipeline failure is
+  `RuntimeError::ContextCompactionFailed`.
 - Fresh inbound that has not been observed by a successful model invocation
   must remain literal in the projection: compaction may never retire it, and
   planning fails explicitly (`CannotFit`) rather than summarizing the
@@ -384,12 +412,14 @@ contracts and provider protocols. These invariants are frozen by M2:
   provider I/O: the target message exists exactly once in the request
   messages, is a user-role message with ordinary `InboundKind::Message`,
   and is never a compaction summary. Malformed attachments are
-  `InvalidRequest` failures. Adapters append the rendered status as one
-  final content unit of the target user message and never fabricate a
-  separate message; with a stored continuation, a target sliced out of the
-  transmitted tail fails explicitly instead of being silently dropped. The
-  model-backed summarizer always constructs requests with
-  `agent_status = None`: summary generation is not an inbound agent turn.
+  `InvalidRequest` failures. The attachment is a Layer 0 contract in
+  `src/model/types.rs`; the model plane never depends on the context layer.
+  Adapters append the rendered status as one final content unit of the
+  target user message and never fabricate a separate message; with a stored
+  continuation, a target sliced out of the transmitted tail fails
+  explicitly instead of being silently dropped. The model-backed summarizer
+  always constructs requests with `agent_status = None`: summary generation
+  is not an inbound agent turn.
 
 ## Cancellation
 

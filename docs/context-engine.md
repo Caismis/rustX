@@ -75,6 +75,11 @@ transiently under its original source `MessageId` as a model-context view
 only; it is never authoritative ledger content. The normal whole-message
 path stays zero-surprise.
 
+`AgentStatusAttachment` is the Layer 0 cross-layer request attachment owned
+by `src/model/types.rs`: the context plane composes and renders it, and the
+projection carries it, but the type itself never lives in the context
+layer.
+
 The projection fingerprint covers the projection items, the checkpoint
 generation, **and the exact Agent Status attachment**: a provider-reported
 input measurement applies only to a byte-for-byte identical projection, so
@@ -437,6 +442,26 @@ compaction failure settles as
 `AttemptFailed(Runtime(ContextCompactionFailed { message }))` — a local
 context service failure is never fabricated into a `ModelError`.
 
+### Preparation failures are distinct from compaction failures
+
+Failures that occur while preparing model context **before any compaction
+starts** classify as `RuntimeError::ContextPreparationFailed`:
+
+- invalid pending fresh-inbound state discovered during projection/status
+  preparation (including a `FreshInboundTurn` that violates canonical
+  ordering);
+- a failing Agent Status section provider;
+- a projection preparation failure that is not itself a compaction
+  operation (checkpoint load, projection build, threshold derivation).
+
+`RuntimeError::ContextCompactionFailed` is reserved for an actual proactive
+compaction pipeline failure (planning, summary generation, application,
+progress rule, checkpoint save). For overflow recovery the existing terminal
+behavior is preserved: a failed recovery compaction keeps the normalized
+`ContextWindowExceeded` as the final model failure with the compaction
+diagnostic in `CompactionFailed.error`, and overflow is never turned into a
+generic runtime preparation failure.
+
 ## 16. Provisional identity across retry
 
 The failed invocation emits no committed `AgentMessageBlock`. The first
@@ -489,13 +514,42 @@ timestamps:
   `MessageBlock::User` with `InboundKind::Message`, and carries a persisted
   timestamp;
 - a compaction summary (user-role history) can never be marked fresh;
-- the final message is the Agent Status target.
+- the final message is the Agent Status target;
+- the referenced messages must occur in canonical history in strictly
+  increasing canonical position in `message_ids` order
+  (`FreshInboundError::OutOfCanonicalOrder` otherwise). The runtime never
+  sorts or reinterprets a caller-supplied turn order; invalid execution
+  state fails explicitly, and canonical inbound order — never a timestamp
+  maximum — is authoritative for the final message.
+
+The attempt's first-turn execution mode is an explicit trigger, never an
+`Option` used as a status switch:
+
+```rust
+pub enum InitialTurnTrigger {
+    FreshInbound(FreshInboundTurn),
+    Continuation,
+}
+```
+
+- `FreshInbound`: the model has not yet observed the referenced turn;
+  validation is mandatory, Agent Status is mandatory, fresh-inbound
+  compaction protection applies, and the trigger stays pending until one
+  successful model invocation observes it — a provider overflow failure does
+  not consume it, a successful `ToolCalls` response does.
+- `Continuation`: there is intentionally no new inbound user turn for the
+  first model invocation, so no Agent Status is attached; this is never a
+  configuration switch for disabling status on inbound messages.
+
+There is no `disable_status`, no optional status mode, and no legacy
+no-context execution path: Agent Status can never be silently suppressed by
+omitting an optional field.
 
 Lifecycle:
 
 ```text
 attempt starts
-→ pending fresh inbound = request.initial_fresh_inbound
+→ pending fresh inbound = request.initial_turn_trigger (FreshInbound)
 
 model invocation successfully completes
 → pending fresh inbound is consumed (including a ToolCalls response)
@@ -524,19 +578,33 @@ final message in inbound order always wins (regression-tested).
 runtime facts
 → structured AgentStatus sections
 → canonical deterministic renderer
-→ rendered AgentStatusAttachment
+→ rendered AgentStatusAttachment (Layer 0 contract)
 → provider wire compiler
 ```
 
 - Section ids are stable; `temporal` and `background_execution` are
   reserved built-ins. Extensions cannot register, replace, or shadow them,
   and duplicate extension ids fail explicitly.
+- A provider's section identity is captured **exactly once at
+  registration** and frozen as runtime-owned registration metadata:
+  `section_id()` is validated against reserved and duplicate ids and never
+  queried again. Composition, provider ordering, diagnostics, and
+  provider listing all use the stored identity, so a stateful provider can
+  never shadow a reserved id or mutate into a duplicate identity after
+  registration (regression-tested with mutating fake providers).
 - Deterministic order: mandatory temporal section, future built-in
   sections, then extensions in explicit registration order. `HashMap`
   iteration is never used for rendering order.
+- Extension providers return **structured runtime facts**, never
+  pre-rendered footer lines: a section carries ordered `AgentStatusFact`
+  (`label` + `value`) pairs, and the canonical renderer is the only place
+  status text is produced — it owns labels, separators, and layout. The
+  structured seam is what a future M5 background runtime populates; no
+  schema framework, templating language, or plugin ecosystem exists.
 - An optional provider returning `None` is intentional absence; a provider
-  failure is a context-preparation failure (`StatusFailed`), never a silent
-  absence.
+  failure is a context-preparation failure (`StatusFailed` →
+  `RuntimeError::ContextPreparationFailed`), never a silent absence and
+  never mislabeled as a compaction failure.
 - The provider seam is narrow and read-only; it exists so a future M5
   background runtime can project its registry. No plugin ecosystem or DI
   framework exists. The `background_execution` section is reserved for M5
@@ -600,8 +668,10 @@ AgentExecution::new(request, adapter, tools, cancellation, context_runtime)
 
 The obsolete no-context compatibility path and `with_context_runtime` are
 gone; there is no Agent Status disable flag and no legacy execution mode.
-`AgentExecutionRequest` carries the explicit `initial_fresh_inbound` turn
-and the per-execution/conversation IANA `timezone` metadata.
+`AgentExecutionRequest` carries the explicit `initial_turn_trigger`
+(`InitialTurnTrigger::FreshInbound(fresh)` or
+`InitialTurnTrigger::Continuation`) and the per-execution/conversation IANA
+`timezone` metadata.
 
 `ContextRuntime` owns the engine, the summary service, the Agent Status
 composer, and the checkpoint store; one store can be shared across attempts
@@ -630,6 +700,14 @@ message. Adapters append the rendered status as one final content unit of
 the target fresh user message (Chat Completions text part, Responses
 `input_text` unit, Anthropic text block) and fail explicitly when a stored
 continuation would slice the target out of the transmitted tail.
+
+The `AgentStatusAttachment` itself is a Layer 0 contract in
+`src/model/types.rs`, mirroring the existing `model → message, tools,
+runtime` direction: `ModelRequest` and every adapter depend only on that
+runtime-owned attachment type, and `src/model` contains no `context::`
+reference (source-level guard). The context plane produces the attachment
+through the composer and canonical renderer; it never re-exports it as a
+context-owned type.
 
 ## 21. RuntimeEvent policy
 

@@ -110,12 +110,16 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
   per model turn)
 - Continuation invalidation after successful compaction; explicit failure
   when the continuation-owning turn is pinned by system context
-- Mandatory Agent Status projection: explicit `FreshInboundTurn` identity,
-  structured section composition with reserved ids, the mandatory temporal
-  section (clock + IANA timezone), the canonical deterministic renderer,
-  the ephemeral `AgentStatusAttachment`, adapter-owned wire placement, full
-  token accounting, projection fingerprinting, and fresh-inbound compaction
-  protection
+- Mandatory Agent Status projection: explicit `FreshInboundTurn` identity
+  with a mandatory canonical-order validation and an explicit
+  `InitialTurnTrigger` (fresh inbound vs pure continuation), structured
+  section composition with reserved ids and registration-frozen section
+  identities, the mandatory temporal section (clock + IANA timezone), the
+  canonical deterministic renderer over structured extension facts, the
+  ephemeral `AgentStatusAttachment` as a Layer 0 `model/types.rs` contract,
+  adapter-owned wire placement, full token accounting, projection
+  fingerprinting, fresh-inbound compaction protection, and a
+  `ContextPreparationFailed`/`ContextCompactionFailed` failure distinction
 - Agent Status integration with Issue #22 inbound batching: one drained
   batch becomes one fresh inbound turn with exactly one status snapshot
   targeting the final message
