@@ -72,14 +72,15 @@ stream and exactly one terminal `RuntimeEvent`:
   explicit contract-violation failures, never silently accepted.
 
 - Continuation is canonical conversation state: the next model request
-  carries the full committed history plus the opaque provider continuation
-  state the previous turn reported, propagated losslessly. With the M4
-  context runtime enabled the request carries the deterministic context
-  projection of that history instead; a successful compaction establishes a
+  carries the deterministic context projection of the committed history
+  plus the opaque provider continuation state the previous turn reported,
+  propagated losslessly; a successful compaction establishes a
   new context boundary and invalidates the pending continuation, and the
   continuation-owning turn is retired completely (never split). The loop
   never fabricates, inspects, or reconstructs provider continuation state;
   a model that requires state the stream did not report fails explicitly.
+  An ordinary inbound drain and an Agent Status attachment never clear the
+  pending continuation.
 
 - Cancellation is observed at deterministic check points (before each
   model event, between tool calls) and races every tool execution (biased
@@ -137,12 +138,11 @@ contract, never durable storage and never canonical history:
   turn;
 - observable cancellation is checked before every model turn begins for
   every execution — the first turn and every continuation — regardless of
-  mailbox attachment, mailbox contents, context runtime presence, or
-  provider protocol; when it wins, no `TurnStarted`, no
-  `ModelRequestStarted`, and no adapter invocation occur, and the attempt
-  settles cancelled. Mailbox attachment adds only the mailbox-safe-boundary
-  cancellation-before-selection rule; it does not control generic
-  cancellation timing;
+  mailbox attachment, mailbox contents, or provider protocol; when it wins,
+  no `TurnStarted`, no `ModelRequestStarted`, and no adapter invocation
+  occur, and the attempt settles cancelled. Mailbox attachment adds only the
+  mailbox-safe-boundary cancellation-before-selection rule; it does not
+  control generic cancellation timing;
 - an empty safe-boundary snapshot permits the attempt to settle; a later
   enqueue never reopens or reclassifies that attempt;
 - terminal failure paths never drain the mailbox: pending items remain for
@@ -229,8 +229,9 @@ Repeated compaction updates a durable context checkpoint (via the
 `ContextCheckpointStore` abstraction) and retains a recent uncompressed
 suffix; later compactions feed the previous summary plus only the newly
 retired material. The recent-token retention target measures conversation
-content only: tool definitions affect the full request estimate, the
-threshold, and the hard fit, but never satisfy `keep_recent_tokens`.
+content only: tool definitions and the Agent Status attachment affect the
+full request estimate, the threshold, and the hard fit, but never satisfy
+`keep_recent_tokens`.
 Whole-turn boundaries are preferred over split-turn compaction; a turn is
 split only when a single oversized turn prevents a viable complete-turn
 projection.
@@ -243,6 +244,43 @@ while leaving its boundary literal. `ContextWindowExceeded` is recovered
 through exactly one bounded compact-and-retry per model turn — the budget
 never persists across turns; a recoverable overflow never settles the
 attempt.
+
+## Fresh inbound and Agent Status
+
+Fresh inbound identity is explicit execution state, never inferred from
+message role, history shape, or timestamps:
+
+- A `FreshInboundTurn` is non-empty, ordered in inbound order, and
+  duplicate-free; every referenced message exists in canonical history, is
+  `MessageBlock::User` with `InboundKind::Message`, and carries a persisted
+  timestamp. A compaction summary is user-role history and can never be
+  marked fresh.
+- One pending fresh inbound turn produces at most one Agent Status snapshot
+  per request preparation; the trigger is consumed by the first successful
+  model invocation (including a `ToolCalls` response) and is not consumed by
+  a failed `ContextWindowExceeded` attempt. A foreground-tool-only
+  continuation with no new mailbox drain carries no Agent Status.
+- `inbound_message_time` is the persisted timestamp of the final message in
+  the ordered fresh inbound turn (for a mailbox batch, the highest-sequence
+  item); the inbound sequence is the delivery-order authority, never
+  `min`/`max` of producer timestamps, the drain time, or current time.
+- Agent Status is projection-only: never canonical history, never checkpoint
+  history, never returned in `AgentExecutionResult.messages`, and never
+  emitted as a committed-message event. It is composed as structured
+  sections with stable section ids (`temporal` and `background_execution`
+  reserved), rendered by a canonical deterministic renderer, and placed on
+  provider wire structures by the adapter only.
+- Fresh inbound that has not been observed by a successful model invocation
+  must remain literal in the projection: compaction may never retire it, and
+  planning fails explicitly (`CannotFit`) rather than summarizing the
+  unobserved instruction. The Agent Status snapshot participates in the full
+  request token estimate and the projection fingerprint, and never
+  satisfies `keep_recent_tokens`. One request preparation samples exactly
+  one snapshot; an overflow compact-and-retry is a new preparation with a
+  freshly sampled snapshot.
+- The M4 context path is mandatory: every normal `AgentExecution` carries a
+  `ContextRuntime`; there is no no-context execution mode and no Agent
+  Status disable flag.
 
 ## Durability
 
@@ -341,6 +379,17 @@ contracts and provider protocols. These invariants are frozen by M2:
 - The runtime resolves an effective output-token limit before invoking any
   adapter: `ModelRequest.max_output_tokens` is a required `u32` and no
   adapter-local default exists.
+
+- An `agent_status` attachment on a `ModelRequest` is validated before any
+  provider I/O: the target message exists exactly once in the request
+  messages, is a user-role message with ordinary `InboundKind::Message`,
+  and is never a compaction summary. Malformed attachments are
+  `InvalidRequest` failures. Adapters append the rendered status as one
+  final content unit of the target user message and never fabricate a
+  separate message; with a stored continuation, a target sliced out of the
+  transmitted tail fails explicitly instead of being silently dropped. The
+  model-backed summarizer always constructs requests with
+  `agent_status = None`: summary generation is not an inbound agent turn.
 
 ## Cancellation
 
