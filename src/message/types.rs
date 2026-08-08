@@ -12,6 +12,7 @@
 //! Streaming deltas are `ModelEvent` facts and never become message blocks;
 //! only completed generations are committed as `AgentMessageBlock` values.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::message::content::{FileReference, ImageReference, TextBlock};
@@ -116,6 +117,19 @@ pub struct UserMessageBlock {
     /// Typed kind of inbound information.
     #[serde(default)]
     pub kind: InboundKind,
+    /// The persisted UTC instant associated with the inbound message, when
+    /// the producer supplied one.
+    ///
+    /// An ordinary asynchronously delivered inbound message
+    /// ([`InboundKind::Message`]) carries the persisted instant of its
+    /// delivery; the producer supplies the original timestamp explicitly and
+    /// no wall-clock time is fabricated. Derived M4 compaction summaries
+    /// ([`InboundKind::CompactionSummary`]) never carry one. Older or
+    /// derived messages without a timestamp remain representable: the field
+    /// defaults to `None` on deserialization and is omitted from the
+    /// canonical encoding while absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<DateTime<Utc>>,
 }
 
 /// Provenance of inbound information.
@@ -265,6 +279,7 @@ mod tests {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         });
         let agent = MessageBlock::Agent(AgentMessageBlock {
             id: MessageId::new("msg-agent-1"),
@@ -308,6 +323,7 @@ mod tests {
                 agent_id: AgentId::new("agent-b"),
             },
             kind: InboundKind::Message,
+            timestamp: None,
         });
         let value = serde_json::to_value(&block).expect("serialize block");
         assert_eq!(value["role"], "user");
@@ -334,6 +350,7 @@ mod tests {
             })],
             source: UserSource::Runtime,
             kind: InboundKind::CompactionSummary,
+            timestamp: None,
         });
         let json = serde_json::to_string(&block).expect("serialize block");
         let decoded: MessageBlock = serde_json::from_str(&json).expect("deserialize block");
