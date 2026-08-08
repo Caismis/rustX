@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::context::checkpoint::{ContextBoundary, ContextCheckpoint, summary_message_id};
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::{ContextProjection, ProjectionItem};
+use crate::context::status::AgentStatusAttachment;
 use crate::context::structure::StructuralIndex;
 use crate::context::summarizer::{SplitTurnSummaryInput, SummaryInputItem, SummaryRequest};
 use crate::context::tokens::{
@@ -30,6 +31,7 @@ use crate::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
+use crate::runtime::inbound::FreshInboundTurn;
 use crate::tools::types::ToolDefinition;
 
 /// The runtime-owned context configuration.
@@ -137,6 +139,32 @@ pub struct CompactionPlan {
     /// The summary output budget reserved during planning (the runtime
     /// maximum output tokens), a conservative bound for the unknown summary.
     pub summary_reservation: u64,
+    /// The exact Agent Status attachment of the request preparation this
+    /// plan belongs to, when one exists. The plan is bound to one status
+    /// snapshot: hard-fit estimates and the application progress rule use
+    /// this same snapshot on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_status: Option<AgentStatusAttachment>,
+}
+
+/// The structural constraints one compaction plan must satisfy.
+///
+/// The two constraints serve opposite purposes and are kept separate from
+/// the hard-fit decision:
+///
+/// ```text
+/// must_cover_through → successful compaction must retire through this
+/// fresh_inbound      → successful compaction must not retire this or
+///                      anything after it
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct CompactionConstraints<'a> {
+    /// The continuation constraint: the boundary must retire the
+    /// continuation-owning turn completely.
+    pub must_cover_through: Option<&'a MessageId>,
+    /// The fresh-inbound retention constraint: unobserved fresh inbound
+    /// material must remain literal.
+    pub fresh_inbound: Option<&'a FreshInboundTurn>,
 }
 
 /// The chosen boundary shape of a plan.
@@ -249,8 +277,14 @@ impl ContextEngine {
     /// not be injected (that would duplicate covered history next to its
     /// summary). The estimated input is `ProviderReported` only when an
     /// observed provider measurement applies to exactly this projection
-    /// (identical fingerprint); otherwise it is a deterministic estimate.
-    /// Estimates never become provider usage.
+    /// (identical fingerprint, including the exact Agent Status attachment);
+    /// otherwise it is a deterministic estimate that includes the Agent
+    /// Status attachment and the tool definitions. Estimates never become
+    /// provider usage.
+    ///
+    /// `agent_status` is the one status snapshot sampled for this request
+    /// preparation: exactly one snapshot per preparation, reused throughout
+    /// its proactive compaction planning and application.
     ///
     /// # Errors
     ///
@@ -262,6 +296,7 @@ impl ContextEngine {
         checkpoint: Option<&ContextCheckpoint>,
         tool_definitions: &[ToolDefinition],
         observed: Option<&ProviderObservedInput>,
+        agent_status: Option<&AgentStatusAttachment>,
     ) -> Result<ContextProjection, ContextError> {
         let index = StructuralIndex::build(history)?;
         let mut items: Vec<ProjectionItem> = history[..index.pinned_end]
@@ -286,6 +321,7 @@ impl ContextEngine {
         }
         let mut projection = ContextProjection {
             items,
+            agent_status: agent_status.cloned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
@@ -351,13 +387,37 @@ impl ContextEngine {
     /// fails explicitly instead of clearing the continuation while leaving
     /// its boundary literal.
     ///
+    /// `fresh_inbound` enforces the fresh-inbound retention constraint: a
+    /// fresh inbound turn that has not yet been observed by a successful
+    /// model invocation must remain literal in the projection. The planned
+    /// boundary must never retire the earliest fresh inbound message or
+    /// anything after it. The two constraints serve opposite purposes and
+    /// are kept separate:
+    ///
+    /// ```text
+    /// continuation owner   → successful compaction must retire through this
+    /// fresh inbound        → successful compaction must not retire this or
+    ///                        anything after it
+    /// ```
+    ///
+    /// The planner always uses the exact Agent Status attachment of the
+    /// current request preparation (carried by `current_projection`) for its
+    /// hard-fit estimates, so the status snapshot itself can change the
+    /// compaction decision. If no valid projection can fit while preserving
+    /// pinned context, the fresh inbound material, the Agent Status
+    /// attachment, the tool definitions, and the required output/reserve
+    /// budget, planning fails explicitly with
+    /// [`ContextErrorKind::CannotFit`]. The current unobserved user
+    /// instruction is never summarized merely to make the request fit.
+    ///
     /// # Errors
     ///
     /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
     /// invalid history, [`ContextErrorKind::NoProgress`] when nothing new
     /// can be retired or the continuation constraint is unsatisfiable, and
     /// [`ContextErrorKind::CannotFit`] when even full compaction cannot fit
-    /// pinned context and the summary reservation.
+    /// pinned context, the fresh inbound material, and the summary
+    /// reservation.
     pub fn plan_compaction(
         &self,
         history: &[MessageBlock],
@@ -365,7 +425,7 @@ impl ContextEngine {
         current_projection: &ContextProjection,
         tool_definitions: &[ToolDefinition],
         max_output_tokens: u32,
-        must_cover_through: Option<&MessageId>,
+        constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
         let soft_limit = self.soft_input_limit(max_output_tokens)?;
         let index = StructuralIndex::build(history)?;
@@ -374,7 +434,8 @@ impl ContextEngine {
             return Err(no_progress("the compactable suffix is empty"));
         }
         let reservation = u64::from(max_output_tokens);
-        let min_cut = continuation_min_cut(&index, must_cover_through)?;
+        let min_cut = continuation_min_cut(&index, constraints.must_cover_through)?;
+        let fresh_cut = fresh_retention_cut(&index, constraints.fresh_inbound)?;
         let scope = PlanScope {
             history,
             suffix: &suffix,
@@ -383,22 +444,26 @@ impl ContextEngine {
             estimator: self.estimator.as_ref(),
             soft_limit,
             reservation,
+            agent_status: current_projection.agent_status.as_ref(),
         };
 
         let mut whole_candidates: Vec<(usize, u64, u64)> = Vec::new();
         for count in 1..=suffix.len() {
             let cut = suffix[count - 1].position() + 1;
-            if !index.whole_cut_is_valid(cut) || cut < min_cut {
+            if !index.whole_cut_is_valid(cut) || cut < min_cut || cut > fresh_cut {
                 continue;
             }
             // The recent-suffix estimate measures conversation content only:
             // tool definitions never satisfy the retention target.
-            let retained = scope
-                .estimator
-                .estimate_conversation_input(&projection_of(&retained_items_of(&scope, count)));
-            let planned =
-                estimate_input_of(&scope, &projection_of(&projection_items_for(&scope, count)))
-                    .saturating_add(reservation);
+            let retained = scope.estimator.estimate_conversation_input(&projection_of(
+                &retained_items_of(&scope, count),
+                None,
+            ));
+            let planned = estimate_input_of(
+                &scope,
+                &projection_of(&projection_items_for(&scope, count), scope.agent_status),
+            )
+            .saturating_add(reservation);
             whole_candidates.push((count, retained, planned));
         }
 
@@ -430,7 +495,7 @@ impl ContextEngine {
                         // context within the hard fit — a single oversized
                         // turn prevents a viable complete-turn projection —
                         // so split the latest turn.
-                        match best_split(&scope, min_cut) {
+                        match best_split(&scope, min_cut, fresh_cut) {
                             Some((agent_position, first)) => Chosen::Split {
                                 agent_position,
                                 first_retained_block: first,
@@ -493,7 +558,8 @@ impl ContextEngine {
     /// retire at least one additional compactable canonical unit, and the
     /// deterministic projected estimate must strictly decrease below the
     /// deterministic pre-compaction estimate. Both sides of the comparison
-    /// come from the same estimator over the actual projection content, so
+    /// come from the same estimator over the actual projection content —
+    /// including the plan's exact Agent Status attachment on both sides — so
     /// the decision never depends on incomparable token provenance; the
     /// provider-reported measurement is preserved only as checkpoint
     /// metadata. If either condition fails the operation errors with
@@ -550,8 +616,13 @@ impl ContextEngine {
             tokens_before: plan.estimated_before,
             estimated_tokens_after: 0,
         };
-        let projection =
-            self.build_projection(history, Some(&checkpoint), tool_definitions, None)?;
+        let projection = self.build_projection(
+            history,
+            Some(&checkpoint),
+            tool_definitions,
+            None,
+            plan.agent_status.as_ref(),
+        )?;
         let estimated_after = projection.estimated_input.input_tokens;
         if estimated_after >= plan.estimated_before_tokens {
             return Err(no_progress(&format!(
@@ -695,9 +766,15 @@ impl ContextEngine {
         }
     }
 
-    fn estimate_items(&self, items: &[ProjectionItem], tools: &[ToolDefinition]) -> u64 {
+    fn estimate_items(
+        &self,
+        items: &[ProjectionItem],
+        tools: &[ToolDefinition],
+        agent_status: Option<&AgentStatusAttachment>,
+    ) -> u64 {
         let projection = ContextProjection {
             items: items.to_vec(),
+            agent_status: agent_status.cloned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
@@ -727,7 +804,11 @@ impl ContextEngine {
             }
         };
         let planned_estimate_after = self
-            .estimate_items(&shape.planned_items, scope.tool_definitions)
+            .estimate_items(
+                &shape.planned_items,
+                scope.tool_definitions,
+                scope.agent_status,
+            )
             .saturating_add(scope.reservation);
         if planned_estimate_after > self.soft_input_limit(max_output_tokens)? {
             return Err(cannot_fit(&self.config));
@@ -738,16 +819,18 @@ impl ContextEngine {
             split_turn_prefix,
             estimated_before: current_projection.estimated_input,
             // The deterministic estimate of the pre-compaction projection,
-            // provenance-free: the anti-loop progress rule compares this to
-            // the deterministic estimate of the post-compaction projection
-            // and never mixes a provider-reported measurement with an
-            // estimate.
+            // provenance-free and including the same exact Agent Status
+            // attachment: the anti-loop progress rule compares this to the
+            // deterministic estimate of the post-compaction projection (also
+            // computed with the plan's attachment) and never mixes a
+            // provider-reported measurement with an estimate.
             estimated_before_tokens: estimate_input_of(
                 scope,
-                &projection_of(&current_projection.items),
+                &projection_of(&current_projection.items, scope.agent_status),
             ),
             planned_estimate_after,
             summary_reservation: scope.reservation,
+            agent_status: scope.agent_status.cloned(),
         })
     }
 }
@@ -761,6 +844,10 @@ struct PlanScope<'a> {
     estimator: &'a dyn TokenEstimator,
     soft_limit: u64,
     reservation: u64,
+    /// The exact Agent Status attachment of the current request preparation;
+    /// hard-fit estimates include it so the status itself can change the
+    /// compaction decision.
+    agent_status: Option<&'a AgentStatusAttachment>,
 }
 
 /// The assembled shape of one chosen boundary.
@@ -896,20 +983,72 @@ fn continuation_min_cut(
     Ok(index.turn_end_of(owner_position) + 1)
 }
 
+/// The maximum history cut the fresh-inbound retention constraint permits,
+/// or the full history length when no fresh inbound turn is pending.
+///
+/// A fresh inbound turn that has not yet been observed by a successfully
+/// completed model invocation must remain literal in the projection, so the
+/// retirement boundary must never pass the earliest fresh inbound message:
+/// `cut <= p` for the earliest fresh message position `p`. When the fresh
+/// message lies inside the pinned system prefix it is literal regardless,
+/// and the constraint is vacuous.
+///
+/// # Errors
+///
+/// Returns [`ContextErrorKind::MalformedHistory`] when a fresh inbound
+/// message is not present in canonical history; a pending fresh trigger must
+/// always reference committed messages.
+fn fresh_retention_cut(
+    index: &StructuralIndex,
+    fresh_inbound: Option<&FreshInboundTurn>,
+) -> Result<usize, ContextError> {
+    let Some(fresh) = fresh_inbound else {
+        return Ok(index.len());
+    };
+    let earliest = fresh
+        .message_ids()
+        .iter()
+        .map(|id| {
+            index.position_of(id).ok_or_else(|| {
+                malformed(&format!(
+                    "fresh inbound message {id} is not in canonical history"
+                ))
+            })
+        })
+        .collect::<Result<Vec<usize>, ContextError>>()?
+        .into_iter()
+        .min()
+        .expect("a fresh inbound turn is never empty");
+    if earliest < index.pinned_end {
+        return Ok(index.len());
+    }
+    Ok(earliest)
+}
+
 /// The smallest split of the latest turn that fits, preserving as much of
 /// the turn's tail as possible.
-fn best_split(scope: &PlanScope<'_>, min_cut: usize) -> Option<(usize, usize)> {
+///
+/// The split is additionally subject to the fresh-inbound retention
+/// constraint: the boundary may not retire the earliest fresh inbound
+/// message, so the split agent message must lie strictly before it.
+fn best_split(scope: &PlanScope<'_>, min_cut: usize, fresh_cut: usize) -> Option<(usize, usize)> {
     let (agent_position, current_first) = last_agent_item(scope)?;
     if min_cut > agent_position {
         // The continuation constraint cannot be satisfied by a split of this
         // turn: its message may not remain partly literal.
         return None;
     }
+    if agent_position + 1 > fresh_cut {
+        // The fresh-inbound retention constraint cannot be satisfied by a
+        // split of this turn: retiring it would also retire the earliest
+        // fresh inbound message.
+        return None;
+    }
     let content_len = scope.index.content_len_of(agent_position)?;
     for first in (current_first + 1)..content_len {
         let items = split_projection_items(scope, agent_position, first);
-        let planned =
-            estimate_input_of(scope, &projection_of(&items)).saturating_add(scope.reservation);
+        let planned = estimate_input_of(scope, &projection_of(&items, scope.agent_status))
+            .saturating_add(scope.reservation);
         if planned <= scope.soft_limit {
             return Some((agent_position, first));
         }
@@ -935,9 +1074,13 @@ fn last_agent_item(scope: &PlanScope<'_>) -> Option<(usize, usize)> {
 }
 
 /// Wraps one item list into a projection for estimation.
-fn projection_of(items: &[ProjectionItem]) -> ContextProjection {
+fn projection_of(
+    items: &[ProjectionItem],
+    agent_status: Option<&AgentStatusAttachment>,
+) -> ContextProjection {
     ContextProjection {
         items: items.to_vec(),
+        agent_status: agent_status.cloned(),
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,
