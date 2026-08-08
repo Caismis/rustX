@@ -18,6 +18,8 @@
 //!  ↓
 //! tool calls (if requested): resolve, execute, record
 //!  ↓
+//! TurnCompleted → safe boundary → one finite inbound mailbox drain
+//!  ↓
 //! continuation (or proactive compaction / compact-and-retry on overflow)
 //!  ↓
 //! exactly one terminal RuntimeEvent
@@ -25,13 +27,15 @@
 //!
 //! Ownership: the loop owns execution semantics, message assembly, tool
 //! execution, continuation state, cancellation observation, context
-//! projection integration, and the runtime event trace. The adapter owns
-//! provider protocol translation only. No provider protocol concept appears
-//! in this module.
+//! projection integration, safe-boundary inbound consumption, and the
+//! runtime event trace. The adapter owns provider protocol translation only.
+//! No provider protocol concept appears in this module.
 //!
 //! The M4 context path is opt-in via [`AgentExecution::with_context_runtime`];
 //! `AgentExecution::new` remains the explicit no-context/unbounded
-//! compatibility path.
+//! compatibility path. The conversation inbound mailbox is opt-in via
+//! [`AgentExecution::with_inbound_mailbox`]; an execution without a mailbox
+//! preserves the exact M3/M4 behavior.
 
 use futures_util::StreamExt;
 
@@ -48,6 +52,7 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
+use crate::runtime::inbound::{ConversationInboundMailbox, MailboxError};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::executor::ToolRegistry;
 use crate::tools::types::ToolCall;
@@ -94,8 +99,9 @@ pub struct AgentExecutionRequest {
 /// settlement that produced the terminal event: they always represent the
 /// same settlement boundary.
 ///
-/// `messages` is canonical history only: initial messages plus committed
-/// agent and tool messages. No compaction summary and no projection-only
+/// `messages` is canonical history only: the initial canonical messages
+/// plus every committed agent message, tool message, and drained inbound
+/// user message of the attempt. No compaction summary and no projection-only
 /// agent slice ever appears here.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentExecutionResult {
@@ -111,8 +117,9 @@ pub struct AgentExecutionResult {
     /// event.
     pub events: Vec<RuntimeEvent>,
     /// The committed conversation state: the initial messages plus every
-    /// committed agent and tool message of the attempt. This is canonical
-    /// history, never a projection.
+    /// committed agent message, tool message, and drained inbound user
+    /// message of the attempt. This is canonical history, never a
+    /// projection.
     pub messages: Vec<MessageBlock>,
 }
 
@@ -121,7 +128,8 @@ pub struct AgentExecutionResult {
 /// The loop borrows the model adapter, the immutable tool registry, and the
 /// attempt cancellation signal, and owns the execution state machine, the
 /// committed history, the retained continuation state, the M4 context
-/// runtime (when enabled), and the runtime event trace.
+/// runtime (when enabled), the conversation inbound mailbox handle (when
+/// attached), and the runtime event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
@@ -137,6 +145,11 @@ pub struct AgentExecution<'a> {
     context_runtime: Option<ContextRuntime<'a>>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
+    /// The conversation inbound mailbox, when attached. The mailbox stays
+    /// external to the execution: the execution object is a consumer that
+    /// performs one finite drain per safe boundary, never the authoritative
+    /// conversation queue store.
+    mailbox: Option<ConversationInboundMailbox>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -199,6 +212,7 @@ impl<'a> AgentExecution<'a> {
             context_runtime: None,
             observed: None,
             last_request_fingerprint: None,
+            mailbox: None,
             turn: 0,
             terminal_emitted: false,
         }
@@ -216,6 +230,34 @@ impl<'a> AgentExecution<'a> {
     pub fn with_context_runtime(mut self, runtime: ContextRuntime<'a>) -> Self {
         self.context_runtime = Some(runtime);
         self
+    }
+
+    /// Attaches the conversation inbound mailbox of the attempt's
+    /// conversation.
+    ///
+    /// The mailbox is conversation-owned coordination that stays external to
+    /// the execution: at every safe turn boundary the loop performs exactly
+    /// one finite atomic drain and appends every drained inbound message as
+    /// its own canonical `UserMessageBlock` before the next model request.
+    /// The mailbox must belong to the same conversation as the request;
+    /// a mismatched conversation is rejected explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::ConversationMismatch`] when the mailbox
+    /// belongs to a different conversation than the request.
+    pub fn with_inbound_mailbox(
+        mut self,
+        mailbox: ConversationInboundMailbox,
+    ) -> Result<Self, MailboxError> {
+        if mailbox.conversation_id() != &self.request.conversation_id {
+            return Err(MailboxError::ConversationMismatch {
+                expected: self.request.conversation_id.clone(),
+                actual: mailbox.conversation_id().clone(),
+            });
+        }
+        self.mailbox = Some(mailbox);
+        Ok(self)
     }
 
     /// Runs the attempt to its single terminal outcome.
@@ -248,6 +290,21 @@ impl<'a> AgentExecution<'a> {
                 } else {
                     let mut terminal = None;
                     while terminal.is_none() {
+                        // Loop-boundary cancellation check: once a previous
+                        // turn returned "continue" (a complete tool-result
+                        // batch and/or a drained inbound batch), observable
+                        // cancellation prevents another model turn from
+                        // beginning. This check never replaces a terminal
+                        // outcome already chosen at a safe boundary: a
+                        // successful no-tool turn whose empty mailbox
+                        // snapshot settled the attempt as Completed exits
+                        // this loop before the check runs again.
+                        if self.cancellation.is_cancelled() {
+                            terminal = Some(Terminal::Cancelled {
+                                reason: self.cancellation.reason(),
+                            });
+                            break;
+                        }
                         terminal = self.run_turn().await;
                     }
                     terminal.expect("the attempt must settle")
@@ -403,7 +460,16 @@ impl<'a> AgentExecution<'a> {
         self.commit_agent_message(&agent_message_id, &turn_assembly.content);
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
-            return Some(Terminal::Completed { finish_reason });
+            // Safe boundary for a completed no-tool turn: the attempt may
+            // settle only when the boundary snapshot observes no eligible
+            // inbound work. A drained batch keeps the attempt running for
+            // one further model turn, so a pending inbound message prevents
+            // a successful Stop from settling before it is observed.
+            return match self.safe_boundary_drain() {
+                Ok(true) => None,
+                Ok(false) => Some(Terminal::Completed { finish_reason }),
+                Err(terminal) => Some(terminal),
+            };
         }
         if let Some(terminal) = self.execute_tools(&turn_assembly.tool_calls).await {
             return Some(terminal);
@@ -419,7 +485,45 @@ impl<'a> AgentExecution<'a> {
             });
         }
         self.emit(RuntimeEvent::TurnCompleted);
-        None
+        // Safe boundary after a structurally complete tool turn: every
+        // foreground call of the turn executed in deterministic order and
+        // every ToolMessage was committed before this point. One finite
+        // mailbox drain may attach an inbound batch to the continuation;
+        // the drain never splits the tool-result batch.
+        self.safe_boundary_drain().err()
+    }
+
+    /// The Issue #22 safe boundary: exactly one finite inbound mailbox
+    /// snapshot after the current turn is structurally complete.
+    ///
+    /// Cancellation wins before batch selection: when cancellation is
+    /// already observable, no drain happens, all pending items stay in the
+    /// mailbox, and the attempt settles cancelled. Otherwise one atomic
+    /// drain is performed and, once drained, the complete batch is appended
+    /// synchronously as distinct canonical `UserMessageBlock` values in
+    /// inbound sequence order — the batch is never partially consumed and
+    /// never requeued, even if cancellation becomes observable afterwards.
+    ///
+    /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
+    /// when no mailbox is attached or the snapshot observed an empty
+    /// mailbox, and the attempt terminal when cancellation was observable
+    /// before the snapshot.
+    fn safe_boundary_drain(&mut self) -> Result<bool, Terminal> {
+        if self.cancellation.is_cancelled() {
+            return Err(Terminal::Cancelled {
+                reason: self.cancellation.reason(),
+            });
+        }
+        let Some(mailbox) = &self.mailbox else {
+            return Ok(false);
+        };
+        let Some(batch) = mailbox.drain() else {
+            return Ok(false);
+        };
+        for item in batch.into_items() {
+            self.history.push(MessageBlock::User(item.into_message()));
+        }
+        Ok(true)
     }
 
     /// Builds the canonical request of the next model invocation.

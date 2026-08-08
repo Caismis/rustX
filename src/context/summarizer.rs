@@ -167,6 +167,7 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                 content: vec![UserContentBlock::Text(TextBlock { text: instruction })],
                 source: UserSource::Runtime,
                 kind: InboundKind::Message,
+                timestamp: None,
             })];
             let model_request = ModelRequest {
                 model: self.config.model.clone(),

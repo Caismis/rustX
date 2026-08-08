@@ -181,6 +181,7 @@ mod tests {
                 })],
                 source: UserSource::Runtime,
                 kind: InboundKind::CompactionSummary,
+                timestamp: None,
             },
             boundary: ContextBoundary::AfterMessage {
                 message_id: MessageId::new("msg-a1"),

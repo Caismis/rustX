@@ -158,6 +158,7 @@ mod tests {
                     })],
                     source: UserSource::Human,
                     kind: crate::message::types::InboundKind::Message,
+                    timestamp: None,
                 },
             ))],
             estimated_input: TokenMeasurement {
@@ -186,6 +187,7 @@ mod tests {
                     })],
                     source: UserSource::Human,
                     kind: crate::message::types::InboundKind::Message,
+                    timestamp: None,
                 })),
                 ProjectionItem::AgentSlice {
                     source_message_id: MessageId::new("msg-agent"),

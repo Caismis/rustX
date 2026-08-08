@@ -241,6 +241,7 @@ mod tests {
             })],
             source: UserSource::Human,
             kind: crate::message::types::InboundKind::Message,
+            timestamp: None,
         })
     }
 

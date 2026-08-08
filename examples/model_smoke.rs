@@ -162,6 +162,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,

@@ -544,6 +544,7 @@ impl ContextEngine {
                 })],
                 source: UserSource::Runtime,
                 kind: InboundKind::CompactionSummary,
+                timestamp: None,
             },
             boundary: plan.boundary.clone(),
             tokens_before: plan.estimated_before,
