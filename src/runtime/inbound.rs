@@ -199,9 +199,11 @@ struct MailboxState {
 ///
 /// Every hook fires while the mailbox lock is held, so tests can establish
 /// exact linearization points: `drain_snapshot` fires after the drain
-/// established its watermark and detached the items, and `enqueue_computed`
+/// established its watermark and detached the items, `drain_release`
+/// unblocks a drain parked inside its critical section (so a competing
+/// enqueue provably contends against that section), `enqueue_computed`
 /// fires after the next sequence was computed and before the item is
-/// published; `enqueue_resume` unblocks a paused enqueue. Each hook is
+/// published, and `enqueue_resume` unblocks a paused enqueue. Each hook is
 /// optional so a test installs exactly the hooks it controls. All signals
 /// are `std` channels because the mailbox synchronization boundary is a
 /// `std` mutex; the pause parks the OS thread, so the race tests run on a
@@ -210,6 +212,7 @@ struct MailboxState {
 #[derive(Debug)]
 struct MailboxProbe {
     drain_snapshot: Option<std::sync::mpsc::SyncSender<()>>,
+    drain_release: Option<std::sync::mpsc::Receiver<()>>,
     enqueue_computed: Option<std::sync::mpsc::SyncSender<()>>,
     enqueue_resume: Option<std::sync::mpsc::Receiver<()>>,
 }
@@ -340,6 +343,9 @@ impl ConversationInboundMailbox {
         if let Some(probe) = &state.probe {
             if let Some(snapshot) = &probe.drain_snapshot {
                 let _ = snapshot.send(());
+            }
+            if let Some(release) = &probe.drain_release {
+                let _ = release.recv();
             }
         }
         drop(state);
@@ -589,10 +595,17 @@ mod tests {
 
     /// Race A — arrival after the drain snapshot: the drain's watermark is
     /// established before a competing enqueue completes, so the enqueue
-    /// joins the next batch.
+    /// joins the next batch. The drain parks inside its critical section,
+    /// so the enqueue provably begins against (and blocks on) that section:
+    /// the drain cannot release the lock before the test releases it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn race_a_arrival_after_snapshot_never_extends_the_batch() {
         let (drain_tx, drain_rx) = sync_channel(1);
+        // Capacity 2: one token releases the parked drain's critical
+        // section, and a second token is consumed by the final verification
+        // drain of the test — the probe parks every drain, so every drain
+        // needs its release token.
+        let (release_tx, release_rx) = sync_channel(2);
         let mailbox = ConversationInboundMailbox {
             conversation_id: ConversationId::new("conv-1"),
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
@@ -600,6 +613,7 @@ mod tests {
                 pending: std::collections::VecDeque::new(),
                 probe: Some(MailboxProbe {
                     drain_snapshot: Some(drain_tx),
+                    drain_release: Some(release_rx),
                     enqueue_computed: None,
                     enqueue_resume: None,
                 }),
@@ -610,17 +624,25 @@ mod tests {
         let draining = mailbox.clone();
         let drain_task = tokio::task::spawn_blocking(move || draining.drain());
         // The drain holds the mailbox lock, established its watermark for A,
-        // and detached the item; it signals while the lock is still held.
+        // detached the item, and parked inside its critical section.
         drain_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("drain snapshot established");
-        // B attempts to enqueue while the drain critical section is still
-        // active; it must wait for the lock and therefore joins the next
-        // batch after the snapshot.
+        // B attempts to enqueue while the drain is still parked inside its
+        // critical section: B's enqueue can only ever acquire the lock after
+        // the drain releases it, so it provably blocks against that section
+        // and joins the next batch after the snapshot.
         let enqueueing = mailbox.clone();
         let enqueue_task = tokio::task::spawn_blocking(move || {
             enqueueing.enqueue(human("m2", "B")).expect("enqueue B")
         });
+        // Release the drain: the critical section ends, the batch with A is
+        // returned, and only then can B's enqueue proceed. The second token
+        // stays buffered for the final verification drain below.
+        release_tx.send(()).expect("release the drain");
+        release_tx
+            .send(())
+            .expect("release the final verification drain");
         let first = drain_task
             .await
             .expect("drain task")
@@ -652,6 +674,7 @@ mod tests {
                 pending: std::collections::VecDeque::new(),
                 probe: Some(MailboxProbe {
                     drain_snapshot: None,
+                    drain_release: None,
                     enqueue_computed: Some(computed_tx),
                     enqueue_resume: Some(resume_rx),
                 }),

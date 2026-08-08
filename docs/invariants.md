@@ -133,6 +133,11 @@ contract, never durable storage and never canonical history:
 - cancellation before batch selection leaves the mailbox untouched; a
   drained-and-appended batch is never requeued, even when cancellation
   becomes observable after the append;
+- the Issue #22 cancellation check points (the safe-boundary snapshot check
+  and the loop-boundary check before a new model turn) exist only for an
+  execution with an attached inbound mailbox: without a mailbox the loop
+  observes cancellation only at the pre-existing M3/M4 check points and
+  matches the pre-Issue #22 execution exactly;
 - an empty safe-boundary snapshot permits the attempt to settle; a later
   enqueue never reopens or reclassifies that attempt;
 - terminal failure paths never drain the mailbox: pending items remain for

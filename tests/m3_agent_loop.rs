@@ -2886,11 +2886,12 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     );
 }
 
-/// Cancellation observable after the drain/append commit point: the batch
-/// stays canonical exactly once, never requeued, and no new continuation
-/// begins once cancellation is observed.
+/// Cancellation observed mid-continuation (after the drained batch already
+/// committed at the first safe boundary): the batch stays canonical exactly
+/// once, never requeued, and the attempt settles cancelled without the
+/// in-flight continuation completing.
 #[tokio::test]
-async fn cancellation_after_drain_append_keeps_batch_canonical() {
+async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     let first = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -2977,7 +2978,150 @@ async fn cancellation_after_drain_append_keeps_batch_canonical() {
     assert_eq!(
         model.requests().len(),
         2,
-        "no new model continuation begins after cancellation is observed"
+        "cancellation observed mid-continuation issues no third model request"
+    );
+}
+
+/// The exact pre-Issue #22 trace of
+/// [`no_mailbox_cancellation_across_turn_boundary_matches_m3_exactly`]: a
+/// completed tool turn, the second turn's request already in flight, and
+/// cancellation observed only at the pre-existing M3 stream check point.
+fn expected_no_mailbox_boundary_cancellation_trace() -> Vec<RuntimeEvent> {
+    vec![
+        RuntimeEvent::AttemptStarted {
+            attempt_id: AttemptId::new("attempt-1"),
+        },
+        RuntimeEvent::TurnStarted,
+        RuntimeEvent::ModelRequestStarted {
+            model: "fake-model".to_owned(),
+        },
+        RuntimeEvent::AgentMessageStarted {
+            message_id: agent_message_id(1),
+        },
+        RuntimeEvent::ToolCallStarted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: rustx::tools::types::ToolCallStart {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+            },
+        },
+        RuntimeEvent::ToolCallArgumentsDelta {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call_id: ToolCallId::new("call-1"),
+            arguments_delta: "{}".to_owned(),
+        },
+        RuntimeEvent::ToolCallCompleted {
+            message_id: agent_message_id(1),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            call: ToolCall {
+                id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        },
+        RuntimeEvent::ModelRequestCompleted {
+            finish_reason: ModelFinishReason::ToolCalls,
+            usage: None,
+        },
+        RuntimeEvent::ToolExecutionStarted {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
+        RuntimeEvent::ToolExecutionCompleted {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+            result: success_result("ok"),
+        },
+        RuntimeEvent::TurnCompleted,
+        RuntimeEvent::TurnStarted,
+        RuntimeEvent::ModelRequestStarted {
+            model: "fake-model".to_owned(),
+        },
+        RuntimeEvent::AgentMessageStarted {
+            message_id: agent_message_id(2),
+        },
+        RuntimeEvent::AgentTextDelta {
+            message_id: agent_message_id(2),
+            block_index: rustx::message::types::ContentBlockIndex::new(0),
+            delta: "partial".to_owned(),
+        },
+        RuntimeEvent::AttemptCancelled {
+            attempt_id: AttemptId::new("attempt-1"),
+            reason: CancellationReason::UserRequested,
+        },
+    ]
+}
+
+/// An execution without an attached mailbox preserves the exact M3
+/// cancellation semantics across the turn boundary: the Issue #22 safe
+/// boundary and loop-boundary cancellation check points exist only for
+/// executions with an inbound mailbox. Cancellation requested while the
+/// second turn's model request is parked is observed at the pre-existing
+/// M3 stream check point, only after the second turn already started —
+/// the recorded trace matches the pre-Issue #22 trace exactly, including
+/// both `TurnStarted`/`ModelRequestStarted` events of the second turn
+/// before the terminal cancellation event.
+#[tokio::test]
+async fn no_mailbox_cancellation_across_turn_boundary_matches_m3_exactly() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    };
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text(0, "partial")),
+            FakeStep::ParkUntilReleased(parked),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
+    let mut tools = ToolRegistry::new();
+    tools.insert(tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mut model_parked = model.parked();
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("second model request parked");
+        controller_cancellation.cancel();
+        release.send(true).expect("release the second turn");
+    });
+    let result = run(&model, &tools, &cancellation).await;
+    controller.await.expect("controller task");
+
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "the second model request began before cancellation was observed: \
+         no loop-boundary cancellation check exists without a mailbox"
+    );
+    assert_trace(
+        &result.events,
+        &expected_no_mailbox_boundary_cancellation_trace(),
+    );
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested,
+        },
     );
 }
 

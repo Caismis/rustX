@@ -92,9 +92,10 @@ the same settlement.
 ## 7. Cancellation
 
 Cancellation is observed at deterministic check points (before each model
-event, between tool calls, before each mailbox safe-boundary snapshot, and
-at the loop boundary before a new model turn begins after a previous turn
-returned "continue") and races every tool execution: the loop
+event, between tool calls, and — only for an execution with an attached
+inbound mailbox — before each mailbox safe-boundary snapshot and at the
+loop boundary before a new model turn begins after a previous turn returned
+"continue") and races every tool execution: the loop
 `select`s between the tool future and the attempt cancellation signal
 (biased toward cancellation, so cancellation wins deterministically once
 observable). When cancellation wins while a tool is pending, the loop
@@ -109,6 +110,12 @@ completion. Dropping a pending tool future does not guarantee that
 external work is physically killed; the tool interface exposes no
 cancellation handle in M3, and executor-specific cancellation is a later
 milestone.
+
+The Issue #22 cancellation check points are additive and mailbox-gated:
+an execution without a mailbox never acquires the safe-boundary snapshot
+check or the loop-boundary check, so its cancellation semantics are the
+exact pre-Issue #22 M3/M4 semantics (cancellation is observed only at the
+pre-existing check points listed above).
 
 ## 8. Deterministic execution
 
@@ -127,7 +134,8 @@ runtime-owned coordination contract: a per-conversation in-memory queue for
 asynchronous user-role messages arriving while an attempt is running. It is
 attached to an execution through `AgentExecution::with_inbound_mailbox`
 (which rejects a mailbox of a different conversation); an execution without
-a mailbox preserves the exact M3/M4 behavior.
+a mailbox preserves the exact M3/M4 behavior, including the absence of the
+Issue #22 safe-boundary and loop-boundary cancellation check points.
 
 Ownership model:
 
