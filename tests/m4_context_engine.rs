@@ -216,7 +216,7 @@ fn request(
         conversation_id: conversation(),
         attempt_id: AttemptId::new(attempt),
         initial_messages,
-        initial_fresh_inbound: None,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: "fake-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
@@ -2033,8 +2033,10 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
         )
         .expect("plan");
     assert_eq!(plan.estimated_before_tokens, 60);
-    // The after estimate (51) decreased from the deterministic before (60)
-    // but is above the provider-reported 50: progress must be accepted.
+    // The after estimate (50) decreased from the deterministic before (60)
+    // but is above the provider-reported 50-boundary of this test's before
+    // measurement: progress must be accepted. A 200-byte summary weighs
+    // exactly 50 tokens under the corrected ceiling division.
     let (checkpoint, _) = engine
         .apply_compaction(
             &conversation(),
@@ -2054,7 +2056,7 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
         },
         "the provider-reported measurement is preserved as checkpoint metadata"
     );
-    assert_eq!(checkpoint.estimated_tokens_after, 51);
+    assert_eq!(checkpoint.estimated_tokens_after, 50);
 }
 
 /// Empty and whitespace-only summaries are rejected at the application

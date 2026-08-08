@@ -24,9 +24,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::status::AgentStatusAttachment;
 use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{AgentContentBlock, MessageBlock};
+use crate::model::types::AgentStatusAttachment;
 use crate::runtime::identity::MessageId;
 
 /// One ordered model-visible projection item.
@@ -166,12 +166,11 @@ fn compile_item(item: &ProjectionItem) -> MessageBlock {
 #[cfg(test)]
 mod tests {
     use super::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
-    use crate::context::status::{
-        AgentStatusAttachment, AgentStatusSectionData, AgentStatusSectionId,
-    };
+    use crate::context::status::{AgentStatusFact, AgentStatusSectionData, AgentStatusSectionId};
     use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+    use crate::model::types::AgentStatusAttachment;
     use crate::runtime::identity::MessageId;
 
     fn projection() -> ContextProjection {
@@ -309,8 +308,18 @@ mod tests {
         let custom = AgentStatusSectionId::new("custom");
         assert!(!custom.is_reserved());
         assert_eq!(
-            AgentStatusSectionData::TextLines { lines: Vec::new() },
-            AgentStatusSectionData::TextLines { lines: Vec::new() }
+            AgentStatusSectionData::Facts {
+                facts: vec![AgentStatusFact {
+                    label: "running".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            },
+            AgentStatusSectionData::Facts {
+                facts: vec![AgentStatusFact {
+                    label: "running".to_owned(),
+                    value: "1".to_owned(),
+                }],
+            }
         );
     }
 }

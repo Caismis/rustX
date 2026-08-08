@@ -887,7 +887,7 @@ fn tail_after_boundary(request: &ModelRequest) -> Result<&[MessageBlock], ModelE
 
 fn translate_user_input(
     user: &crate::message::types::UserMessageBlock,
-    agent_status: Option<&crate::context::status::AgentStatusAttachment>,
+    agent_status: Option<&crate::model::types::AgentStatusAttachment>,
 ) -> Result<serde_json::Value, ModelError> {
     let mut content = Vec::new();
     for block in &user.content {

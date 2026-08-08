@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use crate::context::checkpoint::{ContextBoundary, ContextCheckpoint, summary_message_id};
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::{ContextProjection, ProjectionItem};
-use crate::context::status::AgentStatusAttachment;
 use crate::context::structure::StructuralIndex;
 use crate::context::summarizer::{SplitTurnSummaryInput, SummaryInputItem, SummaryRequest};
 use crate::context::tokens::{
@@ -30,6 +29,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
+use crate::model::types::AgentStatusAttachment;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::tools::types::ToolDefinition;

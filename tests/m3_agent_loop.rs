@@ -50,10 +50,11 @@ fn request(attempt: &str) -> AgentExecutionRequest {
             source: UserSource::Human,
             kind: rustx::message::types::InboundKind::Message,
             // A historical (non-fresh) inbound message: the M3 loop
-            // invariants are exercised without Agent Status.
+            // invariants are exercised without Agent Status, expressed as an
+            // explicit pure-continuation trigger.
             timestamp: None,
         })],
-        initial_fresh_inbound: None,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: "fake-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,

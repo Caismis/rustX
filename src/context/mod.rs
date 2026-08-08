@@ -39,10 +39,9 @@ pub use engine::{CompactionConstraints, CompactionPlan, ContextConfig, ContextEn
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
 pub use status::{
-    AgentStatus, AgentStatusAttachment, AgentStatusClock, AgentStatusComposer,
-    AgentStatusCompositionError, AgentStatusRenderContext, AgentStatusSection,
-    AgentStatusSectionData, AgentStatusSectionId, AgentStatusSectionProvider, SystemClock,
-    render_agent_status,
+    AgentStatus, AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError,
+    AgentStatusFact, AgentStatusRenderContext, AgentStatusSection, AgentStatusSectionData,
+    AgentStatusSectionId, AgentStatusSectionProvider, SystemClock, render_agent_status,
 };
 pub use summarizer::{
     ContextSummarizer, ModelBackedSummarizer, SplitTurnSummaryInput, SummaryInputItem,

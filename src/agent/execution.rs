@@ -48,7 +48,6 @@ use futures_util::StreamExt;
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
-use crate::context::status::AgentStatusAttachment;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{ContextRuntime, compile_projection};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -57,10 +56,14 @@ use crate::model::adapter::{ModelAdapter, ModelEventStream};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort};
+use crate::model::types::{
+    AgentStatusAttachment, ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort,
+};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
-use crate::runtime::inbound::{ConversationInboundMailbox, FreshInboundTurn, MailboxError};
+use crate::runtime::inbound::{
+    ConversationInboundMailbox, FreshInboundTurn, InitialTurnTrigger, MailboxError,
+};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::executor::ToolRegistry;
 use crate::tools::types::ToolCall;
@@ -91,13 +94,14 @@ pub struct AgentExecutionRequest {
     /// The conversation/input state the attempt starts from. The loop owns
     /// the committed history and appends agent and tool messages to it.
     pub initial_messages: Vec<MessageBlock>,
-    /// The explicit fresh inbound trigger of the attempt's first turn, when
-    /// the attempt starts with inbound material the model has not yet
-    /// observed. Fresh inbound identity is explicit execution state, never
-    /// inferred from message role or history shape; omitting it is only
-    /// meaningful when no inbound material exists (a pure continuation
-    /// attempt) and is never an Agent Status disable switch.
-    pub initial_fresh_inbound: Option<FreshInboundTurn>,
+    /// The explicit execution trigger of the attempt's first model turn.
+    ///
+    /// Fresh inbound identity is explicit execution state, never inferred
+    /// from message role or history shape. [`InitialTurnTrigger::FreshInbound`]
+    /// makes Agent Status and fresh-inbound validation mandatory; omitting a
+    /// status or a fresh turn is impossible, so the trigger can never
+    /// silently suppress Agent Status.
+    pub initial_turn_trigger: InitialTurnTrigger,
     /// The per-execution/conversation IANA timezone metadata used by the
     /// temporal Agent Status section, when known. The process/system local
     /// timezone is never consulted.
@@ -311,8 +315,14 @@ impl<'a> AgentExecution<'a> {
             }
         } else {
             // The attempt's explicit fresh inbound trigger is pending until
-            // the first successful model invocation observes it.
-            self.pending_fresh_inbound = self.request.initial_fresh_inbound.clone();
+            // the first successful model invocation observes it. A pure
+            // continuation attempt has no pending trigger: the trigger makes
+            // the execution mode explicit, so Agent Status can never be
+            // silently suppressed.
+            self.pending_fresh_inbound = match &self.request.initial_turn_trigger {
+                InitialTurnTrigger::FreshInbound(fresh) => Some(fresh.clone()),
+                InitialTurnTrigger::Continuation => None,
+            };
             let mut terminal = None;
             while terminal.is_none() {
                 // Generic Agent Loop cancellation checkpoint:
@@ -1362,7 +1372,7 @@ mod tests {
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
     };
-    use crate::runtime::inbound::ConversationInboundMailbox;
+    use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::types::CancellationReason;
     use crate::tools::executor::{Tool, ToolRegistry};
     use crate::tools::types::{
@@ -1467,7 +1477,7 @@ mod tests {
             conversation_id: ConversationId::new("conv-1"),
             attempt_id: AttemptId::new("attempt-1"),
             initial_messages: Vec::new(),
-            initial_fresh_inbound: None,
+            initial_turn_trigger: InitialTurnTrigger::Continuation,
             timezone: None,
             model: "scripted-model".to_owned(),
             protocol: chat_protocol(),

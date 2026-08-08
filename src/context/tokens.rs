@@ -221,7 +221,7 @@ mod tests {
     /// counts tool definitions as part of the input.
     #[test]
     fn default_estimator_is_deterministic_and_includes_tools() {
-        use crate::context::status::AgentStatusAttachment;
+        use crate::model::types::AgentStatusAttachment;
         let projection = crate::context::projection::ContextProjection {
             items: Vec::new(),
             agent_status: None,

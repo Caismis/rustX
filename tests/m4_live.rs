@@ -61,7 +61,7 @@ async fn live_step(
         conversation_id: conversation_id(),
         attempt_id: AttemptId::new(attempt),
         initial_messages: history,
-        initial_fresh_inbound: None,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: model.to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,

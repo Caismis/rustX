@@ -228,6 +228,29 @@ pub struct FreshInboundTurn {
     message_ids: Vec<MessageId>,
 }
 
+/// The explicit execution trigger of an attempt's first model turn.
+///
+/// The trigger makes the intended execution mode explicit: there is no
+/// optional status field and no disable flag, so Agent Status can never be
+/// silently suppressed by omitting it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InitialTurnTrigger {
+    /// The attempt's first model invocation observes a fresh inbound turn:
+    /// the model has not yet observed the referenced messages. Validation
+    /// against canonical history is mandatory, Agent Status is mandatory,
+    /// fresh-inbound compaction protection applies, and the trigger remains
+    /// pending until one successful model invocation observes it — a
+    /// provider overflow failure does not consume it, while a successful
+    /// `ToolCalls` response does.
+    FreshInbound(FreshInboundTurn),
+    /// There is intentionally no new inbound user turn for the first model
+    /// invocation: the attempt continues committed canonical history, and
+    /// therefore no Agent Status is attached to the first request. This is
+    /// the explicit expression of a pure continuation, never a configuration
+    /// switch for disabling status on inbound messages.
+    Continuation,
+}
+
 /// A `FreshInboundTurn` contract violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FreshInboundError {
@@ -244,6 +267,18 @@ pub enum FreshInboundError {
     NotInboundMessage(MessageId),
     /// A referenced message has no persisted timestamp.
     MissingTimestamp(MessageId),
+    /// The referenced messages do not occur in canonical history in the
+    /// caller-supplied order: `next` precedes `previous` in canonical
+    /// position. A fresh inbound turn must name canonical messages in
+    /// strictly increasing canonical order, and the runtime never
+    /// reinterprets or sorts a caller-supplied order.
+    OutOfCanonicalOrder {
+        /// The previously validated message, canonically earlier.
+        previous: MessageId,
+        /// The message that violates the strictly increasing canonical
+        /// order.
+        next: MessageId,
+    },
 }
 
 impl core::fmt::Display for FreshInboundError {
@@ -259,6 +294,11 @@ impl core::fmt::Display for FreshInboundError {
                 write!(f, "message {id} is not an ordinary inbound message")
             }
             Self::MissingTimestamp(id) => write!(f, "message {id} has no persisted timestamp"),
+            Self::OutOfCanonicalOrder { previous, next } => write!(
+                f,
+                "message {next} precedes {previous} in canonical history; \
+                 fresh inbound message ids must be in strictly increasing canonical order"
+            ),
         }
     }
 }
@@ -270,6 +310,10 @@ impl FreshInboundTurn {
     ///
     /// The ids are ordered in the intended inbound order; the final id is the
     /// message to which Agent Status is attached. Duplicate ids are invalid.
+    /// Canonical ordering is not checked here — a caller-supplied order must
+    /// name messages in strictly increasing canonical order, which
+    /// [`FreshInboundTurn::validate_against`] enforces against canonical
+    /// history.
     ///
     /// # Errors
     ///
@@ -313,17 +357,31 @@ impl FreshInboundTurn {
     /// `MessageBlock::User` with [`InboundKind::Message`], and carry a
     /// persisted timestamp. A compaction summary (user-role history that the
     /// model has already observed through the summary projection) can never
-    /// be marked fresh.
+    /// be marked fresh. The referenced messages must also occur in canonical
+    /// history in the caller-supplied order: their canonical positions must
+    /// be strictly increasing in `message_ids` order. The runtime never
+    /// sorts or reinterprets a caller-supplied turn order; an invalid
+    /// execution state fails explicitly.
     ///
     /// # Errors
     ///
     /// Returns the specific [`FreshInboundError`] of the first violation.
     pub fn validate_against(&self, history: &[MessageBlock]) -> Result<(), FreshInboundError> {
+        let mut previous_position: Option<usize> = None;
         for id in &self.message_ids {
-            let message = history
+            let position = history
                 .iter()
-                .find(|message| message_id_of(message) == *id)
+                .position(|message| message_id_of(message) == *id)
                 .ok_or_else(|| FreshInboundError::UnknownMessage(id.clone()))?;
+            if let Some(previous) = previous_position {
+                if position <= previous {
+                    return Err(FreshInboundError::OutOfCanonicalOrder {
+                        previous: message_id_of(&history[previous]),
+                        next: id.clone(),
+                    });
+                }
+            }
+            let message = &history[position];
             match message {
                 MessageBlock::User(user) => {
                     if user.kind != InboundKind::Message {
@@ -335,6 +393,7 @@ impl FreshInboundTurn {
                 }
                 _ => return Err(FreshInboundError::NotUserRole(id.clone())),
             }
+            previous_position = Some(position);
         }
         Ok(())
     }
@@ -912,5 +971,100 @@ mod tests {
             turn.validate_against(&[MessageBlock::User(human("u1", "ok"))])
                 .is_ok()
         );
+    }
+
+    /// Canonical ordering: canonical `[A, B]` with a fresh `[A, B]` turn is
+    /// valid.
+    #[test]
+    fn fresh_turn_matching_canonical_order_is_valid() {
+        let history = vec![
+            MessageBlock::User(human("m-a", "A")),
+            MessageBlock::User(human("m-b", "B")),
+        ];
+        let turn = FreshInboundTurn::new(vec![MessageId::new("m-a"), MessageId::new("m-b")])
+            .expect("valid ids");
+        assert!(turn.validate_against(&history).is_ok());
+    }
+
+    /// Canonical ordering: canonical `[A, B]` with a fresh `[B, A]` turn is
+    /// rejected explicitly; the runtime never reinterprets caller-supplied
+    /// turn order.
+    #[test]
+    fn fresh_turn_out_of_canonical_order_is_rejected() {
+        let history = vec![
+            MessageBlock::User(human("m-a", "A")),
+            MessageBlock::User(human("m-b", "B")),
+        ];
+        let turn = FreshInboundTurn::new(vec![MessageId::new("m-b"), MessageId::new("m-a")])
+            .expect("valid ids");
+        assert_eq!(
+            turn.validate_against(&history),
+            Err(FreshInboundError::OutOfCanonicalOrder {
+                previous: MessageId::new("m-b"),
+                next: MessageId::new("m-a"),
+            })
+        );
+    }
+
+    /// Canonical ordering: a mailbox-drained A/B batch history with the
+    /// drained-batch fresh turn `[A, B]` remains valid even when earlier
+    /// canonical messages (for example a committed agent turn) intervene.
+    #[test]
+    fn drained_batch_order_remains_valid_in_mixed_history() {
+        use crate::message::types::{AgentContentBlock, AgentMessageBlock};
+        let history = vec![
+            MessageBlock::User(human("m-u0", "start")),
+            MessageBlock::Agent(AgentMessageBlock {
+                id: MessageId::new("m-agent-1"),
+                content: vec![AgentContentBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: "done".to_owned(),
+                    },
+                )],
+            }),
+            MessageBlock::User(human("m-a", "A")),
+            MessageBlock::User(human("m-b", "B")),
+        ];
+        let turn = FreshInboundTurn::new(vec![MessageId::new("m-a"), MessageId::new("m-b")])
+            .expect("valid ids");
+        assert!(turn.validate_against(&history).is_ok());
+    }
+
+    /// Canonical ordering: identical messages in non-monotonic timestamp
+    /// order are still ordered by canonical position — the final fresh
+    /// message in canonical inbound order is the last id, never a timestamp
+    /// maximum.
+    #[test]
+    fn non_monotonic_timestamps_follow_canonical_position() {
+        let later = UserMessageBlock {
+            timestamp: Some(fixed_time()),
+            ..human("m-a", "A")
+        };
+        let earlier = UserMessageBlock {
+            timestamp: Some(fixed_time() - chrono::Duration::hours(2)),
+            ..human("m-b", "B")
+        };
+        let history = vec![MessageBlock::User(later), MessageBlock::User(earlier)];
+        let turn = FreshInboundTurn::new(vec![MessageId::new("m-a"), MessageId::new("m-b")])
+            .expect("valid ids");
+        assert!(turn.validate_against(&history).is_ok());
+        assert_eq!(turn.last_message_id(), &MessageId::new("m-b"));
+    }
+
+    /// The explicit initial-turn trigger distinguishes a fresh inbound turn
+    /// from a pure continuation; a continuation is not an Agent Status
+    /// disable switch.
+    #[test]
+    fn initial_turn_trigger_is_explicit() {
+        use super::InitialTurnTrigger;
+        let fresh = InitialTurnTrigger::FreshInbound(
+            FreshInboundTurn::new(vec![MessageId::new("m-1")]).expect("valid turn"),
+        );
+        assert!(matches!(fresh, InitialTurnTrigger::FreshInbound(_)));
+        assert_eq!(
+            InitialTurnTrigger::Continuation,
+            InitialTurnTrigger::Continuation
+        );
+        assert_ne!(fresh, InitialTurnTrigger::Continuation);
     }
 }

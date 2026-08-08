@@ -340,8 +340,8 @@ mod tests {
         }
     }
 
-    fn attachment(target: &str) -> crate::context::status::AgentStatusAttachment {
-        crate::context::status::AgentStatusAttachment {
+    fn attachment(target: &str) -> crate::model::types::AgentStatusAttachment {
+        crate::model::types::AgentStatusAttachment {
             target_message_id: crate::runtime::identity::MessageId::new(target),
             rendered: "<system-reminder>Current time: fixed</system-reminder>".to_owned(),
         }

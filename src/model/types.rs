@@ -4,13 +4,43 @@
 //! information the runtime owns, and future adapters translate them to and
 //! from `OpenAI` Chat Completions, `OpenAI` Responses, and `Anthropic`
 //! Messages. Provider SDK types never appear here.
+//!
+//! This Layer 0 module also owns the cross-layer model-request attachment
+//! contract of the Agent Status projection: [`AgentStatusAttachment`] is the
+//! only Agent Status data a `ModelRequest` carries, and it contains only the
+//! request-level data adapters need (the target canonical message and the
+//! rendered status text). The context plane (`src/context/status.rs`)
+//! *produces* the attachment, but model contracts never depend on context
+//! implementation modules: `ModelRequest` uses only Layer 0 runtime-owned
+//! attachment data.
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::status::AgentStatusAttachment;
 use crate::message::types::MessageBlock;
 use crate::runtime::continuation::ProviderContinuationState;
+use crate::runtime::identity::MessageId;
 use crate::tools::types::ToolDefinition;
+
+/// The ephemeral Agent Status attachment of one model request.
+///
+/// This is the Layer 0 cross-layer model-request attachment contract: it is
+/// produced by the context plane (Agent Status composition and canonical
+/// rendering) but owned here, so `ModelRequest` and every provider adapter
+/// depend only on runtime-owned data and never on context implementation
+/// modules. The attachment exists only for a pending fresh inbound turn,
+/// targets the final fresh inbound message, and is projection-only: it is
+/// never canonical history, never checkpoint history, never returned in
+/// `AgentExecutionResult.messages`, and never emitted as a committed-message
+/// event. It participates in the projection fingerprint and the full request
+/// token estimate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStatusAttachment {
+    /// The identity of the final fresh inbound message the status
+    /// accompanies.
+    pub target_message_id: MessageId,
+    /// The canonical deterministic rendered status text.
+    pub rendered: String,
+}
 
 /// The model interaction protocol an adapter must speak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,7 +195,6 @@ mod tests {
     /// when None.
     #[test]
     fn agent_status_attachment_is_optional_request_metadata() {
-        use crate::context::status::AgentStatusAttachment;
         use crate::message::content::TextBlock;
         use crate::message::types::{
             InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -194,7 +223,7 @@ mod tests {
             !json.contains("agent_status"),
             "absent agent status must be omitted from the canonical encoding"
         );
-        request.agent_status = Some(AgentStatusAttachment {
+        request.agent_status = Some(super::AgentStatusAttachment {
             target_message_id: MessageId::new("msg-inbound-1"),
             rendered: "status".to_owned(),
         });

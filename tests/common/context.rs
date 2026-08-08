@@ -163,7 +163,7 @@ impl TokenEstimator for ScriptedEstimator {
         let mut total = tool_definitions.len() as u64 * self.per_tool;
         total += self.items_estimate(projection);
         if let Some(status) = &projection.agent_status {
-            total += status.rendered.len() as u64 / 4 + 1;
+            total += (status.rendered.len() as u64).div_ceil(4);
         }
         total
     }
@@ -187,7 +187,7 @@ impl ScriptedEstimator {
                     if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
                         total += *weight;
                     } else if is_summary(message) {
-                        total += summary_text(message).len() as u64 / 4 + 1;
+                        total += (summary_text(message).len() as u64).div_ceil(4);
                     } else if matches!(message, MessageBlock::Agent(_)) {
                         let blocks = match message {
                             MessageBlock::Agent(agent) => agent.content.len() as u64,

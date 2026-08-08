@@ -25,9 +25,9 @@ use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use common::fake::{FakeModel, FakeStep, model_release};
-use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest};
+use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, InitialTurnTrigger};
 use rustx::context::{
-    AgentStatusAttachment, AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError,
+    AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError, AgentStatusFact,
     AgentStatusRenderContext, AgentStatusSectionData, AgentStatusSectionId,
     AgentStatusSectionProvider, ContextCheckpointStore, ContextConfig, ContextEngine, ContextError,
     ContextErrorKind, ContextRuntime, InMemoryCheckpointStore, ProviderObservedInput,
@@ -41,7 +41,7 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
+use rustx::model::types::{AgentStatusAttachment, ModelProtocol, ModelRequest, ReasoningEffort};
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::runtime::inbound::{ConversationInboundMailbox, FreshInboundTurn};
@@ -96,19 +96,19 @@ fn utc(rfc3339: &str) -> DateTime<Utc> {
         .with_timezone(&Utc)
 }
 
-/// A scripted extension status provider: stable id, optional lines, optional
-/// failure.
+/// A scripted extension status provider: stable id, optional structured
+/// facts, optional failure.
 struct TestProvider {
     id: &'static str,
-    lines: Option<Vec<String>>,
+    facts: Option<Vec<AgentStatusFact>>,
     fail: bool,
 }
 
 impl TestProvider {
-    fn returning(id: &'static str, lines: Vec<String>) -> Self {
+    fn returning(id: &'static str, facts: Vec<AgentStatusFact>) -> Self {
         Self {
             id,
-            lines: Some(lines),
+            facts: Some(facts),
             fail: false,
         }
     }
@@ -116,7 +116,7 @@ impl TestProvider {
     fn empty(id: &'static str) -> Self {
         Self {
             id,
-            lines: None,
+            facts: None,
             fail: false,
         }
     }
@@ -124,7 +124,7 @@ impl TestProvider {
     fn failing(id: &'static str) -> Self {
         Self {
             id,
-            lines: None,
+            facts: None,
             fail: true,
         }
     }
@@ -146,9 +146,75 @@ impl AgentStatusSectionProvider for TestProvider {
             ));
         }
         Ok(self
-            .lines
+            .facts
             .clone()
-            .map(|lines| AgentStatusSectionData::TextLines { lines }))
+            .map(|facts| AgentStatusSectionData::Facts { facts }))
+    }
+}
+
+/// A deliberately stateful/mutating provider: `section_id()` returns whatever
+/// the current internal id is, so a test can prove that post-registration
+/// identity mutation cannot shadow reserved ids or create duplicates.
+#[derive(Debug)]
+struct MutableProvider {
+    current: Mutex<&'static str>,
+}
+
+impl MutableProvider {
+    fn new(id: &'static str) -> Self {
+        Self {
+            current: Mutex::new(id),
+        }
+    }
+
+    fn set_id(&self, id: &'static str) {
+        *self.current.lock().expect("mutable provider lock") = id;
+    }
+}
+
+impl AgentStatusSectionProvider for MutableProvider {
+    fn section_id(&self) -> AgentStatusSectionId {
+        AgentStatusSectionId::new(*self.current.lock().expect("mutable provider lock"))
+    }
+
+    fn section(
+        &self,
+        _context: &AgentStatusRenderContext,
+    ) -> Result<Option<AgentStatusSectionData>, ContextError> {
+        Ok(Some(AgentStatusSectionData::Facts {
+            facts: vec![AgentStatusFact {
+                label: "state".to_owned(),
+                value: "running".to_owned(),
+            }],
+        }))
+    }
+}
+
+/// A provider that counts how often `section_id()` is queried.
+#[derive(Debug)]
+struct CountingProvider {
+    id_queries: Mutex<u32>,
+}
+
+impl CountingProvider {
+    fn new() -> Self {
+        Self {
+            id_queries: Mutex::new(0),
+        }
+    }
+}
+
+impl AgentStatusSectionProvider for CountingProvider {
+    fn section_id(&self) -> AgentStatusSectionId {
+        *self.id_queries.lock().expect("counting lock") += 1;
+        AgentStatusSectionId::new("counting")
+    }
+
+    fn section(
+        &self,
+        _context: &AgentStatusRenderContext,
+    ) -> Result<Option<AgentStatusSectionData>, ContextError> {
+        Ok(None)
     }
 }
 
@@ -218,7 +284,7 @@ fn conversation() -> ConversationId {
 fn request(
     attempt: &str,
     initial_messages: Vec<MessageBlock>,
-    fresh: Option<FreshInboundTurn>,
+    trigger: InitialTurnTrigger,
     timezone: Option<Tz>,
 ) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -226,7 +292,7 @@ fn request(
         conversation_id: conversation(),
         attempt_id: AttemptId::new(attempt),
         initial_messages,
-        initial_fresh_inbound: fresh,
+        initial_turn_trigger: trigger,
         timezone,
         model: "fake-status-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
@@ -359,13 +425,20 @@ fn assert_no_status_in_history(history: &[MessageBlock]) {
 // Structured composition
 // ---------------------------------------------------------------------------
 
+fn fact(label: &str, value: &str) -> AgentStatusFact {
+    AgentStatusFact {
+        label: label.to_owned(),
+        value: value.to_owned(),
+    }
+}
+
 #[test]
 fn temporal_section_is_first_and_mandatory() {
     let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
     composer
         .register(Arc::new(TestProvider::returning(
             "custom",
-            vec!["custom line".to_owned()],
+            vec![fact("custom label", "custom value")],
         )))
         .expect("register");
     let status = composer
@@ -389,13 +462,13 @@ fn extensions_preserve_registration_order() {
     composer
         .register(Arc::new(TestProvider::returning(
             "first",
-            vec!["first line".to_owned()],
+            vec![fact("first label", "first value")],
         )))
         .expect("first");
     composer
         .register(Arc::new(TestProvider::returning(
             "second",
-            vec!["second line".to_owned()],
+            vec![fact("second label", "second value")],
         )))
         .expect("second");
     let status = composer
@@ -410,10 +483,53 @@ fn extensions_preserve_registration_order() {
         .map(|section| section.id.as_str().to_owned())
         .collect();
     assert_eq!(ids, vec!["temporal", "first", "second"]);
+    // Ordering is asserted through the structured values rendered by the
+    // canonical renderer, never through provider-generated final lines.
     let rendered = render_agent_status(&status);
     assert!(
-        rendered.find("first line") < rendered.find("second line"),
+        rendered.find("first label: first value") < rendered.find("second label: second value"),
         "extension sections render in explicit registration order"
+    );
+}
+
+/// Extension providers contribute structured facts and the canonical
+/// renderer owns the final text: the provider never hands over pre-rendered
+/// footer lines, and every fact renders as `label: value` in deterministic
+/// order under the canonical footer.
+#[test]
+fn structured_facts_render_through_the_canonical_renderer() {
+    let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
+    composer
+        .register(Arc::new(TestProvider::returning(
+            "execution",
+            vec![fact("running", "2"), fact("queued", "1")],
+        )))
+        .expect("register");
+    let status = composer
+        .compose(&AgentStatusRenderContext {
+            inbound_message_time: utc("2026-08-08T16:30:58Z"),
+            timezone: None,
+        })
+        .expect("compose");
+    let AgentStatusSectionData::Facts { facts } = &status.sections[1].data else {
+        panic!("extension sections carry structured facts");
+    };
+    assert_eq!(
+        *facts,
+        vec![fact("running", "2"), fact("queued", "1")],
+        "the provider's structured facts are preserved verbatim"
+    );
+    let rendered = render_agent_status(&status);
+    assert_eq!(
+        rendered,
+        "<system-reminder>\n\
+         Current time: 2026-08-08T16:31:00Z\n\
+         Inbound message time: 2026-08-08T16:30:58Z\n\
+         \n\
+         running: 2\n\
+         queued: 1\n\
+         </system-reminder>",
+        "the canonical renderer formats labels, separators, and layout"
     );
 }
 
@@ -458,6 +574,111 @@ fn background_execution_cannot_be_hijacked() {
         AgentStatusCompositionError::ReservedSectionId(id)
             if id.as_str() == AgentStatusSectionId::BACKGROUND_EXECUTION
     ));
+}
+
+/// A provider's section identity is captured and frozen at registration:
+/// post-registration changes to what `section_id()` would return can never
+/// shadow the reserved `temporal` id, and the composed section retains its
+/// originally registered identity.
+#[test]
+fn registered_section_identity_is_frozen_at_registration() {
+    let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
+    let mutable = Arc::new(MutableProvider::new("custom"));
+    composer.register(mutable.clone()).expect("register");
+    // The provider's identity mutates after registration; the runtime keeps
+    // using the registered id.
+    mutable.set_id("temporal");
+    let status = composer
+        .compose(&AgentStatusRenderContext {
+            inbound_message_time: utc("2026-08-08T16:30:58Z"),
+            timezone: None,
+        })
+        .expect("compose");
+    assert_eq!(
+        composer.provider_ids(),
+        vec![AgentStatusSectionId::new("custom")],
+        "provider listing uses the stored registration identity"
+    );
+    assert_eq!(status.sections.len(), 2);
+    assert_eq!(
+        status.sections[1].id,
+        AgentStatusSectionId::new("custom"),
+        "the rendered section retains its originally registered identity"
+    );
+    assert!(
+        render_agent_status(&status).contains("state: running"),
+        "the frozen custom section still renders"
+    );
+}
+
+/// Post-registration identity mutation cannot create duplicate registered
+/// identities: two registered providers keep their stored ids even when both
+/// would now report the same id, and a new provider claiming a stored id is
+/// still rejected.
+#[test]
+fn registered_identity_cannot_mutate_into_a_duplicate() {
+    let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
+    let first = Arc::new(MutableProvider::new("first"));
+    let second = Arc::new(MutableProvider::new("second"));
+    composer.register(first.clone()).expect("register first");
+    composer.register(second.clone()).expect("register second");
+    // Both providers now report the same id they could not claim originally;
+    // the frozen registration identities remain distinct and ordered.
+    first.set_id("second");
+    second.set_id("first");
+    assert_eq!(
+        composer.provider_ids(),
+        vec![
+            AgentStatusSectionId::new("first"),
+            AgentStatusSectionId::new("second"),
+        ],
+        "registration order and stored identities remain deterministic"
+    );
+    let status = composer
+        .compose(&AgentStatusRenderContext {
+            inbound_message_time: utc("2026-08-08T16:30:58Z"),
+            timezone: None,
+        })
+        .expect("compose");
+    let ids: Vec<String> = status
+        .sections
+        .iter()
+        .map(|section| section.id.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["temporal", "first", "second"],
+        "no duplicate identities exist after attempted mutation"
+    );
+    // A fresh provider claiming an already-stored id is still rejected.
+    let error = composer
+        .register(Arc::new(MutableProvider::new("first")))
+        .expect_err("a stored id is still reserved to its registration");
+    assert!(matches!(
+        error,
+        AgentStatusCompositionError::DuplicateSectionId(id) if id.as_str() == "first"
+    ));
+}
+
+/// `section_id()` is called exactly once per provider at registration and
+/// never again: composition and provider listing use the stored identity.
+#[test]
+fn section_identity_is_queried_only_at_registration() {
+    let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
+    let counting = Arc::new(CountingProvider::new());
+    composer.register(counting.clone()).expect("register");
+    composer
+        .compose(&AgentStatusRenderContext {
+            inbound_message_time: utc("2026-08-08T16:30:58Z"),
+            timezone: None,
+        })
+        .expect("compose");
+    let _ = composer.provider_ids();
+    assert_eq!(
+        *counting.id_queries.lock().expect("counting lock"),
+        1,
+        "the provider identity is captured exactly once at registration"
+    );
 }
 
 #[test]
@@ -574,7 +795,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
         request(
             "attempt-1",
             vec![initial.clone()],
-            Some(fresh),
+            InitialTurnTrigger::FreshInbound(fresh),
             Some(Tz::Asia__Tokyo),
         ),
         &model,
@@ -634,7 +855,12 @@ async fn runtime_originated_inbound_triggers_status() {
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-runtime-1")]).expect("turn");
     let result = AgentExecution::new(
-        request("attempt-1", vec![initial], Some(fresh), None),
+        request(
+            "attempt-1",
+            vec![initial],
+            InitialTurnTrigger::FreshInbound(fresh),
+            None,
+        ),
         &model,
         &tools,
         &cancellation,
@@ -665,7 +891,9 @@ async fn runtime_originated_inbound_triggers_status() {
 
 /// Freshness is never inferred from role or history shape: a historical
 /// compaction summary (Runtime source, no timestamp, not marked fresh) and an
-/// unmarked human message never produce Agent Status.
+/// unmarked human message never produce Agent Status. An explicit pure
+/// continuation trigger means there is intentionally no fresh inbound turn
+/// for the first model invocation, so the first request carries no status.
 #[tokio::test]
 async fn no_role_heuristic_triggers_status() {
     let model = FakeModel::new(vec![stop_script()]);
@@ -677,7 +905,7 @@ async fn no_role_heuristic_triggers_status() {
         historical_user("msg-old-1", "old message"),
     ];
     let result = AgentExecution::new(
-        request("attempt-1", initial, None, None),
+        request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
         &model,
         &tools,
         &cancellation,
@@ -697,6 +925,48 @@ async fn no_role_heuristic_triggers_status() {
     assert!(
         requests[0].agent_status.is_none(),
         "user-role history without an explicit fresh trigger must never carry Agent Status"
+    );
+}
+
+/// The explicit fresh-inbound trigger makes Agent Status mandatory and
+/// non-bypassable: an initial fresh turn cannot silently suppress status by
+/// omitting it, because there is no optional status field left to omit.
+#[tokio::test]
+async fn explicit_fresh_trigger_carries_mandatory_status() {
+    let model = FakeModel::new(vec![stop_script()]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let initial = fresh_user(
+        "msg-inbound-1",
+        "deploy it",
+        UserSource::Human,
+        utc("2026-08-08T16:30:58Z"),
+    );
+    let trigger = InitialTurnTrigger::FreshInbound(
+        FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn"),
+    );
+    let result = AgentExecution::new(
+        request("attempt-1", vec![initial], trigger, None),
+        &model,
+        &tools,
+        &cancellation,
+        runtime(
+            10_000_000,
+            weighted(10, 10, 10),
+            FakeContextSummarizer::new(Vec::new()),
+            store,
+            Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
+        ),
+    )
+    .run()
+    .await;
+    assert_completed(&result);
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].agent_status.is_some(),
+        "a FreshInbound trigger always composes exactly one Agent Status snapshot"
     );
 }
 
@@ -740,7 +1010,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
         request(
             "attempt-1",
             vec![historical_user("msg-u0", "start")],
-            None,
+            InitialTurnTrigger::Continuation,
             None,
         ),
         &model,
@@ -842,7 +1112,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
         request(
             "attempt-1",
             vec![historical_user("msg-u0", "start")],
-            None,
+            InitialTurnTrigger::Continuation,
             None,
         ),
         &model,
@@ -914,7 +1184,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
         request(
             "attempt-1",
             vec![historical_user("msg-u0", "start")],
-            None,
+            InitialTurnTrigger::Continuation,
             None,
         ),
         &model,
@@ -999,7 +1269,12 @@ async fn foreground_tool_continuation_has_no_status() {
     let initial = fresh_user("msg-inbound-1", "run it", UserSource::Human, inbound_time);
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let result = AgentExecution::new(
-        request("attempt-1", vec![initial], Some(fresh), None),
+        request(
+            "attempt-1",
+            vec![initial],
+            InitialTurnTrigger::FreshInbound(fresh),
+            None,
+        ),
         &model,
         &tools,
         &cancellation,
@@ -1055,7 +1330,12 @@ async fn fresh_inbound_is_protected_from_compaction() {
     ];
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let result = AgentExecution::new(
-        request("attempt-1", initial, Some(fresh), None),
+        request(
+            "attempt-1",
+            initial,
+            InitialTurnTrigger::FreshInbound(fresh),
+            None,
+        ),
         &model,
         &tools,
         &cancellation,
@@ -1326,7 +1606,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
         request(
             "attempt-1",
             vec![historical_user("msg-u0", "start")],
-            None,
+            InitialTurnTrigger::Continuation,
             None,
         ),
         &model,
@@ -1805,4 +2085,70 @@ async fn anthropic_appends_status_without_breaking_tool_result_grouping() {
         1,
         "the status appears exactly once on the wire"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Layer/API contracts
+// ---------------------------------------------------------------------------
+
+/// The Layer 0 model contracts never depend on the context layer: `src/model`
+/// source contains no `context::` reference, so `ModelRequest` and the
+/// `AgentStatusAttachment` it carries are usable without a
+/// `model -> context` dependency. Context *produces* the attachment; model
+/// contracts own it.
+#[test]
+fn model_layer_has_no_context_dependency() {
+    let model_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("model");
+    let mut files = Vec::new();
+    collect_rs_files(&model_dir, &mut files);
+    assert!(!files.is_empty(), "model sources must exist");
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("read model source");
+        assert!(
+            !source.contains("context::"),
+            "src/model must never depend on the context layer: {}",
+            file.display()
+        );
+    }
+}
+
+/// The old ambiguous request contract is gone: `AgentExecutionRequest` has an
+/// explicit trigger field, and no optional status field, disable flag, or
+/// legacy no-context path exists in the agent kernel source.
+#[test]
+fn no_optional_status_or_legacy_execution_path_exists() {
+    let agent_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("agent");
+    let mut files = Vec::new();
+    collect_rs_files(&agent_dir, &mut files);
+    assert!(!files.is_empty(), "agent sources must exist");
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("read agent source");
+        for token in [
+            "initial_fresh_inbound",
+            "disable_status",
+            "with_context_runtime",
+        ] {
+            assert!(
+                !source.contains(token),
+                "{token} must not exist in the agent kernel: {}",
+                file.display()
+            );
+        }
+    }
+}
+
+fn collect_rs_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("read directory") {
+        let entry = entry.expect("directory entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
 }
