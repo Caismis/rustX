@@ -3004,6 +3004,236 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Context failure classification (preparation vs compaction)
+// ---------------------------------------------------------------------------
+
+/// A fixed deterministic UTC clock for status composition in these
+/// classification regressions.
+#[derive(Debug, Clone, Copy)]
+struct FixedClock(chrono::DateTime<chrono::Utc>);
+
+impl rustx::context::AgentStatusClock for FixedClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.0
+    }
+}
+
+fn fixed_time() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+        .expect("fixed timestamp")
+        .with_timezone(&chrono::Utc)
+}
+
+/// A scripted status provider that always fails.
+struct FailingStatusProvider;
+
+impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
+    fn section_id(&self) -> rustx::context::AgentStatusSectionId {
+        rustx::context::AgentStatusSectionId::new("broken")
+    }
+
+    fn section(
+        &self,
+        _context: &rustx::context::AgentStatusRenderContext,
+    ) -> Result<Option<rustx::context::AgentStatusSectionData>, ContextError> {
+        Err(ContextError::new(
+            ContextErrorKind::StatusFailed,
+            "test provider exploded",
+        ))
+    }
+}
+
+/// A fresh-inbound request: the first turn carries a pending fresh inbound
+/// turn, so Agent Status composition is mandatory.
+fn fresh_request(
+    attempt: &str,
+    initial_messages: Vec<MessageBlock>,
+) -> AgentExecutionRequest {
+    AgentExecutionRequest {
+        agent_id: AgentId::new("agent-a"),
+        conversation_id: conversation(),
+        attempt_id: AttemptId::new(attempt),
+        initial_messages,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::FreshInbound(
+            rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new(
+                "msg-inbound-1",
+            )])
+            .expect("valid fresh turn"),
+        ),
+        timezone: None,
+        model: "fake-model".to_owned(),
+        protocol: ModelProtocol::OpenAiChatCompletions,
+        reasoning: ReasoningEffort::Medium,
+        max_output_tokens: 0,
+    }
+}
+
+/// A timestamped ordinary inbound user message.
+fn fresh_user(id: &str, text: &str) -> MessageBlock {
+    MessageBlock::User(UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: text.to_owned(),
+        })],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: Some(fixed_time()),
+    })
+}
+
+/// A deterministic failing Agent Status provider is a context **preparation**
+/// failure, never a compaction failure: no provider request is sent, no
+/// `CompactionStarted` is emitted, the terminal is exactly one
+/// `AttemptFailed`, and the error classifies as
+/// `Runtime(ContextPreparationFailed { .. })`.
+#[tokio::test]
+async fn failing_status_provider_is_preparation_failure_not_compaction() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "ok")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let mut composer =
+        rustx::context::AgentStatusComposer::new(Arc::new(FixedClock(fixed_time())));
+    composer
+        .register(Arc::new(FailingStatusProvider))
+        .expect("register");
+    let result = AgentExecution::new(
+        fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
+        &model,
+        &tools,
+        &cancellation,
+        rustx::context::ContextRuntime::with_status_composer(
+            engine(10_000_000, 0, 0, weighted(10, 10, 10)),
+            Arc::new(FakeContextSummarizer::new(Vec::new())),
+            store,
+            composer,
+        ),
+    )
+    .run()
+    .await;
+
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "no provider request may be sent when status composition fails"
+    );
+    let terminals: Vec<&RuntimeEvent> = result
+        .events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::AttemptFailed { .. }))
+        .collect();
+    assert_eq!(terminals.len(), 1, "exactly one terminal event");
+    assert_eq!(
+        result.events.last(),
+        Some(terminals[0]),
+        "the terminal event is last"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
+        "no compaction pipeline may start for a preparation failure"
+    );
+    let RuntimeEvent::AttemptFailed { error, .. } = terminals[0] else {
+        unreachable!("terminal matched above");
+    };
+    let AttemptFailure::Runtime { error } = error else {
+        panic!("the terminal must be a runtime failure, got {error:?}");
+    };
+    assert!(
+        matches!(error, rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }),
+        "a status provider failure classifies as context preparation failure"
+    );
+    assert!(
+        !matches!(error, rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }),
+        "a status provider failure must never be mislabeled as a compaction failure"
+    );
+    if let rustx::runtime::types::RuntimeError::ContextPreparationFailed { message } = error {
+        assert!(
+            message.contains("broken"),
+            "the diagnostic names the failing provider: {message}"
+        );
+    }
+}
+
+/// An actual proactive compaction pipeline failure still classifies as
+/// `Runtime(ContextCompactionFailed { .. })`, distinct from a preparation
+/// failure: no provider request follows, but the compaction pipeline
+/// genuinely started and failed.
+#[tokio::test]
+async fn proactive_compaction_failure_is_context_compaction_failed() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "ok")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Fail(ContextError::new(
+        ContextErrorKind::SummaryFailed,
+        "summary generation refused",
+    ))]);
+    let initial = vec![
+        user("msg-old-1", "old"),
+        user("msg-old-2", "older"),
+        fresh_user("msg-inbound-1", "fresh instruction"),
+    ];
+    let result = AgentExecution::new(
+        fresh_request("attempt-1", initial),
+        &model,
+        &tools,
+        &cancellation,
+        runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
+    )
+    .run()
+    .await;
+
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "no provider request follows a failed proactive compaction"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+        "a proactive compaction pipeline must actually start"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
+        "the compaction failure event carries the diagnostic"
+    );
+    let RuntimeEvent::AttemptFailed { error, .. } = result.events.last().expect("terminal") else {
+        panic!("the terminal must be an AttemptFailed");
+    };
+    let AttemptFailure::Runtime { error } = error else {
+        panic!("the terminal must be a runtime failure");
+    };
+    assert!(
+        matches!(error, rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }),
+        "an actual compaction pipeline failure keeps the compaction classification"
+    );
+    assert!(
+        !matches!(error, rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }),
+        "an actual compaction failure is not a preparation failure"
+    );
+    assert!(
+        store.load(&conversation()).expect("store").is_none(),
+        "no checkpoint may be saved after a failed compaction"
+    );
+}
+
 /// A no-progress compaction (summary not smaller than the replaced
 /// context) fails explicitly: no checkpoint, no retry, no loop, one
 /// terminal event.

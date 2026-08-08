@@ -749,11 +749,17 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// The `AttemptFailed` terminal of a context-plane failure that occurred
-    /// before any compaction began.
+    /// while preparing model context **before any compaction began**: an
+    /// invalid pending fresh-inbound state discovered during status
+    /// composition or projection preparation, a failing Agent Status section
+    /// provider, or a projection preparation failure that is not itself a
+    /// compaction operation. These are never mislabeled as compaction
+    /// failures: [`RuntimeError::ContextCompactionFailed`] is reserved for an
+    /// actual proactive compaction pipeline failure.
     fn context_failure_terminal(error: &ContextError) -> Terminal {
         Terminal::Failed {
             failure: AttemptFailure::Runtime {
-                error: RuntimeError::ContextCompactionFailed {
+                error: RuntimeError::ContextPreparationFailed {
                     message: error.message.clone(),
                 },
             },
@@ -914,6 +920,14 @@ impl<'a> AgentExecution<'a> {
 
     /// Emits `CompactionFailed` with the diagnostic and returns the
     /// compaction terminal for this caller.
+    ///
+    /// A proactive compaction failure is an actual compaction pipeline
+    /// failure and settles as
+    /// `AttemptFailed(Runtime(ContextCompactionFailed { message }))`; after a
+    /// context overflow the original normalized overflow is preserved as the
+    /// final model failure with the compaction diagnostic carried by
+    /// `CompactionFailed.error`. Neither path becomes a generic context
+    /// preparation failure.
     fn compaction_failure(
         &mut self,
         error: &ContextError,
@@ -928,7 +942,13 @@ impl<'a> AgentExecution<'a> {
                     error: overflow.clone(),
                 },
             },
-            None => Self::context_failure_terminal(error),
+            None => Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContextCompactionFailed {
+                        message: error.message.clone(),
+                    },
+                },
+            },
         }
     }
 

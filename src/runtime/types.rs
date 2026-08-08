@@ -54,10 +54,23 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// Context preparation failed while building the model context of a
+    /// request **before any compaction started**: an invalid pending
+    /// fresh-inbound state discovered during projection/status preparation,
+    /// a failing Agent Status section provider, or a projection preparation
+    /// failure that is not itself a compaction operation. This is never
+    /// mislabeled as a compaction failure.
+    ContextPreparationFailed {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
     /// Context compaction failed. This is a runtime-owned context-plane
-    /// failure: it never fabricates a provider error, and it is distinct
-    /// from a normalized model error even when the two coincide (for
-    /// example a context overflow whose recovery compaction failed).
+    /// failure of an actual proactive compaction pipeline: it never
+    /// fabricates a provider error, and it is distinct from a normalized
+    /// model error even when the two coincide (for example a context
+    /// overflow whose recovery compaction failed). Preparation failures that
+    /// occur before compaction starts are [`RuntimeError::ContextPreparationFailed`]
+    /// instead.
     ContextCompactionFailed {
         /// Human-readable diagnostic message.
         message: String,
@@ -104,6 +117,12 @@ mod tests {
                     message: "event after terminal".to_owned(),
                 },
                 "contract_violation",
+            ),
+            (
+                RuntimeError::ContextPreparationFailed {
+                    message: "status provider failed".to_owned(),
+                },
+                "context_preparation_failed",
             ),
             (
                 RuntimeError::ContextCompactionFailed {

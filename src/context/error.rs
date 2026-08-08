@@ -4,9 +4,13 @@
 //! canonical history into bounded model context. Its failures are runtime
 //! facts, never provider facts: an error here is reported as a typed
 //! [`ContextError`] and converted into a runtime error at the attempt
-//! boundary ([`RuntimeError::ContextCompactionFailed`]); it is never
-//! fabricated into a normalized [`ModelError`].
+//! boundary — [`RuntimeError::ContextPreparationFailed`] for failures that
+//! occur while preparing model context before compaction starts, and
+//! [`RuntimeError::ContextCompactionFailed`] for actual proactive compaction
+//! pipeline failures. A context error is never fabricated into a normalized
+//! [`ModelError`].
 //!
+//! [`RuntimeError::ContextPreparationFailed`]: crate::runtime::types::RuntimeError::ContextPreparationFailed
 //! [`RuntimeError::ContextCompactionFailed`]: crate::runtime::types::RuntimeError::ContextCompactionFailed
 //! [`ModelError`]: crate::model::error::ModelError
 
