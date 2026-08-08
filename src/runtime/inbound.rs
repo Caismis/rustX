@@ -34,8 +34,8 @@ use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use crate::message::types::{InboundKind, UserMessageBlock};
-use crate::runtime::identity::ConversationId;
+use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
+use crate::runtime::identity::{ConversationId, MessageId};
 
 /// A conversation-scoped inbound sequence number.
 ///
@@ -217,6 +217,138 @@ struct MailboxProbe {
     enqueue_resume: Option<std::sync::mpsc::Receiver<()>>,
 }
 
+/// The explicit execution-domain identity of one fresh inbound turn.
+///
+/// Fresh inbound identity is explicit execution state, never inferred from
+/// message role, history shape, or timestamps: a compaction summary is
+/// user-role history and must never be marked fresh. Agent Status is attached
+/// to the final message of exactly one `FreshInboundTurn` per model turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreshInboundTurn {
+    message_ids: Vec<MessageId>,
+}
+
+/// A `FreshInboundTurn` contract violation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FreshInboundError {
+    /// A fresh inbound turn must contain at least one message.
+    Empty,
+    /// The turn contains the same message id twice.
+    DuplicateIds(MessageId),
+    /// The turn references a message that is not in canonical history.
+    UnknownMessage(MessageId),
+    /// A referenced message is not a `MessageBlock::User`.
+    NotUserRole(MessageId),
+    /// A referenced message is not an ordinary [`InboundKind::Message`] (for
+    /// example a compaction summary).
+    NotInboundMessage(MessageId),
+    /// A referenced message has no persisted timestamp.
+    MissingTimestamp(MessageId),
+}
+
+impl core::fmt::Display for FreshInboundError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "a fresh inbound turn must contain at least one message"),
+            Self::DuplicateIds(id) => {
+                write!(f, "message {id} appears twice in the fresh inbound turn")
+            }
+            Self::UnknownMessage(id) => write!(f, "message {id} is not in canonical history"),
+            Self::NotUserRole(id) => write!(f, "message {id} is not a user-role message"),
+            Self::NotInboundMessage(id) => {
+                write!(f, "message {id} is not an ordinary inbound message")
+            }
+            Self::MissingTimestamp(id) => write!(f, "message {id} has no persisted timestamp"),
+        }
+    }
+}
+
+impl Error for FreshInboundError {}
+
+impl FreshInboundTurn {
+    /// Creates a fresh inbound turn from its ordered message ids.
+    ///
+    /// The ids are ordered in the intended inbound order; the final id is the
+    /// message to which Agent Status is attached. Duplicate ids are invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FreshInboundError::Empty`] for an empty id list and
+    /// [`FreshInboundError::DuplicateIds`] for a repeated id.
+    pub fn new(message_ids: Vec<MessageId>) -> Result<Self, FreshInboundError> {
+        if message_ids.is_empty() {
+            return Err(FreshInboundError::Empty);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &message_ids {
+            if !seen.insert(id.clone()) {
+                return Err(FreshInboundError::DuplicateIds(id.clone()));
+            }
+        }
+        Ok(Self { message_ids })
+    }
+
+    /// The ordered message ids of the turn.
+    #[must_use]
+    pub fn message_ids(&self) -> &[MessageId] {
+        &self.message_ids
+    }
+
+    /// The final message id: the message to which Agent Status is attached.
+    ///
+    /// # Panics
+    ///
+    /// Panics only when the turn is empty, which is impossible by
+    /// construction ([`FreshInboundTurn::new`] rejects empty turns).
+    #[must_use]
+    pub fn last_message_id(&self) -> &MessageId {
+        self.message_ids
+            .last()
+            .expect("a fresh inbound turn is never empty")
+    }
+
+    /// Validates the turn against one canonical history.
+    ///
+    /// Every referenced message must exist in the history, be
+    /// `MessageBlock::User` with [`InboundKind::Message`], and carry a
+    /// persisted timestamp. A compaction summary (user-role history that the
+    /// model has already observed through the summary projection) can never
+    /// be marked fresh.
+    ///
+    /// # Errors
+    ///
+    /// Returns the specific [`FreshInboundError`] of the first violation.
+    pub fn validate_against(&self, history: &[MessageBlock]) -> Result<(), FreshInboundError> {
+        for id in &self.message_ids {
+            let message = history
+                .iter()
+                .find(|message| message_id_of(message) == *id)
+                .ok_or_else(|| FreshInboundError::UnknownMessage(id.clone()))?;
+            match message {
+                MessageBlock::User(user) => {
+                    if user.kind != InboundKind::Message {
+                        return Err(FreshInboundError::NotInboundMessage(id.clone()));
+                    }
+                    if user.timestamp.is_none() {
+                        return Err(FreshInboundError::MissingTimestamp(id.clone()));
+                    }
+                }
+                _ => return Err(FreshInboundError::NotUserRole(id.clone())),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn message_id_of(message: &MessageBlock) -> MessageId {
+    match message {
+        MessageBlock::System(system) => system.id.clone(),
+        MessageBlock::User(user) => user.id.clone(),
+        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Tool(tool) => tool.id.clone(),
+    }
+}
+
 /// The conversation-owned inbound mailbox.
 ///
 /// The mailbox is bound to exactly one [`ConversationId`], is cheap to
@@ -359,9 +491,14 @@ impl ConversationInboundMailbox {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConversationInboundMailbox, InboundSequence, MailboxError, MailboxProbe};
+    use super::{
+        ConversationInboundMailbox, FreshInboundError, FreshInboundTurn, InboundSequence,
+        MailboxError, MailboxProbe,
+    };
     use crate::message::content::TextBlock;
-    use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
     use crate::runtime::identity::{ConversationId, MessageId};
     use chrono::{DateTime, TimeZone, Utc};
     use std::sync::Arc;
@@ -703,5 +840,77 @@ mod tests {
         assert_eq!(batch.items().len(), 1);
         assert_eq!(batch.items()[0].sequence(), InboundSequence(1));
         assert_eq!(mailbox.drain(), None, "the queue holds no hidden item");
+    }
+
+    /// A fresh inbound turn is non-empty, ordered, and duplicate-free.
+    #[test]
+    fn fresh_inbound_turn_contract() {
+        assert_eq!(FreshInboundTurn::new(vec![]), Err(FreshInboundError::Empty));
+        let duplicate = FreshInboundTurn::new(vec![MessageId::new("m1"), MessageId::new("m1")]);
+        assert_eq!(
+            duplicate,
+            Err(FreshInboundError::DuplicateIds(MessageId::new("m1")))
+        );
+        let turn = FreshInboundTurn::new(vec![MessageId::new("m1"), MessageId::new("m2")])
+            .expect("valid turn");
+        assert_eq!(turn.message_ids().len(), 2);
+        assert_eq!(turn.last_message_id(), &MessageId::new("m2"));
+    }
+
+    /// Freshness is never inferred from role: a compaction summary is
+    /// user-role history and is rejected by validation.
+    #[test]
+    fn fresh_inbound_rejects_compaction_summaries_and_missing_timestamps() {
+        let ordinary = MessageBlock::User(human("u1", "hi"));
+        let summary = MessageBlock::User(UserMessageBlock {
+            kind: InboundKind::CompactionSummary,
+            ..human("u2", "derived history")
+        });
+        let no_time = MessageBlock::User(UserMessageBlock {
+            timestamp: None,
+            ..human("u3", "legacy")
+        });
+        let history = vec![ordinary, summary, no_time];
+        let turn = FreshInboundTurn::new(vec![MessageId::new("u1"), MessageId::new("u2")])
+            .expect("valid ids");
+        assert_eq!(
+            turn.validate_against(&history),
+            Err(FreshInboundError::NotInboundMessage(MessageId::new("u2")))
+        );
+        let turn = FreshInboundTurn::new(vec![MessageId::new("u1"), MessageId::new("u3")])
+            .expect("valid ids");
+        assert_eq!(
+            turn.validate_against(&history),
+            Err(FreshInboundError::MissingTimestamp(MessageId::new("u3")))
+        );
+        let turn = FreshInboundTurn::new(vec![MessageId::new("u1"), MessageId::new("ghost")])
+            .expect("valid ids");
+        assert_eq!(
+            turn.validate_against(&history),
+            Err(FreshInboundError::UnknownMessage(MessageId::new("ghost")))
+        );
+        let tool = MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            id: MessageId::new("tool-1"),
+            tool_call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-alpha"),
+            result: crate::tools::types::ToolExecutionResult {
+                status: crate::tools::types::ToolExecutionStatus::Success,
+                content: Vec::new(),
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        });
+        let turn = FreshInboundTurn::new(vec![MessageId::new("tool-1")]).expect("valid ids");
+        assert_eq!(
+            turn.validate_against(&[tool]),
+            Err(FreshInboundError::NotUserRole(MessageId::new("tool-1")))
+        );
+        let turn = FreshInboundTurn::new(vec![MessageId::new("u1")]).expect("valid ids");
+        assert!(
+            turn.validate_against(&[MessageBlock::User(human("u1", "ok"))])
+                .is_ok()
+        );
     }
 }

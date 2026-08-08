@@ -58,8 +58,10 @@ pub struct ProviderObservedInput {
 /// fallback ([`DefaultTokenEstimator`]).
 pub trait TokenEstimator: Send + Sync {
     /// The deterministic estimated input tokens of one projection, including
-    /// non-compacted contributors such as tool definitions. This is the full
-    /// request estimate: it feeds the soft-limit threshold and the hard fit.
+    /// non-compacted contributors such as tool definitions and the exact
+    /// Agent Status attachment. This is the full request estimate: it feeds
+    /// the soft-limit threshold and the hard fit, so the Agent Status
+    /// snapshot can itself change the compaction decision.
     fn estimate_input(
         &self,
         projection: &ContextProjection,
@@ -68,13 +70,13 @@ pub trait TokenEstimator: Send + Sync {
 
     /// The deterministic estimated input tokens of one projection's
     /// conversation content only, excluding non-conversation contributors
-    /// such as tool definitions.
+    /// such as tool definitions and the Agent Status attachment.
     ///
     /// This is the recent-conversation estimate: it measures how much
     /// literal conversation history a retained suffix contributes. Tool
-    /// definitions affect the full request estimate, the threshold, and the
-    /// hard fit, but they must never count toward satisfying the
-    /// `keep_recent_tokens` retention target.
+    /// definitions and Agent Status affect the full request estimate, the
+    /// threshold, and the hard fit, but they must never count toward
+    /// satisfying the `keep_recent_tokens` retention target.
     fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64;
 }
 
@@ -90,22 +92,25 @@ pub type EstimatorFunction = dyn Fn(&ContextProjection, &[ToolDefinition]) -> u6
 /// ```
 ///
 /// applied over the runtime-owned canonical serialization of the projection
-/// items and the tool definitions, plus the configured per-request
-/// contributors. `ceil(x / 4)` is `(bytes + 3) / 4` over `u64`, so every
-/// byte counted contributes at most 4 bytes to one token. The formula is
-/// intentionally an estimate, never provider usage.
+/// items, the tool definitions, and the exact Agent Status attachment, plus
+/// the configured per-request contributors. `ceil(x / 4)` is `(bytes + 3) /
+/// 4` over `u64`, so every byte counted contributes at most 4 bytes to one
+/// token. The formula is intentionally an estimate, never provider usage.
+/// Agent Status is real model input, so it participates in the full request
+/// estimate; the recent-conversation estimate ([`TokenEstimator::estimate_conversation_input`])
+/// excludes it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultTokenEstimator;
 
 impl DefaultTokenEstimator {
-    /// The deterministic serialized bytes of the projection items and tool
-    /// definitions.
+    /// The deterministic serialized bytes of the projection items, the tool
+    /// definitions, and the exact Agent Status attachment.
     ///
     /// # Panics
     ///
-    /// Panics only if the canonical projection or tool definitions fail to
-    /// serialize, which is unreachable for the canonical runtime-owned
-    /// types.
+    /// Panics only if the canonical projection, tool definitions, or status
+    /// attachment fail to serialize, which is unreachable for the canonical
+    /// runtime-owned types.
     #[must_use]
     pub fn serialized_bytes(
         projection: &ContextProjection,
@@ -117,11 +122,16 @@ impl DefaultTokenEstimator {
         let tools = serde_json::to_vec(tool_definitions)
             .expect("canonical tool definitions serialize")
             .len();
-        (items + tools) as u64
+        let status = projection.agent_status.as_ref().map_or(0, |status| {
+            serde_json::to_vec(status)
+                .expect("canonical agent status attachment serializes")
+                .len()
+        });
+        (items + tools + status) as u64
     }
 
     /// The deterministic serialized bytes of the projection items only,
-    /// excluding tool definitions.
+    /// excluding tool definitions and the Agent Status attachment.
     ///
     /// # Panics
     ///
@@ -211,8 +221,10 @@ mod tests {
     /// counts tool definitions as part of the input.
     #[test]
     fn default_estimator_is_deterministic_and_includes_tools() {
+        use crate::context::status::AgentStatusAttachment;
         let projection = crate::context::projection::ContextProjection {
             items: Vec::new(),
+            agent_status: None,
             estimated_input: crate::context::tokens::TokenMeasurement {
                 input_tokens: 0,
                 source: crate::context::tokens::TokenMeasurementSource::Estimated,
@@ -237,6 +249,28 @@ mod tests {
         assert!(
             with_tools > without_tools,
             "tool definitions must contribute to the planned request estimate"
+        );
+        // The exact Agent Status attachment is actual model input: it
+        // contributes to the full request estimate but never to the
+        // recent-conversation estimate.
+        let with_status = crate::context::projection::ContextProjection {
+            agent_status: Some(AgentStatusAttachment {
+                target_message_id: crate::runtime::identity::MessageId::new("msg-inbound-1"),
+                rendered:
+                    "<system-reminder>\nCurrent time: 2026-08-08T16:31:00+08:00\n</system-reminder>"
+                        .to_owned(),
+            }),
+            ..projection.clone()
+        };
+        assert!(
+            estimator.estimate_input(&with_status, &[])
+                > estimator.estimate_input(&projection, &[]),
+            "the Agent Status attachment must contribute to the full request estimate"
+        );
+        assert_eq!(
+            estimator.estimate_conversation_input(&with_status),
+            estimator.estimate_conversation_input(&projection),
+            "the Agent Status attachment must never satisfy keep_recent_tokens"
         );
     }
 }
