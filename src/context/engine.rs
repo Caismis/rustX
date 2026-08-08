@@ -122,8 +122,15 @@ pub struct CompactionPlan {
     /// The retired prefix of a split turn, when this compaction splits one.
     pub split_turn_prefix: Option<SplitTurnSummaryInput>,
     /// The measured input of the pre-compaction projection, with its
+    /// provenance. Preserved for diagnostics and checkpoint metadata; the
+    /// anti-loop progress rule never compares measurements of different
     /// provenance.
     pub estimated_before: TokenMeasurement,
+    /// The deterministic estimated input of the pre-compaction projection,
+    /// computed with the same estimator on both sides of the progress rule.
+    /// The anti-loop invariant compares this to the deterministic estimate
+    /// of the post-compaction projection.
+    pub estimated_before_tokens: u64,
     /// The planned post-compaction estimate: pinned context plus the
     /// retained suffix plus the summary reservation.
     pub planned_estimate_after: u64,
@@ -235,9 +242,13 @@ impl ContextEngine {
     /// Builds the current projection of one canonical history.
     ///
     /// The projection is deterministic: pinned system prefix, then the
-    /// checkpoint summary (when a checkpoint exists), then the retained
-    /// literal suffix. The estimated input is `ProviderReported` only when
-    /// an observed provider measurement applies to exactly this projection
+    /// checkpoint summary (when a checkpoint exists and is not absorbed by
+    /// the pinned prefix), then the retained literal suffix. A checkpoint
+    /// whose coverage lies fully inside the current pinned system prefix is
+    /// *absorbed*: its covered history is literal again, so its summary must
+    /// not be injected (that would duplicate covered history next to its
+    /// summary). The estimated input is `ProviderReported` only when an
+    /// observed provider measurement applies to exactly this projection
     /// (identical fingerprint); otherwise it is a deterministic estimate.
     /// Estimates never become provider usage.
     ///
@@ -258,7 +269,9 @@ impl ContextEngine {
             .cloned()
             .map(ProjectionItem::Message)
             .collect();
-        if let Some(checkpoint) = checkpoint {
+        let active_checkpoint =
+            checkpoint.filter(|checkpoint| !Self::checkpoint_is_absorbed(&index, checkpoint));
+        if let Some(checkpoint) = active_checkpoint {
             items.push(ProjectionItem::Message(MessageBlock::User(
                 checkpoint.summary.clone(),
             )));
@@ -277,7 +290,7 @@ impl ContextEngine {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
             },
-            checkpoint_generation: checkpoint.map(|checkpoint| checkpoint.generation),
+            checkpoint_generation: active_checkpoint.map(|checkpoint| checkpoint.generation),
         };
         projection.estimated_input = match observed {
             Some(observed) if observed.fingerprint == projection.fingerprint() => {
@@ -294,29 +307,57 @@ impl ContextEngine {
         Ok(projection)
     }
 
+    /// Whether a checkpoint's coverage is fully absorbed by the pinned
+    /// system prefix.
+    ///
+    /// When the current pinned prefix covers the checkpoint boundary (the
+    /// boundary message lies inside the pinned region), the checkpoint's
+    /// covered history is rendered literally again and the checkpoint must
+    /// not contribute its summary to the projection. The checkpoint itself
+    /// is untouched; a later compaction establishes a fresh checkpoint.
+    fn checkpoint_is_absorbed(index: &StructuralIndex, checkpoint: &ContextCheckpoint) -> bool {
+        match &checkpoint.boundary {
+            ContextBoundary::AfterMessage { message_id } => index
+                .position_of(message_id)
+                .is_some_and(|position| position < index.pinned_end),
+            ContextBoundary::InsideAgent { message_id, .. } => index
+                .position_of(message_id)
+                .is_some_and(|position| position < index.pinned_end),
+        }
+    }
+
     /// Plans one compaction of the current state.
     ///
-    /// The algorithm is deterministic:
+    /// The algorithm is deterministic and freezes this priority:
     ///
-    /// 1. Build the structural index and the uncompressed suffix.
-    /// 2. Walk the valid whole-turn boundaries backward using token
-    ///    estimates and choose the latest boundary that retains at least
-    ///    `keep_recent_tokens`, subject to the hard fit.
-    /// 3. If the retained region cannot fit and one turn dominates the
-    ///    budget, split that turn; otherwise retain as much as fits.
-    /// 4. If no structurally safe split exists, choose a safe whole-turn cut
-    ///    even if it violates the soft recent-token preference.
+    /// 1. a whole-turn boundary that satisfies the recent-token target and
+    ///    the hard fit;
+    /// 2. if no such boundary exists, a hard-fitting whole-turn boundary
+    ///    that retains as much useful recent complete-turn context as
+    ///    possible (the most-retaining whole cut under the hard fit);
+    /// 3. split a turn only when a single oversized turn prevents a viable
+    ///    complete-turn projection (no whole cut retains any recent context
+    ///    within the hard fit).
+    ///
+    /// The recent-token target is measured over conversation content only:
+    /// tool definitions never count toward satisfying `keep_recent_tokens`,
+    /// though they still affect the full request estimate, the threshold,
+    /// and the hard fit.
     ///
     /// `must_cover_through` enforces the continuation constraint: the new
     /// boundary must retire the continuation-owning turn completely and may
-    /// never split it.
+    /// never split it. When the continuation-owning turn has become part of
+    /// the pinned system prefix, no compaction can retire it, and the plan
+    /// fails explicitly instead of clearing the continuation while leaving
+    /// its boundary literal.
     ///
     /// # Errors
     ///
     /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
     /// invalid history, [`ContextErrorKind::NoProgress`] when nothing new
-    /// can be retired, and [`ContextErrorKind::CannotFit`] when even full
-    /// compaction cannot fit pinned context and the summary reservation.
+    /// can be retired or the continuation constraint is unsatisfiable, and
+    /// [`ContextErrorKind::CannotFit`] when even full compaction cannot fit
+    /// pinned context and the summary reservation.
     pub fn plan_compaction(
         &self,
         history: &[MessageBlock],
@@ -350,8 +391,11 @@ impl ContextEngine {
             if !index.whole_cut_is_valid(cut) || cut < min_cut {
                 continue;
             }
-            let retained =
-                estimate_input_of(&scope, &projection_of(&retained_items_of(&scope, count)));
+            // The recent-suffix estimate measures conversation content only:
+            // tool definitions never satisfy the retention target.
+            let retained = scope
+                .estimator
+                .estimate_conversation_input(&projection_of(&retained_items_of(&scope, count)));
             let planned =
                 estimate_input_of(&scope, &projection_of(&projection_items_for(&scope, count)))
                     .saturating_add(reservation);
@@ -366,31 +410,26 @@ impl ContextEngine {
             .copied();
 
         let chosen = match target_cut {
+            // Priority 1: the target-satisfying boundary that retires the
+            // most, when it fits.
             Some((count, _, planned)) if planned <= soft_limit => Chosen::Whole { count },
-            Some(_) => {
-                // The target whole cut cannot fit: one turn dominates the
-                // budget. Prefer a split that preserves the turn's tail.
-                match best_split(&scope, min_cut) {
-                    Some((agent_position, first)) => Chosen::Split {
-                        agent_position,
-                        first_retained_block: first,
-                    },
-                    None => smallest_fitting_whole(&whole_candidates, soft_limit)
-                        .ok_or_else(|| cannot_fit(&self.config))?,
-                }
-            }
-            None => {
-                // No whole boundary retains at least the target (the whole
-                // suffix is below the target): retain the most that fits.
-                let smallest = whole_candidates
+            _ => {
+                // Priority 2: a hard-fitting whole-turn boundary retaining
+                // as much useful recent complete-turn context as possible —
+                // the most-retaining whole cut under the hard fit. This must
+                // win over splitting whenever it retains any recent context.
+                let best_fitting = whole_candidates
                     .iter()
+                    .filter(|(_, _, planned)| *planned <= soft_limit)
                     .min_by_key(|(count, _, _)| *count)
                     .copied();
-                match smallest {
-                    Some((count, _, planned)) if planned <= soft_limit => Chosen::Whole { count },
+                match best_fitting {
+                    Some((count, _, _)) if count < scope.suffix.len() => Chosen::Whole { count },
                     _ => {
-                        // Even the whole suffix cannot fit: the latest turn
-                        // dominates the budget, so try splitting it.
+                        // Priority 3: no whole cut retains useful recent
+                        // context within the hard fit — a single oversized
+                        // turn prevents a viable complete-turn projection —
+                        // so split the latest turn.
                         match best_split(&scope, min_cut) {
                             Some((agent_position, first)) => Chosen::Split {
                                 agent_position,
@@ -426,14 +465,24 @@ impl ContextEngine {
     ///
     /// The mandatory progress rule is enforced here: the new checkpoint must
     /// retire at least one additional compactable canonical unit, and the
-    /// projected estimate must strictly decrease. If either condition fails
-    /// the operation errors with [`ContextErrorKind::NoProgress`] and no
-    /// checkpoint is produced, so no retry may follow.
+    /// deterministic projected estimate must strictly decrease below the
+    /// deterministic pre-compaction estimate. Both sides of the comparison
+    /// come from the same estimator over the actual projection content, so
+    /// the decision never depends on incomparable token provenance; the
+    /// provider-reported measurement is preserved only as checkpoint
+    /// metadata. If either condition fails the operation errors with
+    /// [`ContextErrorKind::NoProgress`] and no checkpoint is produced, so no
+    /// retry may follow.
+    ///
+    /// A summary with no textual content (empty or whitespace-only) is
+    /// rejected at this application boundary so no summarizer — including a
+    /// custom or scripted one — can erase history through an empty summary.
     ///
     /// # Errors
     ///
     /// Returns [`ContextErrorKind::NoProgress`] when the plan or the summary
-    /// makes no measurable progress, and
+    /// makes no measurable progress, [`ContextErrorKind::SummaryFailed`] for
+    /// an empty/whitespace-only summary, and
     /// [`ContextErrorKind::MalformedHistory`] for invalid history.
     pub fn apply_compaction(
         &self,
@@ -447,6 +496,12 @@ impl ContextEngine {
         if !self.summary_request(previous, plan).advances_coverage() {
             return Err(no_progress(
                 "the plan retires no additional compactable unit",
+            ));
+        }
+        if summary_text.trim().is_empty() {
+            return Err(ContextError::new(
+                ContextErrorKind::SummaryFailed,
+                "summary generation produced no content",
             ));
         }
         let generation = previous.map_or(1, |checkpoint| checkpoint.generation + 1);
@@ -468,10 +523,10 @@ impl ContextEngine {
         let projection =
             self.build_projection(history, Some(&checkpoint), tool_definitions, None)?;
         let estimated_after = projection.estimated_input.input_tokens;
-        if estimated_after >= plan.estimated_before.input_tokens {
+        if estimated_after >= plan.estimated_before_tokens {
             return Err(no_progress(&format!(
-                "projected estimate {} does not strictly decrease from {}",
-                estimated_after, plan.estimated_before.input_tokens
+                "projected estimate {} does not strictly decrease from the deterministic estimate {}",
+                estimated_after, plan.estimated_before_tokens
             )));
         }
         checkpoint.estimated_tokens_after = estimated_after;
@@ -549,7 +604,11 @@ impl ContextEngine {
         checkpoint: Option<&ContextCheckpoint>,
         index: &StructuralIndex,
     ) -> Result<Vec<SuffixItem>, ContextError> {
-        let Some(checkpoint) = checkpoint else {
+        // An absorbed checkpoint contributes nothing to the compactable
+        // suffix: its covered history is pinned-literal again.
+        let Some(checkpoint) =
+            checkpoint.filter(|checkpoint| !Self::checkpoint_is_absorbed(index, checkpoint))
+        else {
             return Ok((index.pinned_end..history.len())
                 .map(SuffixItem::Whole)
                 .collect());
@@ -648,6 +707,15 @@ impl ContextEngine {
             newly_retired: shape.newly_retired,
             split_turn_prefix,
             estimated_before: current_projection.estimated_input,
+            // The deterministic estimate of the pre-compaction projection,
+            // provenance-free: the anti-loop progress rule compares this to
+            // the deterministic estimate of the post-compaction projection
+            // and never mixes a provider-reported measurement with an
+            // estimate.
+            estimated_before_tokens: estimate_input_of(
+                scope,
+                &projection_of(&current_projection.items),
+            ),
             planned_estimate_after,
             summary_reservation: scope.reservation,
         })
@@ -766,6 +834,12 @@ fn split_projection_items(
 
 /// The history cut the continuation constraint requires, or 0 when no
 /// constraint applies.
+///
+/// A continuation can be retired only by actually covering its owning turn.
+/// When a new `SystemMessage` has pinned the continuation-owning message
+/// into the literal prefix, no compaction can retire it; the constraint is
+/// unsatisfiable and the plan fails explicitly rather than clearing the
+/// continuation while leaving its boundary literal.
 fn continuation_min_cut(
     index: &StructuralIndex,
     must_cover_through: Option<&MessageId>,
@@ -782,6 +856,12 @@ fn continuation_min_cut(
         return Err(malformed(&format!(
             "continuation-owning message {owner} is not an agent message"
         )));
+    }
+    if owner_position < index.pinned_end {
+        return Err(no_progress(
+            "the continuation-owning turn is pinned by system context and \
+             cannot be retired by compaction",
+        ));
     }
     Ok(index.turn_end_of(owner_position) + 1)
 }

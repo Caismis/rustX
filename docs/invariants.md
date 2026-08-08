@@ -164,22 +164,44 @@ System messages are pinned: everything through the last
 `SystemMessageBlock` stays literal and is outside summary coverage. A
 compaction summary is a `UserMessageBlock` with runtime provenance and
 `InboundKind::CompactionSummary`; it is never a fifth role and never
-replaces system authority.
+replaces system authority. A checkpoint whose coverage is fully absorbed by
+a later pinned system prefix must not contribute its summary to the
+projection: the covered history is literal again, and the next valid
+compaction establishes a fresh checkpoint without mutating canonical
+history.
 
 A successful compaction must make measurable progress: the new checkpoint
-covers at least one additional compactable unit and the projected estimate
-strictly decreases. Without progress, no checkpoint is saved and no model
+covers at least one additional compactable unit and the deterministic
+estimate of the post-compaction projection strictly decreases below the
+deterministic estimate of the pre-compaction projection. Both sides of the
+progress comparison come from the same estimator; a provider-reported
+measurement is preserved only as checkpoint metadata and is never compared
+against an estimate. Without progress, no checkpoint is saved and no model
 retry follows.
+
+A compaction summary must contain content: an empty or whitespace-only
+summary is rejected at the engine application boundary, so no custom or
+fake summarizer can erase history; no checkpoint and no overflow retry
+follow an invalid summary.
 
 Repeated compaction updates a durable context checkpoint (via the
 `ContextCheckpointStore` abstraction) and retains a recent uncompressed
 suffix; later compactions feed the previous summary plus only the newly
-retired material.
+retired material. The recent-token retention target measures conversation
+content only: tool definitions affect the full request estimate, the
+threshold, and the hard fit, but never satisfy `keep_recent_tokens`.
+Whole-turn boundaries are preferred over split-turn compaction; a turn is
+split only when a single oversized turn prevents a viable complete-turn
+projection.
 
 A successful compaction invalidates the pending provider continuation; the
-continuation-owning turn is retired completely. `ContextWindowExceeded` is
-recovered through exactly one bounded compact-and-retry; a recoverable
-overflow never settles the attempt.
+continuation-owning turn is retired completely. If the continuation-owning
+turn has become part of the pinned system prefix, no compaction can retire
+it and the plan fails explicitly rather than clearing the continuation
+while leaving its boundary literal. `ContextWindowExceeded` is recovered
+through exactly one bounded compact-and-retry per model turn — the budget
+never persists across turns; a recoverable overflow never settles the
+attempt.
 
 ## Durability
 

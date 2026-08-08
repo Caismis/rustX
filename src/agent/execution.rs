@@ -137,7 +137,6 @@ pub struct AgentExecution<'a> {
     context_runtime: Option<ContextRuntime<'a>>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
-    overflow_retries: u32,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -151,6 +150,19 @@ enum StreamTerminal {
     Failed {
         error: ModelError,
     },
+}
+
+/// One completed model invocation: the provisional message identity, the
+/// assembler holding the provisional stream content, and the stream
+/// terminal.
+///
+/// The three pieces travel together: an overflow retry replaces the whole
+/// invocation, so provisional output and tool calls of the failed request
+/// are never committed under the retry's message identity.
+struct ModelInvocation {
+    message_id: MessageId,
+    assembler: ModelEventAssembler,
+    terminal: StreamTerminal,
 }
 
 /// The terminal outcome of the whole attempt.
@@ -187,7 +199,6 @@ impl<'a> AgentExecution<'a> {
             context_runtime: None,
             observed: None,
             last_request_fingerprint: None,
-            overflow_retries: 0,
             turn: 0,
             terminal_emitted: false,
         }
@@ -271,7 +282,7 @@ impl<'a> AgentExecution<'a> {
     /// results. Returns the terminal outcome when the attempt settled.
     async fn run_turn(&mut self) -> Option<Terminal> {
         self.turn += 1;
-        let mut agent_message_id =
+        let agent_message_id =
             MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
         self.emit(RuntimeEvent::TurnStarted);
 
@@ -282,15 +293,8 @@ impl<'a> AgentExecution<'a> {
         self.emit(RuntimeEvent::ModelRequestStarted {
             model: request.model.clone(),
         });
-        let mut stream = self
-            .adapter
-            .stream(request, self.cancellation.model_cancellation());
-        let mut assembler = ModelEventAssembler::new();
-        let mut stream_terminal = match self
-            .consume_model_stream(&mut assembler, &agent_message_id, &mut stream)
-            .await
-        {
-            Ok(stream_terminal) => stream_terminal,
+        let mut invocation = match self.consume_invocation(request, &agent_message_id).await {
+            Ok(invocation) => invocation,
             Err(terminal) => return Some(terminal),
         };
 
@@ -298,22 +302,37 @@ impl<'a> AgentExecution<'a> {
         // not settle the attempt. The execution state remains an active
         // model-running state; no state-machine settlement and no attempt
         // terminal event are produced between the overflow and the retry.
-        if let StreamTerminal::Failed { error } = &stream_terminal
+        //
+        // The retry budget is per model turn: `overflow_retries` is
+        // turn-local, so every turn is entitled to its own
+        // `MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN` retries and the
+        // budget never persists across turns. The retry path is single-shot:
+        // a retry that overflows again settles the attempt, so there is no
+        // second retry inside any individual turn.
+        let overflow_retries: u32 = 0;
+        if let StreamTerminal::Failed { error } = &invocation.terminal
             && error.kind == ModelErrorKind::ContextWindowExceeded
             && self.context_runtime.is_some()
-            && self.overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN
+            && overflow_retries < MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN
         {
+            let retry_number = overflow_retries + 1;
             let overflow_error = error.clone();
-            match self.retry_after_overflow(&overflow_error).await {
-                Ok((retry_message_id, retry_terminal)) => {
-                    agent_message_id = retry_message_id;
-                    stream_terminal = retry_terminal;
+            match self
+                .retry_after_overflow(&overflow_error, retry_number)
+                .await
+            {
+                Ok(retry_invocation) => {
+                    // The successful retry replaces the complete invocation:
+                    // the provisional identity, the assembler (and therefore
+                    // the provisional content and tool calls of the failed
+                    // request), and the terminal.
+                    invocation = retry_invocation;
                 }
                 Err(terminal) => return Some(terminal),
             }
         }
 
-        match stream_terminal {
+        match invocation.terminal {
             StreamTerminal::Failed { error } => Some(Terminal::Failed {
                 failure: AttemptFailure::Model { error },
             }),
@@ -321,8 +340,13 @@ impl<'a> AgentExecution<'a> {
                 finish_reason,
                 usage,
             } => {
-                self.complete_turn(&agent_message_id, finish_reason, usage, assembler)
-                    .await
+                self.complete_turn(
+                    invocation.message_id,
+                    finish_reason,
+                    usage,
+                    invocation.assembler,
+                )
+                .await
             }
         }
     }
@@ -333,7 +357,7 @@ impl<'a> AgentExecution<'a> {
     /// settled.
     async fn complete_turn(
         &mut self,
-        agent_message_id: &MessageId,
+        agent_message_id: MessageId,
         finish_reason: ModelFinishReason,
         usage: Option<ModelUsage>,
         assembler: ModelEventAssembler,
@@ -376,7 +400,7 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        self.commit_agent_message(agent_message_id, &turn_assembly.content);
+        self.commit_agent_message(&agent_message_id, &turn_assembly.content);
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
             return Some(Terminal::Completed { finish_reason });
@@ -619,20 +643,53 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
+    /// Consumes one model invocation: sends the request, assembles the
+    /// provisional stream content under the given provisional identity, and
+    /// returns the complete invocation (identity + assembler + terminal).
+    async fn consume_invocation(
+        &mut self,
+        request: ModelRequest,
+        provisional_message_id: &MessageId,
+    ) -> Result<ModelInvocation, Terminal> {
+        let mut stream = self
+            .adapter
+            .stream(request, self.cancellation.model_cancellation());
+        let mut assembler = ModelEventAssembler::new();
+        let terminal = match self
+            .consume_model_stream(&mut assembler, provisional_message_id, &mut stream)
+            .await
+        {
+            Ok(stream_terminal) => stream_terminal,
+            Err(terminal) => return Err(terminal),
+        };
+        Ok(ModelInvocation {
+            message_id: provisional_message_id.clone(),
+            assembler,
+            terminal,
+        })
+    }
+
     /// The bounded M4 compact-and-retry path after a context overflow.
     ///
     /// The compaction must retire the continuation-owning turn completely
     /// (the constraint is passed to the context engine), the pending
     /// continuation is then invalidated, and the retry request uses the
     /// smaller projection with its own deterministic retry-specific
-    /// provisional/committed message identity `{attempt}-agent-{turn}-retry-1`.
+    /// provisional/committed message identity
+    /// `{attempt}-agent-{turn}-retry-{retry_number}`.
+    ///
+    /// The retry returns the complete retry invocation — provisional
+    /// identity, assembler, and terminal together — so a successful retry
+    /// replaces the failed invocation wholesale and the failed request's
+    /// provisional content and tool calls are never committed or executed.
     ///
     /// If the retry also overflows, no second compaction occurs: the attempt
     /// settles with the second overflow error as its final model failure.
     async fn retry_after_overflow(
         &mut self,
         overflow_error: &ModelError,
-    ) -> Result<(MessageId, StreamTerminal), Terminal> {
+        retry_number: u32,
+    ) -> Result<ModelInvocation, Terminal> {
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -659,15 +716,14 @@ impl<'a> AgentExecution<'a> {
         self.pending_continuation = None;
         self.continuation_owner = None;
         self.observed = None;
-        self.overflow_retries += 1;
-        let retry_message_id = MessageId::new(format!(
-            "{}-agent-{}-retry-{}",
-            self.request.attempt_id, self.turn, self.overflow_retries
-        ));
         self.emit(RuntimeEvent::ModelRetryScheduled {
-            attempt_number: self.overflow_retries,
+            attempt_number: retry_number,
             retry_delay_ms: None,
         });
+        let retry_message_id = MessageId::new(format!(
+            "{}-agent-{}-retry-{}",
+            self.request.attempt_id, self.turn, retry_number
+        ));
         let request = match self.context_model_request() {
             Ok(request) => request,
             Err(terminal) => return Err(terminal),
@@ -675,18 +731,7 @@ impl<'a> AgentExecution<'a> {
         self.emit(RuntimeEvent::ModelRequestStarted {
             model: request.model.clone(),
         });
-        let mut stream = self
-            .adapter
-            .stream(request, self.cancellation.model_cancellation());
-        let mut assembler = ModelEventAssembler::new();
-        let stream_terminal = match self
-            .consume_model_stream(&mut assembler, &retry_message_id, &mut stream)
-            .await
-        {
-            Ok(stream_terminal) => stream_terminal,
-            Err(terminal) => return Err(terminal),
-        };
-        Ok((retry_message_id, stream_terminal))
+        self.consume_invocation(request, &retry_message_id).await
     }
 
     /// Consumes one model stream: emits runtime events for non-terminal

@@ -112,8 +112,9 @@ pub struct SummaryModelConfig {
 /// The summary request is a canonical one-off `ModelRequest`: no tools, no
 /// continuation, the execution's model/protocol/reasoning and runtime
 /// output budget, and a deterministic instruction plus the serialized
-/// request input. A refusal, a tool request, an invalid stream, or a model
-/// failure is a compaction failure, and any provider continuation emitted by
+/// request input. A refusal (with or without a `RefusalDelta`), a tool
+/// request, an invalid stream, a model failure, or an empty/whitespace-only
+/// output is a compaction failure, and any provider continuation emitted by
 /// the one-off request is discarded: summary activity never contaminates the
 /// attempt's continuation or usage state.
 pub struct ModelBackedSummarizer<'a> {
@@ -179,6 +180,7 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
             let mut stream = self.adapter.stream(model_request, cancellation);
             let mut text = String::new();
             let mut terminal = false;
+            let mut finish_reason = None;
             while let Some(event) = stream.next().await {
                 match event {
                     ModelEvent::Started
@@ -194,7 +196,11 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                     | ModelEvent::ToolCallCompleted { .. } => {
                         return Err(summary_failed("summary generation must not request tools"));
                     }
-                    ModelEvent::Completed { .. } => {
+                    ModelEvent::Completed {
+                        finish_reason: reason,
+                        ..
+                    } => {
+                        finish_reason = Some(reason);
                         terminal = true;
                         break;
                     }
@@ -219,6 +225,23 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                 return Err(summary_failed(
                     "summary stream ended without a terminal event",
                 ));
+            }
+            // The terminal finish reason is authoritative: a refusal with no
+            // `RefusalDelta` and a tool-call completion with no delta are
+            // still compaction failures, never summaries.
+            match finish_reason {
+                Some(crate::model::finish::ModelFinishReason::Refusal) => {
+                    return Err(summary_failed("summary generation refused"));
+                }
+                Some(crate::model::finish::ModelFinishReason::ToolCalls) => {
+                    return Err(summary_failed("summary generation must not request tools"));
+                }
+                _ => {}
+            }
+            // An empty or whitespace-only output erases history; it is never
+            // a valid summary.
+            if text.trim().is_empty() {
+                return Err(summary_failed("summary generation produced no content"));
             }
             Ok(text)
         })

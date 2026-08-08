@@ -59,7 +59,12 @@ only; it is never authoritative ledger content. The normal whole-message
 path stays zero-surprise.
 
 Item order is deterministic: pinned system prefix, checkpoint summary (when
-a checkpoint exists), then the retained literal suffix.
+a checkpoint exists and is not absorbed by the pinned prefix), then the
+retained literal suffix. A checkpoint whose coverage lies fully inside the
+current pinned system prefix is *absorbed*: its covered history is literal
+again, so its summary is not injected (that would duplicate covered history
+next to its summary), and a later compaction establishes a fresh
+checkpoint without mutating canonical history.
 
 ## 4. System pinning
 
@@ -154,16 +159,24 @@ deterministic (tested).
 ## 8. Recent-token retention
 
 `keep_recent_tokens` is a token target, never a message count target. The
-selection algorithm:
+target is measured over conversation content only: tool definitions affect
+the full request estimate, the soft-limit threshold, and the hard fit, but
+they never count toward satisfying `keep_recent_tokens`.
 
-1. Walk backward over the current uncompressed suffix using token
-   estimates.
-2. Among structurally valid whole-turn boundaries, choose the latest
-   boundary that retains at least the target (`keep_recent_tokens`).
-3. If that boundary cannot fit under the soft limit, prefer a split of the
-   latest turn that preserves its tail; otherwise retain as much as fits.
-4. Structural correctness wins over the exact target; a token target may
-   retain fewer messages than a count target would.
+The frozen selection priority:
+
+1. a whole-turn boundary that satisfies the recent-token target and the
+   hard fit;
+2. if none exists, a hard-fitting whole-turn boundary that retains as much
+   useful recent complete-turn context as possible (the most-retaining
+   whole cut under the hard fit);
+3. split a turn only when a single oversized turn prevents a viable
+   complete-turn projection (no whole cut retains any recent context within
+   the hard fit).
+
+The latest turn is never split merely because the configured target cannot
+be fully achieved. Structural correctness wins over the exact target; a
+token target may retain fewer messages than a count target would.
 
 Planning reserves room for the compaction summary using the summarizer's
 configured maximum output budget (`max_output_tokens`) as a conservative
@@ -288,12 +301,18 @@ successful compaction must satisfy both:
 
 1. **coverage advances** — the new checkpoint retires at least one
    additional compactable canonical unit;
-2. **projected estimate strictly decreases** — `estimated_after <
-   estimated_before`.
+2. **projected estimate strictly decreases** — the deterministic estimate
+   of the post-compaction projection is strictly below the deterministic
+   estimate of the pre-compaction projection
+   (`estimated_after < estimated_before_tokens`).
 
-If either fails: no checkpoint is saved, `CompactionFailed` is emitted, and
-no model retry follows that compaction. This is the central anti-loop
-invariant. After the real summary is produced the full projected estimate
+Both sides of the comparison come from the same estimator over the actual
+projection content, so the decision never depends on incomparable token
+provenance: a `ProviderReported` measurement is preserved separately as
+checkpoint/plan metadata and never compared against an `Estimated`
+after-count. If either condition fails: no checkpoint is saved,
+`CompactionFailed` is emitted, and no model retry follows that compaction.
+This is the central anti-loop invariant. After the real summary is produced the full projected estimate
 is recomputed; if it still exceeds the soft limit, compaction fails
 explicitly.
 
@@ -310,6 +329,12 @@ explicitly.
 
 This prevents pairing a new summary/projection with an old opaque provider
 continuation and avoids depending on adapter-specific replay behavior.
+
+If a new `SystemMessage` pins the continuation-owning turn into the literal
+prefix, no compaction can retire the owner: the constraint is
+unsatisfiable, and `plan_compaction` fails explicitly (no checkpoint, no
+cleared continuation) instead of clearing the continuation while leaving
+its boundary literal.
 
 ## 15. Context overflow compact-and-retry
 
@@ -340,9 +365,11 @@ pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
 ```
 
 No exponential backoff, rate-limit retry, timeout retry, transport retry,
-or provider fallback exists. If the retry also overflows, the attempt
-settles with the second overflow error as its final model failure; no
-second compaction occurs. If the first overflow is followed by a
+or provider fallback exists. The retry budget is genuinely per model turn: every turn is entitled to
+its own single `ContextWindowExceeded` retry, and the budget never persists
+across turns. If the retry also overflows, the attempt settles with the
+second overflow error as its final model failure; no second compaction and
+no second retry occur inside any individual turn. If the first overflow is followed by a
 failed/no-progress compaction, the attempt fails with the original
 normalized overflow as the final model failure while
 `CompactionFailed.error` carries the compaction diagnostic. A proactive

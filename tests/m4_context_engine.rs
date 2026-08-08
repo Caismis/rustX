@@ -466,6 +466,52 @@ fn tool_definitions_contribute_to_the_request_estimate() {
     assert_eq!(without_tools.estimated_input.input_tokens, 10);
 }
 
+/// Tool definitions never satisfy the recent-conversation retention target:
+/// the retention decision is a pure function of conversation content, while
+/// the full request estimate still includes the tool overhead.
+#[test]
+fn tool_definitions_never_satisfy_the_recent_retention_target() {
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        agent("a2", vec![text_block("y")]),
+    ];
+    let tools = vec![common::tool("alpha", "tool-alpha")];
+    // Target 20: with conversation weights of 10/10, retiring u1 and a1
+    // retains exactly u2+a2 = 20. If the huge tool weight counted toward the
+    // target, the engine would retire everything instead.
+    let cheap = engine(10_000_000, 0, 20, weighted(10, 10, 0));
+    let expensive = engine(10_000_000, 0, 20, weighted(10, 10, 1_000_000));
+    let projection_cheap = cheap
+        .build_projection(&history, None, &tools, None)
+        .expect("projection");
+    let projection_expensive = expensive
+        .build_projection(&history, None, &tools, None)
+        .expect("projection");
+    let plan_cheap = cheap
+        .plan_compaction(&history, None, &projection_cheap, &tools, 0, None)
+        .expect("plan");
+    let plan_expensive = expensive
+        .plan_compaction(&history, None, &projection_expensive, &tools, 0, None)
+        .expect("plan");
+    // Identical retention decision: the tool weight changes the full request
+    // estimate but never the recent-conversation target.
+    assert_eq!(
+        plan_cheap.boundary,
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        }
+    );
+    assert_eq!(plan_cheap.boundary, plan_expensive.boundary);
+    assert!(plan_expensive.split_turn_prefix.is_none());
+    // The full request estimate still reflects the tool overhead.
+    assert!(
+        plan_expensive.planned_estimate_after > plan_cheap.planned_estimate_after,
+        "tool definitions still affect the full request estimate"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Token accounting
 // ---------------------------------------------------------------------------
@@ -970,6 +1016,153 @@ fn system_messages_are_pinned_and_never_summarized() {
     ));
 }
 
+/// A checkpoint whose `AfterMessage` boundary is absorbed by a later pinned
+/// system prefix must not contribute its summary: the covered history is
+/// literal again, and injecting the summary would duplicate it.
+#[test]
+fn absorbed_after_message_checkpoint_does_not_inject_its_summary() {
+    let engine = engine(1_000, 0, 5, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        system("sys-2", "trusted"),
+        user("u3", ""),
+    ];
+    let previous = checkpoint(
+        1,
+        "sum(U1/A1)",
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        },
+        TokenMeasurement {
+            input_tokens: 30,
+            source: TokenMeasurementSource::Estimated,
+        },
+    );
+    let projection = engine
+        .build_projection(&history, Some(&previous), &[], None)
+        .expect("projection");
+    let ids: Vec<String> = projection
+        .items
+        .iter()
+        .map(|item| match item {
+            ProjectionItem::Message(message) => message_id_of(message),
+            ProjectionItem::AgentSlice { .. } => "slice".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["u1", "a1", "u2", "sys-2", "u3"],
+        "the projection is fully literal: no summary, no duplication"
+    );
+    assert_eq!(
+        projection.checkpoint_generation, None,
+        "an absorbed checkpoint contributes no generation"
+    );
+}
+
+/// The same absorption policy applies to an `InsideAgent` checkpoint whose
+/// split message is pinned: no summary, no projection-only slice.
+#[test]
+fn absorbed_inside_agent_checkpoint_does_not_inject_its_summary() {
+    let engine = engine(1_000, 0, 5, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("intro"), call_block("c1")]),
+        tool_message("t1", "c1"),
+        system("sys-2", "trusted"),
+        user("u2", ""),
+    ];
+    let previous = checkpoint(
+        1,
+        "sum",
+        ContextBoundary::InsideAgent {
+            message_id: MessageId::new("a1"),
+            first_retained_block: ContentBlockIndex::new(1),
+        },
+        TokenMeasurement {
+            input_tokens: 40,
+            source: TokenMeasurementSource::Estimated,
+        },
+    );
+    let projection = engine
+        .build_projection(&history, Some(&previous), &[], None)
+        .expect("projection");
+    let ids: Vec<String> = projection
+        .items
+        .iter()
+        .map(|item| match item {
+            ProjectionItem::Message(message) => message_id_of(message),
+            ProjectionItem::AgentSlice { .. } => "slice".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["u1", "a1", "t1", "sys-2", "u2"],
+        "the projection is fully literal: no summary, no slice, no duplication"
+    );
+    assert_eq!(projection.checkpoint_generation, None);
+}
+
+/// After absorption, the next valid compaction establishes a fresh
+/// checkpoint without mutating canonical history.
+#[test]
+fn fresh_checkpoint_is_established_after_absorption() {
+    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        system("sys-2", "trusted"),
+        user("u3", ""),
+        user("u4", ""),
+    ];
+    let previous = checkpoint(
+        1,
+        "sum",
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        },
+        TokenMeasurement {
+            input_tokens: 30,
+            source: TokenMeasurementSource::Estimated,
+        },
+    );
+    let projection = engine
+        .build_projection(&history, Some(&previous), &[], None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(&history, Some(&previous), &projection, &[], 0, None)
+        .expect("plan");
+    let (next, rebuilt) = engine
+        .apply_compaction(
+            &conversation(),
+            &history,
+            Some(&previous),
+            &plan,
+            "fresh",
+            &[],
+        )
+        .expect("fresh checkpoint");
+    assert_eq!(next.generation, 2);
+    let ids: Vec<String> = rebuilt
+        .items
+        .iter()
+        .map(|item| match item {
+            ProjectionItem::Message(message) => message_id_of(message),
+            ProjectionItem::AgentSlice { .. } => "slice".to_owned(),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["u1", "a1", "u2", "sys-2", summary_id(2).as_str()],
+        "the fresh checkpoint summary replaces the absorbed one"
+    );
+    // Canonical history is untouched.
+    assert_eq!(history.len(), 6);
+}
+
 /// If pinned context alone prevents fitting, compaction fails explicitly.
 #[test]
 fn pinned_context_alone_cannot_fit_fails_explicitly() {
@@ -1072,6 +1265,45 @@ fn oversized_turn_splits_inside_the_agent_message() {
         message,
         MessageBlock::Agent(agent) if agent.id.as_str() == "a1" && agent.content.len() == 5
     )));
+}
+
+/// Whole-turn preference wins over split-turn compaction: when the latest
+/// complete turn fits but the target asks for more than fits, the latest
+/// turn is retained whole and never split.
+#[test]
+fn whole_turn_preference_wins_over_splitting_the_latest_turn() {
+    // Turn 1: u1 (10) + a1 (10). Turn 2: u2 (10) + a2 (30). The latest turn
+    // (40) fits exactly under the soft limit; the target asks for both turns
+    // (50), which cannot fit. The engine must retain the latest turn whole
+    // instead of splitting it.
+    let engine = engine(40, 0, 50, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        agent(
+            "a2",
+            vec![text_block("y"), text_block("z"), text_block("w")],
+        ),
+    ];
+    let projection = engine
+        .build_projection(&history, None, &[], None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .expect("plan");
+    assert_eq!(
+        plan.boundary,
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        },
+        "the cut retains the latest complete turn whole"
+    );
+    assert!(
+        plan.split_turn_prefix.is_none(),
+        "the latest turn is never split merely because the target cannot be achieved"
+    );
+    assert_eq!(plan.planned_estimate_after, 40);
 }
 
 /// If no structurally safe split exists, a safe whole-turn cut wins even
@@ -1323,6 +1555,131 @@ fn no_progress_compaction_is_rejected() {
     assert_eq!(error.kind, ContextErrorKind::NoProgress);
 }
 
+/// The anti-loop progress rule never compares a provider-reported
+/// before-count against an estimated after-count: both sides of the
+/// comparison are deterministic estimates of the actual projection content.
+/// A provider-reported number far above the deterministic estimate must not
+/// mask an estimate that grew.
+#[test]
+fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
+    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
+    let history = vec![user("u1", ""), agent("a1", vec![text_block("x")])];
+    // Provider-reported before = 1000; the deterministic estimate of the
+    // same projection is 20.
+    let plain_projection = engine
+        .build_projection(&history, None, &[], None)
+        .expect("projection");
+    let observed = ProviderObservedInput {
+        fingerprint: plain_projection.fingerprint(),
+        input_tokens: 1_000,
+    };
+    let projection = engine
+        .build_projection(&history, None, &[], Some(&observed))
+        .expect("provider-reported projection");
+    assert_eq!(
+        projection.estimated_input.source,
+        TokenMeasurementSource::ProviderReported
+    );
+    let plan = engine
+        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .expect("plan");
+    assert_eq!(
+        plan.estimated_before.input_tokens, 1_000,
+        "the provider-reported measurement is preserved as metadata"
+    );
+    assert_eq!(
+        plan.estimated_before_tokens, 20,
+        "the progress comparison uses the deterministic estimate"
+    );
+    // The after estimate (31) grew relative to the deterministic before
+    // (20): rejected, even though it is far below the provider-reported 1000.
+    let error = engine
+        .apply_compaction(
+            &conversation(),
+            &history,
+            None,
+            &plan,
+            &"x".repeat(120),
+            &[],
+        )
+        .expect_err("no progress");
+    assert_eq!(error.kind, ContextErrorKind::NoProgress);
+}
+
+/// The reverse direction: a provider-reported before-count below the
+/// deterministic estimate must not reject a compaction whose estimated
+/// after-count decreased relative to the deterministic before.
+#[test]
+fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller() {
+    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        user("u2", ""),
+        user("u3", ""),
+        user("u4", ""),
+        user("u5", ""),
+        user("u6", ""),
+    ];
+    // Provider-reported before = 50; the deterministic estimate of the same
+    // projection is 60.
+    let plain_projection = engine
+        .build_projection(&history, None, &[], None)
+        .expect("projection");
+    let observed = ProviderObservedInput {
+        fingerprint: plain_projection.fingerprint(),
+        input_tokens: 50,
+    };
+    let projection = engine
+        .build_projection(&history, None, &[], Some(&observed))
+        .expect("provider-reported projection");
+    let plan = engine
+        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .expect("plan");
+    assert_eq!(plan.estimated_before_tokens, 60);
+    // The after estimate (51) decreased from the deterministic before (60)
+    // but is above the provider-reported 50: progress must be accepted.
+    let (checkpoint, _) = engine
+        .apply_compaction(
+            &conversation(),
+            &history,
+            None,
+            &plan,
+            &"x".repeat(200),
+            &[],
+        )
+        .expect("progress accepted");
+    assert_eq!(checkpoint.generation, 1);
+    assert_eq!(
+        checkpoint.tokens_before,
+        TokenMeasurement {
+            input_tokens: 50,
+            source: TokenMeasurementSource::ProviderReported,
+        },
+        "the provider-reported measurement is preserved as checkpoint metadata"
+    );
+    assert_eq!(checkpoint.estimated_tokens_after, 51);
+}
+
+/// Empty and whitespace-only summaries are rejected at the application
+/// boundary: no summarizer can erase history through an empty summary.
+#[test]
+fn empty_and_whitespace_summaries_are_rejected() {
+    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
+    let history = vec![user("u1", ""), user("u2", "")];
+    let projection = engine
+        .build_projection(&history, None, &[], None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .expect("plan");
+    for bad in ["", "   ", "\n\t "] {
+        let error = engine
+            .apply_compaction(&conversation(), &history, None, &plan, bad, &[])
+            .expect_err("empty summary must be rejected");
+        assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Continuation constraint
 // ---------------------------------------------------------------------------
@@ -1404,6 +1761,65 @@ fn continuation_owner_is_never_split() {
             message_id: MessageId::new("t2"),
         }
     );
+    assert!(plan.split_turn_prefix.is_none());
+}
+
+/// When a later `SystemMessage` pins the continuation-owning turn, the
+/// constraint is unsatisfiable: compaction cannot retire the owner, so the
+/// plan fails explicitly instead of clearing the continuation while leaving
+/// its boundary literal.
+#[test]
+fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
+    let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        system("sys-2", "trusted"),
+        user("u2", ""),
+    ];
+    let projection = engine
+        .build_projection(&history, None, &[], None)
+        .expect("projection");
+    let error = engine
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            Some(&MessageId::new("a1")),
+        )
+        .expect_err("pinned continuation owner cannot be retired");
+    assert_eq!(error.kind, ContextErrorKind::NoProgress);
+    assert!(
+        error.message.contains("pinned"),
+        "the error explains the pinned constraint: {}",
+        error.message
+    );
+    // The same history without the pinning system message satisfies the
+    // constraint: the check is specific to the pinned prefix.
+    let unpinned = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+    ];
+    let projection = engine
+        .build_projection(&unpinned, None, &[], None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(
+            &unpinned,
+            None,
+            &projection,
+            &[],
+            0,
+            Some(&MessageId::new("a1")),
+        )
+        .expect("unpinned continuation owner is retired");
+    assert!(matches!(
+        plan.boundary,
+        ContextBoundary::AfterMessage { .. }
+    ));
     assert!(plan.split_turn_prefix.is_none());
 }
 
@@ -1823,6 +2239,290 @@ async fn overflow_retry_exhausted_after_one_retry() {
             ..
         })
     ));
+}
+
+/// An overflow retry replaces the complete failed invocation: the retry's
+/// output commits under the retry identity, and provisional content from
+/// the failed request never enters the committed message.
+#[tokio::test]
+async fn overflow_retry_never_commits_provisional_failed_content() {
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "PROVISIONAL")),
+            FakeStep::Emit(overflow_event()),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "RETRY")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let summarizer =
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
+    let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .run()
+    .await;
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(
+        result.messages.len(),
+        2,
+        "input + one committed agent message"
+    );
+    let MessageBlock::Agent(agent) = &result.messages[1] else {
+        panic!("the committed message must be the retry agent message");
+    };
+    assert_eq!(
+        agent.id,
+        retry_message_id(1),
+        "the committed message carries the retry identity"
+    );
+    let texts: Vec<String> = agent
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            AgentContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["RETRY".to_owned()], "exactly the retry output");
+    let serialized = serde_json::to_string(&result.messages).expect("serialize messages");
+    assert!(
+        !serialized.contains("PROVISIONAL"),
+        "the failed request's provisional content must never be committed"
+    );
+}
+
+/// The failed overflow request's complete provisional tool call is never
+/// committed and never executed: the retry replaces the whole invocation.
+#[tokio::test]
+async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
+    let scripted = scripted_call();
+    let mut first = vec![FakeStep::Emit(started())];
+    first.extend(
+        tool_call_events(0, &scripted)
+            .into_iter()
+            .map(FakeStep::Emit),
+    );
+    first.push(FakeStep::Emit(overflow_event()));
+    let model = FakeModel::new(vec![
+        first,
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "plain answer")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = tool_registry_with_alpha();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let summarizer =
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
+    let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .run()
+    .await;
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert!(
+        result.events.iter().all(|event| {
+            !matches!(
+                event,
+                RuntimeEvent::ToolExecutionStarted { .. }
+                    | RuntimeEvent::ToolExecutionCompleted { .. }
+            )
+        }),
+        "the failed request's tool call is never executed"
+    );
+    assert!(
+        result
+            .messages
+            .iter()
+            .all(|message| !matches!(message, MessageBlock::Tool(_))),
+        "no tool message is committed for the failed request's call"
+    );
+    let MessageBlock::Agent(agent) = &result.messages[1] else {
+        panic!("the committed message must be the retry agent message");
+    };
+    assert_eq!(agent.id, retry_message_id(1));
+    assert_eq!(agent.content.len(), 1, "only the retry text block");
+}
+
+/// The overflow retry budget is genuinely per model turn: both turns are
+/// entitled to their own single retry, and the budget never persists across
+/// turns.
+#[tokio::test]
+async fn overflow_retry_budget_is_per_model_turn() {
+    let scripted = scripted_call();
+    let model = FakeModel::new(vec![
+        // Turn 1: overflow, then its own retry → ToolCalls.
+        vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &scripted)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &scripted)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &scripted)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        // Turn 2: overflow, then its own retry → Stop.
+        vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "done")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = tool_registry_with_alpha();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let summarizer = FakeContextSummarizer::new(vec![
+        FakeSummaryStep::Return("summary-1".to_owned()),
+        FakeSummaryStep::Return("summary-2".to_owned()),
+    ]);
+    let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .run()
+    .await;
+
+    let requests = model.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "two invocations per turn: request + retry"
+    );
+    let retries = result
+        .events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
+        .count();
+    assert_eq!(retries, 2, "each turn gets exactly one retry");
+    let compactions = result
+        .events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
+        .count();
+    assert_eq!(compactions, 2, "one compaction per overflow");
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    // The committed conversation holds both turns, each with the retry
+    // identity of its own turn.
+    assert_eq!(result.messages.len(), 4, "input + agent1 + tool + agent2");
+    assert!(matches!(
+        &result.messages[1],
+        MessageBlock::Agent(agent) if agent.id == retry_message_id(1)
+    ));
+    assert!(matches!(
+        &result.messages[3],
+        MessageBlock::Agent(agent) if agent.id == retry_message_id(2)
+    ));
+}
+
+/// An invalid (empty or whitespace-only) summary from a custom/fake
+/// summarizer fails the compaction: no checkpoint is saved and no overflow
+/// retry follows.
+#[tokio::test]
+async fn invalid_summary_fails_without_checkpoint_or_retry() {
+    for bad_summary in ["", "   "] {
+        let model = FakeModel::new(vec![vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(overflow_event()),
+        ]]);
+        let tools = ToolRegistry::new();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let store = InMemoryCheckpointStore::new().shared();
+        let summarizer =
+            FakeContextSummarizer::new(vec![FakeSummaryStep::Return(bad_summary.to_owned())]);
+        let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+        let result = AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0),
+            &model,
+            &tools,
+            &cancellation,
+        )
+        .with_context_runtime(runtime)
+        .run()
+        .await;
+
+        assert_single_terminal(&result.events);
+        assert_outcome(
+            &result,
+            &AttemptOutcome::Failed {
+                error: AttemptFailure::Model {
+                    error: overflow_error(),
+                },
+            },
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
+            "the invalid summary is a compaction failure"
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|event| !matches!(event, RuntimeEvent::CompactionCompleted)),
+            "no checkpoint may be committed"
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|event| !matches!(event, RuntimeEvent::ModelRetryScheduled { .. })),
+            "no overflow retry may follow an invalid summary"
+        );
+        assert!(
+            store.load(&conversation()).expect("store").is_none(),
+            "no checkpoint is saved after an invalid summary"
+        );
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "exactly the overflowing request, no retry request"
+        );
+    }
 }
 
 /// A compaction failure after an overflow preserves the original normalized
@@ -2345,6 +3045,53 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
             .await
             .expect_err("must fail");
         assert_eq!(error.kind, expected);
+    }
+}
+
+/// A refusal with no `RefusalDelta`, an empty `Stop` output, and a
+/// whitespace-only output are compaction failures: the terminal finish
+/// reason is authoritative and empty output can never be a summary.
+#[tokio::test]
+async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output() {
+    let cases: Vec<Vec<FakeStep>> = vec![
+        // Refusal with no RefusalDelta: the finish reason alone must fail.
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Refusal)),
+        ],
+        // Completed(Stop) with no TextDelta at all.
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        // Whitespace-only output.
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "   \n\t ")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ];
+    for events in cases {
+        let model = FakeModel::new(vec![events]);
+        let summarizer = ModelBackedSummarizer::new(
+            &model,
+            SummaryModelConfig {
+                model: "fake-model".to_owned(),
+                protocol: ModelProtocol::OpenAiChatCompletions,
+                reasoning: ReasoningEffort::Medium,
+                max_output_tokens: 64,
+            },
+        );
+        let request = SummaryRequest {
+            previous_summary: None,
+            newly_retired: vec![],
+            split_turn_prefix: None,
+        };
+        let error = summarizer
+            .summarize(request, rustx::model::ModelCancellation::new())
+            .await
+            .expect_err("invalid summary must fail");
+        assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
     }
 }
 

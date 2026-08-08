@@ -157,6 +157,20 @@ impl TokenEstimator for ScriptedEstimator {
         tool_definitions: &[ToolDefinition],
     ) -> u64 {
         let mut total = tool_definitions.len() as u64 * self.per_tool;
+        total += self.items_estimate(projection);
+        total
+    }
+
+    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
+        self.items_estimate(projection)
+    }
+}
+
+impl ScriptedEstimator {
+    /// The conversation-content estimate: message/block/summary weights only,
+    /// never the fixed per-tool overhead.
+    fn items_estimate(&self, projection: &ContextProjection) -> u64 {
+        let mut total = 0;
         for item in &projection.items {
             match item {
                 ProjectionItem::AgentSlice { content, .. } => {

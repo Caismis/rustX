@@ -58,12 +58,24 @@ pub struct ProviderObservedInput {
 /// fallback ([`DefaultTokenEstimator`]).
 pub trait TokenEstimator: Send + Sync {
     /// The deterministic estimated input tokens of one projection, including
-    /// non-compacted contributors such as tool definitions.
+    /// non-compacted contributors such as tool definitions. This is the full
+    /// request estimate: it feeds the soft-limit threshold and the hard fit.
     fn estimate_input(
         &self,
         projection: &ContextProjection,
         tool_definitions: &[ToolDefinition],
     ) -> u64;
+
+    /// The deterministic estimated input tokens of one projection's
+    /// conversation content only, excluding non-conversation contributors
+    /// such as tool definitions.
+    ///
+    /// This is the recent-conversation estimate: it measures how much
+    /// literal conversation history a retained suffix contributes. Tool
+    /// definitions affect the full request estimate, the threshold, and the
+    /// hard fit, but they must never count toward satisfying the
+    /// `keep_recent_tokens` retention target.
+    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64;
 }
 
 /// The deterministic function behind a [`ClosureTokenEstimator`].
@@ -107,6 +119,20 @@ impl DefaultTokenEstimator {
             .len();
         (items + tools) as u64
     }
+
+    /// The deterministic serialized bytes of the projection items only,
+    /// excluding tool definitions.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the canonical projection fails to serialize, which is
+    /// unreachable for the canonical runtime-owned types.
+    #[must_use]
+    pub fn conversation_bytes(projection: &ContextProjection) -> u64 {
+        serde_json::to_vec(&projection.items)
+            .expect("canonical projection items serialize")
+            .len() as u64
+    }
 }
 
 impl TokenEstimator for DefaultTokenEstimator {
@@ -116,6 +142,10 @@ impl TokenEstimator for DefaultTokenEstimator {
         tool_definitions: &[ToolDefinition],
     ) -> u64 {
         bytes_to_tokens(Self::serialized_bytes(projection, tool_definitions))
+    }
+
+    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
+        bytes_to_tokens(Self::conversation_bytes(projection))
     }
 }
 
@@ -147,6 +177,10 @@ impl TokenEstimator for ClosureTokenEstimator {
         tool_definitions: &[ToolDefinition],
     ) -> u64 {
         (self.function)(projection, tool_definitions)
+    }
+
+    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
+        (self.function)(projection, &[])
     }
 }
 
