@@ -75,7 +75,8 @@ Features:
 - Sequential and parallel tool batches
 - Deterministic tool-result ordering
 - Attempt termination rules
-- Turn-boundary inbound-message drain point
+- Turn-boundary inbound-message drain point (implemented by Issue #22 as a
+  safe-boundary mailbox drain)
 - Mock model executor for deterministic tests
 
 Exit criteria:
@@ -114,8 +115,8 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
-Remaining under Issue #7 (not implemented by PR #21, implemented
-separately):
+Remaining under Issue #7 (not implemented by PR #21 or the Issue #22
+batching PR, implemented separately):
 
 - Mandatory Agent Status projection (temporal section, extension/provider
   contract)
@@ -123,7 +124,14 @@ separately):
 - Later M5-backed background-execution status integration
 - Live acceptance criteria that remain unverified without credentials
 
-Issue #22 (inbound batching) is not implemented in PR #21.
+Issue #22 (inbound batching) is implemented in the Issue #22 PR: the
+conversation inbound mailbox foundation (`src/runtime/inbound.rs`),
+including the canonical `UserMessageBlock.timestamp`, the shared
+`InboundSequence` domain, atomic enqueue, the finite watermark-bounded
+drain, safe-boundary agent-loop integration, and the deterministic
+mailbox/race/agent-loop/M4/provider test coverage. Agent Status integration
+remains Issue #7, background runtime producers remain Issue #8, and mailbox
+persistence/recovery remains later milestone work.
 
 Exit criteria:
 
@@ -133,9 +141,9 @@ Exit criteria:
 
 Deferred to later milestones: durable checkpoint/event storage (M8),
 conversation summarization in the CLI (M10), and any provider fallback or
-routing. M3's explicitly deferred parallel tool scheduling and
-turn-boundary mailbox draining remain deferred and are not claimed as
-implemented.
+routing. M3's explicitly deferred parallel tool scheduling remains
+deferred and is not claimed as implemented; the turn-boundary mailbox
+drain is implemented in the Issue #22 PR as a safe-boundary contract.
 
 ## Milestone 5 — Native tool plane
 

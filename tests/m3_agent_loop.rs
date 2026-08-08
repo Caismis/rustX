@@ -3,14 +3,19 @@
 //! Every test drives the loop with scripted fixture models and tools, never
 //! a real provider. Tests assert behavior through the recorded
 //! `RuntimeEvent` trace, the platform `AttemptOutcome`, and the committed
-//! conversation state.
+//! conversation state. Issue #22 adds the conversation inbound mailbox
+//! integration: safe-boundary finite drains, Stop-with-pending-inbound
+//! continuation, cancellation/failure ownership, and deterministic
+//! interleavings driven by explicit synchronization (never wall-clock
+//! timing).
 
 mod common;
 
 use std::path::Path;
 
 use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, success_result, tool_call_events,
+    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
+    tool_call_events,
 };
 use common::replay_execution_states;
 use rustx::agent::{
@@ -27,6 +32,7 @@ use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
+use rustx::runtime::inbound::{ConversationInboundMailbox, MailboxError};
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::ToolCall;
@@ -43,6 +49,7 @@ fn request(attempt: &str) -> AgentExecutionRequest {
             })],
             source: UserSource::Human,
             kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
         })],
         model: "fake-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
@@ -994,7 +1001,11 @@ async fn multiple_ordered_tool_calls_continue_once() {
 // Cancellation
 // ---------------------------------------------------------------------------
 
-/// Cancellation before the attempt starts settles as cancelled.
+/// The generic Agent Loop checkpoint applies before the first model turn:
+/// cancellation already observable at `run()` start settles cancelled with
+/// zero `TurnStarted`, zero `ModelRequestStarted`, and zero adapter
+/// requests, the single `AttemptCancelled` terminal is last, and the
+/// cancellation reason is preserved.
 #[tokio::test]
 async fn cancellation_before_start_settles_cancelled() {
     let model = FakeModel::new(vec![vec![
@@ -2390,5 +2401,850 @@ async fn unfinished_tool_call_at_terminal_is_rejected() {
         model.requests().len(),
         1,
         "no continuation after the contract violation"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #22 — conversation inbound mailbox
+// ---------------------------------------------------------------------------
+
+/// A timestamped ordinary inbound message for mailbox enqueue.
+fn inbound_user(id: &str, text: &str, source: UserSource) -> UserMessageBlock {
+    UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+            text: text.to_owned(),
+        })],
+        source,
+        kind: rustx::message::types::InboundKind::Message,
+        timestamp: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                .expect("parse fixed timestamp")
+                .with_timezone(&chrono::Utc),
+        ),
+    }
+}
+
+/// The message id of one canonical block.
+fn block_id(block: &MessageBlock) -> String {
+    match block {
+        MessageBlock::System(system) => system.id.to_string(),
+        MessageBlock::User(user) => user.id.to_string(),
+        MessageBlock::Agent(agent) => agent.id.to_string(),
+        MessageBlock::Tool(tool) => tool.id.to_string(),
+    }
+}
+
+/// Runs the attempt with a mailbox attached to the request conversation.
+async fn run_with_mailbox(
+    model: &FakeModel,
+    tools: &ToolRegistry,
+    cancellation: &AgentCancellation,
+    mailbox: ConversationInboundMailbox,
+) -> AgentExecutionResult {
+    AgentExecution::new(request("attempt-1"), model, tools, cancellation)
+        .with_inbound_mailbox(mailbox)
+        .expect("mailbox belongs to the request conversation")
+        .run()
+        .await
+}
+
+/// Attaching a mailbox of a different conversation is rejected explicitly.
+#[tokio::test]
+async fn mailbox_conversation_mismatch_is_rejected() {
+    let model = FakeModel::new(Vec::new());
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let foreign = ConversationInboundMailbox::new(ConversationId::new("conv-other"));
+    let error = AgentExecution::new(request("attempt-1"), &model, &tools, &cancellation)
+        .with_inbound_mailbox(foreign)
+        .err()
+        .expect("a mismatched conversation must be rejected");
+    assert!(matches!(error, MailboxError::ConversationMismatch { .. }));
+}
+
+/// Foreground tools with an empty mailbox preserve the exact M3 behavior:
+/// tool result batch, then the continuation, with no synthetic user message.
+#[tokio::test]
+async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({"path": "."}),
+    };
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text(0, "done")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tool = FakeTool::new(
+        common::tool("alpha", "tool-alpha"),
+        success_result("listed"),
+    );
+    let mut tools = ToolRegistry::new();
+    tools.insert(tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+
+    assert_trace(&result.events, &expected_single_tool_trace());
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    let user_blocks: Vec<&MessageBlock> = result
+        .messages
+        .iter()
+        .filter(|block| matches!(block, MessageBlock::User(_)))
+        .collect();
+    assert_eq!(
+        user_blocks.len(),
+        1,
+        "no synthetic user message appears when the mailbox is empty"
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    let ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec!["msg-user-1", "attempt-1-agent-1", "attempt-1-tool-1-call-1"],
+        "the continuation carries input + agent + tool result only"
+    );
+}
+
+/// Foreground tools with an inbound batch: the batch drains only after the
+/// complete tool-result batch committed, and the next model request sees
+/// both inbound messages in one continuation.
+#[tokio::test]
+async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({"path": "."}),
+    };
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let (tool, release) = FakeTool::parking(
+        common::tool("alpha", "tool-alpha"),
+        success_result("listed"),
+    );
+    let mut tool_started = tool.started();
+    let mut tools = ToolRegistry::new();
+    tools.insert(tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let controller = tokio::spawn(async move {
+        tool_started
+            .wait_for(|running| *running)
+            .await
+            .expect("tool started");
+        let sequence_a = controller_mailbox
+            .enqueue(inbound_user("msg-inbound-a", "human A", UserSource::Human))
+            .expect("enqueue human A");
+        let sequence_b = controller_mailbox
+            .enqueue(inbound_user(
+                "msg-inbound-b",
+                "runtime B",
+                UserSource::Runtime,
+            ))
+            .expect("enqueue runtime B");
+        assert!(
+            sequence_a < sequence_b,
+            "Human and Runtime share one sequence domain"
+        );
+        release.notify_waiters();
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    controller.await.expect("controller task");
+    assert!(mailbox.drain().is_none(), "the drained batch is consumed");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    // Canonical history before the continuation: agent tool call, tool
+    // result, then the distinct timestamped inbound messages in sequence
+    // order, followed by the final agent message. The drain never splits
+    // the tool-result batch.
+    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-user-1".to_owned(),
+            "attempt-1-agent-1".to_owned(),
+            "attempt-1-tool-1-call-1".to_owned(),
+            "msg-inbound-a".to_owned(),
+            "msg-inbound-b".to_owned(),
+            "attempt-1-agent-2".to_owned(),
+        ]
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2, "one continuation after the batch");
+    let MessageBlock::User(user_a) = &requests[1].messages[3] else {
+        panic!("fourth message of the continuation must be user A");
+    };
+    assert_eq!(user_a.id, MessageId::new("msg-inbound-a"));
+    assert_eq!(user_a.source, UserSource::Human);
+    assert!(
+        user_a.timestamp.is_some(),
+        "A keeps its persisted timestamp"
+    );
+    let MessageBlock::User(user_b) = &requests[1].messages[4] else {
+        panic!("fifth message of the continuation must be user B");
+    };
+    assert_eq!(user_b.id, MessageId::new("msg-inbound-b"));
+    assert_eq!(user_b.source, UserSource::Runtime);
+    assert!(
+        user_a.content != user_b.content || user_a.id != user_b.id,
+        "A and B stay distinct canonical messages"
+    );
+    assert!(mailbox.drain().is_none(), "the drained batch is consumed");
+}
+
+/// The later-correction regression: enqueuing "deploy it" then "actually do
+/// not deploy it" during one running tool turn yields exactly one batch and
+/// exactly one subsequent model request observing both, in order.
+#[tokio::test]
+async fn later_correction_ships_one_batch_and_one_continuation() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({"path": "."}),
+    };
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let (tool, release) = FakeTool::parking(
+        common::tool("alpha", "tool-alpha"),
+        success_result("listed"),
+    );
+    let mut tool_started = tool.started();
+    let mut tools = ToolRegistry::new();
+    tools.insert(tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let controller = tokio::spawn(async move {
+        tool_started
+            .wait_for(|running| *running)
+            .await
+            .expect("tool started");
+        controller_mailbox
+            .enqueue(inbound_user("msg-corr-1", "deploy it", UserSource::Human))
+            .expect("enqueue correction A");
+        controller_mailbox
+            .enqueue(inbound_user(
+                "msg-corr-2",
+                "actually do not deploy it",
+                UserSource::Human,
+            ))
+            .expect("enqueue correction B");
+        release.notify_waiters();
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    let requests = model.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "exactly one subsequent model request sees the correction batch"
+    );
+    let ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-user-1".to_owned(),
+            "attempt-1-agent-1".to_owned(),
+            "attempt-1-tool-1-call-1".to_owned(),
+            "msg-corr-1".to_owned(),
+            "msg-corr-2".to_owned(),
+        ],
+        "A then B in inbound sequence order, never a request containing only A"
+    );
+    assert_eq!(
+        requests[1].messages[3..]
+            .iter()
+            .filter(|block| matches!(block, MessageBlock::User(_)))
+            .count(),
+        2,
+        "the correction messages remain separate canonical user messages"
+    );
+}
+
+/// Model Stop with pending inbound is the formerly ambiguous case: the
+/// first Stop must not settle the attempt before the already-pending
+/// inbound work was observed.
+#[tokio::test]
+async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text(0, "doing")),
+            FakeStep::ParkUntilReleased(parked.clone()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text(0, "done")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let mut model_parked = model.parked();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-stop-a", "deploy it", UserSource::Human))
+            .expect("enqueue while turn 1 is in flight");
+        release.send(true).expect("release turn 1");
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    controller.await.expect("controller task");
+
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "the first Stop must not settle the attempt while inbound work is pending"
+    );
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-user-1".to_owned(),
+            "attempt-1-agent-1".to_owned(),
+            "msg-stop-a".to_owned(),
+            "attempt-1-agent-2".to_owned(),
+        ],
+        "turn 1 AgentMessage, the drained inbound message, then the final turn"
+    );
+    let requests = model.requests();
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-stop-a"))),
+        "model request 2 contains the drained inbound message"
+    );
+}
+
+/// The finite settlement rule: a successful no-tool turn whose safe-boundary
+/// snapshot observes an empty mailbox settles; a message enqueued after that
+/// snapshot never reopens the attempt and stays in the conversation mailbox.
+#[tokio::test]
+async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "done")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the empty snapshot permits immediate settlement"
+    );
+    // Strictly after the empty-snapshot linearization point (the attempt
+    // already settled): the new message stays queued for later conversation
+    // processing; the old attempt is never reopened.
+    mailbox
+        .enqueue(inbound_user("msg-late-1", "new work", UserSource::Human))
+        .expect("enqueue after settlement");
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "a later enqueue never reopens the settled attempt"
+    );
+    let batch = mailbox.drain().expect("the late message remains pending");
+    assert_eq!(batch.items().len(), 1);
+    assert_eq!(batch.items()[0].message().id, MessageId::new("msg-late-1"));
+    assert_eq!(
+        batch.watermark().get(),
+        1,
+        "a fresh mailbox starts at sequence 1"
+    );
+}
+
+/// Cancellation observable before the safe-boundary snapshot: no drain
+/// happens, the pending item stays in the mailbox, and nothing is appended.
+#[tokio::test]
+async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "doing")),
+        FakeStep::ParkUntilReleased(parked.clone()),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let controller_cancellation = cancellation.clone();
+    let mut model_parked = model.parked();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-cancel-a", "pending", UserSource::Human))
+            .expect("enqueue pending message");
+        controller_cancellation.cancel();
+        release.send(true).expect("release turn");
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested,
+        },
+    );
+    assert!(
+        !result
+            .messages
+            .iter()
+            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-cancel-a"))),
+        "the pending message is not appended to attempt history"
+    );
+    let batch = mailbox.drain().expect("the pending message remains");
+    assert_eq!(batch.items().len(), 1);
+    assert_eq!(
+        batch.items()[0].message().id,
+        MessageId::new("msg-cancel-a")
+    );
+}
+
+/// Cancellation observed mid-continuation (after the drained batch already
+/// committed at the first safe boundary): the batch stays canonical exactly
+/// once, never requeued, and the attempt settles cancelled without the
+/// in-flight continuation completing.
+#[tokio::test]
+async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
+    let first = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({"n": 1}),
+    };
+    let second = ScriptedCall {
+        id: "call-2",
+        tool_id: "tool-beta",
+        name: "beta",
+        arguments: serde_json::json!({"n": 2}),
+    };
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &first)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &first)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &second)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &second)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &second)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+    ]);
+    let (first_tool, first_release) =
+        FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("a"));
+    let (second_tool, _never_released) =
+        FakeTool::parking(common::tool("beta", "tool-beta"), success_result("b"));
+    let mut first_started = first_tool.started();
+    let mut second_started = second_tool.started();
+    let mut tools = ToolRegistry::new();
+    tools.insert(first_tool);
+    tools.insert(second_tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        first_started
+            .wait_for(|running| *running)
+            .await
+            .expect("first tool started");
+        controller_mailbox
+            .enqueue(inbound_user("msg-commit-a", "committed", UserSource::Human))
+            .expect("enqueue before the first safe boundary");
+        first_release.notify_waiters();
+        // Turn 2 begins only after the first safe boundary drained and
+        // appended the batch; cancellation is observed during turn 2's tool
+        // wait, after the batch commit point.
+        second_started
+            .wait_for(|running| *running)
+            .await
+            .expect("second tool started");
+        controller_cancellation.cancel();
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested,
+        },
+    );
+    let committed: Vec<&MessageBlock> = result
+        .messages
+        .iter()
+        .filter(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-commit-a")))
+        .collect();
+    assert_eq!(
+        committed.len(),
+        1,
+        "the drained batch exists exactly once in canonical history"
+    );
+    assert!(
+        mailbox.drain().is_none(),
+        "the appended batch is consumed from the mailbox and never requeued"
+    );
+    assert_eq!(
+        model.requests().len(),
+        2,
+        "cancellation observed mid-continuation issues no third model request"
+    );
+}
+
+/// A terminal model failure never drains the mailbox: the pending item
+/// remains available for later conversation processing.
+#[tokio::test]
+async fn terminal_model_failure_leaves_pending_inbound_untouched() {
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text(0, "partial")),
+        FakeStep::ParkUntilReleased(parked.clone()),
+        FakeStep::Emit(fail(
+            rustx::model::ModelErrorKind::ProviderError,
+            "stream broke",
+        )),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let mut model_parked = model.parked();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-fail-a", "pending", UserSource::Human))
+            .expect("enqueue pending message");
+        release.send(true).expect("release the failing turn");
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Model { .. }
+        }
+    ));
+    assert!(
+        !result
+            .messages
+            .iter()
+            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-fail-a"))),
+        "no post-failure drain appends the pending message"
+    );
+    assert_eq!(
+        mailbox.drain().expect("pending").items()[0].message().id,
+        MessageId::new("msg-fail-a")
+    );
+}
+
+/// An unknown tool failure settles the attempt without consuming the
+/// pending mailbox work.
+#[tokio::test]
+async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-missing",
+        name: "missing",
+        arguments: serde_json::json!({}),
+    };
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
+        FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
+        FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
+        FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let mut emitted = model.emitted();
+    let controller = tokio::spawn(async move {
+        emitted
+            .wait_for(|count| *count >= 1)
+            .await
+            .expect("model request in flight");
+        controller_mailbox
+            .enqueue(inbound_user("msg-ut-a", "pending", UserSource::Runtime))
+            .expect("enqueue while the request is in flight");
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Failed {
+            error: AttemptFailure::Runtime {
+                error: RuntimeError::UnknownTool {
+                    name: "missing".to_owned(),
+                },
+            },
+        },
+    );
+    assert_eq!(
+        mailbox.drain().expect("pending").items()[0].message().id,
+        MessageId::new("msg-ut-a")
+    );
+}
+
+/// An ordinary inbound drain preserves the pending provider continuation:
+/// the next model request retains the same continuation state when no
+/// compaction occurred.
+#[tokio::test]
+async fn continuation_retained_across_inbound_drain() {
+    let state = ProviderContinuationState::Anthropic(AnthropicContinuation {
+        opaque: serde_json::json!({"signature": "sig-1", "opaque": [1, 2, 3]}),
+    });
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(reasoning(0, "Thinking.")),
+            FakeStep::Emit(ModelEvent::ContinuationState {
+                block_index: rustx::message::types::ContentBlockIndex::new(0),
+                state: state.clone(),
+            }),
+            FakeStep::Emit(text(1, "doing")),
+            FakeStep::ParkUntilReleased(parked.clone()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let mut model_parked = model.parked();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-cont-a", "continue", UserSource::Human))
+            .expect("enqueue inbound message");
+        release.send(true).expect("release turn 1");
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].continuation,
+        Some(state),
+        "the ordinary inbound drain does not invalidate the continuation"
+    );
+}
+
+/// One attempt may consume several batches, but never more than one batch
+/// at one safe boundary: each tool turn drains exactly the items pending at
+/// its own boundary.
+#[tokio::test]
+async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
+    let first = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({"n": 1}),
+    };
+    let second = ScriptedCall {
+        id: "call-2",
+        tool_id: "tool-beta",
+        name: "beta",
+        arguments: serde_json::json!({"n": 2}),
+    };
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &first)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &first)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(tool_call_events(0, &second)[0].clone()),
+            FakeStep::Emit(tool_call_events(0, &second)[1].clone()),
+            FakeStep::Emit(tool_call_events(0, &second)[2].clone()),
+            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text(0, "done")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let (first_tool, first_release) =
+        FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("a"));
+    let (second_tool, second_release) =
+        FakeTool::parking(common::tool("beta", "tool-beta"), success_result("b"));
+    let mut first_started = first_tool.started();
+    let mut second_started = second_tool.started();
+    let mut tools = ToolRegistry::new();
+    tools.insert(first_tool);
+    tools.insert(second_tool);
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let controller_mailbox = mailbox.clone();
+    let controller = tokio::spawn(async move {
+        first_started
+            .wait_for(|running| *running)
+            .await
+            .expect("first tool started");
+        controller_mailbox
+            .enqueue(inbound_user("msg-batch-a", "A", UserSource::Human))
+            .expect("enqueue A before boundary 1");
+        first_release.notify_waiters();
+        second_started
+            .wait_for(|running| *running)
+            .await
+            .expect("second tool started");
+        controller_mailbox
+            .enqueue(inbound_user("msg-batch-c", "C", UserSource::Human))
+            .expect("enqueue C before boundary 2");
+        second_release.notify_waiters();
+    });
+    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(
+        model.requests().len(),
+        3,
+        "turn 3 settles only after both boundaries drained their batches"
+    );
+    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-user-1".to_owned(),
+            "attempt-1-agent-1".to_owned(),
+            "attempt-1-tool-1-call-1".to_owned(),
+            "msg-batch-a".to_owned(),
+            "attempt-1-agent-2".to_owned(),
+            "attempt-1-tool-2-call-2".to_owned(),
+            "msg-batch-c".to_owned(),
+            "attempt-1-agent-3".to_owned(),
+        ],
+        "batch A at boundary 1, batch C at boundary 2, never merged"
     );
 }

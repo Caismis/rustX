@@ -123,6 +123,7 @@ async fn live_repeated_compaction() {
         })],
         source: UserSource::Human,
         kind: InboundKind::Message,
+        timestamp: None,
     })];
 
     let mut completions = 0;
@@ -166,6 +167,7 @@ async fn live_repeated_compaction() {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         }));
     }
 

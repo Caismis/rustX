@@ -302,6 +302,7 @@ pub fn simple_request(
             })],
             source: UserSource::Human,
             kind: rustx::message::types::InboundKind::Message,
+            timestamp: None,
         })],
         tools: Vec::new(),
         reasoning: ReasoningEffort::Medium,

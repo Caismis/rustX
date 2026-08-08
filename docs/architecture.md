@@ -31,11 +31,16 @@ runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            ToolCallId, ToolVersionId, McpServerId, SkillId,
                            SkillVersionId, ArtifactId) and CapabilityRevision
 runtime/types.rs           CancellationReason, RuntimeError
+runtime/inbound.rs         ConversationInboundMailbox (per-conversation
+                           in-memory coordination contract): InboundSequence,
+                           InboundItem, InboundBatch, MailboxError
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
 message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
                            (SystemAuthority, UserSource, InboundKind),
+                           UserMessageBlock.timestamp (persisted inbound
+                           instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
 tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
                            ToolExecutionResult, ToolExecutionStatus,
@@ -187,6 +192,14 @@ The kernel owns deterministic execution semantics:
 
 The kernel operates only on rustX canonical types and interfaces.
 
+The runtime inbound coordination contract (`src/runtime/inbound.rs`, Layer
+0) is deliberately not part of the kernel: the conversation mailbox is a
+conversation-owned in-memory queue shared by concurrent producers while the
+kernel's `AgentExecution` consumes exactly one finite batch per safe turn
+boundary. The mailbox is coordination only — canonical history is the
+durable conversation truth and the Event Journal records execution facts —
+and it is not a scheduler, supervisor, or persistent service layer.
+
 #### M3 implementation (agent loop)
 
 The M3 implementation freezes the agent-loop boundary in `src/agent` and
@@ -220,6 +233,16 @@ The M3 test suite drives the loop with scripted fixture models and tools
 (`tests/common/fake.rs`), asserts behavior through the recorded
 `RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
 execution phases from traces (`tests/common/mod.rs`).
+
+The Issue #22 inbound batching integration is additive:
+`AgentExecution::with_inbound_mailbox` attaches the conversation mailbox
+(rejecting a mismatched conversation), and at every safe turn boundary the
+loop performs exactly one finite watermark-bounded drain and appends every
+drained message as its own canonical `UserMessageBlock` before the next
+model request. Mailbox attachment adds the safe-boundary
+cancellation-before-selection rule; observable cancellation before every
+model turn is a generic Agent Loop invariant for all executions. See
+`docs/agent-loop.md` section 9 for the full boundary description.
 
 ### Layer 2: Context engine
 
@@ -533,7 +556,9 @@ distinguishes human, agent, fleet, external-system, and runtime sources;
 `SystemAuthority` distinguishes platform, agent, runtime, skill, and fleet
 authority for system blocks. A future compaction summary is represented as a
 `UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
-no fifth message role exists.
+no fifth message role exists. Ordinary inbound messages carry their
+persisted UTC instant on `UserMessageBlock.timestamp` (supplied by the
+producer, never fabricated); derived compaction summaries carry `None`.
 
 Agent-to-agent communication uses a durable mailbox model. A `send_message` tool result reports only whether delivery was durably accepted or rejected. The recipient later receives the content as a `UserMessageBlock`.
 

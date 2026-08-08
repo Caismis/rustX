@@ -15,13 +15,19 @@ Compaction changes the projection, never canonical history.
 Canonical history is the `Vec<MessageBlock>` committed by the agent loop
 (`AgentExecutionResult.messages`). The context engine never pushes, drains,
 or rewrites it: `AgentExecutionResult.messages` remains initial canonical
-messages plus committed agent and tool messages. No checkpoint summary and
-no projection-only agent slice ever appears there.
+messages plus committed agent and tool messages and drained inbound user
+messages (Issue #22). No checkpoint summary and no projection-only agent
+slice ever appears there. Drained inbound messages enter canonical history
+at a safe turn boundary before the next projection/compaction, so the
+model request corresponding to a selected inbound batch always contains
+that batch.
 
 ## 2. Data flow
 
 ```text
 canonical history
+    ↓
+safe boundary: drained inbound batch appended as distinct UserMessageBlocks
     ↓
 ContextEngine
     ↓
@@ -35,6 +41,12 @@ ModelAdapter
     ↓
 provider
 ```
+
+A drained batch is never special-cased inside the engine: it may push the
+projection over the M4 soft input threshold, which is the normal proactive
+compaction trigger, and canonical inbound messages remain in
+`AgentExecutionResult.messages` even when older model-facing history is
+summarized.
 
 ## 3. ContextProjection
 

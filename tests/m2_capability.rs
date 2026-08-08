@@ -48,6 +48,7 @@ fn image_user_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
         })],
         source: UserSource::Human,
         kind: InboundKind::Message,
+        timestamp: None,
     });
     request
 }
@@ -69,6 +70,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         }),
         MessageBlock::Agent(AgentMessageBlock {
             id: MessageId::new("msg-a1"),
@@ -106,6 +108,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
+            timestamp: None,
         }),
     ];
     request.tools = vec![tool("list_directory", "tool-list")];

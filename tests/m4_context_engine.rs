@@ -12,7 +12,9 @@ mod common;
 use std::sync::Arc;
 
 use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
-use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
+use common::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, model_release, success_result, tool_call_events,
+};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -36,6 +38,7 @@ use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
+use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus};
@@ -52,6 +55,7 @@ fn user(id: &str, text: &str) -> MessageBlock {
         })],
         source: UserSource::Human,
         kind: InboundKind::Message,
+        timestamp: None,
     })
 }
 
@@ -355,6 +359,7 @@ fn checkpoint(
             })],
             source: UserSource::Runtime,
             kind: InboundKind::CompactionSummary,
+            timestamp: None,
         },
         boundary,
         tokens_before,
@@ -3515,4 +3520,334 @@ fn newly_retired_id(item: &SummaryInputItem) -> String {
         SummaryInputItem::Message(message) => message_id_of(message),
         SummaryInputItem::AgentSlice { message_id, .. } => message_id.as_str().to_owned(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #22 — drained inbound batches before M4 projection/compaction
+// ---------------------------------------------------------------------------
+
+/// A timestamped ordinary inbound message for mailbox enqueue.
+fn inbound_user(id: &str, text: &str, source: UserSource) -> UserMessageBlock {
+    UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: text.to_owned(),
+        })],
+        source,
+        kind: InboundKind::Message,
+        timestamp: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                .expect("parse fixed timestamp")
+                .with_timezone(&chrono::Utc),
+        ),
+    }
+}
+
+fn block_id(block: &MessageBlock) -> String {
+    match block {
+        MessageBlock::System(system) => system.id.to_string(),
+        MessageBlock::User(user) => user.id.to_string(),
+        MessageBlock::Agent(agent) => agent.id.to_string(),
+        MessageBlock::Tool(tool) => tool.id.to_string(),
+    }
+}
+
+/// Scripts a two-turn model whose first turn parks (with a released text
+/// delta) and completes with Stop; the second turn completes immediately.
+fn parked_two_turn_model(release: tokio::sync::watch::Receiver<bool>) -> FakeModel {
+    FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "doing")),
+            FakeStep::ParkUntilReleased(release),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ])
+}
+
+/// Enqueues human A and runtime B while turn 1 is parked, then releases the
+/// turn; returns the spawned controller task.
+fn controller_enqueue_a_and_b(
+    model: &FakeModel,
+    mailbox: &ConversationInboundMailbox,
+    release: tokio::sync::watch::Sender<bool>,
+) -> tokio::task::JoinHandle<()> {
+    let controller_mailbox = mailbox.clone();
+    let mut model_parked = model.parked();
+    tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-inbound-a", "human A", UserSource::Human))
+            .expect("enqueue human A");
+        controller_mailbox
+            .enqueue(inbound_user(
+                "msg-inbound-b",
+                "runtime B",
+                UserSource::Runtime,
+            ))
+            .expect("enqueue runtime B");
+        release.send(true).expect("release turn 1");
+    })
+}
+
+/// A drained batch is appended to canonical history before the next
+/// projection: the `ContextProjection` used by the next request and the
+/// captured `ModelRequest` both contain every drained message.
+#[tokio::test]
+async fn m4_projection_contains_drained_batch_before_request() {
+    let (release, parked) = model_release();
+    let model = parked_two_turn_model(parked.clone());
+    let tools = tool_registry_with_alpha();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    // A window far above the projected input: no compaction may interfere.
+    let runtime = runtime_with(
+        10_000,
+        0,
+        0,
+        weighted(100, 10, 0),
+        FakeContextSummarizer::new(Vec::new()),
+        InMemoryCheckpointStore::new().shared(),
+    );
+    let mailbox = ConversationInboundMailbox::new(conversation());
+    let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-u0", "start")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .with_inbound_mailbox(mailbox)
+    .expect("mailbox belongs to the request conversation")
+    .run()
+    .await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+        "no compaction below the threshold"
+    );
+    // Canonical history contains the distinct inbound messages.
+    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-u0".to_owned(),
+            agent_message_id(1).to_string(),
+            "msg-inbound-a".to_owned(),
+            "msg-inbound-b".to_owned(),
+            agent_message_id(2).to_string(),
+        ]
+    );
+    // The captured ModelRequest of the next model turn contains A and B.
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    let request_ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    assert_eq!(
+        request_ids,
+        vec![
+            "msg-u0".to_owned(),
+            agent_message_id(1).to_string(),
+            "msg-inbound-a".to_owned(),
+            "msg-inbound-b".to_owned(),
+        ],
+        "the projection was built after the batch drain, never before"
+    );
+}
+
+/// Appending a drained batch may cross the proactive compaction threshold:
+/// the M4 engine compacts the projection while the inbound messages remain
+/// canonical history.
+#[tokio::test]
+async fn m4_compaction_after_drain_preserves_canonical_inbound() {
+    let (release, parked) = model_release();
+    let model = parked_two_turn_model(parked.clone());
+    let tools = tool_registry_with_alpha();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    // per-message = 100, per-block = 10, window = 250:
+    // before the drain the projection is 100 tokens (below the threshold);
+    // after the drain [u0, agent, A, B] is 310 tokens (at/above it), so the
+    // drained batch deterministically triggers proactive compaction.
+    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
+    let store = InMemoryCheckpointStore::new().shared();
+    let runtime = runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone());
+    let mailbox = ConversationInboundMailbox::new(conversation());
+    let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-u0", "start")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .with_inbound_mailbox(mailbox)
+    .expect("mailbox belongs to the request conversation")
+    .run()
+    .await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    // The drained batch pushed the projection over the threshold: exactly
+    // one proactive compaction ran.
+    assert_eq!(
+        result
+            .events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
+            .count(),
+        1,
+        "the drained batch must cross the compaction threshold exactly once"
+    );
+    // Canonical history still contains the original inbound UserMessageBlocks
+    // even though the model-facing history was summarized.
+    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-u0".to_owned(),
+            agent_message_id(1).to_string(),
+            "msg-inbound-a".to_owned(),
+            "msg-inbound-b".to_owned(),
+            agent_message_id(2).to_string(),
+        ],
+        "canonical history preserves the drained inbound messages"
+    );
+    // The request continues on the compacted projection: the summary stands
+    // for the older model-facing history.
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    let request_ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    assert_eq!(
+        request_ids,
+        vec![summary_id(1).to_string()],
+        "the continuation request uses the compacted projection"
+    );
+    let serialized = serde_json::to_string(&requests[1].messages).expect("serialize");
+    assert!(
+        serialized.contains('S'),
+        "the summary reaches the projection"
+    );
+    // The stored checkpoint summary is a derived compaction summary: no
+    // fabricated wall-clock timestamp.
+    let checkpoint = store
+        .load(&conversation())
+        .expect("store")
+        .expect("checkpoint");
+    assert!(
+        matches!(
+            &checkpoint.summary,
+            UserMessageBlock {
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary,
+                timestamp: None,
+                ..
+            }
+        ),
+        "a compaction summary never carries a fabricated timestamp"
+    );
+}
+
+/// Without compaction, an ordinary inbound drain retains the pending
+/// provider continuation through the M4 projection path.
+#[tokio::test]
+async fn m4_drain_retains_continuation_without_compaction() {
+    let state = anthropic_state();
+    let (release, parked) = model_release();
+    let model = FakeModel::new(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(ModelEvent::ContinuationState {
+                block_index: ContentBlockIndex::new(0),
+                state: state.clone(),
+            }),
+            FakeStep::Emit(text_delta(1, "doing")),
+            FakeStep::ParkUntilReleased(parked.clone()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let tools = tool_registry_with_alpha();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let runtime = runtime_with(
+        10_000,
+        0,
+        0,
+        weighted(100, 10, 0),
+        FakeContextSummarizer::new(Vec::new()),
+        InMemoryCheckpointStore::new().shared(),
+    );
+    let mailbox = ConversationInboundMailbox::new(conversation());
+    let controller_mailbox = mailbox.clone();
+    let mut model_parked = model.parked();
+    let controller = tokio::spawn(async move {
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("model parked");
+        controller_mailbox
+            .enqueue(inbound_user("msg-inbound-a", "continue", UserSource::Human))
+            .expect("enqueue inbound message");
+        release.send(true).expect("release turn 1");
+    });
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-u0", "hi")], 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .with_inbound_mailbox(mailbox)
+    .expect("mailbox belongs to the request conversation")
+    .run()
+    .await;
+    controller.await.expect("controller task");
+
+    assert_single_terminal(&result.events);
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+        "no compaction below the threshold"
+    );
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].continuation,
+        Some(state),
+        "the ordinary inbound drain does not invalidate the continuation"
+    );
+    assert!(
+        requests[1]
+            .messages
+            .iter()
+            .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-inbound-a"))),
+        "the drained message is part of the projection"
+    );
 }
