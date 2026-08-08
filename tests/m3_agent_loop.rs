@@ -49,8 +49,12 @@ fn request(attempt: &str) -> AgentExecutionRequest {
             })],
             source: UserSource::Human,
             kind: rustx::message::types::InboundKind::Message,
+            // A historical (non-fresh) inbound message: the M3 loop
+            // invariants are exercised without Agent Status.
             timestamp: None,
         })],
+        initial_fresh_inbound: None,
+        timezone: None,
         model: "fake-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
         reasoning: ReasoningEffort::Medium,
@@ -58,12 +62,38 @@ fn request(attempt: &str) -> AgentExecutionRequest {
     }
 }
 
+/// A deterministic context runtime with a window far larger than any
+/// scripted request: the mandatory M4 path is active, but no compaction or
+/// summary activity can ever trigger in these loop-contract tests.
+fn runtime() -> rustx::context::ContextRuntime<'static> {
+    use rustx::context::{
+        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
+        InMemoryCheckpointStore,
+    };
+    let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
+        std::sync::Arc::new(DefaultTokenEstimator);
+    let engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        estimator,
+    )
+    .expect("valid context configuration");
+    ContextRuntime::new(
+        engine,
+        std::sync::Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
+        std::sync::Arc::new(InMemoryCheckpointStore::new()),
+    )
+}
+
 async fn run(
     model: &FakeModel,
     tools: &ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> AgentExecutionResult {
-    AgentExecution::new(request("attempt-1"), model, tools, cancellation)
+    AgentExecution::new(request("attempt-1"), model, tools, cancellation, runtime())
         .run()
         .await
 }
@@ -2442,7 +2472,7 @@ async fn run_with_mailbox(
     cancellation: &AgentCancellation,
     mailbox: ConversationInboundMailbox,
 ) -> AgentExecutionResult {
-    AgentExecution::new(request("attempt-1"), model, tools, cancellation)
+    AgentExecution::new(request("attempt-1"), model, tools, cancellation, runtime())
         .with_inbound_mailbox(mailbox)
         .expect("mailbox belongs to the request conversation")
         .run()
@@ -2456,10 +2486,16 @@ async fn mailbox_conversation_mismatch_is_rejected() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let foreign = ConversationInboundMailbox::new(ConversationId::new("conv-other"));
-    let error = AgentExecution::new(request("attempt-1"), &model, &tools, &cancellation)
-        .with_inbound_mailbox(foreign)
-        .err()
-        .expect("a mismatched conversation must be rejected");
+    let error = AgentExecution::new(
+        request("attempt-1"),
+        &model,
+        &tools,
+        &cancellation,
+        runtime(),
+    )
+    .with_inbound_mailbox(foreign)
+    .err()
+    .expect("a mismatched conversation must be rejected");
     assert!(matches!(error, MailboxError::ConversationMismatch { .. }));
 }
 
