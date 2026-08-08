@@ -617,6 +617,21 @@ fn translate_messages(
                         }
                     }
                 }
+                // The target fresh inbound user message receives one final
+                // rendered Agent Status text part. The status is never a
+                // separate canonical message and never appended to other
+                // user messages of the batch.
+                if let Some(status) = request
+                    .agent_status
+                    .as_ref()
+                    .filter(|status| status.target_message_id == user.id)
+                {
+                    parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                        ChatCompletionRequestMessageContentPartText {
+                            text: status.rendered.clone(),
+                        },
+                    ));
+                }
                 ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
                     content: ChatCompletionRequestUserMessageContent::Array(parts),
                     name: None,

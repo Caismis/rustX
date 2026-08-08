@@ -319,6 +319,21 @@ fn translate_messages(
                         }
                     }
                 }
+                // The target fresh inbound user message receives one final
+                // text block containing the rendered Agent Status. The flush
+                // above already guarantees the status can never land between
+                // an assistant tool_use and its tool_result, or between the
+                // tool results of one foreground batch.
+                if let Some(status) = request
+                    .agent_status
+                    .as_ref()
+                    .filter(|status| status.target_message_id == user.id)
+                {
+                    content.push(serde_json::json!({
+                        "type": "text",
+                        "text": status.rendered,
+                    }));
+                }
                 messages.push(WireRequestMessage {
                     role: "user",
                     content,
