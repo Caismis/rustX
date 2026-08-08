@@ -253,6 +253,13 @@ re-fed. This holds for `AfterMessage` boundaries and for `InsideAgent`
 boundaries: retiring a previously split message later feeds only the
 residual slice (`SummaryInputItem::AgentSlice`), never the original prefix.
 
+The stored previous checkpoint and the active incremental summary source
+are distinct: an absorbed checkpoint (coverage fully inside the current
+pinned system prefix) keeps its generation lineage, but its old summary is
+never fed into the next summarization (`SummaryRequest.previous_summary` is
+`None`), and the newly retired material begins strictly from the currently
+compactable region after the pinned prefix.
+
 ## 12. Summary provenance
 
 The summary service is provider-neutral and fakeable:

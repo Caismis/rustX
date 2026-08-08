@@ -1163,6 +1163,217 @@ fn fresh_checkpoint_is_established_after_absorption() {
     assert_eq!(history.len(), 6);
 }
 
+/// End-to-end: an absorbed stored checkpoint must not leak its old summary
+/// into the next summarization through the real runtime path. The stored
+/// checkpoint keeps its generation lineage, but the summary source is
+/// inactive: `previous_summary == None` and only the currently compactable
+/// suffix is retired.
+#[tokio::test]
+async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "answer")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    // Stored generation-1 checkpoint whose boundary (after A1) is absorbed
+    // by the pinned System S2 of the current canonical history.
+    let previous = checkpoint(
+        1,
+        "old-summary",
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        },
+        TokenMeasurement {
+            input_tokens: 300,
+            source: TokenMeasurementSource::Estimated,
+        },
+    );
+    store.save(&previous).expect("store generation 1");
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "fresh-suffix-summary".to_owned(),
+    )]));
+    let runtime = ContextRuntime::new(
+        engine(400, 0, 0, weighted(100, 10, 0)),
+        summarizer.clone(),
+        store.clone(),
+    );
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        system("sys-2", "trusted"),
+        user("u3", ""),
+        user("u4", ""),
+    ];
+    let result = AgentExecution::new(
+        request("attempt-1", history, 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .run()
+    .await;
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    // The summarizer received exactly one request, with no previous summary:
+    // the absorbed checkpoint's old summary must never reappear transitively.
+    let summary_requests = summarizer.requests();
+    assert_eq!(summary_requests.len(), 1);
+    assert_eq!(
+        summary_requests[0].previous_summary, None,
+        "an absorbed checkpoint is never an incremental summary source"
+    );
+    // Only the currently compactable suffix is newly retired — never the
+    // pinned, checkpoint-covered history.
+    let newly: Vec<String> = summary_requests[0]
+        .newly_retired
+        .iter()
+        .map(|item| match item {
+            SummaryInputItem::Message(message) => message_id_of(message),
+            SummaryInputItem::AgentSlice { message_id, .. } => format!("slice:{message_id}"),
+        })
+        .collect();
+    assert_eq!(newly, vec!["u3", "u4"]);
+    // The generation lineage survives absorption: generation 2 follows
+    // stored generation 1; it is never reset to 1.
+    let latest = store.load(&conversation()).expect("store").expect("latest");
+    assert_eq!(latest.generation, 2);
+    assert_eq!(
+        latest.boundary,
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("u4"),
+        }
+    );
+    // The subsequent model projection carries the pinned literal history
+    // exactly once, the fresh summary exactly once, and the retained suffix
+    // — never the old checkpoint summary.
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    let ids: Vec<String> = requests[0].messages.iter().map(message_id_of).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "u1".to_owned(),
+            "a1".to_owned(),
+            "u2".to_owned(),
+            "sys-2".to_owned(),
+            summary_id(2).as_str().to_owned(),
+        ]
+    );
+    let serialized = serde_json::to_string(&requests[0].messages).expect("serialize");
+    assert!(serialized.contains("fresh-suffix-summary"));
+    assert!(
+        !serialized.contains("old-summary"),
+        "the absorbed checkpoint's old summary never reaches the projection"
+    );
+}
+
+/// The same end-to-end guarantee for an absorbed `InsideAgent` checkpoint.
+#[tokio::test]
+async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "answer")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let previous = checkpoint(
+        1,
+        "old-summary",
+        ContextBoundary::InsideAgent {
+            message_id: MessageId::new("a1"),
+            first_retained_block: ContentBlockIndex::new(1),
+        },
+        TokenMeasurement {
+            input_tokens: 400,
+            source: TokenMeasurementSource::Estimated,
+        },
+    );
+    store.save(&previous).expect("store generation 1");
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "fresh-suffix-summary".to_owned(),
+    )]));
+    let runtime = ContextRuntime::new(
+        engine(500, 0, 0, weighted(100, 10, 0)),
+        summarizer.clone(),
+        store.clone(),
+    );
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("intro"), call_block("c1")]),
+        tool_message("t1", "c1"),
+        user("u2", ""),
+        system("sys-2", "trusted"),
+        user("u3", ""),
+    ];
+    let result = AgentExecution::new(
+        request("attempt-1", history, 0),
+        &model,
+        &tools,
+        &cancellation,
+    )
+    .with_context_runtime(runtime)
+    .run()
+    .await;
+
+    assert_single_terminal(&result.events);
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    let summary_requests = summarizer.requests();
+    assert_eq!(summary_requests.len(), 1);
+    assert_eq!(
+        summary_requests[0].previous_summary, None,
+        "an absorbed InsideAgent checkpoint is never a summary source"
+    );
+    let newly: Vec<String> = summary_requests[0]
+        .newly_retired
+        .iter()
+        .map(|item| match item {
+            SummaryInputItem::Message(message) => message_id_of(message),
+            SummaryInputItem::AgentSlice { message_id, .. } => format!("slice:{message_id}"),
+        })
+        .collect();
+    assert_eq!(newly, vec!["u3"]);
+    let latest = store.load(&conversation()).expect("store").expect("latest");
+    assert_eq!(latest.generation, 2, "the lineage survives absorption");
+    let requests = model.requests();
+    assert_eq!(requests.len(), 1);
+    let ids: Vec<String> = requests[0].messages.iter().map(message_id_of).collect();
+    assert_eq!(
+        ids,
+        vec![
+            "u1".to_owned(),
+            "a1".to_owned(),
+            "t1".to_owned(),
+            "u2".to_owned(),
+            "sys-2".to_owned(),
+            summary_id(2).as_str().to_owned(),
+        ]
+    );
+    let serialized = serde_json::to_string(&requests[0].messages).expect("serialize");
+    assert!(serialized.contains("fresh-suffix-summary"));
+    assert!(
+        !serialized.contains("old-summary"),
+        "the absorbed checkpoint's old summary never reaches the projection"
+    );
+}
+
 /// If pinned context alone prevents fitting, compaction fails explicitly.
 #[test]
 fn pinned_context_alone_cannot_fit_fails_explicitly() {
@@ -1403,7 +1614,9 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
         })
         .collect();
     assert_eq!(newly, vec!["slice:a1", "t2", "u2"]);
-    let request = engine.summary_request(Some(&checkpoint1), &second);
+    let request = engine
+        .summary_request(&grown, Some(&checkpoint1), &second)
+        .expect("summary request");
     assert_eq!(request.previous_summary.as_deref(), Some("s1"));
     let (checkpoint2, _) = engine
         .apply_compaction(
@@ -1499,7 +1712,9 @@ fn incremental_second_checkpoint_receives_only_new_material() {
     let second = engine
         .plan_compaction(&history, Some(&checkpoint1), &projection2, &[], 0, None)
         .expect("second plan");
-    let request = engine.summary_request(Some(&checkpoint1), &second);
+    let request = engine
+        .summary_request(&history, Some(&checkpoint1), &second)
+        .expect("summary request");
     assert_eq!(request.previous_summary.as_deref(), Some("s1"));
     // Only the newly retired material is fed: not the raw prefix covered by
     // checkpoint 1.
@@ -3091,6 +3306,57 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
             .summarize(request, rustx::model::ModelCancellation::new())
             .await
             .expect_err("invalid summary must fail");
+        assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
+    }
+}
+
+/// Malformed canonical stream orderings are compaction failures: content
+/// before `Started`, a duplicate `Started`, `Completed` without `Started`,
+/// and events after the terminal are never folded into a summary.
+#[tokio::test]
+async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
+    let cases: Vec<Vec<FakeStep>> = vec![
+        // Content before Started.
+        vec![
+            FakeStep::Emit(text_delta(0, "early")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        // Duplicate Started.
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "x")),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+        // Completed without Started.
+        vec![FakeStep::Emit(done(ModelFinishReason::Stop))],
+        // Events after the terminal event.
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+            FakeStep::Emit(text_delta(0, "late")),
+        ],
+    ];
+    for events in cases {
+        let model = FakeModel::new(vec![events]);
+        let summarizer = ModelBackedSummarizer::new(
+            &model,
+            SummaryModelConfig {
+                model: "fake-model".to_owned(),
+                protocol: ModelProtocol::OpenAiChatCompletions,
+                reasoning: ReasoningEffort::Medium,
+                max_output_tokens: 64,
+            },
+        );
+        let request = SummaryRequest {
+            previous_summary: None,
+            newly_retired: vec![],
+            split_turn_prefix: None,
+        };
+        let error = summarizer
+            .summarize(request, rustx::model::ModelCancellation::new())
+            .await
+            .expect_err("malformed stream must fail");
         assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
     }
 }

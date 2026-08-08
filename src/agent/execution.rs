@@ -563,7 +563,14 @@ impl<'a> AgentExecution<'a> {
             Ok(plan) => plan,
             Err(error) => return Err(self.compaction_failure(&error, overflow)),
         };
-        let summary_request = runtime.engine.summary_request(checkpoint.as_ref(), &plan);
+        let summary_request =
+            match runtime
+                .engine
+                .summary_request(&self.history, checkpoint.as_ref(), &plan)
+            {
+                Ok(request) => request,
+                Err(error) => return Err(self.compaction_failure(&error, overflow)),
+            };
         let summary = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {

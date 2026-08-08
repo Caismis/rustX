@@ -179,9 +179,12 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
             };
             let mut stream = self.adapter.stream(model_request, cancellation);
             let mut text = String::new();
-            let mut terminal = false;
+            let mut state = SummaryStreamState::default();
             let mut finish_reason = None;
             while let Some(event) = stream.next().await {
+                // Malformed canonical orderings are compaction failures,
+                // never silently folded into a durable checkpoint.
+                state.accept(&event)?;
                 match event {
                     ModelEvent::Started
                     | ModelEvent::UsageUpdate { .. }
@@ -201,8 +204,6 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                         ..
                     } => {
                         finish_reason = Some(reason);
-                        terminal = true;
-                        break;
                     }
                     ModelEvent::Failed { error } => {
                         return Err(
@@ -221,7 +222,7 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                     }
                 }
             }
-            if !terminal {
+            if !state.terminal {
                 return Err(summary_failed(
                     "summary stream ended without a terminal event",
                 ));
@@ -250,4 +251,62 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
 
 fn summary_failed(message: &str) -> ContextError {
     ContextError::new(ContextErrorKind::SummaryFailed, message)
+}
+
+/// The canonical stream state of one summary generation.
+///
+/// Malformed adapter streams must never become durable compaction
+/// checkpoints: the summary stream must start with `Started` (or a bare
+/// terminal `Failed` for a request rejected before provider execution),
+/// `Started` occurs at most once, `Completed` requires `Started`, and no
+/// event follows the terminal event. This is the same canonical contract
+/// the agent loop enforces, kept provider-neutral and without recursing
+/// into `AgentExecution`.
+#[derive(Debug, Default)]
+struct SummaryStreamState {
+    started: bool,
+    terminal: bool,
+}
+
+impl SummaryStreamState {
+    /// Accepts one event, validating the canonical stream ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContextErrorKind::SummaryFailed`] for a malformed
+    /// ordering: content before `Started`, a duplicate `Started`,
+    /// `Completed` without `Started`, or any event after the terminal.
+    fn accept(&mut self, event: &ModelEvent) -> Result<(), ContextError> {
+        if self.terminal {
+            return Err(summary_failed(
+                "summary stream event after the terminal event",
+            ));
+        }
+        match event {
+            ModelEvent::Started => {
+                if self.started {
+                    return Err(summary_failed("duplicate Started in the summary stream"));
+                }
+                self.started = true;
+                Ok(())
+            }
+            ModelEvent::Failed { .. } => {
+                self.terminal = true;
+                Ok(())
+            }
+            ModelEvent::Completed { .. } => {
+                if !self.started {
+                    return Err(summary_failed("summary stream Completed without Started"));
+                }
+                self.terminal = true;
+                Ok(())
+            }
+            _ => {
+                if !self.started {
+                    return Err(summary_failed("summary stream content before Started"));
+                }
+                Ok(())
+            }
+        }
+    }
 }

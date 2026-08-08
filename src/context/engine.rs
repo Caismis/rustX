@@ -446,18 +446,44 @@ impl ContextEngine {
         self.build_plan(&scope, chosen, current_projection, max_output_tokens)
     }
 
-    /// The `SummaryRequest` a plan implies, given the previous checkpoint.
-    #[must_use]
+    /// The `SummaryRequest` a plan implies, given the previous checkpoint
+    /// and the current canonical history.
+    ///
+    /// The stored checkpoint keeps the generation lineage (the next
+    /// checkpoint generation is `previous.generation + 1`), but it is the
+    /// active incremental summary source only when it is not absorbed by the
+    /// current pinned system prefix. An absorbed checkpoint's coverage is
+    /// pinned-literal again, so its old summary must never be fed into the
+    /// next summarization: `previous_summary` is `None`, and the newly
+    /// retired material starts strictly from the currently compactable
+    /// region after the pinned prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
+    /// invalid history.
     pub fn summary_request(
         &self,
+        history: &[MessageBlock],
         checkpoint: Option<&ContextCheckpoint>,
         plan: &CompactionPlan,
-    ) -> SummaryRequest {
-        SummaryRequest {
-            previous_summary: checkpoint.map(summary_text),
+    ) -> Result<SummaryRequest, ContextError> {
+        let active_previous = match checkpoint {
+            Some(checkpoint) => {
+                let index = StructuralIndex::build(history)?;
+                if Self::checkpoint_is_absorbed(&index, checkpoint) {
+                    None
+                } else {
+                    Some(checkpoint)
+                }
+            }
+            None => None,
+        };
+        Ok(SummaryRequest {
+            previous_summary: active_previous.map(summary_text),
             newly_retired: plan.newly_retired.clone(),
             split_turn_prefix: plan.split_turn_prefix.clone(),
-        }
+        })
     }
 
     /// Applies a plan with the generated summary text, producing the next
@@ -493,7 +519,10 @@ impl ContextEngine {
         summary_text: &str,
         tool_definitions: &[ToolDefinition],
     ) -> Result<(ContextCheckpoint, ContextProjection), ContextError> {
-        if !self.summary_request(previous, plan).advances_coverage() {
+        if !self
+            .summary_request(history, previous, plan)?
+            .advances_coverage()
+        {
             return Err(no_progress(
                 "the plan retires no additional compactable unit",
             ));
