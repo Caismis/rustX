@@ -110,18 +110,24 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
   per model turn)
 - Continuation invalidation after successful compaction; explicit failure
   when the continuation-owning turn is pinned by system context
+- Mandatory Agent Status projection: explicit `FreshInboundTurn` identity,
+  structured section composition with reserved ids, the mandatory temporal
+  section (clock + IANA timezone), the canonical deterministic renderer,
+  the ephemeral `AgentStatusAttachment`, adapter-owned wire placement, full
+  token accounting, projection fingerprinting, and fresh-inbound compaction
+  protection
+- Agent Status integration with Issue #22 inbound batching: one drained
+  batch becomes one fresh inbound turn with exactly one status snapshot
+  targeting the final message
 - Opt-in live repeated-compaction validation (`tests/m4_live.rs`)
 
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
-Remaining under Issue #7 (not implemented by PR #21 or the Issue #22
-batching PR, implemented separately):
+Remaining under Issue #7 (not implemented by PR #21, the Issue #22
+batching PR, or the Agent Status PR):
 
-- Mandatory Agent Status projection (temporal section, extension/provider
-  contract)
-- Agent Status integration with Issue #22 inbound batching
-- Later M5-backed background-execution status integration
+- M5-backed background-execution Agent Status integration
 - Live acceptance criteria that remain unverified without credentials
 
 Issue #22 (inbound batching) is implemented in the Issue #22 PR: the
@@ -129,8 +135,10 @@ conversation inbound mailbox foundation (`src/runtime/inbound.rs`),
 including the canonical `UserMessageBlock.timestamp`, the shared
 `InboundSequence` domain, atomic enqueue, the finite watermark-bounded
 drain, safe-boundary agent-loop integration, and the deterministic
-mailbox/race/agent-loop/M4/provider test coverage. Agent Status integration
-remains Issue #7, background runtime producers remain Issue #8, and mailbox
+mailbox/race/agent-loop/M4/provider test coverage. The remaining
+cross-issue acceptance work — Agent Status integration with the drained
+batch — is implemented by the Agent Status PR (issue-7/agent-status).
+Background runtime producers remain Issue #8, and mailbox
 persistence/recovery remains later milestone work.
 
 Exit criteria:
@@ -138,6 +146,9 @@ Exit criteria:
 - A long local session can compact multiple times and continue correctly.
 - Compaction never rewrites or deletes canonical history.
 - Deterministic fixtures cover normal compaction and split-turn compaction.
+- Fresh inbound material is never compacted before a successful model
+  invocation observes it; preserving it or failing explicitly with
+  `CannotFit` are the only two outcomes.
 
 Deferred to later milestones: durable checkpoint/event storage (M8),
 conversation summarization in the CLI (M10), and any provider fallback or

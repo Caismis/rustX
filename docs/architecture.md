@@ -315,12 +315,23 @@ Key contracts:
   `ContextWindowExceeded` is recovered through exactly one bounded
   compact-and-retry
   (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
+- Agent Status is the mandatory, provider-neutral, ephemeral projection of
+  current runtime facts (temporal section with a narrow clock/timezone
+  boundary, structured section providers with stable reserved ids, and a
+  canonical deterministic renderer). It exists only while a
+  `FreshInboundTurn` is pending, participates in the full token estimate
+  and the projection fingerprint, is excluded from recent-conversation
+  retention, and is protected from compaction until a successful model
+  invocation observes it. Adapters own its wire placement.
+- A fresh inbound turn that has not been observed may never be compacted
+  away; when preserving it makes the projection impossible, planning fails
+  with `CannotFit` rather than summarizing the unobserved instruction.
 
-`AgentExecution::new(...)` remains the explicit no-context/unbounded
-compatibility path; the M4 path is additive via
-`AgentExecution::with_context_runtime(ContextRuntime { engine, summarizer,
-checkpoint_store })`. See `docs/context-engine.md` for the full boundary
-description.
+The M4 context path is **mandatory**: every `AgentExecution` is constructed
+with a `ContextRuntime` (`AgentExecution::new(request, adapter, tools,
+cancellation, context_runtime)`); the no-context compatibility path and
+`with_context_runtime` are gone, and there is no Agent Status disable flag.
+See `docs/context-engine.md` for the full boundary description.
 
 ### Layer 3: Model plane
 

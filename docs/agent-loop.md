@@ -18,6 +18,8 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - cancellation observation and terminal cancellation outcome
 - the recorded `RuntimeEvent` trace
 - the committed in-memory conversation state of the attempt
+- the pending fresh inbound trigger lifecycle (`FreshInboundTurn`) and its
+  composition into exactly one Agent Status snapshot per request preparation
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
@@ -61,15 +63,32 @@ verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
 
-With the M4 context runtime enabled (`with_context_runtime`), the request
-carries the *context projection* of that history (pinned system prefix,
-checkpoint summary, retained suffix) instead of the raw committed history,
-and the projection is what continuation state refers to. A successful
-compaction establishes a new context boundary and therefore invalidates
-the pending continuation; the M4 context engine enforces that the
-continuation-owning turn is retired completely, so an old opaque provider
-continuation is never paired with a new projection. See
-`docs/context-engine.md` section 14.
+The M4 context path is mandatory: every model request carries the *context
+projection* of the committed history (pinned system prefix, checkpoint
+summary, retained suffix) plus the ephemeral Agent Status attachment of the
+pending fresh inbound turn (when one exists), instead of the raw committed
+history, and the projection is what continuation state refers to. A
+successful compaction establishes a new context boundary and therefore
+invalidates the pending continuation; the M4 context engine enforces that
+the continuation-owning turn is retired completely, so an old opaque
+provider continuation is never paired with a new projection. See
+`docs/context-engine.md` sections 14 and 18-19. An ordinary inbound drain
+and an Agent Status attachment never clear the pending continuation.
+
+## 4.1 Fresh inbound lifecycle
+
+Fresh inbound identity is explicit execution state, never inferred from
+message role or history shape. The attempt starts with the request's
+`initial_fresh_inbound` trigger pending; the first successfully completed
+model invocation consumes it (including a successful `ToolCalls` response:
+the model has already observed the turn). A safe-boundary mailbox drain
+appends the whole batch to canonical history and establishes one new
+`FreshInboundTurn` from the drained ids in sequence order. The next model
+request composes exactly one Agent Status snapshot targeting the final
+fresh inbound message; a `ContextWindowExceeded` overflow does not consume
+the trigger, and the retry composes a freshly sampled snapshot. A
+foreground-tool-only continuation with no new drain carries no Agent
+Status.
 
 ## 5. Usage
 
@@ -112,11 +131,11 @@ milestone.
 ### Generic Agent Loop cancellation
 
 Observable cancellation is checked **before every model turn begins**, for
-every execution, regardless of mailbox attachment, mailbox contents,
-context runtime presence, or provider protocol. This is an intentional
-pre-1.0 Agent Loop contract refinement, not a mailbox feature: the mailbox
-only adds its own safe-boundary selection rule (below); it does not control
-generic cancellation timing.
+every execution, regardless of mailbox attachment, mailbox contents, or
+provider protocol. This is an intentional pre-1.0 Agent Loop contract
+refinement, not a mailbox feature: the mailbox only adds its own
+safe-boundary selection rule (below); it does not control generic
+cancellation timing.
 
 When cancellation wins at the generic checkpoint:
 
@@ -188,6 +207,12 @@ Event Journal    = execution facts
   appended to canonical history it is consumed from the mailbox and is
   never requeued; canonical history carries it forward even if the attempt
   later fails before the model observes it.
+- The whole drained batch becomes one `FreshInboundTurn`, so the next model
+  request receives exactly one Agent Status snapshot. `inbound_message_time`
+  is the persisted timestamp of the final batch item in inbound sequence
+  order (the highest-sequence item), never `min`/`max` of producer wall
+  clocks, the drain time, or current time; producer timestamps may be
+  non-monotonic due to clock skew.
 
 ### Safe boundaries
 

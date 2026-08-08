@@ -61,6 +61,8 @@ async fn live_step(
         conversation_id: conversation_id(),
         attempt_id: AttemptId::new(attempt),
         initial_messages: history,
+        initial_fresh_inbound: None,
+        timezone: None,
         model: model.to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
         reasoning: ReasoningEffort::Medium,
@@ -84,8 +86,7 @@ async fn live_step(
         store,
     )
     .expect("live context runtime");
-    AgentExecution::new(request, adapter, tools, &cancellation)
-        .with_context_runtime(runtime)
+    AgentExecution::new(request, adapter, tools, &cancellation, runtime)
         .run()
         .await
 }

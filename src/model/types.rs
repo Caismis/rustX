@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::status::AgentStatusAttachment;
 use crate::message::types::MessageBlock;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::tools::types::ToolDefinition;
@@ -45,8 +46,11 @@ pub enum ReasoningEffort {
 ///
 /// The runtime passes exactly the normalized information it owns: model
 /// identity, canonical context, available tool definitions, reasoning
-/// configuration, and optional provider continuation state. Provider
-/// request schemas are adapter concerns.
+/// configuration, the ephemeral Agent Status attachment of a pending fresh
+/// inbound turn (when one exists), and optional provider continuation state.
+/// Provider request schemas are adapter concerns. The Agent Status
+/// attachment is never encoded as a fake canonical `MessageBlock`; adapters
+/// own its wire placement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
     /// Provider model identifier.
@@ -58,6 +62,10 @@ pub struct ModelRequest {
     /// Tool definitions the model may call.
     #[serde(default)]
     pub tools: Vec<ToolDefinition>,
+    /// The ephemeral Agent Status attachment of the pending fresh inbound
+    /// turn, when one exists. Projection-only: never canonical history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_status: Option<AgentStatusAttachment>,
     /// Reasoning effort for the generation.
     pub reasoning: ReasoningEffort,
     /// The runtime-resolved effective maximum output tokens.
@@ -150,5 +158,49 @@ mod tests {
         let json = serde_json::to_string(&usage).expect("serialize usage");
         let decoded: ModelUsage = serde_json::from_str(&json).expect("deserialize usage");
         assert_eq!(decoded, usage);
+    }
+
+    /// The Agent Status attachment is ephemeral request metadata: it
+    /// round-trips when present and is absent from the canonical encoding
+    /// when None.
+    #[test]
+    fn agent_status_attachment_is_optional_request_metadata() {
+        use crate::context::status::AgentStatusAttachment;
+        use crate::message::content::TextBlock;
+        use crate::message::types::{
+            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        };
+        use crate::runtime::identity::MessageId;
+        let mut request = super::ModelRequest {
+            model: "m".to_owned(),
+            protocol: ModelProtocol::OpenAiResponses,
+            messages: vec![MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-inbound-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "hi".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })],
+            tools: Vec::new(),
+            agent_status: None,
+            reasoning: ReasoningEffort::Medium,
+            max_output_tokens: 512,
+            continuation: None,
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        assert!(
+            !json.contains("agent_status"),
+            "absent agent status must be omitted from the canonical encoding"
+        );
+        request.agent_status = Some(AgentStatusAttachment {
+            target_message_id: MessageId::new("msg-inbound-1"),
+            rendered: "status".to_owned(),
+        });
+        let json = serde_json::to_string(&request).expect("serialize");
+        assert!(json.contains("agent_status"));
+        let decoded: super::ModelRequest = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, request);
     }
 }

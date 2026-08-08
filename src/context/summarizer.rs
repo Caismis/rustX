@@ -174,6 +174,9 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                 protocol: self.config.protocol,
                 messages,
                 tools: Vec::new(),
+                // Summary generation is not an inbound agent turn: it never
+                // carries an Agent Status attachment.
+                agent_status: None,
                 reasoning: self.config.reasoning,
                 max_output_tokens: self.config.max_output_tokens,
                 continuation: None,
