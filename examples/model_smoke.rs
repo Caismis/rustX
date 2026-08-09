@@ -165,6 +165,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             timestamp: None,
         })],
         tools: Vec::new(),
+        agent_status: None,
         reasoning: ReasoningEffort::Medium,
         max_output_tokens: 512,
         continuation: None,

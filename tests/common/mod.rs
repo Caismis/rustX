@@ -305,6 +305,7 @@ pub fn simple_request(
             timestamp: None,
         })],
         tools: Vec::new(),
+        agent_status: None,
         reasoning: ReasoningEffort::Medium,
         max_output_tokens: 512,
         continuation: None,

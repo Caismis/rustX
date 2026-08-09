@@ -216,6 +216,8 @@ fn request(
         conversation_id: conversation(),
         attempt_id: AttemptId::new(attempt),
         initial_messages,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
+        timezone: None,
         model: "fake-model".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
         reasoning: ReasoningEffort::Medium,
@@ -377,7 +379,7 @@ fn short_history_requires_no_compaction() {
     let engine = engine(100, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi"), user("u2", "bye")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     assert!(
         !engine
@@ -410,10 +412,10 @@ fn projection_ordering_is_deterministic() {
         },
     );
     let first = engine
-        .build_projection(&history, Some(&checkpoint), &[], None)
+        .build_projection(&history, Some(&checkpoint), &[], None, None)
         .expect("projection");
     let second = engine
-        .build_projection(&history, Some(&checkpoint), &[], None)
+        .build_projection(&history, Some(&checkpoint), &[], None, None)
         .expect("projection again");
     assert_eq!(first, second, "projection must be a pure function");
     let kinds: Vec<&str> = first
@@ -440,10 +442,10 @@ fn same_context_produces_same_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi"), agent("a1", vec![text_block("ok")])];
     let first = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let second = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection again");
     assert_eq!(first.estimated_input, second.estimated_input);
     assert_eq!(
@@ -462,10 +464,10 @@ fn tool_definitions_contribute_to_the_request_estimate() {
         common::tool("beta", "tool-beta"),
     ];
     let without_tools = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection without tools");
     let with_tools = engine
-        .build_projection(&history, None, &tools, None)
+        .build_projection(&history, None, &tools, None, None)
         .expect("projection with tools");
     assert_eq!(with_tools.estimated_input.input_tokens, 30);
     assert_eq!(without_tools.estimated_input.input_tokens, 10);
@@ -489,16 +491,30 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
     let cheap = engine(10_000_000, 0, 20, weighted(10, 10, 0));
     let expensive = engine(10_000_000, 0, 20, weighted(10, 10, 1_000_000));
     let projection_cheap = cheap
-        .build_projection(&history, None, &tools, None)
+        .build_projection(&history, None, &tools, None, None)
         .expect("projection");
     let projection_expensive = expensive
-        .build_projection(&history, None, &tools, None)
+        .build_projection(&history, None, &tools, None, None)
         .expect("projection");
     let plan_cheap = cheap
-        .plan_compaction(&history, None, &projection_cheap, &tools, 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection_cheap,
+            &tools,
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     let plan_expensive = expensive
-        .plan_compaction(&history, None, &projection_expensive, &tools, 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection_expensive,
+            &tools,
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // Identical retention decision: the tool weight changes the full request
     // estimate but never the recent-conversation target.
@@ -528,14 +544,14 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: projection.fingerprint(),
         input_tokens: 42,
     };
     let measured = engine
-        .build_projection(&history, None, &[], Some(&observed))
+        .build_projection(&history, None, &[], Some(&observed), None)
         .expect("projection with observed usage");
     assert_eq!(measured.estimated_input.input_tokens, 42);
     assert_eq!(
@@ -547,7 +563,7 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     // measurement does not apply, and the estimate is used instead.
     let grown = vec![user("u1", "hi"), user("u2", "more")];
     let estimated = engine
-        .build_projection(&grown, None, &[], Some(&observed))
+        .build_projection(&grown, None, &[], Some(&observed), None)
         .expect("projection with stale observation");
     assert_eq!(estimated.estimated_input.input_tokens, 20);
     assert_eq!(
@@ -563,7 +579,7 @@ fn missing_usage_falls_back_to_the_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 10);
     assert_eq!(
@@ -580,7 +596,7 @@ fn estimates_never_become_model_usage() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     assert_eq!(
         projection.estimated_input.source,
@@ -604,7 +620,7 @@ fn default_estimator_formula_is_frozen() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let expected = rustx::context::bytes_to_tokens(
         serde_json::to_vec(&projection.items)
@@ -624,7 +640,7 @@ fn default_estimator_formula_is_frozen() {
 fn threshold_equality_compacts() {
     let engine = engine(100, 0, 5, weighted(20, 20, 20));
     let at = engine
-        .build_projection(&vec![user("u1", ""); 5], None, &[], None)
+        .build_projection(&vec![user("u1", ""); 5], None, &[], None, None)
         .expect("projection");
     assert_eq!(at.estimated_input.input_tokens, 100);
     assert!(
@@ -634,7 +650,7 @@ fn threshold_equality_compacts() {
     );
 
     let below = engine
-        .build_projection(&vec![user("u1", ""); 4], None, &[], None)
+        .build_projection(&vec![user("u1", ""); 4], None, &[], None, None)
         .expect("projection");
     assert_eq!(below.estimated_input.input_tokens, 80);
     assert!(
@@ -644,7 +660,7 @@ fn threshold_equality_compacts() {
     );
 
     let above = engine
-        .build_projection(&vec![user("u1", ""); 6], None, &[], None)
+        .build_projection(&vec![user("u1", ""); 6], None, &[], None, None)
         .expect("projection");
     assert_eq!(above.estimated_input.input_tokens, 120);
     assert!(engine.should_compact(&above, 0).expect("above threshold"));
@@ -726,10 +742,17 @@ fn simple_complete_turn_boundary() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.boundary,
@@ -754,10 +777,17 @@ fn multiple_tool_calls_stay_with_their_results() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // The retired call c1 is covered together with its result t1, and the
     // retained call c2 stays with its result t2.
@@ -796,7 +826,7 @@ fn orphan_tool_message_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = vec![user("u1", ""), tool_message("t1", "ghost")];
     let error = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect_err("malformed history");
     assert_eq!(error.kind, ContextErrorKind::MalformedHistory);
 }
@@ -815,10 +845,17 @@ fn no_edge_crosses_the_chosen_cut() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     let (checkpoint, rebuilt) = engine
         .apply_compaction(&conversation(), &history, None, &plan, "s1", &[])
@@ -853,13 +890,27 @@ fn candidate_selection_is_deterministic() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let first = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     let second = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan again");
     assert_eq!(first, second);
 }
@@ -872,10 +923,17 @@ fn message_count_alone_does_not_control_the_cut() {
     let engine = engine(1_000, 0, 25, scripted(10, 10, 10, &[("huge", 500)]));
     let history = vec![user("huge", ""), user("small1", ""), user("small2", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.boundary,
@@ -900,10 +958,17 @@ fn retained_suffix_approximates_the_recent_target() {
         user("u4", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // Latest boundary retaining at least 25 tokens: retire one, keep three.
     assert_eq!(
@@ -927,10 +992,17 @@ fn structural_rule_may_force_extra_retention() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // The naive "keep the last two messages" cut would retire a1 but keep
     // t1, separating the call from its result; the valid cut retains the
@@ -955,10 +1027,17 @@ fn token_target_may_retain_fewer_messages_than_recent() {
         user("m3", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // Target 20: retire the huge message and the next one, keeping exactly
     // the two recent small messages.
@@ -987,11 +1066,18 @@ fn system_messages_are_pinned_and_never_summarized() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 310);
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // The system message never enters the summary input.
     for item in &plan.newly_retired {
@@ -1046,7 +1132,7 @@ fn absorbed_after_message_checkpoint_does_not_inject_its_summary() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None)
+        .build_projection(&history, Some(&previous), &[], None, None)
         .expect("projection");
     let ids: Vec<String> = projection
         .items
@@ -1092,7 +1178,7 @@ fn absorbed_inside_agent_checkpoint_does_not_inject_its_summary() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None)
+        .build_projection(&history, Some(&previous), &[], None, None)
         .expect("projection");
     let ids: Vec<String> = projection
         .items
@@ -1135,10 +1221,17 @@ fn fresh_checkpoint_is_established_after_absorption() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None)
+        .build_projection(&history, Some(&previous), &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, Some(&previous), &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            Some(&previous),
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     let (next, rebuilt) = engine
         .apply_compaction(
@@ -1218,8 +1311,8 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -1328,8 +1421,8 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -1390,10 +1483,17 @@ fn pinned_context_alone_cannot_fit_fails_explicitly() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let error = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect_err("cannot fit");
     assert_eq!(error.kind, ContextErrorKind::CannotFit);
 }
@@ -1424,10 +1524,17 @@ fn oversized_turn_splits_inside_the_agent_message() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.boundary,
@@ -1503,10 +1610,17 @@ fn whole_turn_preference_wins_over_splitting_the_latest_turn() {
         ),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.boundary,
@@ -1534,10 +1648,17 @@ fn no_safe_split_falls_back_to_a_whole_turn_cut() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.boundary,
@@ -1574,10 +1695,17 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let first = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("first plan");
     assert!(matches!(
         first.boundary,
@@ -1599,10 +1727,17 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
         tool_message("t3", "c3"),
     ];
     let projection2 = engine
-        .build_projection(&grown, Some(&checkpoint1), &[], None)
+        .build_projection(&grown, Some(&checkpoint1), &[], None, None)
         .expect("second projection");
     let second = engine
-        .plan_compaction(&grown, Some(&checkpoint1), &projection2, &[], 0, None)
+        .plan_compaction(
+            &grown,
+            Some(&checkpoint1),
+            &projection2,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("second plan");
     assert_eq!(
         second.boundary,
@@ -1652,10 +1787,17 @@ fn first_checkpoint_is_committed_with_full_metadata() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(plan.estimated_before.input_tokens, 310);
     assert_eq!(
@@ -1696,10 +1838,17 @@ fn incremental_second_checkpoint_receives_only_new_material() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let first = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("first plan");
     assert_eq!(
         first.boundary,
@@ -1712,10 +1861,17 @@ fn incremental_second_checkpoint_receives_only_new_material() {
         .expect("first apply");
 
     let projection2 = engine
-        .build_projection(&history, Some(&checkpoint1), &[], None)
+        .build_projection(&history, Some(&checkpoint1), &[], None, None)
         .expect("second projection");
     let second = engine
-        .plan_compaction(&history, Some(&checkpoint1), &projection2, &[], 0, None)
+        .plan_compaction(
+            &history,
+            Some(&checkpoint1),
+            &projection2,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("second plan");
     let request = engine
         .summary_request(&history, Some(&checkpoint1), &second)
@@ -1756,10 +1912,17 @@ fn no_progress_compaction_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = vec![user("u1", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     // A summary text of 400 bytes estimates 101 tokens >= the 100 before.
     let error = engine
@@ -1787,21 +1950,28 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
     // Provider-reported before = 1000; the deterministic estimate of the
     // same projection is 20.
     let plain_projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 1_000,
     };
     let projection = engine
-        .build_projection(&history, None, &[], Some(&observed))
+        .build_projection(&history, None, &[], Some(&observed), None)
         .expect("provider-reported projection");
     assert_eq!(
         projection.estimated_input.source,
         TokenMeasurementSource::ProviderReported
     );
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(
         plan.estimated_before.input_tokens, 1_000,
@@ -1843,21 +2013,30 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
     // Provider-reported before = 50; the deterministic estimate of the same
     // projection is 60.
     let plain_projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 50,
     };
     let projection = engine
-        .build_projection(&history, None, &[], Some(&observed))
+        .build_projection(&history, None, &[], Some(&observed), None)
         .expect("provider-reported projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     assert_eq!(plan.estimated_before_tokens, 60);
-    // The after estimate (51) decreased from the deterministic before (60)
-    // but is above the provider-reported 50: progress must be accepted.
+    // The after estimate (50) decreased from the deterministic before (60)
+    // but is above the provider-reported 50-boundary of this test's before
+    // measurement: progress must be accepted. A 200-byte summary weighs
+    // exactly 50 tokens under the corrected ceiling division.
     let (checkpoint, _) = engine
         .apply_compaction(
             &conversation(),
@@ -1877,7 +2056,7 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
         },
         "the provider-reported measurement is preserved as checkpoint metadata"
     );
-    assert_eq!(checkpoint.estimated_tokens_after, 51);
+    assert_eq!(checkpoint.estimated_tokens_after, 50);
 }
 
 /// Empty and whitespace-only summaries are rejected at the application
@@ -1887,10 +2066,17 @@ fn empty_and_whitespace_summaries_are_rejected() {
     let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
     let history = vec![user("u1", ""), user("u2", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
-        .plan_compaction(&history, None, &projection, &[], 0, None)
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            0,
+            &rustx::context::CompactionConstraints::default(),
+        )
         .expect("plan");
     for bad in ["", "   ", "\n\t "] {
         let error = engine
@@ -1915,7 +2101,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1924,7 +2110,10 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
             &projection,
             &[],
             0,
-            Some(&MessageId::new("a1")),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: Some(&MessageId::new("a1")),
+                fresh_inbound: None,
+            },
         )
         .expect("plan");
     assert_eq!(
@@ -1961,7 +2150,7 @@ fn continuation_owner_is_never_split() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     // Without the constraint this turn would split (see the split test);
     // with the constraint it must be retired whole.
@@ -1972,7 +2161,10 @@ fn continuation_owner_is_never_split() {
             &projection,
             &[],
             0,
-            Some(&MessageId::new("a1")),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: Some(&MessageId::new("a1")),
+                fresh_inbound: None,
+            },
         )
         .expect("plan");
     assert_eq!(
@@ -1998,7 +2190,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None)
+        .build_projection(&history, None, &[], None, None)
         .expect("projection");
     let error = engine
         .plan_compaction(
@@ -2007,7 +2199,10 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
             &projection,
             &[],
             0,
-            Some(&MessageId::new("a1")),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: Some(&MessageId::new("a1")),
+                fresh_inbound: None,
+            },
         )
         .expect_err("pinned continuation owner cannot be retired");
     assert_eq!(error.kind, ContextErrorKind::NoProgress);
@@ -2024,7 +2219,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&unpinned, None, &[], None)
+        .build_projection(&unpinned, None, &[], None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2033,7 +2228,10 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
             &projection,
             &[],
             0,
-            Some(&MessageId::new("a1")),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: Some(&MessageId::new("a1")),
+                fresh_inbound: None,
+            },
         )
         .expect("unpinned continuation owner is retired");
     assert!(matches!(
@@ -2080,8 +2278,8 @@ async fn proactive_compaction_before_the_next_turn() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2255,8 +2453,8 @@ async fn below_threshold_runs_without_compaction() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2309,8 +2507,8 @@ async fn overflow_compact_and_retry_succeeds() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2419,8 +2617,8 @@ async fn overflow_retry_exhausted_after_one_retry() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2489,8 +2687,8 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2561,8 +2759,8 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2634,8 +2832,8 @@ async fn overflow_retry_budget_is_per_model_turn() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2698,8 +2896,8 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
             &model,
             &tools,
             &cancellation,
+            runtime,
         )
-        .with_context_runtime(runtime)
         .run()
         .await;
 
@@ -2767,8 +2965,8 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2806,6 +3004,242 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Context failure classification (preparation vs compaction)
+// ---------------------------------------------------------------------------
+
+/// A fixed deterministic UTC clock for status composition in these
+/// classification regressions.
+#[derive(Debug, Clone, Copy)]
+struct FixedClock(chrono::DateTime<chrono::Utc>);
+
+impl rustx::context::AgentStatusClock for FixedClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.0
+    }
+}
+
+fn fixed_time() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+        .expect("fixed timestamp")
+        .with_timezone(&chrono::Utc)
+}
+
+/// A scripted status provider that always fails.
+struct FailingStatusProvider;
+
+impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
+    fn section_id(&self) -> rustx::context::AgentStatusSectionId {
+        rustx::context::AgentStatusSectionId::new("broken")
+    }
+
+    fn section(
+        &self,
+        _context: &rustx::context::AgentStatusRenderContext,
+    ) -> Result<Option<Vec<rustx::context::AgentStatusFact>>, ContextError> {
+        Err(ContextError::new(
+            ContextErrorKind::StatusFailed,
+            "test provider exploded",
+        ))
+    }
+}
+
+/// A fresh-inbound request: the first turn carries a pending fresh inbound
+/// turn, so Agent Status composition is mandatory.
+fn fresh_request(attempt: &str, initial_messages: Vec<MessageBlock>) -> AgentExecutionRequest {
+    AgentExecutionRequest {
+        agent_id: AgentId::new("agent-a"),
+        conversation_id: conversation(),
+        attempt_id: AttemptId::new(attempt),
+        initial_messages,
+        initial_turn_trigger: rustx::agent::InitialTurnTrigger::FreshInbound(
+            rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
+                .expect("valid fresh turn"),
+        ),
+        timezone: None,
+        model: "fake-model".to_owned(),
+        protocol: ModelProtocol::OpenAiChatCompletions,
+        reasoning: ReasoningEffort::Medium,
+        max_output_tokens: 0,
+    }
+}
+
+/// A timestamped ordinary inbound user message.
+fn fresh_user(id: &str, text: &str) -> MessageBlock {
+    MessageBlock::User(UserMessageBlock {
+        id: MessageId::new(id),
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: text.to_owned(),
+        })],
+        source: UserSource::Human,
+        kind: InboundKind::Message,
+        timestamp: Some(fixed_time()),
+    })
+}
+
+/// A deterministic failing Agent Status provider is a context **preparation**
+/// failure, never a compaction failure: no provider request is sent, no
+/// `CompactionStarted` is emitted, the terminal is exactly one
+/// `AttemptFailed`, and the error classifies as
+/// `Runtime(ContextPreparationFailed { .. })`.
+#[tokio::test]
+async fn failing_status_provider_is_preparation_failure_not_compaction() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "ok")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let mut composer = rustx::context::AgentStatusComposer::new(Arc::new(FixedClock(fixed_time())));
+    composer
+        .register(Arc::new(FailingStatusProvider))
+        .expect("register");
+    let result = AgentExecution::new(
+        fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
+        &model,
+        &tools,
+        &cancellation,
+        rustx::context::ContextRuntime::with_status_composer(
+            engine(10_000_000, 0, 0, weighted(10, 10, 10)),
+            Arc::new(FakeContextSummarizer::new(Vec::new())),
+            store,
+            composer,
+        ),
+    )
+    .run()
+    .await;
+
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "no provider request may be sent when status composition fails"
+    );
+    let terminals: Vec<&RuntimeEvent> = result
+        .events
+        .iter()
+        .filter(|event| matches!(event, RuntimeEvent::AttemptFailed { .. }))
+        .collect();
+    assert_eq!(terminals.len(), 1, "exactly one terminal event");
+    assert_eq!(
+        result.events.last(),
+        Some(terminals[0]),
+        "the terminal event is last"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
+        "no compaction pipeline may start for a preparation failure"
+    );
+    let RuntimeEvent::AttemptFailed { error, .. } = terminals[0] else {
+        unreachable!("terminal matched above");
+    };
+    let AttemptFailure::Runtime { error } = error else {
+        panic!("the terminal must be a runtime failure, got {error:?}");
+    };
+    assert!(
+        matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
+        ),
+        "a status provider failure classifies as context preparation failure"
+    );
+    assert!(
+        !matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
+        ),
+        "a status provider failure must never be mislabeled as a compaction failure"
+    );
+    if let rustx::runtime::types::RuntimeError::ContextPreparationFailed { message } = error {
+        assert!(
+            message.contains("broken"),
+            "the diagnostic names the failing provider: {message}"
+        );
+    }
+}
+
+/// An actual proactive compaction pipeline failure still classifies as
+/// `Runtime(ContextCompactionFailed { .. })`, distinct from a preparation
+/// failure: no provider request follows, but the compaction pipeline
+/// genuinely started and failed.
+#[tokio::test]
+async fn proactive_compaction_failure_is_context_compaction_failed() {
+    let model = FakeModel::new(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(text_delta(0, "ok")),
+        FakeStep::Emit(done(ModelFinishReason::Stop)),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let store = InMemoryCheckpointStore::new().shared();
+    let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Fail(ContextError::new(
+        ContextErrorKind::SummaryFailed,
+        "summary generation refused",
+    ))]);
+    let initial = vec![
+        user("msg-old-1", "old"),
+        user("msg-old-2", "older"),
+        fresh_user("msg-inbound-1", "fresh instruction"),
+    ];
+    let result = AgentExecution::new(
+        fresh_request("attempt-1", initial),
+        &model,
+        &tools,
+        &cancellation,
+        runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
+    )
+    .run()
+    .await;
+
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "no provider request follows a failed proactive compaction"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
+        "a proactive compaction pipeline must actually start"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
+        "the compaction failure event carries the diagnostic"
+    );
+    let RuntimeEvent::AttemptFailed { error, .. } = result.events.last().expect("terminal") else {
+        panic!("the terminal must be an AttemptFailed");
+    };
+    let AttemptFailure::Runtime { error } = error else {
+        panic!("the terminal must be a runtime failure");
+    };
+    assert!(
+        matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextCompactionFailed { .. }
+        ),
+        "an actual compaction pipeline failure keeps the compaction classification"
+    );
+    assert!(
+        !matches!(
+            error,
+            rustx::runtime::types::RuntimeError::ContextPreparationFailed { .. }
+        ),
+        "an actual compaction failure is not a preparation failure"
+    );
+    assert!(
+        store.load(&conversation()).expect("store").is_none(),
+        "no checkpoint may be saved after a failed compaction"
+    );
+}
+
 /// A no-progress compaction (summary not smaller than the replaced
 /// context) fails explicitly: no checkpoint, no retry, no loop, one
 /// terminal event.
@@ -2827,8 +3261,8 @@ async fn no_progress_compaction_fails_without_retry() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -2896,8 +3330,8 @@ async fn cancel_before_proactive_compaction() {
         &model,
         &tools,
         &cancellation,
-    )
-    .with_context_runtime(runtime);
+        runtime,
+    );
     // Wait until the model stream was fully consumed, then cancel while the
     // tool is parked: the loop settles cancelled before any later turn could
     // compact.
@@ -2951,8 +3385,8 @@ async fn cancel_while_summary_generation_is_pending() {
         &model,
         &tools,
         &cancellation,
-    )
-    .with_context_runtime(runtime);
+        runtime,
+    );
     // Wait until the summarizer parked, then cancel.
     let mut parked = parked;
     let controller_cancellation = cancellation.clone();
@@ -3047,8 +3481,8 @@ async fn run_continuation_case(
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
     let requests = model.requests();
@@ -3446,8 +3880,8 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .run()
     .await;
 
@@ -3622,8 +4056,8 @@ async fn m4_projection_contains_drained_batch_before_request() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")
     .run()
@@ -3676,6 +4110,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
 /// the M4 engine compacts the projection while the inbound messages remain
 /// canonical history.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // the full compaction-after-drain contract is asserted verbatim
 async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let (release, parked) = model_release();
     let model = parked_two_turn_model(parked.clone());
@@ -3695,8 +4130,8 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")
     .run()
@@ -3736,14 +4171,38 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         "canonical history preserves the drained inbound messages"
     );
     // The request continues on the compacted projection: the summary stands
-    // for the older model-facing history.
+    // for the older model-facing history, while the drained batch — now a
+    // fresh inbound turn that the model has not yet observed — is protected
+    // from compaction and remains literal.
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
     let request_ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
     assert_eq!(
         request_ids,
-        vec![summary_id(1).to_string()],
-        "the continuation request uses the compacted projection"
+        vec![
+            summary_id(1).to_string(),
+            "msg-inbound-a".to_owned(),
+            "msg-inbound-b".to_owned(),
+        ],
+        "the continuation request uses the compacted projection with the \
+         unobserved fresh inbound preserved literally"
+    );
+    // Exactly one Agent Status snapshot accompanies the fresh inbound turn,
+    // targeting its final message; the attachment is never a canonical
+    // message.
+    let status = requests[1]
+        .agent_status
+        .as_ref()
+        .expect("one status snapshot");
+    assert_eq!(
+        status.target_message_id,
+        MessageId::new("msg-inbound-b"),
+        "the status targets the final fresh inbound message"
+    );
+    assert!(
+        status.rendered.contains("<system-reminder>")
+            && status.rendered.contains("Inbound message time"),
+        "the rendered status is the canonical system-reminder footer"
     );
     let serialized = serde_json::to_string(&requests[1].messages).expect("serialize");
     assert!(
@@ -3767,6 +4226,18 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             }
         ),
         "a compaction summary never carries a fabricated timestamp"
+    );
+    // The status is projection-only: it never appears in canonical history
+    // or in the checkpoint.
+    let history_serialized = serde_json::to_string(&result.messages).expect("serialize");
+    assert!(
+        !history_serialized.contains("<system-reminder>"),
+        "canonical history must never contain the Agent Status footer"
+    );
+    let checkpoint_serialized = serde_json::to_string(&checkpoint).expect("serialize");
+    assert!(
+        !checkpoint_serialized.contains("<system-reminder>"),
+        "the checkpoint must never contain the Agent Status footer"
     );
 }
 
@@ -3820,8 +4291,8 @@ async fn m4_drain_retains_continuation_without_compaction() {
         &model,
         &tools,
         &cancellation,
+        runtime,
     )
-    .with_context_runtime(runtime)
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")
     .run()

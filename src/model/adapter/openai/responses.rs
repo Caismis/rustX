@@ -832,6 +832,20 @@ fn translate_inputs(
             tail_after_boundary(request)?
         }
     };
+    // When a continuation slices the canonical request after the previous
+    // response boundary, the Agent Status target must exist in the
+    // transmitted tail; a status whose target was sliced away fails
+    // explicitly instead of being silently dropped.
+    if continuation_variant.is_some()
+        && let Some(status) = &request.agent_status
+        && !blocks.iter().any(|block| {
+            matches!(block, MessageBlock::User(user) if user.id == status.target_message_id)
+        })
+    {
+        return Err(invalid_request(
+            "Agent Status target message is not in the transmitted continuation tail",
+        ));
+    }
     for block in blocks {
         match block {
             MessageBlock::System(system) => {
@@ -840,7 +854,7 @@ fn translate_inputs(
                 }
             }
             MessageBlock::User(user) => {
-                input_items.push(translate_user_input(user)?);
+                input_items.push(translate_user_input(user, request.agent_status.as_ref())?);
             }
             MessageBlock::Agent(agent) => {
                 input_items.extend(translate_agent_inputs(agent)?);
@@ -873,6 +887,7 @@ fn tail_after_boundary(request: &ModelRequest) -> Result<&[MessageBlock], ModelE
 
 fn translate_user_input(
     user: &crate::message::types::UserMessageBlock,
+    agent_status: Option<&crate::model::types::AgentStatusAttachment>,
 ) -> Result<serde_json::Value, ModelError> {
     let mut content = Vec::new();
     for block in &user.content {
@@ -891,6 +906,15 @@ fn translate_user_input(
                 ));
             }
         }
+    }
+    // The target fresh inbound user input receives one final input_text unit
+    // containing the rendered Agent Status. The status is never a separate
+    // input item and never appended to other user inputs of the batch.
+    if let Some(status) = agent_status.filter(|status| status.target_message_id == user.id) {
+        content.push(serde_json::json!({
+            "type": "input_text",
+            "text": status.rendered,
+        }));
     }
     Ok(serde_json::json!({
         "type": "message",

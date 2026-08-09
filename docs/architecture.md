@@ -47,7 +47,12 @@ tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
                            ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
                            TruncationState
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
-                           ReasoningEffort
+                           ReasoningEffort, AgentStatusAttachment (the
+                           cross-layer model-request attachment contract of
+                           the Agent Status projection: the context plane
+                           produces it, `ModelRequest` and adapters consume
+                           it, and model contracts never depend on context
+                           implementation modules)
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
 model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
@@ -315,12 +320,65 @@ Key contracts:
   `ContextWindowExceeded` is recovered through exactly one bounded
   compact-and-retry
   (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
+- Agent Status is the mandatory, provider-neutral, ephemeral projection of
+  current runtime facts (temporal section with a narrow clock/timezone
+  boundary, structured section providers with stable reserved ids, and a
+  canonical deterministic renderer). It exists only while a
+  `FreshInboundTurn` is pending, participates in the full token estimate
+  and the projection fingerprint, is excluded from recent-conversation
+  retention, and is protected from compaction until a successful model
+  invocation observes it. Adapters own its wire placement.
+- The cross-layer `AgentStatusAttachment` is a Layer 0 contract owned by
+  `model/types.rs`: it holds only the request-level data adapters need (the
+  target canonical `MessageId` and the rendered status text). The context
+  plane (`src/context/status.rs`) *produces* the attachment, but `ModelRequest`
+  uses only Layer 0 runtime-owned attachment data — `model` never depends on
+  `context`. `ContextProjection`, `CompiledContext`, `ModelRequest`, token
+  accounting, and every provider adapter refer to the Layer 0 type.
+- The initial-turn trigger is an explicit execution mode, never an `Option`
+  used as a status switch: `AgentExecutionRequest` carries one
+  `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation,
+  Agent Status, and fresh-inbound compaction protection mandatory and keeps
+  the trigger pending until one successful model invocation observes it;
+  `Continuation` expresses an intentional pure continuation with no new
+  inbound turn and therefore no Agent Status on the first request. There is
+  no `disable_status`, no optional status mode, and no legacy no-context
+  execution path.
+- A `FreshInboundTurn` is ordered according to canonical history/inbound
+  sequence: `validate_against` requires the referenced messages to occur in
+  strictly increasing canonical position in `message_ids` order
+  (`OutOfCanonicalOrder` otherwise); the runtime never sorts or reinterprets
+  a caller-supplied turn order.
+- A provider's section identity is captured at registration and frozen as
+  runtime-owned metadata: `section_id()` is called exactly once, validated
+  against reserved and duplicate ids, and never queried again; composition,
+  ordering, diagnostics, and provider listing all use the stored identity, so
+  a stateful provider can never shadow a reserved id or mutate into a
+  duplicate.
+- Extension providers contribute structured runtime facts
+  (`AgentStatusFact` label/value pairs) only: the provider result type
+  cannot express built-in section variants, so built-in section semantics
+  are runtime-owned and can only be constructed by the Agent Status
+  composer/runtime. The canonical context renderer owns labels, separators,
+  and layout, and providers never hand over pre-rendered footer lines.
+- Context failure semantics are separated at the attempt boundary: failures
+  that occur while preparing model context **before compaction starts**
+  (invalid pending fresh-inbound state, a failing status provider, a
+  projection preparation failure) classify as
+  `RuntimeError::ContextPreparationFailed`, while an actual proactive
+  compaction pipeline failure keeps `RuntimeError::ContextCompactionFailed`.
+  An overflow whose recovery compaction fails still preserves the normalized
+  `ContextWindowExceeded` as the final model failure with the compaction
+  diagnostic carried by `CompactionFailed`.
+- A fresh inbound turn that has not been observed may never be compacted
+  away; when preserving it makes the projection impossible, planning fails
+  with `CannotFit` rather than summarizing the unobserved instruction.
 
-`AgentExecution::new(...)` remains the explicit no-context/unbounded
-compatibility path; the M4 path is additive via
-`AgentExecution::with_context_runtime(ContextRuntime { engine, summarizer,
-checkpoint_store })`. See `docs/context-engine.md` for the full boundary
-description.
+The M4 context path is **mandatory**: every `AgentExecution` is constructed
+with a `ContextRuntime` (`AgentExecution::new(request, adapter, tools,
+cancellation, context_runtime)`); the no-context compatibility path and
+`with_context_runtime` are gone, and there is no Agent Status disable flag.
+See `docs/context-engine.md` for the full boundary description.
 
 ### Layer 3: Model plane
 

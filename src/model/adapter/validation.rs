@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::message::types::{InboundKind, MessageBlock};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::runtime::continuation::ProviderContinuationState;
@@ -57,7 +58,66 @@ pub fn validate_request(
     }
 
     validate_continuation(request, protocol)?;
+    validate_agent_status(request)?;
     validate_tools(request)
+}
+
+/// Validates a request's ephemeral Agent Status attachment before any
+/// provider I/O.
+///
+/// A malformed attachment is an invalid request: the target message must
+/// exist exactly once in the request's canonical messages, must be a
+/// `MessageBlock::User`, and must be an ordinary inbound
+/// [`InboundKind::Message`]. A compaction summary is user-role history and
+/// can never be the status target.
+fn validate_agent_status(request: &ModelRequest) -> Result<(), ModelError> {
+    let Some(status) = &request.agent_status else {
+        return Ok(());
+    };
+    let occurrences = request
+        .messages
+        .iter()
+        .filter(|message| message_id_of(message) == status.target_message_id)
+        .count();
+    if occurrences == 0 {
+        return Err(invalid_request(format!(
+            "Agent Status targets message {} which is not present in the request messages",
+            status.target_message_id
+        )));
+    }
+    if occurrences > 1 {
+        return Err(invalid_request(format!(
+            "Agent Status target message {} appears more than once in the request messages",
+            status.target_message_id
+        )));
+    }
+    let Some(MessageBlock::User(target)) = request
+        .messages
+        .iter()
+        .find(|message| message_id_of(message) == status.target_message_id)
+    else {
+        return Err(invalid_request(format!(
+            "Agent Status target message {} is not a user-role message",
+            status.target_message_id
+        )));
+    };
+    if target.kind != InboundKind::Message {
+        return Err(invalid_request(format!(
+            "Agent Status target message {} is not an ordinary inbound message; \
+             a compaction summary is never a fresh inbound target",
+            status.target_message_id
+        )));
+    }
+    Ok(())
+}
+
+fn message_id_of(message: &MessageBlock) -> crate::runtime::identity::MessageId {
+    match message {
+        MessageBlock::System(system) => system.id.clone(),
+        MessageBlock::User(user) => user.id.clone(),
+        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Tool(tool) => tool.id.clone(),
+    }
 }
 
 fn validate_continuation(
@@ -137,6 +197,7 @@ fn serde_name(protocol: ModelProtocol) -> String {
 #[cfg(test)]
 mod tests {
     use super::validate_request;
+    use crate::message::types::InboundKind;
     use crate::model::error::ModelErrorKind;
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::continuation::{
@@ -151,6 +212,7 @@ mod tests {
             protocol: ModelProtocol::OpenAiResponses,
             messages: Vec::new(),
             tools: Vec::new(),
+            agent_status: None,
             reasoning: crate::model::types::ReasoningEffort::Medium,
             max_output_tokens: 512,
             continuation: None,
@@ -257,5 +319,96 @@ mod tests {
             vec!["list", "read"],
             "names resolve in deterministic sorted order"
         );
+    }
+
+    fn user_message(id: &str, kind: InboundKind) -> crate::message::types::UserMessageBlock {
+        use crate::message::content::TextBlock;
+        use crate::message::types::{UserContentBlock, UserMessageBlock, UserSource};
+        use crate::runtime::identity::MessageId;
+        UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "inbound".to_owned(),
+            })],
+            source: UserSource::Human,
+            kind,
+            timestamp: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                    .expect("fixed timestamp")
+                    .with_timezone(&chrono::Utc),
+            ),
+        }
+    }
+
+    fn attachment(target: &str) -> crate::model::types::AgentStatusAttachment {
+        crate::model::types::AgentStatusAttachment {
+            target_message_id: crate::runtime::identity::MessageId::new(target),
+            rendered: "<system-reminder>Current time: fixed</system-reminder>".to_owned(),
+        }
+    }
+
+    #[test]
+    fn agent_status_target_must_exist_exactly_once_as_ordinary_user_message() {
+        let mut r = request();
+        r.agent_status = Some(attachment("msg-inbound-1"));
+        let missing = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("missing");
+        assert_eq!(missing.kind, ModelErrorKind::InvalidRequest);
+        assert!(missing.message.contains("not present"));
+
+        r.messages = vec![
+            crate::message::types::MessageBlock::User(user_message(
+                "msg-inbound-1",
+                InboundKind::Message,
+            )),
+            crate::message::types::MessageBlock::User(user_message(
+                "msg-inbound-2",
+                InboundKind::Message,
+            )),
+        ];
+        let ok = validate_request(&r, ModelProtocol::OpenAiResponses).expect("must pass");
+        assert_eq!(ok.resolve("missing"), None);
+
+        r.messages
+            .push(crate::message::types::MessageBlock::User(user_message(
+                "msg-inbound-1",
+                InboundKind::Message,
+            )));
+        let duplicate = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("dup");
+        assert_eq!(duplicate.kind, ModelErrorKind::InvalidRequest);
+        assert!(duplicate.message.contains("more than once"));
+    }
+
+    #[test]
+    fn agent_status_target_rejects_non_user_and_summary_targets() {
+        use crate::message::types::{
+            AgentMessageBlock, MessageBlock, SystemAuthority, SystemMessageBlock,
+        };
+        let mut r = request();
+        r.agent_status = Some(attachment("msg-agent-1"));
+        r.messages = vec![MessageBlock::Agent(AgentMessageBlock {
+            id: crate::runtime::identity::MessageId::new("msg-agent-1"),
+            content: Vec::new(),
+        })];
+        let not_user = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("agent");
+        assert_eq!(not_user.kind, ModelErrorKind::InvalidRequest);
+        assert!(not_user.message.contains("not a user-role message"));
+
+        r.agent_status = Some(attachment("msg-summary-1"));
+        r.messages = vec![MessageBlock::User(user_message(
+            "msg-summary-1",
+            InboundKind::CompactionSummary,
+        ))];
+        let summary = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("summary");
+        assert_eq!(summary.kind, ModelErrorKind::InvalidRequest);
+        assert!(summary.message.contains("compaction summary"));
+
+        r.agent_status = Some(attachment("msg-sys-1"));
+        r.messages = vec![MessageBlock::System(SystemMessageBlock {
+            id: crate::runtime::identity::MessageId::new("msg-sys-1"),
+            authority: SystemAuthority::Platform,
+            content: Vec::new(),
+        })];
+        let system = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("system");
+        assert_eq!(system.kind, ModelErrorKind::InvalidRequest);
     }
 }

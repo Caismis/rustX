@@ -121,6 +121,10 @@ impl ContextSummarizer for FakeContextSummarizer {
 ///   weighs `ceil(bytes / 4)`, mirroring the default estimator formula, so
 ///   scripted summaries can deterministically produce no-progress
 ///   compactions.
+/// - `per_status_byte`: one rendered Agent Status attachment byte,
+///   `ceil(bytes / 4)`; the exact status snapshot of a request preparation
+///   contributes to the full request estimate but never to the
+///   recent-conversation retention estimate.
 /// - per-message overrides by `MessageId`, applied before role defaults.
 #[derive(Debug, Clone)]
 pub struct ScriptedEstimator {
@@ -158,6 +162,9 @@ impl TokenEstimator for ScriptedEstimator {
     ) -> u64 {
         let mut total = tool_definitions.len() as u64 * self.per_tool;
         total += self.items_estimate(projection);
+        if let Some(status) = &projection.agent_status {
+            total += (status.rendered.len() as u64).div_ceil(4);
+        }
         total
     }
 
@@ -180,7 +187,7 @@ impl ScriptedEstimator {
                     if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
                         total += *weight;
                     } else if is_summary(message) {
-                        total += summary_text(message).len() as u64 / 4 + 1;
+                        total += (summary_text(message).len() as u64).div_ceil(4);
                     } else if matches!(message, MessageBlock::Agent(_)) {
                         let blocks = match message {
                             MessageBlock::Agent(agent) => agent.content.len() as u64,
