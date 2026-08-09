@@ -209,26 +209,34 @@ Bash requirements:
 - `TERM -> grace period -> KILL` driven by the invocation supervisor
 - Complete lifecycle ownership: shell-parent exit is not the Bash
   settlement boundary. The invocation settles naturally only when the
-  shell's terminal status is known, the supervisor reached the kernel
-  child-wait terminal state (every owned child reaped; `ECHILD`), and the
-  capture is settled; a live owned descendant (pipes held or redirected
-  away) keeps the invocation active under the same deadline and
-  cancellation until the supervisor's terminal state or
-  cancellation/timeout/process-control failure settles it
+  shell's terminal status is known, the invocation-owned process group
+  reached its kernel-mediated terminal state, and the capture is settled;
+  a live in-group descendant (pipes held or redirected away) keeps the
+  invocation active under the same deadline and cancellation until the
+  owned group is terminal or cancellation/timeout/process-control failure
+  settles it
+- **Process-group-scoped ownership**: the invocation's ownership boundary
+  is its dedicated process group. A descendant that explicitly leaves the
+  group/session (`setsid`/`setpgid`) is outside the cancellation/terminality
+  contract: it is never signaled by the group `TERM`/`KILL` and never
+  blocks terminal settlement; subreaper adoption of such children is a
+  reaping detail, not an ownership claim
 - Reuse-safe process-group ownership: `TERM`/`KILL` are issued by the
   inner supervisor with `killpg` against its own process group, whose
   numeric id is its own pid — provably allocated while it lives; the final
   signal is the last `killpg`, after which the anchor is released by the
   reap and no further signal exists
-- Kernel-mediated descendant ownership: shell descendants that outlive the
+- Kernel-mediated group terminality: shell descendants that outlive the
   shell are reparented into the invocation supervisor's child domain
-  (`PR_SET_CHILD_SUBREAPER`), and the terminal child-set point is the
-  supervisor's `waitpid(-1)` loop returning `ECHILD` — never a `/proc`
-  membership scan, which is not a linearizable ownership snapshot
+  (`PR_SET_CHILD_SUBREAPER`), and the terminal point is the group-scoped
+  wait (`waitid` with `Id::PGid`) returning `ECHILD` at the outer
+  supervisor — never a `/proc` membership scan and never a `killpg(..., 0)`
+  probe (an un-reaped leader zombie keeps the numeric group observable)
 - Process-control failures (supervisor setup, shell spawning,
-  waiting/reaping, signaling, IPC) are explicit failed results; if
-  ownership of a numeric process group can no longer be proven, no further
-  signal is issued and the invocation fails explicitly
+  waiting/reaping, signaling, IPC, SIGTERM handler installation) are
+  explicit failed results; if ownership of a numeric process group can no
+  longer be proven, no further signal is issued and the invocation fails
+  explicitly
 - Explicit artifact-capture failures instead of silent success
 - Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment

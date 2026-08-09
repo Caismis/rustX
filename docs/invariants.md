@@ -305,22 +305,40 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   parent-process secrets are absent unless explicitly authorized.
 - Shell-parent exit is not by itself the Bash settlement boundary: the
   invocation settles naturally only when the shell's terminal status is
-  known, the invocation supervisor reached the kernel child-wait terminal
-  state (every owned child reaped), AND the runtime-owned output capture is
-  settled. A descendant that remains owned after the shell exits — with the
-  pipes either still held or already redirected away — keeps the invocation
-  active under the same deadline and cancellation until the supervisor's
-  terminal state or cancellation/timeout/process-control failure settles it.
+  known, the invocation-owned process group reached its kernel-mediated
+  terminal state, AND the runtime-owned output capture is settled. A
+  descendant that remains in the owned group after the shell exits — with
+  the pipes either still held or already redirected away — keeps the
+  invocation active under the same deadline and cancellation until the
+  owned group is terminal or cancellation/timeout/process-control failure
+  settles it.
+- **The Bash invocation ownership boundary is its dedicated process
+  group.** The invocation owns, guarantees termination of, and bases its
+  settlement on exactly the processes that remain in that group. Ordinary
+  shell descendants remain owned while they stay in the group. A process
+  that explicitly leaves the group/session (for example via `setsid` or
+  `setpgid`) is outside the invocation's cancellation/terminality contract:
+  it is never signaled by the group `TERM`/`KILL`, and it must never block
+  terminal settlement. **Subreaper adoption is a process-reaping
+  implementation detail and does not by itself expand semantic ownership
+  beyond the defined process-group boundary**: adopted children outside the
+  group are reaped for hygiene when they die and are handed to init when
+  the supervisor exits, but they never keep an invocation alive whose
+  owned group is terminal.
 - **Every Bash result status — `Success`, `Failed`, `Cancelled`, and
   `TimedOut` — is terminal with respect to the invocation-owned process
-  tree**: no invocation-owned Bash process remains capable of executing
+  group**: no invocation-owned Bash process remains capable of executing
   work before any result is returned. In particular, a detected
   process-control/runtime failure determines the eventual result status but
   does not itself settle the invocation lifecycle: after a failure is
-  observed, the invocation's owned process domain is contained, the outer
-  supervisor reaches its terminal `ECHILD`, the capture is finalized, and
-  only then is the remembered `Failed` result returned. A `Failed` result
-  can therefore never be observed while owned work is still alive.
+  observed, the invocation's owned group is contained, the outer
+  supervisor's group-scoped wait reaches its terminal `ECHILD`, the capture
+  is finalized, and only then is the remembered `Failed` result returned. A
+  `Failed` result can therefore never be observed while owned work is still
+  alive. If the owned group cannot be proven terminal within the bounded
+  confirmation window, the invocation settles as an explicit bounded
+  process-control failure — it never waits indefinitely for an
+  out-of-domain process.
 - Each Bash invocation owns one invocation-local supervisor process unit
   (an outer reaper-of-last-resort plus an inner session/group leader that
   spawns `/bin/bash`; both subreapers). Shell descendants that outlive the
@@ -343,34 +361,41 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   without releasing its identity), and the anchor is released only by the
   final reap after that last signal. A numeric group id whose allocation has
   ended is never signaled.
-- The kernel-mediated terminal condition of the invocation-owned child set
-  is the wait contract, with **one authoritative reporter**: the inner
-  supervisor's `waitpid(-1)` loop returning `ECHILD` is inner child-domain
-  completion (reported only by its exit status), while the outer
-  supervisor's `waitpid(-1)` loop returning `ECHILD` — the inner and every
-  reparented child reaped — is the canonical terminal process-tree event of
-  the whole supervisor unit, reported as `AllChildrenReaped`. `ECHILD` is
-  not an observational snapshot: after it is observed no new owned child can
-  appear, because a live descendant would still be a child of the
-  supervisor. This is the exact lifecycle linearization point; rustX
-  combines the outer `AllChildrenReaped` with output-capture settlement to
-  produce the tool result.
+- The kernel-mediated terminal condition of the invocation-owned process
+  group is the **group-scoped wait**, with one authoritative reporter:
+  `waitid` with `Id::PGid` matches only children inside the invocation
+  group, so the inner supervisor's group-scoped wait returning `ECHILD`
+  means the shell and every owned member are reaped (inner child-domain
+  completion, reported only by its exit status), while the outer
+  supervisor's group-scoped wait returning `ECHILD` — no child of the outer
+  remains in the invocation group, the inner anchor itself released by that
+  same wait strictly after any fallback containment signal — is the
+  canonical terminal process-tree event of the whole supervisor unit,
+  reported as `AllChildrenReaped`. A live group member is a matching child
+  and keeps the group-scoped wait from returning `ECHILD`; an adopted child
+  that left the group/session is not in the group and can never block it.
+  This is the exact lifecycle linearization point; rustX combines the outer
+  `AllChildrenReaped` with output-capture settlement to produce the tool
+  result. `killpg(..., 0)` probes are never the terminal point: an un-reaped
+  group-leader zombie keeps the numeric group observable, so probes cannot
+  distinguish live members from the anchored zombie.
 - Process-control failures are never silent: supervisor setup, shell
   spawning, waiting/reaping, signaling, and control-channel failures surface
   as an explicit failed tool result — never as an ordinary `Success`,
   `Cancelled`, or `TimedOut`. Failures are distinguished by ownership:
   failures before any Bash process tree was established (control-channel
-  setup, supervisor spawn, bash spawn) may return `Failed` immediately
-  because no owned work exists; failures after ownership exists (signal
-  failure, wait/reap failure, IPC failure, control-channel read failure,
-  unexpected supervisor exit, rustX control-channel abandonment) follow the
-  containment lifecycle — the failure is remembered, the owned domain is
-  contained and reaped to the outer `ECHILD`, the capture is finalized, and
-  only then is `Failed` returned. If ownership of a numeric process group
-  can no longer be proven, no further signal is issued and the invocation
-  fails explicitly. Control-channel loss is never treated as permission for
-  owned work to continue: dropping the rustX-side execution future triggers
-  the supervisor unit's fail-safe containment, so an abandoned Bash tree can
+  setup, supervisor spawn, bash spawn, SIGTERM handler-installation failure)
+  may return `Failed` immediately because no owned work exists; failures
+  after ownership exists (signal failure, wait/reap failure, IPC failure,
+  control-channel read failure, unexpected supervisor exit, rustX
+  control-channel abandonment) follow the containment lifecycle — the
+  failure is remembered, the owned group is contained and reaches its
+  terminal state, the capture is finalized, and only then is `Failed`
+  returned. If ownership of a numeric process group can no longer be
+  proven, no further signal is issued and the invocation fails explicitly.
+  Control-channel loss is never treated as permission for owned work to
+  continue: dropping the rustX-side execution future triggers the
+  supervisor unit's fail-safe containment, so an abandoned owned group can
   never escape. Cancellation/timeout intent that cannot be established
   through process control is consistent with the background registry's rule
   that an explicit process-control failure may override canonical

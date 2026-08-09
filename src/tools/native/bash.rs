@@ -1805,6 +1805,32 @@ mod tests {
         );
     }
 
+    /// A SIGTERM handler-installation failure inside the supervisor is a
+    /// pre-ownership setup failure: no bash tree exists, so the explicit
+    /// failed result is the correct settlement.
+    #[tokio::test]
+    async fn sigterm_handler_setup_failure_settles_as_an_explicit_failed_result() {
+        let (_dir, artifacts, workspace) = fixture();
+        let result = run_with_control(
+            "echo hi".to_owned(),
+            BashTestControl::new().fail_sigterm_handler(),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "an injected SIGTERM handler failure must be an explicit failed result, got {:?}",
+            result.status
+        );
+        assert!(
+            !matches!(result.status, ToolExecutionStatus::Success),
+            "a failed SIGTERM handler setup must never be reported as success"
+        );
+    }
+
     /// A wait/reap failure after ownership is established is an explicit
     /// failed result — and the failure is terminal with respect to the
     /// owned process tree. The fixture has a real descendant: the inner
@@ -2252,5 +2278,276 @@ mod tests {
         wait_for_group_death(anchor_pid).await;
         wait_for_process_death(b_pid).await;
         let _ = dir;
+    }
+
+    /// The escaped-descendant regression (reproducer): a descendant that
+    /// explicitly leaves the invocation session/group via `setsid` is
+    /// outside the owned execution domain (Contract B). The shell's natural
+    /// exit must settle the invocation once the owned group is terminal —
+    /// the escaped process must neither block settlement nor be claimed as
+    /// rustX-owned. The escaped process is cleaned up by the test as an
+    /// explicitly out-of-domain fixture, never described as runtime
+    /// containment.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn escaped_descendant_does_not_block_natural_settlement() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let escaped_pid_file = root.join("escaped.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let command = format!(
+            "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            shell_pid_file.display(),
+            escaped_pid_file.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                Some(10_000),
+            ),
+        )
+        .await
+        .expect(
+            "the invocation settles exactly once (bounded, not blocked by the escaped process)",
+        );
+        // The shell's natural exit settles Success: the owned group is
+        // terminal and the escaped process is out of domain.
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Success,
+            "the owned group is terminal; the shell's natural exit settles Success, got {:?}",
+            result.status
+        );
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
+            .expect("escaped pid file")
+            .trim()
+            .parse()
+            .expect("escaped pid");
+        // The owned group is terminal (the anchor is released with the
+        // final reap) and the shell is gone.
+        wait_for_group_death(anchor_pid).await;
+        wait_for_process_death(shell_pid).await;
+        // The escaped process intentionally left the owned domain and is
+        // still alive. The test cleans it up as an explicitly out-of-domain
+        // fixture; this is not rustX-owned containment.
+        assert!(
+            process_alive(escaped_pid),
+            "the escaped process is outside the owned domain and must still be alive"
+        );
+        kill_escaped_fixture(escaped_pid).await;
+        let _ = dir;
+    }
+
+    /// The escaped-descendant timeout regression: the shell stays alive in
+    /// the owned group while the escaped descendant runs elsewhere; the
+    /// invocation timeout owns the outcome and settles `TimedOut` in
+    /// bounded time — the escaped process does not block the group's
+    /// termination or the settlement.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn escaped_descendant_timeout_settles_boundedly() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let escaped_pid_file = root.join("escaped.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let command = format!(
+            "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; sleep 30",
+            shell_pid_file.display(),
+            escaped_pid_file.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                Some(500),
+            ),
+        )
+        .await
+        .expect("the invocation settles exactly once (bounded)");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::TimedOut,
+            "the timeout owns the owned group; the escaped process must not block it, got {:?}",
+            result.status
+        );
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
+            .expect("escaped pid file")
+            .trim()
+            .parse()
+            .expect("escaped pid");
+        // The owned group and shell are terminal; the escaped process
+        // survives out of domain.
+        wait_for_group_death(anchor_pid).await;
+        wait_for_process_death(shell_pid).await;
+        assert!(
+            process_alive(escaped_pid),
+            "the escaped process must survive the owned-group termination"
+        );
+        kill_escaped_fixture(escaped_pid).await;
+        let _ = dir;
+    }
+
+    /// The escaped-descendant cancellation regression: cancellation
+    /// terminates the owned group and settles `Cancelled` in bounded time
+    /// while the escaped descendant continues out of domain.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn escaped_descendant_cancellation_settles_boundedly() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let escaped_pid_file = root.join("escaped.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let command = format!(
+            "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; sleep 30",
+            shell_pid_file.display(),
+            escaped_pid_file.display()
+        );
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // The shell provably started before cancellation becomes observable.
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles exactly once (bounded)")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+            "cancellation owns the owned group; the escaped process must not block it, got {:?}",
+            result.status
+        );
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
+            .expect("escaped pid file")
+            .trim()
+            .parse()
+            .expect("escaped pid");
+        wait_for_group_death(anchor_pid).await;
+        assert!(
+            process_alive(escaped_pid),
+            "the escaped process must survive the owned-group termination"
+        );
+        kill_escaped_fixture(escaped_pid).await;
+        let _ = dir;
+    }
+
+    /// The non-terminating escaped-descendant regression: an escaped
+    /// process that never exits naturally must not keep the invocation
+    /// active (the old outer-`ECHILD` gate would have waited forever). The
+    /// invocation settles from the owned group's terminality alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn non_terminating_escaped_descendant_does_not_block_settlement() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let escaped_pid_file = root.join("escaped.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let command = format!(
+            "echo $$ > {}; setsid sh -c 'trap \"\" TERM; while :; do sleep 1; done' >/dev/null 2>&1 & echo $! > {}; exit 0",
+            shell_pid_file.display(),
+            escaped_pid_file.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                Some(10_000),
+            ),
+        )
+        .await
+        .expect(
+            "the invocation settles exactly once (bounded, never waits for the escaped process)",
+        );
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Success,
+            "the owned group is terminal; the non-terminating escaped process is out of domain, got {:?}",
+            result.status
+        );
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
+            .expect("escaped pid file")
+            .trim()
+            .parse()
+            .expect("escaped pid");
+        wait_for_group_death(anchor_pid).await;
+        assert!(
+            process_alive(escaped_pid),
+            "the non-terminating escaped process must still be alive"
+        );
+        kill_escaped_fixture(escaped_pid).await;
+        let _ = dir;
+    }
+
+    /// Terminates one explicitly out-of-domain escaped fixture process.
+    /// This is test-side cleanup of a process the contract intentionally
+    /// classifies outside the invocation's ownership; it is never presented
+    /// as rustX-owned containment.
+    #[cfg(unix)]
+    async fn kill_escaped_fixture(pid: i32) {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        wait_for_process_death(pid).await;
     }
 }
