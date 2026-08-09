@@ -1241,6 +1241,14 @@ fn agent_status_background_section_rendering() {
             execution_id: ToolExecutionId::new("exec_1"),
             tool_id: ToolId::new("tool-bash"),
             tool_name: "bash".to_owned(),
+            state: BackgroundLifecycle::Starting,
+            progress: None,
+            result: None,
+        },
+        BackgroundExecutionSnapshot {
+            execution_id: ToolExecutionId::new("exec_2"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
             state: BackgroundLifecycle::Running,
             progress: Some(ToolProgress {
                 message: Some("compiling workspace".to_owned()),
@@ -1250,7 +1258,7 @@ fn agent_status_background_section_rendering() {
             result: None,
         },
         BackgroundExecutionSnapshot {
-            execution_id: ToolExecutionId::new("exec_2"),
+            execution_id: ToolExecutionId::new("exec_3"),
             tool_id: ToolId::new("tool-grep"),
             tool_name: "grep".to_owned(),
             state: BackgroundLifecycle::Cancelling,
@@ -1278,11 +1286,12 @@ fn agent_status_background_section_rendering() {
     let AgentStatusSectionData::BackgroundExecution { executions } = &section.data else {
         panic!("runtime-owned built-in section data");
     };
-    assert_eq!(executions.len(), 2);
+    assert_eq!(executions.len(), 3);
     let rendered = rustx::context::status::render_agent_status(&status);
     assert!(rendered.contains("Background executions:"));
-    assert!(rendered.contains("- exec_1 | bash | running | compiling workspace"));
-    assert!(rendered.contains("- exec_2 | grep | cancelling"));
+    assert!(rendered.contains("- exec_1 | bash | starting"));
+    assert!(rendered.contains("- exec_2 | bash | running | compiling workspace"));
+    assert!(rendered.contains("- exec_3 | grep | cancelling"));
     // Full output never appears: the rendered status carries identities and
     // states only.
     assert!(!rendered.contains("BackgroundExecutionSnapshot"));
