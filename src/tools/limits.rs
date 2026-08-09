@@ -64,3 +64,133 @@ pub fn bounded_text_preview(data: &[u8], limit: usize) -> (String, bool) {
     let (bytes, truncated) = bounded_preview(data, limit);
     (String::from_utf8_lossy(&bytes).into_owned(), truncated)
 }
+
+/// Bounds one progress notification through the canonical UTF-8-safe
+/// normalization shared by the foreground and background paths.
+///
+/// `completed` and `total` are preserved; `message` is bounded to
+/// [`MAX_PROGRESS_MESSAGE_BYTES`] and never panics on UTF-8: the bound is
+/// cut at a character boundary, so the result is always valid UTF-8 and the
+/// output is deterministic for a given input.
+#[must_use]
+pub fn bound_tool_progress(
+    progress: crate::tools::types::ToolProgress,
+) -> crate::tools::types::ToolProgress {
+    let crate::tools::types::ToolProgress {
+        message,
+        completed,
+        total,
+    } = progress;
+    crate::tools::types::ToolProgress {
+        message: message.map(|text| bound_utf8_message(text, MAX_PROGRESS_MESSAGE_BYTES)),
+        completed,
+        total,
+    }
+}
+
+/// Truncates `text` to at most `max_bytes` bytes at a UTF-8 character
+/// boundary. Never panics and never splits a code point.
+#[must_use]
+fn bound_utf8_message(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_PROGRESS_MESSAGE_BYTES, bound_tool_progress};
+    use crate::tools::types::ToolProgress;
+
+    /// ASCII exactly at the boundary is preserved unchanged.
+    #[test]
+    fn ascii_at_the_boundary_is_preserved() {
+        let progress = ToolProgress {
+            message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES)),
+            completed: Some(1),
+            total: Some(2),
+        };
+        let bounded = bound_tool_progress(progress.clone());
+        assert_eq!(
+            bounded.message.as_deref().expect("message").len(),
+            MAX_PROGRESS_MESSAGE_BYTES
+        );
+        assert_eq!(bounded.message, progress.message);
+        assert_eq!(bounded.completed, Some(1));
+        assert_eq!(bounded.total, Some(2));
+    }
+
+    /// ASCII crossing the boundary is truncated to the bound.
+    #[test]
+    fn ascii_crossing_the_boundary_is_truncated() {
+        let bounded = bound_tool_progress(ToolProgress {
+            message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES + 10)),
+            completed: None,
+            total: None,
+        });
+        assert_eq!(
+            bounded.message.as_deref().expect("message").len(),
+            MAX_PROGRESS_MESSAGE_BYTES
+        );
+    }
+
+    /// A multibyte code point crossing the boundary is never split: the
+    /// truncation index walks back to a character boundary and the result
+    /// is valid UTF-8.
+    #[test]
+    fn multibyte_code_point_crossing_the_boundary_is_never_split() {
+        // MAX-1 ASCII bytes plus one 4-byte emoji: the 512-byte bound lands
+        // inside the emoji, so the truncation keeps the 511 ASCII bytes.
+        let message = format!("{}😀", "x".repeat(MAX_PROGRESS_MESSAGE_BYTES - 1));
+        let bounded = bound_tool_progress(ToolProgress {
+            message: Some(message),
+            completed: None,
+            total: None,
+        });
+        let text = bounded.message.expect("message");
+        assert_eq!(text, "x".repeat(MAX_PROGRESS_MESSAGE_BYTES - 1));
+        assert_eq!(text.len(), MAX_PROGRESS_MESSAGE_BYTES - 1);
+    }
+
+    /// Emoji-only messages are truncated to a whole number of code points.
+    #[test]
+    fn emoji_only_messages_are_truncated_at_a_code_point_boundary() {
+        let bounded = bound_tool_progress(ToolProgress {
+            message: Some("😀".repeat(200)),
+            completed: None,
+            total: None,
+        });
+        let text = bounded.message.expect("message");
+        assert_eq!(text, "😀".repeat(MAX_PROGRESS_MESSAGE_BYTES / 4));
+        assert!(text.len() <= MAX_PROGRESS_MESSAGE_BYTES);
+    }
+
+    /// The normalization is deterministic and preserves the numeric fields.
+    #[test]
+    fn normalization_is_deterministic_and_preserves_counts() {
+        let progress = ToolProgress {
+            message: Some("y".repeat(MAX_PROGRESS_MESSAGE_BYTES + 5)),
+            completed: Some(7),
+            total: Some(9),
+        };
+        let first = bound_tool_progress(progress.clone());
+        let second = bound_tool_progress(progress);
+        assert_eq!(first, second);
+        assert_eq!(first.completed, Some(7));
+        assert_eq!(first.total, Some(9));
+        let none_message = bound_tool_progress(ToolProgress {
+            message: None,
+            completed: Some(3),
+            total: Some(4),
+        });
+        assert_eq!(none_message.message, None);
+        assert_eq!(none_message.completed, Some(3));
+        assert_eq!(none_message.total, Some(4));
+    }
+}

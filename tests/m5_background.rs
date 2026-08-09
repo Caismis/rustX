@@ -968,124 +968,6 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     ));
 }
 
-/// Terminal inbound after the safe-boundary snapshot waits for the next
-/// batch: the drain is parked inside its critical section while the
-/// detached runner settles, so the message joins the next batch.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[allow(clippy::too_many_lines)]
-async fn terminal_inbound_after_snapshot_waits_for_the_next_batch() {
-    let dir = tempfile::tempdir().expect("temp dir");
-    let workspace_root = dir.path().join("workspace");
-    std::fs::create_dir_all(&workspace_root).expect("workspace");
-    // A human message parked ahead of the terminal inbound: the drain
-    // snapshot takes it and holds the critical section open.
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    mailbox
-        .enqueue(common::fake::inbound_message(
-            "msg-human",
-            "hello",
-            UserSource::Human,
-        ))
-        .expect("enqueue human message");
-    let tool_runtime = ConversationToolRuntime::from_config(
-        ConversationId::new("conv-1"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace_root,
-                dir.path().join("artifacts"),
-            )
-        },
-    )
-    .expect("tool runtime");
-
-    let call_bg = scripted(
-        "call-bg",
-        "tool-bg",
-        "bg",
-        serde_json::json!({"__rustx_execution": "background"}),
-    );
-    let model = FakeModel::new(vec![
-        vec![
-            FakeStep::Emit(started()),
-            FakeStep::Emit(tool_call_events(0, &call_bg)[0].clone()),
-            FakeStep::Emit(tool_call_events(0, &call_bg)[1].clone()),
-            FakeStep::Emit(tool_call_events(0, &call_bg)[2].clone()),
-            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
-        ],
-        vec![
-            FakeStep::Emit(started()),
-            FakeStep::Emit(ModelEvent::TextDelta {
-                block_index: rustx::message::types::ContentBlockIndex::new(0),
-                text: "turn two".to_owned(),
-            }),
-            FakeStep::Emit(done(ModelFinishReason::Stop)),
-        ],
-        vec![
-            FakeStep::Emit(started()),
-            FakeStep::Emit(ModelEvent::TextDelta {
-                block_index: rustx::message::types::ContentBlockIndex::new(0),
-                text: "turn three".to_owned(),
-            }),
-            FakeStep::Emit(done(ModelFinishReason::Stop)),
-        ],
-    ]);
-    let (tool_bg, release_bg) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-        ),
-        success_result("bg"),
-    );
-    let mut bg_started = tool_bg.started();
-    let mut tools = ToolRegistry::new();
-    tool_bg.register(&mut tools);
-    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-
-    let controller = tokio::spawn(async move {
-        bg_started
-            .wait_for(|started| *started)
-            .await
-            .expect("bg started");
-        // Release the detached runner while the attempt is still finishing
-        // its tool turn; the terminal inbound races the first safe-boundary
-        // snapshot and must not be picked up by it.
-        release_bg.notify_one();
-    });
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
-    )
-    .await
-    .expect("run terminates");
-    controller.await.expect("controller task");
-
-    // The terminal inbound either joined the second batch (turn three) or
-    // waited for a later drain; either way it is never lost and is never
-    // retroactively added to the first drained batch.
-    let requests = model.requests();
-    let first_drain_contains_terminal = requests[1]
-        .messages
-        .iter()
-        .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal"));
-    let second_drain_contains_terminal = requests[2]
-        .messages
-        .iter()
-        .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal"));
-    assert!(
-        first_drain_contains_terminal || second_drain_contains_terminal,
-        "the post-snapshot terminal inbound waits for the next batch"
-    );
-    assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
-}
-
 // ---------------------------------------------------------------------------
 // background_task intrinsic
 // ---------------------------------------------------------------------------
@@ -1411,6 +1293,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     tool_b2.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
+    let controller_registry = tool_runtime.background().clone();
     let controller = tokio::spawn(async move {
         started_b1
             .wait_for(|started| *started)
@@ -1420,11 +1303,19 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
             .wait_for(|started| *started)
             .await
             .expect("b2 started");
-        // B1 settles while the second model generation is parked: its
-        // terminal inbound is enqueued after the first safe-boundary
-        // snapshot and waits for the next batch.
+        // B1 settles while the second model generation is parked. The
+        // terminal registry transition and its inbound enqueue share one
+        // registry critical section, so observing the terminal registry
+        // state deterministically means the enqueue already committed
+        // before the model is released — after the first safe-boundary
+        // snapshot, which B1 could not have reached while parked.
         release_b1.notify_one();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        wait_for_state(
+            &controller_registry,
+            &ToolExecutionId::new("exec_1"),
+            BackgroundLifecycle::Succeeded,
+        )
+        .await;
         model_release_tx.send(true).expect("release the model");
     });
     let result = tokio::time::timeout(

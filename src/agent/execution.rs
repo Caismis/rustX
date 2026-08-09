@@ -1647,8 +1647,10 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
 }
 
 /// The foreground progress reporter of one execution: progress facts are
-/// buffered per slot and become canonical `ToolExecutionProgress` events at
-/// batch commit, before their completion event.
+/// normalized through the one shared UTF-8-safe bound
+/// ([`bound_tool_progress`], the same normalization the background registry
+/// uses), buffered per slot, and become canonical `ToolExecutionProgress`
+/// events at batch commit, before their completion event.
 struct BufferProgressReporter {
     call_id: ToolCallId,
     tool_id: ToolId,
@@ -1657,12 +1659,13 @@ struct BufferProgressReporter {
 
 impl ProgressReporter for BufferProgressReporter {
     fn report(&self, progress: ToolProgress) {
+        let bounded = crate::tools::limits::bound_tool_progress(progress);
         self.buffer.lock().expect("progress buffer lock").push(
             RuntimeEvent::ToolExecutionProgress {
                 tool_call_id: self.call_id.clone(),
                 tool_id: self.tool_id.clone(),
                 execution_id: None,
-                progress,
+                progress: bounded,
             },
         );
     }
@@ -2211,6 +2214,250 @@ mod tests {
         assert!(
             mailbox.drain().is_none(),
             "the appended batch is consumed from the mailbox and never requeued"
+        );
+    }
+
+    /// A parking background executor: starts, waits for the release notify,
+    /// and then settles with a fixed result.
+    struct ParkingBackgroundTool {
+        definition: ToolDefinition,
+        started: tokio::sync::watch::Sender<bool>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl ParkingBackgroundTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            Arc<tokio::sync::Notify>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let release = Arc::new(tokio::sync::Notify::new());
+            (
+                Self {
+                    definition: ToolDefinition {
+                        id: ToolId::new("tool-bg"),
+                        name: "bg".to_owned(),
+                        description: String::new(),
+                        input_schema: serde_json::json!({"type": "object"}),
+                        execution_policy: ToolExecutionPolicy::ModelSelectable,
+                        concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                        replay_policy: ToolReplayPolicy::Never,
+                        origin: ToolOrigin::Builtin,
+                    },
+                    started,
+                    release: release.clone(),
+                },
+                started_rx,
+                release,
+            )
+        }
+    }
+
+    impl ToolExecutor for ParkingBackgroundTool {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
+            self.started.send_replace(true);
+            let release = self.release.clone();
+            Box::pin(async move {
+                release.notified().await;
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                }
+            })
+        }
+    }
+
+    /// Exact mailbox-boundary proof for the background terminal inbound:
+    ///
+    /// ```text
+    /// safe-boundary drain takes its finite snapshot (parked, lock held)
+    /// test observes the snapshot linearization happened
+    /// background terminal enqueue occurs (blocked by the parked drain)
+    /// drain releases and returns WITHOUT the terminal
+    /// the next drain receives the terminal
+    /// ```
+    ///
+    /// Every step is gated by the mailbox's in-crate synchronization probe:
+    /// the drain provably snapshots before the terminal enqueue publishes,
+    /// so the terminal can never appear in the first drained batch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
+        use crate::runtime::inbound::MailboxProbe;
+        use std::sync::mpsc::sync_channel;
+        // One snapshot token per non-empty drain (two), two release tokens,
+        // and one computed/resume token pair per enqueue (human + terminal).
+        let (snapshot_tx, snapshot_rx) = sync_channel(2);
+        let (release_tx, release_rx) = sync_channel(2);
+        let (computed_tx, computed_rx) = sync_channel(1);
+        let (resume_tx, resume_rx) = sync_channel(1);
+        let mailbox = crate::runtime::inbound::ConversationInboundMailbox::with_probe(
+            ConversationId::new("conv-1"),
+            MailboxProbe {
+                drain_snapshot: Some(snapshot_tx),
+                drain_release: Some(release_rx),
+                enqueue_computed: Some(computed_tx),
+                enqueue_resume: Some(resume_rx),
+            },
+        );
+        // The human message is enqueued through the probe: sequence 1 is
+        // computed and published only after the test releases the enqueue.
+        let enqueueing = mailbox.clone();
+        let human_task = tokio::task::spawn_blocking(move || {
+            enqueueing
+                .enqueue(inbound_message("msg-human", "hello"))
+                .expect("enqueue human")
+        });
+        computed_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("human enqueue sequence computed");
+        resume_tx.send(()).expect("release the human enqueue");
+        human_task.await.expect("human enqueue task");
+
+        let call = ToolCall {
+            id: ToolCallId::new("call-bg"),
+            tool_id: ToolId::new("tool-bg"),
+            name: "bg".to_owned(),
+            arguments: serde_json::json!({"__rustx_execution": "background"}),
+        };
+        let adapter = ScriptedAdapter::new(vec![
+            tool_call_script(&call),
+            vec![
+                ModelEvent::Started,
+                ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    text: "turn two".to_owned(),
+                },
+                ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ],
+            vec![
+                ModelEvent::Started,
+                ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    text: "turn three".to_owned(),
+                },
+                ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ],
+        ]);
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(tool.definition.clone(), Arc::new(tool))
+            .expect("register bg tool");
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
+        let controller_registry = tool_runtime.background().clone();
+        let controller = tokio::spawn(async move {
+            // 1. The first safe boundary drain took its snapshot ([human])
+            //    and is parked inside its critical section.
+            snapshot_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("first drain snapshot established");
+            // 2. Wait until the detached runner is provably started, then
+            //    settle it: the terminal enqueue can only ever acquire the
+            //    mailbox lock after the parked drain.
+            eprintln!(
+                "DBG ctrl: snapshot observed @ {:.3}s",
+                std::time::Instant::now().elapsed().as_secs_f64()
+            );
+            started
+                .wait_for(|started| *started)
+                .await
+                .expect("bg runner started");
+            eprintln!(
+                "DBG ctrl: started observed @ {:.3}s",
+                std::time::Instant::now().elapsed().as_secs_f64()
+            );
+            release.notify_one();
+            eprintln!(
+                "DBG ctrl: notified @ {:.3}s",
+                std::time::Instant::now().elapsed().as_secs_f64()
+            );
+            // 3. Release the parked drain: its batch is [human] only.
+            release_tx.send(()).expect("release the first drain");
+            eprintln!(
+                "DBG ctrl: drain released @ {:.3}s",
+                std::time::Instant::now().elapsed().as_secs_f64()
+            );
+            // 4. The terminal enqueue is inside its critical section with
+            //    its sequence computed but the item not yet published.
+            // 4/5. Publish the terminal (the resume token is pre-buffered,
+            //    so the parked enqueue completes immediately); the next
+            //    safe boundary drain will take it. The second release
+            //    token is pre-buffered for that drain.
+            resume_tx.send(()).expect("release the terminal enqueue");
+            release_tx.send(()).expect("release the second drain");
+            let _ = controller_registry;
+        });
+        let _result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            AgentExecution::new(
+                request(),
+                &adapter,
+                &tools,
+                &cancellation,
+                runtime(),
+                &tool_runtime,
+            )
+            .expect("conversation identity matches the tool runtime")
+            .run(),
+        )
+        .await
+        .expect("the attempt terminates");
+        controller.await.expect("controller task");
+
+        let requests = adapter.requests.lock().expect("requests lock").clone();
+        assert_eq!(requests.len(), 3, "human turn, terminal turn, stop turn");
+        let second_request = &requests[1];
+        assert!(
+            second_request.messages.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id == MessageId::new("msg-human"))
+            }),
+            "the human message joins the second request"
+        );
+        assert!(
+            !second_request.messages.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+            }),
+            "the terminal can never appear in the first drained batch"
+        );
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")),
+            "the terminal inbound waits for the next drained batch"
+        );
+        let terminal_occurrences = requests
+            .iter()
+            .flat_map(|request| &request.messages)
+            .filter(|message| {
+                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+            })
+            .count();
+        assert_eq!(
+            terminal_occurrences, 1,
+            "the terminal inbound is drained and committed exactly once"
+        );
+        assert!(mailbox.drain().is_none(), "the mailbox is drained");
+        assert!(
+            computed_rx.try_recv().is_ok(),
+            "the terminal enqueue provably occurred (its sequence was computed and published)"
         );
     }
 }

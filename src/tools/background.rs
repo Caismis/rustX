@@ -16,15 +16,20 @@
 //! [`ToolExecutionId`], creates a private prepared record with its own
 //! cancellation resources, and spawns the runner behind a start/commit gate
 //! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch`]
-//! performs the final attempt-cancellation checkpoint and then COMMITS
-//! conversation ownership: the record is published as `Starting`, the gate
-//! is released, and the accepted attempt-facing result is produced. The
-//! commit is the background dispatch linearization point:
+//! is the one deterministic linearization point of background ownership:
+//! the registry synchronization boundary is acquired first, the final
+//! attempt-cancellation observation happens at that same protected boundary,
+//! and only then does the commit happen:
 //!
-//! - before commit, attempt cancellation can roll the prepared dispatch back
-//!   (no accepted result, no detached execution);
-//! - after commit, ordinary attempt cancellation can no longer reclaim or
-//!   cancel the background work.
+//! - attempt cancellation observable at the boundary: the prepared dispatch
+//!   rolls back completely under the same boundary — no published record,
+//!   no accepted result, the runner is aborted and never begins;
+//! - conversation ownership wins: the record is published as `Starting`,
+//!   ownership transfers exactly once, the accepted result is produced, and
+//!   a later attempt cancellation can never reclaim the detached execution.
+//!
+//! There is no unchecked window between the deciding cancellation
+//! observation and the prepared→owned registry transition.
 //!
 //! # Cancellation-vs-completion race
 //!
@@ -33,8 +38,12 @@
 //! (`Succeeded`/`Failed`/`Cancelled`) commits first, a later cancel is an
 //! idempotent no-op returning the terminal snapshot. If cancellation
 //! intent commits first (`Starting`/`Running` → `Cancelling`), cancellation
-//! owns settlement and a later normal executor return cannot overwrite the
-//! cancellation winner with `Succeeded`.
+//! owns settlement: the cancellation reason is retained for final
+//! settlement, and a later normal executor return cannot overwrite the
+//! cancellation winner with `Succeeded` — the stored terminal result is
+//! canonicalized to `Cancelled` with the retained reason. Only an explicit
+//! runtime/process-control failure after cancellation intent settles as
+//! `Failed`.
 //!
 //! # Terminal inbound publication
 //!
@@ -60,17 +69,27 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::ConversationInboundMailbox;
+use crate::runtime::types::CancellationReason;
 use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
-use crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES;
+use crate::tools::limits::bound_tool_progress;
 use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
     ToolResultContent,
 };
 use crate::tools::workspace::Workspace;
+
+/// The one cancellation reason of conversation-owned background cancellation.
+///
+/// Background cancellation is only ever requested through the conversation
+/// control path (`background_task(action = cancel)` or direct registry
+/// cancellation), which is a user-requested control action. The registry
+/// retains this reason when cancellation intent commits so the canonicalized
+/// terminal result always agrees with the registry winner.
+const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserRequested;
 
 /// The public lifecycle of one background execution.
 ///
@@ -257,6 +276,11 @@ struct BackgroundRecord {
     tool_name: String,
     lifecycle: BackgroundLifecycle,
     cancellation: CancellationSignal,
+    /// The retained cancellation reason when cancellation intent committed
+    /// (`Cancelling`): the registry keeps it for final settlement, so the
+    /// canonicalized terminal result always agrees with the registry
+    /// winner.
+    cancel_reason: Option<CancellationReason>,
     progress: Option<ToolProgress>,
     result: Option<ToolExecutionResult>,
     notification: NotificationState,
@@ -275,6 +299,10 @@ struct BackgroundRegistryState {
     prepared: HashMap<ToolExecutionId, PreparedRecord>,
     records: Vec<BackgroundRecord>,
     index: HashMap<ToolExecutionId, usize>,
+    /// Test-only synchronization hook at the dispatch ownership commit
+    /// boundary; never present outside `#[cfg(test)]`.
+    #[cfg(test)]
+    commit_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
 }
 
 /// The conversation-owned authoritative background registry.
@@ -318,9 +346,20 @@ impl ConversationBackgroundRegistry {
                 prepared: HashMap::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
+                #[cfg(test)]
+                commit_hook: None,
             })),
             resources,
         }
+    }
+
+    /// Installs the test-only synchronization hook at the dispatch
+    /// ownership commit boundary. Only available under `#[cfg(test)]`;
+    /// never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
+        let mut state = self.state();
+        state.commit_hook = Some(hook);
     }
 
     /// The conversation this registry belongs to.
@@ -382,6 +421,7 @@ impl ConversationBackgroundRegistry {
                 tool_name: invocation.tool_name.clone(),
                 lifecycle: BackgroundLifecycle::Starting,
                 cancellation,
+                cancel_reason: None,
                 progress: None,
                 result: None,
                 notification: NotificationState::Pending,
@@ -399,13 +439,16 @@ impl ConversationBackgroundRegistry {
 
     /// Stage two: commits the prepared dispatch (the linearization point).
     ///
-    /// Under the registry synchronization boundary, performs the final
-    /// attempt-cancellation checkpoint. If the attempt cancellation is
-    /// already observable, the prepared dispatch is rolled back — the
-    /// runner is aborted, no execution is detached, and no accepted result
-    /// exists. Otherwise conversation ownership commits: the record is
-    /// published as `Starting`, the runner gate is released, and the
-    /// accepted attempt-facing result is produced. No await or cancellation
+    /// The registry synchronization boundary is acquired first; the final
+    /// attempt-cancellation observation happens at that same protected
+    /// boundary, so there is no unchecked window between the deciding
+    /// cancellation observation and the prepared→owned transition. If the
+    /// attempt cancellation is observable, the prepared dispatch rolls back
+    /// completely under the boundary — no published record, no accepted
+    /// result, and the runner is aborted and never begins. Otherwise
+    /// conversation ownership commits exactly once: the record is published
+    /// as `Starting`, the runner gate is released, and the accepted
+    /// attempt-facing result is produced. No await or cancellation
     /// checkpoint can split the ownership commit from the accepted result.
     #[must_use]
     pub fn commit_dispatch(
@@ -413,16 +456,27 @@ impl ConversationBackgroundRegistry {
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
     ) -> BackgroundDispatchOutcome {
+        let mut state = self.state();
+        // TEST-ONLY ownership-commit boundary: the registry lock is held and
+        // the deciding cancellation observation is next. Tests park here to
+        // make the linearization exact.
+        #[cfg(test)]
+        if let Some(hook) = &state.commit_hook {
+            hook.enter();
+        }
         if attempt_cancellation.is_cancelled() {
-            // The rollback happens through the prepared handle's drop
-            // semantics; this is also the final attempt-cancellation
-            // checkpoint, so no accepted result may be produced.
+            // The deciding cancellation observation and the rollback share
+            // this critical section: the prepared record is removed and the
+            // runner aborted here, and the prepared handle's drop semantics
+            // are neutralized so no second rollback path exists.
+            if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                prepared_record.runner.abort();
+            }
             prepared.committed = true;
-            self.rollback_prepared(&prepared.execution_id);
             return BackgroundDispatchOutcome::RolledBack;
         }
-        let mut state = self.state();
         let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
+            prepared.committed = true;
             return BackgroundDispatchOutcome::RolledBack;
         };
         let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
@@ -445,6 +499,11 @@ impl ConversationBackgroundRegistry {
     /// Cancellation is idempotent: for an already-cancelling or terminal
     /// execution the current snapshot is returned unchanged and the state is
     /// never destructively changed. An unknown execution id returns `None`.
+    ///
+    /// When cancellation intent commits, the cancellation reason is
+    /// retained in the record; the registry is the settlement authority and
+    /// uses it to canonicalize the final terminal result, so the registry
+    /// winner and the stored result can never disagree.
     #[must_use]
     pub fn cancel(&self, execution_id: &ToolExecutionId) -> Option<BackgroundExecutionSnapshot> {
         let mut state = self.state();
@@ -453,6 +512,7 @@ impl ConversationBackgroundRegistry {
         match record.lifecycle {
             BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
                 record.lifecycle = BackgroundLifecycle::Cancelling;
+                record.cancel_reason = Some(BACKGROUND_CANCEL_REASON);
                 record.cancellation.cancel();
             }
             BackgroundLifecycle::Cancelling
@@ -500,6 +560,13 @@ impl ConversationBackgroundRegistry {
     /// or cancellation intent wins the race (see the module documentation).
     /// A terminal transition may claim at most one runtime inbound
     /// publication; duplicate settlement calls are idempotent no-ops.
+    ///
+    /// When cancellation intent already owns settlement (`Cancelling`), a
+    /// later normal executor return cannot contradict the registry winner:
+    /// the stored terminal result is canonicalized to `Cancelled` with the
+    /// retained cancellation reason, preserving useful bounded result data
+    /// and artifacts where present. Only an explicit runtime/process-control
+    /// failure after cancellation intent settles as `Failed`.
     pub fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
@@ -509,13 +576,15 @@ impl ConversationBackgroundRegistry {
         if record.lifecycle.is_terminal() {
             return;
         }
-        let settled = match record.lifecycle {
+        let (settled, stored) = match record.lifecycle {
             BackgroundLifecycle::Starting | BackgroundLifecycle::Running => match result.status {
-                ToolExecutionStatus::Success => BackgroundLifecycle::Succeeded,
-                ToolExecutionStatus::Cancelled { .. } => BackgroundLifecycle::Cancelled,
+                ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
+                ToolExecutionStatus::Cancelled { .. } => {
+                    (BackgroundLifecycle::Cancelled, result.clone())
+                }
                 ToolExecutionStatus::Failed { .. }
                 | ToolExecutionStatus::TimedOut
-                | ToolExecutionStatus::Interrupted => BackgroundLifecycle::Failed,
+                | ToolExecutionStatus::Interrupted => (BackgroundLifecycle::Failed, result.clone()),
             },
             BackgroundLifecycle::Cancelling => {
                 // Cancellation intent already owns settlement. A normal
@@ -523,8 +592,16 @@ impl ConversationBackgroundRegistry {
                 // winner; only an explicit runtime/process-control failure
                 // is represented as Failed.
                 match result.status {
-                    ToolExecutionStatus::Failed { .. } => BackgroundLifecycle::Failed,
-                    _ => BackgroundLifecycle::Cancelled,
+                    ToolExecutionStatus::Failed { .. } => {
+                        (BackgroundLifecycle::Failed, result.clone())
+                    }
+                    _ => {
+                        let mut canonical = result.clone();
+                        canonical.status = ToolExecutionStatus::Cancelled {
+                            reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                        };
+                        (BackgroundLifecycle::Cancelled, canonical)
+                    }
                 }
             }
             BackgroundLifecycle::Succeeded
@@ -532,7 +609,7 @@ impl ConversationBackgroundRegistry {
             | BackgroundLifecycle::Cancelled => return,
         };
         record.lifecycle = settled;
-        record.result = Some(result.clone());
+        record.result = Some(stored.clone());
         if record.notification != NotificationState::Pending {
             return;
         }
@@ -541,7 +618,7 @@ impl ConversationBackgroundRegistry {
             execution_id,
             &record.tool_name,
             settled,
-            &result.artifacts,
+            &stored.artifacts,
             self.resources.clock.now(),
         );
         match self.resources.mailbox.enqueue(message) {
@@ -561,24 +638,13 @@ impl ConversationBackgroundRegistry {
     /// emits the corresponding canonical execution fact through the narrow
     /// event seam, when one is attached.
     ///
-    /// Only the current/latest bounded progress snapshot is retained; no
-    /// unbounded progress history exists in the registry. Progress of a
-    /// terminal execution is ignored.
+    /// Every progress notification is normalized through the one shared
+    /// UTF-8-safe bound (`bound_tool_progress`), the same normalization the
+    /// foreground path uses. Only the current/latest bounded progress
+    /// snapshot is retained; no unbounded progress history exists in the
+    /// registry. Progress of a terminal execution is ignored.
     pub fn report_progress(&self, execution_id: &ToolExecutionId, progress: ToolProgress) {
-        let ToolProgress {
-            message,
-            completed,
-            total,
-        } = progress;
-        let bounded = ToolProgress {
-            message: message.map(|message| {
-                let mut bounded = message;
-                bounded.truncate(MAX_PROGRESS_MESSAGE_BYTES);
-                bounded
-            }),
-            completed,
-            total,
-        };
+        let bounded = bound_tool_progress(progress);
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
@@ -740,5 +806,437 @@ struct BackgroundProgressReporter {
 impl ProgressReporter for BackgroundProgressReporter {
     fn report(&self, progress: ToolProgress) {
         self.registry.report_progress(&self.execution_id, progress);
+    }
+}
+
+/// Test-only synchronization for the dispatch ownership commit boundary.
+///
+/// [`CommitBoundaryHook::enter`] is called by `commit_dispatch` while the
+/// registry synchronization lock is held, immediately before the deciding
+/// attempt-cancellation observation. It signals `entered` and parks the
+/// calling thread until the test calls `proceed`, so a test can prove the
+/// exact linearization: cancellation made observable after `entered` but
+/// before `proceed` is necessarily observed at the protected boundary and
+/// rolls the prepared dispatch back; a commit released without
+/// interruption is never reclaimable by a later attempt cancellation.
+///
+/// All synchronization is `std` (mutex + condvar) because the commit
+/// boundary is a `std` mutex critical section; the parking blocks the OS
+/// thread, so the race tests run on a multi-threaded runtime. This module
+/// exists only under `#[cfg(test)]`.
+#[cfg(test)]
+pub(crate) mod test_sync {
+    use std::sync::{Condvar, Mutex};
+
+    /// The two-phase gate of the commit boundary.
+    #[derive(Debug, Default)]
+    pub(crate) struct CommitBoundaryHook {
+        state: Mutex<HookState>,
+        condvar: Condvar,
+    }
+
+    #[derive(Debug, Default)]
+    struct HookState {
+        entered: bool,
+        proceed: bool,
+    }
+
+    impl CommitBoundaryHook {
+        /// Signals that the commit boundary was entered (the registry lock
+        /// is held and the deciding cancellation observation is next), then
+        /// blocks until [`CommitBoundaryHook::proceed`].
+        pub(crate) fn enter(&self) {
+            let mut state = self.state.lock().expect("commit hook lock poisoned");
+            state.entered = true;
+            self.condvar.notify_all();
+            while !state.proceed {
+                state = self.condvar.wait(state).expect("commit hook wait poisoned");
+            }
+        }
+
+        /// Blocks until the commit boundary was entered.
+        pub(crate) fn wait_entered(&self) {
+            let mut state = self.state.lock().expect("commit hook lock poisoned");
+            while !state.entered {
+                state = self.condvar.wait(state).expect("commit hook wait poisoned");
+            }
+        }
+
+        /// Releases a parked commit boundary.
+        pub(crate) fn proceed(&self) {
+            let mut state = self.state.lock().expect("commit hook lock poisoned");
+            state.proceed = true;
+            self.condvar.notify_all();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use futures_util::future::BoxFuture;
+    use tokio::sync::{Notify, watch};
+
+    use super::test_sync::CommitBoundaryHook;
+    use super::{
+        BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
+        BackgroundResources, ConversationBackgroundRegistry,
+    };
+    use crate::events::RecordingEventSink;
+    use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
+    use crate::runtime::inbound::ConversationInboundMailbox;
+    use crate::runtime::types::CancellationReason;
+    use crate::tools::artifacts::ArtifactStore;
+    use crate::tools::environment::ToolEnvironment;
+    use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+    use crate::tools::types::{
+        ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
+    };
+    use crate::tools::workspace::Workspace;
+
+    fn success() -> ToolExecutionResult {
+        ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: Vec::new(),
+            duration_ms: 0,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+        }
+    }
+
+    fn background_invocation(tool: &str) -> ToolInvocation {
+        ToolInvocation {
+            call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new(format!("tool-{tool}")),
+            tool_name: tool.to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    struct TestRegistry {
+        _dir: tempfile::TempDir,
+        registry: ConversationBackgroundRegistry,
+        mailbox: ConversationInboundMailbox,
+    }
+
+    fn registry(conversation_id: &str) -> TestRegistry {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        let conversation = ConversationId::new(conversation_id);
+        let mailbox = ConversationInboundMailbox::new(conversation.clone());
+        let registry = ConversationBackgroundRegistry::new(
+            conversation.clone(),
+            BackgroundResources {
+                mailbox: mailbox.clone(),
+                workspace: Workspace::new(&workspace_root).expect("workspace"),
+                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                environment: ToolEnvironment::new(),
+                clock: Arc::new(crate::runtime::SystemClock),
+                event_sink: None,
+            },
+        );
+        TestRegistry {
+            _dir: dir,
+            registry,
+            mailbox,
+        }
+    }
+
+    /// An executor that waits for the release notify and then returns a
+    /// fixed result, deliberately ignoring the cancellation signal.
+    struct IgnoreCancellationExecutor {
+        started: watch::Sender<bool>,
+        release: Arc<Notify>,
+        result: ToolExecutionResult,
+    }
+
+    impl IgnoreCancellationExecutor {
+        fn new(result: ToolExecutionResult) -> (Self, watch::Receiver<bool>, Arc<Notify>) {
+            let (started, started_rx) = watch::channel(false);
+            let release = Arc::new(Notify::new());
+            (
+                Self {
+                    started,
+                    release: release.clone(),
+                    result,
+                },
+                started_rx,
+                release,
+            )
+        }
+    }
+
+    impl ToolExecutor for IgnoreCancellationExecutor {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
+            self.started.send_replace(true);
+            let release = self.release.clone();
+            let result = self.result.clone();
+            Box::pin(async move {
+                release.notified().await;
+                result
+            })
+        }
+    }
+
+    async fn prepare(
+        fixture: &TestRegistry,
+        executor: &Arc<dyn ToolExecutor>,
+    ) -> super::PreparedBackgroundDispatch {
+        fixture
+            .registry
+            .prepare_dispatch(&background_invocation("bash"), executor)
+            .expect("prepare")
+    }
+
+    /// Cancellation observable at the ownership-commit boundary rolls the
+    /// prepared dispatch back: no published record, no accepted result, and
+    /// the runner never begins. The test parks the commit exactly between
+    /// lock acquisition and the deciding cancellation observation, so the
+    /// race is proven without timing assumptions.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_observable_at_the_commit_boundary_rolls_back() {
+        let fixture = registry("conv-bg");
+        let (executor, mut started, _release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor).await;
+        let attempt_cancellation = crate::runtime::cancellation::CancellationSignal::new();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let attempt_for_task = attempt_cancellation.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry.commit_dispatch(prepared, &attempt_for_task)
+        });
+        // The commit is parked inside its critical section: the deciding
+        // cancellation observation is next. Make attempt cancellation
+        // observable now, then release the boundary.
+        hook.wait_entered();
+        attempt_cancellation.cancel();
+        hook.proceed();
+        let outcome = commit_task.await.expect("commit task returns an outcome");
+        assert_eq!(
+            outcome,
+            BackgroundDispatchOutcome::RolledBack,
+            "cancellation observable at the boundary means no accepted result"
+        );
+        assert_eq!(
+            fixture.registry.all_snapshots().len(),
+            0,
+            "no detached execution is published"
+        );
+        let started_outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            started.wait_for(|started| *started),
+        )
+        .await;
+        assert!(
+            !matches!(started_outcome, Ok(Ok(_))),
+            "the rolled-back runner must never begin"
+        );
+    }
+
+    /// Ownership committed at the boundary is never reclaimable: after the
+    /// commit completes, a later attempt cancellation cannot stop the
+    /// conversation-owned runner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commit_wins_and_later_attempt_cancellation_cannot_reclaim() {
+        let fixture = registry("conv-bg");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor).await;
+        let attempt_cancellation = crate::runtime::cancellation::CancellationSignal::new();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let attempt_for_task = attempt_cancellation.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry.commit_dispatch(prepared, &attempt_for_task)
+        });
+        // Release the boundary immediately: ownership commits while the
+        // attempt cancellation is still fresh.
+        hook.wait_entered();
+        hook.proceed();
+        let outcome = commit_task.await.expect("commit task returns an outcome");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("expected accepted");
+        };
+        // Attempt cancellation after the commit cannot reclaim the work.
+        attempt_cancellation.cancel();
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the conversation-owned runner still starts");
+        release.notify_one();
+        let terminal = fixture.registry.snapshot(&execution_id).expect("snapshot");
+        let expected = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(expected.state, BackgroundLifecycle::Succeeded);
+        assert_eq!(terminal.state, BackgroundLifecycle::Running);
+    }
+
+    /// Cancellation winner consistency: cancellation commits while the
+    /// executor runs; the executor ignores cancellation and returns
+    /// `Success`; the registry canonicalizes the stored terminal result to
+    /// `Cancelled` with the retained reason, and exactly one terminal
+    /// inbound publication exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_winner_canonicalizes_the_terminal_result() {
+        let fixture = registry("conv-bg");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor).await;
+        let outcome = fixture.registry.commit_dispatch(
+            prepared,
+            &crate::runtime::cancellation::CancellationSignal::new(),
+        );
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("runner started");
+        // Cancellation wins in the registry while the executor is running.
+        let cancelling = fixture.registry.cancel(&execution_id).expect("cancel");
+        assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
+        // The executor ignores cancellation and returns Success.
+        release.notify_one();
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Cancelled,
+            "the registry cancellation winner owns settlement"
+        );
+        let result = terminal.result.expect("terminal result");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: BACKGROUND_CANCEL_REASON,
+            },
+            "the stored terminal result agrees with the registry winner"
+        );
+        let batch = fixture.mailbox.drain().expect("one terminal batch");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "exactly one terminal inbound publication"
+        );
+        assert!(fixture.mailbox.drain().is_none());
+    }
+
+    /// Oversized multibyte progress cannot panic or strand the execution:
+    /// the shared UTF-8-safe bound normalizes the message and the execution
+    /// still reaches its terminal state.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn oversized_multibyte_progress_cannot_panic_or_strand() {
+        let sink = Arc::new(RecordingEventSink::new());
+        let sink_dyn: Arc<dyn crate::events::RuntimeEventSink> = sink.clone();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        let conversation = ConversationId::new("conv-bg");
+        let mailbox = ConversationInboundMailbox::new(conversation.clone());
+        let registry = ConversationBackgroundRegistry::new(
+            conversation.clone(),
+            BackgroundResources {
+                mailbox: mailbox.clone(),
+                workspace: Workspace::new(&workspace_root).expect("workspace"),
+                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                environment: ToolEnvironment::new(),
+                clock: Arc::new(crate::runtime::SystemClock),
+                event_sink: Some(sink_dyn),
+            },
+        );
+        let fixture = TestRegistry {
+            _dir: dir,
+            registry,
+            mailbox,
+        };
+        struct ProgressThenDone;
+        impl ToolExecutor for ProgressThenDone {
+            fn execute<'a>(
+                &'a self,
+                _invocation: ToolInvocation,
+                context: ToolExecutionContext<'a>,
+            ) -> BoxFuture<'a, ToolExecutionResult> {
+                let message = format!("{}😀", "x".repeat(1024));
+                context.progress.report(ToolProgress {
+                    message: Some(message),
+                    completed: Some(1),
+                    total: Some(2),
+                });
+                Box::pin(async move { success() })
+            }
+        }
+        let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&background_invocation("bash"), &executor)
+            .expect("prepare");
+        let outcome = fixture.registry.commit_dispatch(
+            prepared,
+            &crate::runtime::cancellation::CancellationSignal::new(),
+        );
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the oversized progress must not strand the execution"
+        );
+        let progress = terminal.progress.expect("progress snapshot");
+        let message = progress.message.expect("message");
+        assert!(
+            message.len() <= crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES,
+            "the snapshot message is bounded"
+        );
+        assert_eq!(progress.completed, Some(1));
+        assert_eq!(progress.total, Some(2));
+        let progress_events = sink
+            .as_ref()
+            .events()
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    crate::events::RuntimeEvent::ToolExecutionProgress { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(progress_events.len(), 1);
+    }
+
+    async fn wait_for_terminal(
+        fixture: &TestRegistry,
+        execution_id: &ToolExecutionId,
+    ) -> super::BackgroundExecutionSnapshot {
+        for _ in 0..200 {
+            let snapshot = fixture.registry.snapshot(execution_id).expect("snapshot");
+            if snapshot.state.is_terminal() {
+                return snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("execution never reached a terminal state");
+    }
+
+    /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the
+    /// conversation-owned cancellation reason.
+    #[test]
+    fn background_cancel_reason_is_user_requested() {
+        assert_eq!(BACKGROUND_CANCEL_REASON, CancellationReason::UserRequested);
     }
 }
