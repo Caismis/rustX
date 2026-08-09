@@ -46,24 +46,19 @@ async fn read_slices_lines_deterministically() {
     let fixture = native_fixture();
     let file = fixture.runtime.workspace().root().join("sample.txt");
     std::fs::write(&file, "one\ntwo\nthree\nfour\nfive\n").expect("write sample");
-    let full = run_tool(
-        &fixture,
-        "read",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "sample.txt"}),
-    )
-    .await;
+    let full = run_tool(&fixture, "read", serde_json::json!({"path": "sample.txt"})).await;
     assert_eq!(text_content(&full), "one\ntwo\nthree\nfour\nfive");
     let middle = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "sample.txt", "start_line": 2, "line_count": 2}),
+        serde_json::json!({"path": "sample.txt", "start_line": 2, "line_count": 2}),
     )
     .await;
     assert_eq!(text_content(&middle), "two\nthree");
     let past_end = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "sample.txt", "start_line": 99}),
+        serde_json::json!({"path": "sample.txt", "start_line": 99}),
     )
     .await;
     assert_eq!(text_content(&past_end), "");
@@ -78,7 +73,7 @@ async fn read_output_is_bounded_and_truncated() {
     let result = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "big.txt", "line_count": 1_000_000}),
+        serde_json::json!({"path": "big.txt", "line_count": 1_000_000}),
     )
     .await;
     assert!(
@@ -99,14 +94,7 @@ async fn read_rejects_binary_input() {
     let fixture = native_fixture();
     let file = fixture.runtime.workspace().root().join("binary.bin");
     std::fs::write(&file, [0xff, 0xfe, 0x00, 0x01]).expect("write binary");
-    assert_failed(
-        &run_tool(
-            &fixture,
-            "read",
-            serde_json::json!({"__rustx_execution": "foreground", "path": "binary.bin"}),
-        )
-        .await,
-    );
+    assert_failed(&run_tool(&fixture, "read", serde_json::json!({"path": "binary.bin"})).await);
 }
 
 #[tokio::test]
@@ -116,7 +104,7 @@ async fn read_rejects_absolute_and_escaping_paths() {
         &run_tool(
             &fixture,
             "read",
-            serde_json::json!({"__rustx_execution": "foreground", "path": "/etc/hostname"}),
+            serde_json::json!({"path": "/etc/hostname"}),
         )
         .await,
     );
@@ -124,7 +112,7 @@ async fn read_rejects_absolute_and_escaping_paths() {
         &run_tool(
             &fixture,
             "read",
-            serde_json::json!({"__rustx_execution": "foreground", "path": "../escape.txt"}),
+            serde_json::json!({"path": "../escape.txt"}),
         )
         .await,
     );
@@ -141,14 +129,7 @@ async fn read_rejects_symlinks_escaping_the_workspace() {
         fixture.runtime.workspace().root().join("linked.txt"),
     )
     .expect("symlink");
-    assert_failed(
-        &run_tool(
-            &fixture,
-            "read",
-            serde_json::json!({"__rustx_execution": "foreground", "path": "linked.txt"}),
-        )
-        .await,
-    );
+    assert_failed(&run_tool(&fixture, "read", serde_json::json!({"path": "linked.txt"})).await);
 }
 
 #[tokio::test]
@@ -158,7 +139,7 @@ async fn write_creates_and_replaces_atomically() {
     let created = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "dir/file.txt", "content": "hello"}),
+        serde_json::json!({"path": "dir/file.txt", "content": "hello"}),
     )
     .await;
     assert_eq!(created.status, ToolExecutionStatus::Success);
@@ -171,7 +152,7 @@ async fn write_creates_and_replaces_atomically() {
     let replaced = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "dir/file.txt", "content": "world"}),
+        serde_json::json!({"path": "dir/file.txt", "content": "world"}),
     )
     .await;
     assert_eq!(replaced.status, ToolExecutionStatus::Success);
@@ -196,7 +177,7 @@ async fn write_requires_an_existing_parent_directory() {
     let result = run_tool(
         &fixture,
         "write",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "missing/deep/file.txt", "content": "x"}),
+        serde_json::json!({"path": "missing/deep/file.txt", "content": "x"}),
     )
     .await;
     assert_failed(&result);
@@ -217,7 +198,7 @@ async fn edit_requires_exactly_one_match() {
     let single = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "edit.txt", "old_text": "beta", "new_text": "GAMMA"}),
+        serde_json::json!({"path": "edit.txt", "old_text": "beta", "new_text": "GAMMA"}),
     )
     .await;
     assert_eq!(single.status, ToolExecutionStatus::Success);
@@ -230,14 +211,14 @@ async fn edit_requires_exactly_one_match() {
     let duplicate = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "edit.txt", "old_text": "alpha", "new_text": "x"}),
+        serde_json::json!({"path": "edit.txt", "old_text": "alpha", "new_text": "x"}),
     )
     .await;
     assert_failed(&duplicate);
     let zero = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "edit.txt", "old_text": "absent", "new_text": "x"}),
+        serde_json::json!({"path": "edit.txt", "old_text": "absent", "new_text": "x"}),
     )
     .await;
     assert_failed(&zero);
@@ -250,7 +231,7 @@ async fn edit_replace_all_replaces_every_match_but_fails_on_zero() {
     let replaced = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "edit.txt", "old_text": "a", "new_text": "z", "replace_all": true}),
+        serde_json::json!({"path": "edit.txt", "old_text": "a", "new_text": "z", "replace_all": true}),
     )
     .await;
     assert_eq!(replaced.status, ToolExecutionStatus::Success);
@@ -263,7 +244,7 @@ async fn edit_replace_all_replaces_every_match_but_fails_on_zero() {
     let zero = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"__rustx_execution": "foreground", "path": "edit.txt", "old_text": "missing", "new_text": "z", "replace_all": true}),
+        serde_json::json!({"path": "edit.txt", "old_text": "missing", "new_text": "z", "replace_all": true}),
     )
     .await;
     assert_failed(&zero);
@@ -278,12 +259,7 @@ async fn glob_is_lexically_ordered_and_workspace_relative() {
     std::fs::write(root.join("zebra.rs"), "z").expect("write");
     std::fs::write(root.join("alpha.rs"), "a").expect("write");
     std::fs::write(root.join("sub/middle.rs"), "m").expect("write");
-    let result = run_tool(
-        &fixture,
-        "glob",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "**/*.rs"}),
-    )
-    .await;
+    let result = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*.rs"})).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(
         json_content(&result)["results"],
@@ -303,7 +279,7 @@ async fn glob_truncates_at_the_result_limit() {
     let result = run_tool(
         &fixture,
         "glob",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "many/*.txt"}),
+        serde_json::json!({"pattern": "many/*.txt"}),
     )
     .await;
     let results = json_content(&result)["results"]
@@ -325,7 +301,7 @@ async fn grep_orders_matches_deterministically() {
     let result = run_tool(
         &fixture,
         "grep",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "fn [xy]", "glob": "**/*.rs"}),
+        serde_json::json!({"pattern": "fn [xy]", "glob": "**/*.rs"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -360,7 +336,7 @@ async fn grep_rejects_invalid_regex() {
     let result = run_tool(
         &fixture,
         "grep",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "([unclosed"}),
+        serde_json::json!({"pattern": "([unclosed"}),
     )
     .await;
     assert_failed(&result);
@@ -372,12 +348,7 @@ async fn grep_truncates_at_the_match_limit() {
     let root = fixture.runtime.workspace().root().to_path_buf();
     let content = "match\n".repeat(rustx::tools::limits::MAX_GREP_MATCHES + 100);
     std::fs::write(root.join("huge.txt"), content).expect("write");
-    let result = run_tool(
-        &fixture,
-        "grep",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "match"}),
-    )
-    .await;
+    let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "match"})).await;
     let matches = json_content(&result)["matches"]
         .as_array()
         .expect("matches")
@@ -395,23 +366,13 @@ async fn traversal_tools_do_not_follow_directory_symlinks() {
     std::fs::create_dir_all(&outside).expect("outside dir");
     std::fs::write(outside.join("secret.rs"), "fn secret() {}").expect("write outside");
     std::os::unix::fs::symlink(&outside, root.join("linked")).expect("symlink");
-    let glob = run_tool(
-        &fixture,
-        "glob",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "**/*.rs"}),
-    )
-    .await;
+    let glob = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*.rs"})).await;
     assert_eq!(
         json_content(&glob)["results"],
         serde_json::json!([]),
         "directory symlinks are never traversed"
     );
-    let grep = run_tool(
-        &fixture,
-        "grep",
-        serde_json::json!({"__rustx_execution": "foreground", "pattern": "secret"}),
-    )
-    .await;
+    let grep = run_tool(&fixture, "grep", serde_json::json!({"pattern": "secret"})).await;
     assert_eq!(
         json_content(&grep)["matches"]
             .as_array()
@@ -420,4 +381,158 @@ async fn traversal_tools_do_not_follow_directory_symlinks() {
         0,
         "grep never descends into directory symlinks"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Execution-policy configurability
+// ---------------------------------------------------------------------------
+
+/// Every ordinary native tool can be registered under any legal execution
+/// policy; `background_task` stays fixed foreground-only sequential.
+#[test]
+#[allow(clippy::too_many_lines)] // one coherent policy matrix across three policies
+fn native_tools_register_under_every_legal_execution_policy() {
+    use rustx::runtime::identity::{ConversationId, ToolCallId, ToolId};
+    use rustx::tools::executor::{PreflightOutcome, ToolRegistry};
+    use rustx::tools::native::{NativeToolPolicy, NativeToolResources, register_native_tools};
+    use rustx::tools::runtime::ConversationToolRuntime;
+    use rustx::tools::types::{
+        ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationMode,
+    };
+
+    for execution in [
+        ToolExecutionPolicy::ForegroundOnly,
+        ToolExecutionPolicy::BackgroundOnly,
+        ToolExecutionPolicy::ModelSelectable,
+    ] {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let runtime = ConversationToolRuntime::new(
+            ConversationId::new("conv-policy"),
+            &workspace_root,
+            dir.path().join("artifacts"),
+        )
+        .expect("runtime");
+        let mut registry = ToolRegistry::new();
+        register_native_tools(
+            &mut registry,
+            NativeToolResources {
+                background: runtime.background().clone(),
+            },
+            NativeToolPolicy {
+                execution,
+                concurrency: ToolConcurrencyPolicy::Sequential,
+            },
+        )
+        .expect("every legal policy registers every ordinary native tool");
+
+        // An ordinary filesystem tool (read) preflights under the policy.
+        let read_call = |arguments| ToolCall {
+            id: ToolCallId::new("call-read"),
+            tool_id: ToolId::new("tool-read"),
+            name: "read".to_owned(),
+            arguments,
+        };
+        let read_mode = match execution {
+            ToolExecutionPolicy::ForegroundOnly => {
+                let outcome = registry
+                    .preflight(&read_call(serde_json::json!({"path": "a.txt"})))
+                    .expect("preflight");
+                let PreflightOutcome::Ready(prepared) = outcome else {
+                    panic!("foreground-only read must preflight as ready");
+                };
+                prepared.invocation.mode
+            }
+            ToolExecutionPolicy::BackgroundOnly => {
+                let outcome = registry
+                    .preflight(&read_call(serde_json::json!({"path": "a.txt"})))
+                    .expect("preflight");
+                let PreflightOutcome::Ready(prepared) = outcome else {
+                    panic!("background-only read must preflight as ready");
+                };
+                prepared.invocation.mode
+            }
+            ToolExecutionPolicy::ModelSelectable => {
+                let outcome = registry
+                    .preflight(&read_call(serde_json::json!({
+                        "__rustx_execution": "foreground",
+                        "path": "a.txt"
+                    })))
+                    .expect("preflight");
+                let PreflightOutcome::Ready(prepared) = outcome else {
+                    panic!("model-selectable read must preflight as ready");
+                };
+                prepared.invocation.mode
+            }
+        };
+        let expected_read_mode = if execution == ToolExecutionPolicy::BackgroundOnly {
+            ToolInvocationMode::Background
+        } else {
+            ToolInvocationMode::Foreground
+        };
+        assert_eq!(read_mode, expected_read_mode);
+
+        // Bash preflights under the policy.
+        let bash_call = |arguments| ToolCall {
+            id: ToolCallId::new("call-bash"),
+            tool_id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            arguments,
+        };
+        let bash_arguments = match execution {
+            ToolExecutionPolicy::ForegroundOnly | ToolExecutionPolicy::BackgroundOnly => {
+                serde_json::json!({"command": "echo hi"})
+            }
+            ToolExecutionPolicy::ModelSelectable => {
+                serde_json::json!({"__rustx_execution": "background", "command": "echo hi"})
+            }
+        };
+        let outcome = registry
+            .preflight(&bash_call(bash_arguments))
+            .expect("preflight");
+        let PreflightOutcome::Ready(prepared) = outcome else {
+            panic!("bash must preflight as ready under {execution:?}");
+        };
+        assert_eq!(
+            prepared.invocation.mode,
+            if execution == ToolExecutionPolicy::ForegroundOnly {
+                ToolInvocationMode::Foreground
+            } else {
+                ToolInvocationMode::Background
+            }
+        );
+
+        // The model-selectable decoration stays provider-neutral: only the
+        // compiled definitions carry the synthetic field.
+        let compiled = registry
+            .model_definitions()
+            .into_iter()
+            .find(|definition| definition.name == "bash")
+            .expect("bash compiled definition");
+        if execution == ToolExecutionPolicy::ModelSelectable {
+            assert!(compiled.input_schema["properties"]["__rustx_execution"].is_object());
+        } else {
+            assert!(compiled.input_schema["properties"]["__rustx_execution"].is_null());
+        }
+
+        // `background_task` cannot be configured away from its fixed
+        // foreground-only sequential policy, regardless of the policy used
+        // for the bulk registration.
+        let definitions = registry.definitions();
+        let intrinsic = definitions
+            .iter()
+            .find(|definition| definition.name == "background_task")
+            .expect("background_task registered");
+        assert_eq!(
+            intrinsic.execution_policy,
+            ToolExecutionPolicy::ForegroundOnly,
+            "background_task stays foreground-only"
+        );
+        assert_eq!(
+            intrinsic.concurrency_policy,
+            ToolConcurrencyPolicy::Sequential,
+            "background_task stays sequential"
+        );
+    }
 }

@@ -591,17 +591,14 @@ impl ConversationBackgroundRegistry {
                 // executor return must not overwrite the cancellation
                 // winner; only an explicit runtime/process-control failure
                 // is represented as Failed.
-                match result.status {
-                    ToolExecutionStatus::Failed { .. } => {
-                        (BackgroundLifecycle::Failed, result.clone())
-                    }
-                    _ => {
-                        let mut canonical = result.clone();
-                        canonical.status = ToolExecutionStatus::Cancelled {
-                            reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
-                        };
-                        (BackgroundLifecycle::Cancelled, canonical)
-                    }
+                if matches!(result.status, ToolExecutionStatus::Failed { .. }) {
+                    (BackgroundLifecycle::Failed, result.clone())
+                } else {
+                    let mut canonical = result.clone();
+                    canonical.status = ToolExecutionStatus::Cancelled {
+                        reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                    };
+                    (BackgroundLifecycle::Cancelled, canonical)
                 }
             }
             BackgroundLifecycle::Succeeded
@@ -987,7 +984,7 @@ mod tests {
         }
     }
 
-    async fn prepare(
+    fn prepare(
         fixture: &TestRegistry,
         executor: &Arc<dyn ToolExecutor>,
     ) -> super::PreparedBackgroundDispatch {
@@ -1007,7 +1004,7 @@ mod tests {
         let fixture = registry("conv-bg");
         let (executor, mut started, _release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let prepared = prepare(&fixture, &executor).await;
+        let prepared = prepare(&fixture, &executor);
         let attempt_cancellation = crate::runtime::cancellation::CancellationSignal::new();
         let hook = Arc::new(CommitBoundaryHook::default());
         fixture.registry.install_commit_boundary_hook(hook.clone());
@@ -1053,7 +1050,7 @@ mod tests {
         let fixture = registry("conv-bg");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let prepared = prepare(&fixture, &executor).await;
+        let prepared = prepare(&fixture, &executor);
         let attempt_cancellation = crate::runtime::cancellation::CancellationSignal::new();
         let hook = Arc::new(CommitBoundaryHook::default());
         fixture.registry.install_commit_boundary_hook(hook.clone());
@@ -1094,7 +1091,7 @@ mod tests {
         let fixture = registry("conv-bg");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let prepared = prepare(&fixture, &executor).await;
+        let prepared = prepare(&fixture, &executor);
         let outcome = fixture.registry.commit_dispatch(
             prepared,
             &crate::runtime::cancellation::CancellationSignal::new(),
@@ -1139,6 +1136,22 @@ mod tests {
     /// still reaches its terminal state.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn oversized_multibyte_progress_cannot_panic_or_strand() {
+        struct ProgressThenDone;
+        impl ToolExecutor for ProgressThenDone {
+            fn execute<'a>(
+                &'a self,
+                _invocation: ToolInvocation,
+                context: ToolExecutionContext<'a>,
+            ) -> BoxFuture<'a, ToolExecutionResult> {
+                let message = format!("{}😀", "x".repeat(1024));
+                context.progress.report(ToolProgress {
+                    message: Some(message),
+                    completed: Some(1),
+                    total: Some(2),
+                });
+                Box::pin(async move { success() })
+            }
+        }
         let sink = Arc::new(RecordingEventSink::new());
         let sink_dyn: Arc<dyn crate::events::RuntimeEventSink> = sink.clone();
         let dir = tempfile::tempdir().expect("temp dir");
@@ -1163,22 +1176,6 @@ mod tests {
             registry,
             mailbox,
         };
-        struct ProgressThenDone;
-        impl ToolExecutor for ProgressThenDone {
-            fn execute<'a>(
-                &'a self,
-                _invocation: ToolInvocation,
-                context: ToolExecutionContext<'a>,
-            ) -> BoxFuture<'a, ToolExecutionResult> {
-                let message = format!("{}😀", "x".repeat(1024));
-                context.progress.report(ToolProgress {
-                    message: Some(message),
-                    completed: Some(1),
-                    total: Some(2),
-                });
-                Box::pin(async move { success() })
-            }
-        }
         let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
         let prepared = fixture
             .registry

@@ -41,7 +41,7 @@ async fn bash_uses_full_shell_semantics() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "echo $((6*7)); for i in a b; do printf '%s ' $i; done"}),
+        serde_json::json!({"command": "echo $((6*7)); for i in a b; do printf '%s ' $i; done"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -68,7 +68,7 @@ async fn bash_uses_the_fixed_workspace_directory() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "pwd; test -f marker.txt && echo found"}),
+        serde_json::json!({"command": "pwd; test -f marker.txt && echo found"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -87,14 +87,14 @@ async fn bash_has_no_state_persistence_between_calls() {
     let first = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "export PERSISTED=yes; cd /; echo one"}),
+        serde_json::json!({"command": "export PERSISTED=yes; cd /; echo one"}),
     )
     .await;
     assert_eq!(first.status, ToolExecutionStatus::Success);
     let second = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "echo ${PERSISTED:-absent} $(pwd)"}),
+        serde_json::json!({"command": "echo ${PERSISTED:-absent} $(pwd)"}),
     )
     .await;
     assert_eq!(second.status, ToolExecutionStatus::Success);
@@ -116,7 +116,7 @@ async fn bash_captures_stdout_stderr_and_combined() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "echo out; echo err >&2"}),
+        serde_json::json!({"command": "echo out; echo err >&2"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -131,20 +131,10 @@ async fn bash_captures_stdout_stderr_and_combined() {
 #[tokio::test]
 async fn bash_zero_exit_is_success_and_nonzero_exit_is_a_failed_result() {
     let fixture = native_fixture();
-    let zero = run_tool(
-        &fixture,
-        "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "exit 0"}),
-    )
-    .await;
+    let zero = run_tool(&fixture, "bash", serde_json::json!({"command": "exit 0"})).await;
     assert_eq!(zero.status, ToolExecutionStatus::Success);
     assert_eq!(json_content(&zero)["exit_code"], 0);
-    let nonzero = run_tool(
-        &fixture,
-        "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "exit 7"}),
-    )
-    .await;
+    let nonzero = run_tool(&fixture, "bash", serde_json::json!({"command": "exit 7"})).await;
     match &nonzero.status {
         ToolExecutionStatus::Failed { error } => {
             assert!(error.contains('7'), "exit code preserved: {error}");
@@ -160,7 +150,7 @@ async fn bash_foreground_timeout_is_timed_out() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "sleep 30", "timeout_ms": 200}),
+        serde_json::json!({"command": "sleep 30", "timeout_ms": 200}),
     )
     .await;
     assert_eq!(
@@ -174,23 +164,35 @@ async fn bash_foreground_timeout_is_timed_out() {
 #[tokio::test]
 async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
     let fixture = native_fixture();
-    let marker = fixture
-        .runtime
-        .workspace()
-        .root()
-        .join("term-received.marker");
-    let command = format!("trap 'touch {}' TERM; sleep 30", marker.display());
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let ready = workspace.join("trap-ready.marker");
+    let marker = workspace.join("term-received.marker");
+    // Deterministic readiness handshake: the shell installs the TERM trap
+    // before it writes the ready marker, so observing the marker
+    // deterministically means the trap is in place before cancellation.
+    let command = format!(
+        "trap 'touch {}' TERM; touch {}; sleep 30",
+        marker.display(),
+        ready.display()
+    );
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
     let controller = tokio::spawn(async move {
-        // Give the child a moment to install its trap before cancelling.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // Polling queries the readiness marker's existence (the state
+        // itself) with a strict deadlock guard.
+        for _ in 0..200 {
+            if ready.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ready.exists(), "the trap readiness marker never appeared");
         cancelling.cancel();
     });
     let result = run_tool_with_cancellation(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": command}),
+        serde_json::json!({"command": command}),
         cancellation,
     )
     .await;
@@ -199,12 +201,8 @@ async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
         result.status,
         ToolExecutionStatus::Cancelled { .. }
     ));
-    for _ in 0..200 {
-        if marker.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
+    // TERM was delivered before the grace period expired and the KILL
+    // landed, so the trap marker provably exists once the tool returns.
     assert!(marker.exists(), "TERM reached the owned process group");
 }
 
@@ -214,7 +212,7 @@ async fn bash_kill_escalates_when_term_is_ignored() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "trap '' TERM; sleep 30", "timeout_ms": 300}),
+        serde_json::json!({"command": "trap '' TERM; sleep 30", "timeout_ms": 300}),
     )
     .await;
     assert_eq!(
@@ -227,22 +225,36 @@ async fn bash_kill_escalates_when_term_is_ignored() {
 #[tokio::test]
 async fn bash_cancellation_terminates_descendants_of_the_process_group() {
     let fixture = native_fixture();
-    let marker = fixture
-        .runtime
-        .workspace()
-        .root()
-        .join("descendant-stopped.marker");
-    let command = format!("sleep 30 & wait; touch {}", marker.display());
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let ready = workspace.join("descendant-ready.marker");
+    let marker = workspace.join("descendant-stopped.marker");
+    // The shell writes the ready marker, then waits for the descendant.
+    // Cancellation is triggered only after the marker exists, so the
+    // descendant is provably alive inside the owned group.
+    let command = format!(
+        "touch {}; sleep 30 & wait; touch {}",
+        ready.display(),
+        marker.display()
+    );
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
     let controller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        for _ in 0..200 {
+            if ready.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            ready.exists(),
+            "the descendant readiness marker never appeared"
+        );
         cancelling.cancel();
     });
     let result = run_tool_with_cancellation(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": command}),
+        serde_json::json!({"command": command}),
         cancellation,
     )
     .await;
@@ -251,8 +263,15 @@ async fn bash_cancellation_terminates_descendants_of_the_process_group() {
         result.status,
         ToolExecutionStatus::Cancelled { .. }
     ));
-    // The descendant was killed with the group: the marker never appears.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The group was TERMed/KILLed and the shell reaped before the tool
+    // returned, so the marker can never be written afterwards; the bounded
+    // poll only guards against kernel-level delivery latency.
+    for _ in 0..200 {
+        if marker.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(
         !marker.exists(),
         "the descendant of the cancelled group must be terminated"
@@ -275,7 +294,7 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
     let result = run_tool_with_cancellation(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "sleep 30"}),
+        serde_json::json!({"command": "sleep 30"}),
         cancellation,
     )
     .await;
@@ -284,7 +303,9 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
         result.status,
         ToolExecutionStatus::Cancelled { .. }
     ));
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The tool's TERM/KILL path (grace included) completed before the tool
+    // returned and targets only the owned process group; the unrelated
+    // process in the test's own group must still be running.
     let mut unrelated = unrelated;
     assert!(
         unrelated.try_wait().expect("try_wait").is_none(),
@@ -298,12 +319,14 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
     let fixture = native_fixture();
-    let marker = fixture
-        .runtime
-        .workspace()
-        .root()
-        .join("bg-term-received.marker");
-    let command = format!("trap 'touch {}' TERM; sleep 30", marker.display());
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let ready = workspace.join("bg-trap-ready.marker");
+    let marker = workspace.join("bg-term-received.marker");
+    let command = format!(
+        "trap 'touch {}' TERM; touch {}; sleep 30",
+        marker.display(),
+        ready.display()
+    );
     let registry = fixture.runtime.background().clone();
     let executor = fixture
         .registry
@@ -324,32 +347,28 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
     else {
         panic!("accepted");
     };
-    // Wait until the execution is running (the runner passed its gate).
-    let running = loop {
-        let snapshot = registry.snapshot(&execution_id).expect("snapshot");
-        if snapshot.state == BackgroundLifecycle::Running {
-            break snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    };
+    // The registry state itself is the thing being polled (with a strict
+    // deadlock guard): wait until the execution is running.
+    let running = wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Running).await;
     assert_eq!(running.state, BackgroundLifecycle::Running);
+    // Deterministic readiness: the TERM trap is installed before the ready
+    // marker is written, and cancellation happens only afterwards.
+    for _ in 0..200 {
+        if ready.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        ready.exists(),
+        "the background trap readiness marker never appeared"
+    );
     let cancelling = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
     // The terminal settlement follows the cancellation path.
-    let terminal = loop {
-        let snapshot = registry.snapshot(&execution_id).expect("snapshot");
-        if snapshot.state == BackgroundLifecycle::Cancelled {
-            break snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    };
+    let terminal =
+        wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
     assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
-    for _ in 0..200 {
-        if marker.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
     assert!(
         marker.exists(),
         "background cancellation TERMs the owned process group"
@@ -380,13 +399,8 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
     else {
         panic!("accepted");
     };
-    let terminal = loop {
-        let snapshot = registry.snapshot(&execution_id).expect("snapshot");
-        if snapshot.state == BackgroundLifecycle::Succeeded {
-            break snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    };
+    let terminal =
+        wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Succeeded).await;
     assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     let after_cancel = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(
@@ -409,7 +423,7 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
         let result = runtime.block_on(run_tool(
             &fixture,
             "bash",
-            serde_json::json!({"__rustx_execution": "foreground", "command": "echo ${RUSTX_SENTINEL_SECRET:-absent}:${RUSTX_AUTHORIZED:-missing}"}),
+            serde_json::json!({"command": "echo ${RUSTX_SENTINEL_SECRET:-absent}:${RUSTX_AUTHORIZED:-missing}"}),
         ));
         println!("OBSERVED={}", json_content(&result)["stdout"]);
         return;
@@ -448,7 +462,7 @@ async fn bash_large_previews_are_bounded_with_full_artifacts_retained() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "yes x | head -c 200000"}),
+        serde_json::json!({"command": "yes x | head -c 200000"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -481,7 +495,7 @@ async fn bash_raw_non_utf8_output_is_preserved_in_the_artifact() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"__rustx_execution": "foreground", "command": "printf '\\377\\376\\001\\002'"}),
+        serde_json::json!({"command": "printf '\\377\\376\\001\\002'"}),
     )
     .await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -498,4 +512,94 @@ async fn bash_raw_non_utf8_output_is_preserved_in_the_artifact() {
     .expect("artifact bytes");
     assert_eq!(bytes, vec![0xff, 0xfe, 0x01, 0x02], "raw bytes preserved");
     assert!(result.truncation.is_none(), "small output is not truncated");
+}
+
+/// A shell parent that exits while a descendant stays in the owned process
+/// group and keeps the output pipe open cannot escape the invocation
+/// timeout: the drain phase still owns the complete lifecycle and
+/// terminates the group.
+#[tokio::test]
+async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
+    let fixture = native_fixture();
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_tool(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": "sleep 30 & exit 0", "timeout_ms": 300}),
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(
+        result.status,
+        ToolExecutionStatus::TimedOut,
+        "the timeout owns the complete lifecycle: a descendant holding the pipe cannot escape"
+    );
+}
+
+/// Cancellation after the shell parent exited remains effective during the
+/// output-drain phase: the readiness marker proves the shell reached the
+/// end of its command stream before cancellation, and the descendant
+/// holding the pipe is terminated with the owned group.
+#[tokio::test]
+async fn bash_cancellation_after_shell_parent_exit_still_terminates_the_group() {
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let ready = workspace.join("exited-ready.marker");
+    // The shell writes the marker, then exits immediately; the descendant
+    // `sleep 30` remains in the owned process group and holds the output
+    // pipe, so the tool is in its output-drain phase when cancellation
+    // fires.
+    let command = format!("touch {}; sleep 30 & exit 0", ready.display());
+    let cancellation = CancellationSignal::new();
+    let cancelling = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        for _ in 0..200 {
+            if ready.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            ready.exists(),
+            "the shell-exit readiness marker never appeared"
+        );
+        cancelling.cancel();
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_tool_with_cancellation(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": command}),
+            cancellation,
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    controller.await.expect("controller");
+    assert!(matches!(
+        result.status,
+        ToolExecutionStatus::Cancelled { .. }
+    ));
+}
+
+/// Polls the registry snapshot state itself (with a strict deadlock
+/// guard); the registry is the authoritative state machine, so the poll
+/// queries the very state under test.
+async fn wait_for_lifecycle(
+    registry: &rustx::tools::background::ConversationBackgroundRegistry,
+    execution_id: &rustx::runtime::identity::ToolExecutionId,
+    state: rustx::tools::background::BackgroundLifecycle,
+) -> rustx::tools::background::BackgroundExecutionSnapshot {
+    for _ in 0..400 {
+        let snapshot = registry.snapshot(execution_id).expect("snapshot");
+        if snapshot.state == state {
+            return snapshot;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let snapshot = registry.snapshot(execution_id).expect("snapshot");
+    panic!("state {state:?} never reached; last snapshot: {snapshot:?}");
 }

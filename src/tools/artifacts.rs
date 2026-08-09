@@ -43,6 +43,11 @@ impl std::error::Error for ArtifactError {}
 #[derive(Debug)]
 struct ArtifactStoreState {
     next: u64,
+    /// Test-only seam: when set, every artifact open and write fails, so
+    /// tests can prove executors represent artifact-capture failure
+    /// explicitly. Never set outside `#[cfg(test)]`.
+    #[cfg(test)]
+    force_write_failures: bool,
 }
 
 /// A conversation-owned artifact store.
@@ -92,8 +97,35 @@ impl ArtifactStore {
         Ok(Self {
             conversation_id,
             root,
-            state: Arc::new(Mutex::new(ArtifactStoreState { next: 0 })),
+            state: Arc::new(Mutex::new(ArtifactStoreState {
+                next: 0,
+                #[cfg(test)]
+                force_write_failures: false,
+            })),
         })
+    }
+
+    /// Test-only seam: forces every subsequent artifact open/write to fail,
+    /// so tests can prove that executors never report successful retention
+    /// while silently losing full output. Only available under
+    /// `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn set_force_write_failures(&self, enabled: bool) {
+        self.state
+            .lock()
+            .expect("artifact store lock poisoned")
+            .force_write_failures = enabled;
+    }
+
+    /// Test-only seam: exhausts the artifact sequence so the next
+    /// allocation fails explicitly. Only available under `#[cfg(test)]`;
+    /// never used by production code.
+    #[cfg(test)]
+    pub(crate) fn exhaust_sequence(&self) {
+        self.state
+            .lock()
+            .expect("artifact store lock poisoned")
+            .next = u64::MAX;
     }
 
     /// The conversation this store belongs to.
@@ -137,8 +169,25 @@ impl ArtifactStore {
     ///
     /// Returns [`ArtifactError::WriteFailed`] when the artifact file cannot
     /// be opened.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the store lock is poisoned, which would mean a
+    /// previous operation panicked while holding the lock.
     pub fn open_writer(&self, id: &ArtifactId) -> Result<ArtifactWriter, ArtifactError> {
         let path = self.path_of(id);
+        #[cfg(test)]
+        if self
+            .state
+            .lock()
+            .expect("artifact store lock poisoned")
+            .force_write_failures
+        {
+            return Err(ArtifactError::WriteFailed(format!(
+                "{}: test-forced artifact write failure",
+                path.display()
+            )));
+        }
         let file = File::options()
             .create(true)
             .write(true)
