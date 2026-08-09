@@ -289,8 +289,12 @@ message role, history shape, or timestamps:
   frozen as runtime-owned metadata: `section_id()` is never queried again
   after registration, so post-registration identity changes can never shadow
   a reserved id or create duplicate registered identities.
-- Extension providers contribute structured runtime facts (`label`/`value`),
-  never pre-rendered footer lines; the canonical renderer owns all text
+- Extension providers contribute structured runtime facts (`label`/`value`)
+  only, never pre-rendered footer lines and never the internal composed
+  section representation: the provider result type cannot express built-in
+  section variants, so built-in section semantics (currently `Temporal`, and
+  any future built-in variant) are runtime-owned and can only be constructed
+  by the Agent Status composer/runtime. The canonical renderer owns all text
   formatting.
 - Context failures are classified at the attempt boundary: failures while
   preparing model context before any compaction starts (invalid pending

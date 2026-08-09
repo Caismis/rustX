@@ -3036,7 +3036,7 @@ impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
     fn section(
         &self,
         _context: &rustx::context::AgentStatusRenderContext,
-    ) -> Result<Option<rustx::context::AgentStatusSectionData>, ContextError> {
+    ) -> Result<Option<Vec<rustx::context::AgentStatusFact>>, ContextError> {
         Err(ContextError::new(
             ContextErrorKind::StatusFailed,
             "test provider exploded",

@@ -46,6 +46,14 @@
 //! provider's `section_id()` *would* return can never shadow a reserved id
 //! or create duplicate identities.
 //!
+//! Built-in section **semantics** are runtime-owned at the type boundary:
+//! an extension provider returns extension data only (structured
+//! [`AgentStatusFact`] values), never the internal composed section
+//! representation, so an extension is structurally incapable of constructing
+//! the runtime-owned [`AgentStatusSectionData::Temporal`] variant or any
+//! future built-in variant. The composer and built-in composition code are
+//! the only places built-in section variants are constructed.
+//!
 //! The `background_execution` section id is reserved for the known M5
 //! background-runtime integration and has no fake M4 implementation.
 
@@ -96,15 +104,19 @@ impl core::fmt::Display for AgentStatusSectionId {
     }
 }
 
-/// The structured data of one Agent Status section.
+/// The structured data of one composed Agent Status section.
 ///
-/// Sections are structured before rendering: a provider returns structured
-/// runtime facts, never provider wire text, and the canonical renderer is the
-/// only place status text is produced. The renderer owns labels, separators,
-/// and layout.
+/// This is the internal composed representation, constructed only by the
+/// composer/built-in composition code: built-in section variants
+/// ([`AgentStatusSectionData::Temporal`] and any future built-in variant)
+/// are runtime-owned and never expressible through the extension provider
+/// contract, which returns structured extension facts only. Sections are
+/// structured before rendering: the canonical renderer is the only place
+/// status text is produced, and it owns labels, separators, and layout.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AgentStatusSectionData {
-    /// The mandatory temporal facts.
+    /// The mandatory temporal facts, constructed by the composer from its
+    /// clock and the render context.
     Temporal {
         /// The runtime clock value sampled at composition time.
         current_time: DateTime<Utc>,
@@ -116,8 +128,8 @@ pub enum AgentStatusSectionData {
     },
     /// An extension section's ordered structured runtime facts.
     ///
-    /// A provider contributes facts (`label` + `value`), never pre-rendered
-    /// footer lines; the canonical renderer formats each fact deterministically.
+    /// The composer converts a provider's extension facts into this variant;
+    /// a provider can never construct it directly, only its fact payload.
     Facts {
         /// The ordered facts of the section.
         facts: Vec<AgentStatusFact>,
@@ -174,18 +186,27 @@ pub struct AgentStatusRenderContext {
 ///
 /// A provider has a stable section identity, receives the read-only render
 /// context, may hold its own read-only authoritative subsystem state, and
-/// returns structured section data ([`AgentStatusSectionData::Facts`]) or an
-/// intentional absence. It must never mutate runtime state while rendering,
-/// and it never returns pre-rendered text: the canonical renderer formats
-/// every fact. This is deliberately not a plugin ecosystem: the seam exists
-/// so a future M5 background runtime can project its registry through a
-/// read-only provider.
+/// returns **extension data only**: an ordered list of structured
+/// [`AgentStatusFact`] values or an intentional absence. The provider
+/// contract never exposes the internal composed section representation:
+/// built-in section variants ([`AgentStatusSectionData::Temporal`] and any
+/// future built-in variant) are runtime-owned and can only be constructed by
+/// the composer, so an extension is structurally incapable of impersonating
+/// built-in section semantics. A provider must never mutate runtime state
+/// while rendering, and it never returns pre-rendered text: the canonical
+/// renderer formats every fact. This is deliberately not a plugin ecosystem:
+/// the seam exists so a future M5 background runtime can project its registry
+/// through a read-only provider.
 pub trait AgentStatusSectionProvider: Send + Sync {
     /// The stable section identity of this provider.
     fn section_id(&self) -> AgentStatusSectionId;
 
-    /// Returns the structured section data, `None` when there is nothing
+    /// Returns the structured extension facts, `None` when there is nothing
     /// useful to render, or an error when composition must fail.
+    ///
+    /// The returned facts are extension data only: the composer converts
+    /// them into the internal composed section representation, and built-in
+    /// section variants are never expressible here.
     ///
     /// # Errors
     ///
@@ -194,7 +215,7 @@ pub trait AgentStatusSectionProvider: Send + Sync {
     fn section(
         &self,
         context: &AgentStatusRenderContext,
-    ) -> Result<Option<AgentStatusSectionData>, ContextError>;
+    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError>;
 }
 
 /// The composition registration failure.
@@ -350,10 +371,14 @@ impl AgentStatusComposer {
     /// Composes one status snapshot: the mandatory temporal section first,
     /// then every extension section in registration order.
     ///
-    /// The clock is sampled exactly once per invocation. An extension
-    /// provider returning `None` contributes no section; a provider failure
-    /// propagates as a context-preparation error and is never silently
-    /// dropped.
+    /// The clock is sampled exactly once per invocation. The composer owns
+    /// the conversion from extension output into the internal composed
+    /// section representation: an extension's structured facts become a
+    /// `Facts` section, and built-in section variants are constructed only
+    /// here (or by built-in composition code), never by providers. An
+    /// extension provider returning `None` contributes no section; a provider
+    /// failure propagates as a context-preparation error and is never
+    /// silently dropped.
     ///
     /// # Errors
     ///
@@ -363,9 +388,9 @@ impl AgentStatusComposer {
         let mut sections = vec![temporal_section(self.clock.now(), context)];
         for registered in &self.providers {
             match registered.provider.section(context) {
-                Ok(Some(data)) => sections.push(AgentStatusSection {
+                Ok(Some(facts)) => sections.push(AgentStatusSection {
                     id: registered.id.clone(),
-                    data,
+                    data: AgentStatusSectionData::Facts { facts },
                 }),
                 Ok(None) => {}
                 Err(error) => {

@@ -576,7 +576,9 @@ final message in inbound order always wins (regression-tested).
 
 ```text
 runtime facts
-→ structured AgentStatus sections
+→ extension providers: structured AgentStatusFact values only
+→ composer: converts extension facts into composed sections,
+  and is the only constructor of built-in section variants (Temporal)
 → canonical deterministic renderer
 → rendered AgentStatusAttachment (Layer 0 contract)
 → provider wire compiler
@@ -595,12 +597,18 @@ runtime facts
 - Deterministic order: mandatory temporal section, future built-in
   sections, then extensions in explicit registration order. `HashMap`
   iteration is never used for rendering order.
-- Extension providers return **structured runtime facts**, never
-  pre-rendered footer lines: a section carries ordered `AgentStatusFact`
-  (`label` + `value`) pairs, and the canonical renderer is the only place
-  status text is produced — it owns labels, separators, and layout. The
-  structured seam is what a future M5 background runtime populates; no
-  schema framework, templating language, or plugin ecosystem exists.
+- Extension providers return **structured runtime facts only**, never
+  pre-rendered footer lines and never the internal composed section
+  representation: the provider contract's result type is an ordered list of
+  `AgentStatusFact` (`label` + `value`) pairs, so a provider is
+  **structurally incapable** of constructing the runtime-owned `Temporal`
+  variant or any future built-in variant. Built-in section variants are
+  runtime-owned and can only be constructed by the composer/built-in
+  composition code, which converts extension facts into the internal
+  `Facts` section form. The canonical renderer is the only place status
+  text is produced — it owns labels, separators, and layout. The structured
+  seam is what a future M5 background runtime populates; no schema
+  framework, templating language, or plugin ecosystem exists.
 - An optional provider returning `None` is intentional absence; a provider
   failure is a context-preparation failure (`StatusFailed` →
   `RuntimeError::ContextPreparationFailed`), never a silent absence and

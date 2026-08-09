@@ -356,9 +356,11 @@ Key contracts:
   a stateful provider can never shadow a reserved id or mutate into a
   duplicate.
 - Extension providers contribute structured runtime facts
-  (`AgentStatusFact` label/value pairs); the canonical context renderer owns
-  labels, separators, and layout, and providers never hand over pre-rendered
-  footer lines.
+  (`AgentStatusFact` label/value pairs) only: the provider result type
+  cannot express built-in section variants, so built-in section semantics
+  are runtime-owned and can only be constructed by the Agent Status
+  composer/runtime. The canonical context renderer owns labels, separators,
+  and layout, and providers never hand over pre-rendered footer lines.
 - Context failure semantics are separated at the attempt boundary: failures
   that occur while preparing model context **before compaction starts**
   (invalid pending fresh-inbound state, a failing status provider, a

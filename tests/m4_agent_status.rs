@@ -138,17 +138,14 @@ impl AgentStatusSectionProvider for TestProvider {
     fn section(
         &self,
         _context: &AgentStatusRenderContext,
-    ) -> Result<Option<AgentStatusSectionData>, ContextError> {
+    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
         if self.fail {
             return Err(ContextError::new(
                 ContextErrorKind::StatusFailed,
                 "test provider exploded",
             ));
         }
-        Ok(self
-            .facts
-            .clone()
-            .map(|facts| AgentStatusSectionData::Facts { facts }))
+        Ok(self.facts.clone())
     }
 }
 
@@ -180,13 +177,11 @@ impl AgentStatusSectionProvider for MutableProvider {
     fn section(
         &self,
         _context: &AgentStatusRenderContext,
-    ) -> Result<Option<AgentStatusSectionData>, ContextError> {
-        Ok(Some(AgentStatusSectionData::Facts {
-            facts: vec![AgentStatusFact {
-                label: "state".to_owned(),
-                value: "running".to_owned(),
-            }],
-        }))
+    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
+        Ok(Some(vec![AgentStatusFact {
+            label: "state".to_owned(),
+            value: "running".to_owned(),
+        }]))
     }
 }
 
@@ -213,7 +208,7 @@ impl AgentStatusSectionProvider for CountingProvider {
     fn section(
         &self,
         _context: &AgentStatusRenderContext,
-    ) -> Result<Option<AgentStatusSectionData>, ContextError> {
+    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
         Ok(None)
     }
 }
@@ -454,6 +449,57 @@ fn temporal_section_is_first_and_mandatory() {
         "the mandatory temporal section is always first"
     );
     assert_eq!(status.sections[1].id.as_str(), "custom");
+    // Built-in temporal semantics are composer-owned: exactly one Temporal
+    // section exists, constructed by the composer from its clock and render
+    // context — extensions cannot construct or duplicate it because their
+    // provider return type cannot express the built-in variant.
+    let temporal_sections: Vec<&AgentStatusSectionData> = status
+        .sections
+        .iter()
+        .map(|section| &section.data)
+        .filter(|data| matches!(data, AgentStatusSectionData::Temporal { .. }))
+        .collect();
+    assert_eq!(
+        temporal_sections.len(),
+        1,
+        "exactly one mandatory temporal section, produced by the composer"
+    );
+}
+
+/// The provider contract is the type boundary: an extension provider returns
+/// structured extension facts only, so the `Temporal` variant is
+/// structurally unreachable through the provider interface. This compiles
+/// only because the provider signature cannot express built-in variants.
+#[test]
+fn extension_providers_cannot_construct_built_in_sections() {
+    let mut composer = AgentStatusComposer::new(Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))));
+    composer
+        .register(Arc::new(TestProvider::returning(
+            "custom",
+            vec![fact("running", "2")],
+        )))
+        .expect("register");
+    let status = composer
+        .compose(&AgentStatusRenderContext {
+            inbound_message_time: utc("2026-08-08T16:30:58Z"),
+            timezone: None,
+        })
+        .expect("compose");
+    assert_eq!(
+        status.sections.len(),
+        2,
+        "temporal plus one extension section"
+    );
+    assert!(
+        status.sections.iter().all(|section| {
+            matches!(
+                &section.data,
+                AgentStatusSectionData::Temporal { .. }
+                    if section.id.as_str() == AgentStatusSectionId::TEMPORAL
+            ) || matches!(&section.data, AgentStatusSectionData::Facts { .. })
+        }),
+        "every non-temporal section is an extension Facts section under its own id"
+    );
 }
 
 #[test]
