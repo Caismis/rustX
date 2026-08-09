@@ -28,9 +28,14 @@ The canonical contracts defined in M1 live in the `src` module tree as follows:
 ```text
 runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            AgentVersionId, AttemptId, TurnId, EventId, ToolId,
-                           ToolCallId, ToolVersionId, McpServerId, SkillId,
-                           SkillVersionId, ArtifactId) and CapabilityRevision
-runtime/types.rs           CancellationReason, RuntimeError
+                           ToolCallId, ToolExecutionId, ToolVersionId,
+                           McpServerId, SkillId, SkillVersionId, ArtifactId)
+                           and CapabilityRevision
+runtime/cancellation.rs   CancellationSignal: the one runtime-owned
+                           cancellation primitive shared by model adapters,
+                           compaction, foreground tool execution, and
+                           background work
+runtime/types.rs           CancellationReason, RuntimeError, RuntimeClock
 runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            in-memory coordination contract): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
@@ -42,10 +47,37 @@ message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
-tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
-                           ToolExecutionResult, ToolExecutionStatus,
-                           ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
-                           TruncationState
+tools/types.rs             ToolDefinition (id, name, description, canonical
+                           input schema, ToolExecutionPolicy, ToolConcurrencyPolicy,
+                           ToolReplayPolicy, ToolOrigin), ModelToolDefinition
+                           (the compiled model-facing definition), ToolCall,
+                           ToolCallStart, ToolInvocation (stripped/validated
+                           canonical invocation), ToolExecutionResult,
+                           ToolExecutionStatus, ToolProgress, TruncationState
+tools/executor.rs          ToolExecutor boundary, ToolExecutionContext,
+                           ProgressReporter, ToolRegistry (validating
+                           definition/executor registry), PreflightOutcome
+tools/schema.rs            JSON Schema validation, the reserved __rustx_
+                           namespace, the model-facing schema compiler, and
+                           reserved invocation metadata extraction
+tools/workspace.rs         Workspace: the canonical runtime-owned workspace
+                           boundary (canonicalized root, relative paths only,
+                           no escape, symlink containment)
+tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
+                           artifact ids with streaming spooling
+tools/environment.rs       ToolEnvironment: the explicit authorized child
+                           environment (no wholesale parent inheritance)
+tools/background.rs        ConversationBackgroundRegistry: conversation-owned
+                           background executions (lifecycle state machine,
+                           dispatch ownership commit, cancel-vs-complete
+                           linearization, terminal inbound publication,
+                           bounded progress snapshots)
+tools/runtime.rs           ConversationToolRuntime: the per-conversation
+                           bundle of workspace, artifacts, environment, and
+                           background registry handed to AgentExecution
+tools/native/             the native tool plane: read, write, edit, glob,
+                           grep, bash executors and the background_task
+                           runtime intrinsic
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
                            ReasoningEffort, AgentStatusAttachment (the
                            cross-layer model-request attachment contract of
@@ -60,7 +92,8 @@ events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome,
                            AttemptFailure
 protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
 model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelEventStream
-model/adapter/cancellation.rs  ModelCancellation (rustX-owned cancellation)
+(cancellation lives in runtime/cancellation.rs; model adapters receive
+                           the shared CancellationSignal)
 model/adapter/validation.rs    deterministic local capability validation
 model/adapter/block_index.rs   provider-key to ContentBlockIndex allocator
 model/adapter/openai/     OpenAI Chat Completions and Responses adapters
@@ -77,7 +110,7 @@ protocol → model, runtime
 events   → message, model, tools, runtime
 model    → message, tools, runtime
 message  → tools, runtime
-tools    → runtime
+tools    → runtime (and the tool plane reuses runtime-owned coordination)
 ```
 
 Serialization conventions for persistence-facing types:
@@ -208,7 +241,8 @@ and it is not a scheduler, supervisor, or persistent service layer.
 #### M3 implementation (agent loop)
 
 The M3 implementation freezes the agent-loop boundary in `src/agent` and
-the tool execution contract in `src/tools/executor.rs`:
+the tool execution contract in `src/tools/executor.rs` (the provisional M3
+`Tool` trait was replaced by the canonical M5 [`ToolExecutor`] boundary):
 
 ```text
 canonical input state
@@ -219,17 +253,19 @@ ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel ->
         |
 ModelEventAssembler: stream validation + ordered AgentMessageBlock assembly
         |
-ToolRegistry: deterministic call resolution and Tool::execute
+ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
+        |
+deterministic scheduling phases (sequential barriers, parallel groups)
         |
 RuntimeEvent trace, ending in exactly one terminal event
 ```
 
 The loop owns execution semantics, message assembly, tool execution,
 continuation state, cancellation observation, and the runtime event
-trace. Adapters own provider protocol translation only, and tools own
-their definitions and single-call execution. Tool calls of one turn
-execute in deterministic block order with no hidden concurrency or retry,
-continuation state propagates losslessly without fabrication, cancellation
+trace. Adapters own provider protocol translation only; the validating
+[`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
+[`ToolExecutor`] implementations and never falls back id-first.
+Continuation state propagates losslessly without fabrication, cancellation
 always settles as a terminal cancellation, and every attempt emits exactly
 one terminal `RuntimeEvent`. See `docs/agent-loop.md` for the full
 boundary description.
@@ -375,10 +411,86 @@ Key contracts:
   with `CannotFit` rather than summarizing the unobserved instruction.
 
 The M4 context path is **mandatory**: every `AgentExecution` is constructed
-with a `ContextRuntime` (`AgentExecution::new(request, adapter, tools,
-cancellation, context_runtime)`); the no-context compatibility path and
+with a `ContextRuntime` and a `ConversationToolRuntime`
+(`AgentExecution::new(request, adapter, tools, cancellation, context_runtime,
+tool_runtime)`); the no-context compatibility path and
 `with_context_runtime` are gone, and there is no Agent Status disable flag.
 See `docs/context-engine.md` for the full boundary description.
+
+#### M5 implementation (native tool plane)
+
+The M5 implementation freezes the canonical tool plane boundary in
+`src/tools` and replaces the provisional M3 `Tool` trait:
+
+```text
+canonical ToolDefinition (tool-owned schema + two policy axes)
+        |
+validating ToolRegistry (definition + Arc<dyn ToolExecutor>)
+        |
+preflight: resolve -> extract reserved metadata -> strip -> JSON Schema validate
+        |
+ToolInvocation (stripped/validated business arguments + resolved mode)
+        |
+ToolExecutor::execute(ToolInvocation, ToolExecutionContext)
+        |
+ToolExecutionResult
+```
+
+The two policy axes are independent:
+
+- [`ToolExecutionPolicy`] (`ForegroundOnly` / `BackgroundOnly` /
+  `ModelSelectable`) decides ownership and settlement: foreground work is
+  attempt-owned and physically cancellable, background work is
+  conversation-owned and detached after accepted dispatch.
+- [`ToolConcurrencyPolicy`] (`Sequential` / `Parallel`) decides scheduling
+  within one tool-call batch: a `Sequential` invocation is an exclusive
+  barrier, adjacent `Parallel` invocations run as one group.
+
+The canonical input schema is tool-owned and never mutated. For
+`ModelSelectable` tools the model-facing compiler decorates a clone with the
+required reserved `__rustx_execution` field
+(`{"type": "string", "enum": ["foreground", "background"]}`) inside the
+reserved `__rustx_` top-level property namespace. The runtime extracts the
+field, resolves the canonical mode, strips it, and validates the remaining
+business arguments against the original schema before dispatch; reserved
+fields are never forwarded to executors. `ModelRequest.tools` carries the
+compiled [`ModelToolDefinition`] values only — provider adapters translate
+them verbatim and never decide execution semantics.
+
+The registry is a correctness boundary: duplicate `ToolId`s, duplicate
+model-facing names, empty identities, invalid or non-root JSON Schema,
+reserved `__rustx_*` collisions, invalid policy combinations, and
+background-capable `background_task` registrations are rejected; a
+canonical call whose id and name disagree is a contract violation. Tool
+definitions reach the model in deterministic registration order, and the
+context engine accounts the exact compiled definitions.
+
+One conversation owns one `ConversationToolRuntime`: the canonical
+`Workspace` boundary (canonicalized root; relative paths only; no `..`
+escape; symlinks contained), the `ArtifactStore` (opaque monotonic
+`artifact_N` ids, streaming spooling outside the model workspace), the
+explicit `ToolEnvironment`, and the authoritative
+`ConversationBackgroundRegistry`. Background executions own a deterministic
+`exec_N` `ToolExecutionId`, a lifecycle state machine
+(`Starting -> Running -> Cancelling -> terminal`), a two-stage dispatch
+with an explicit ownership commit linearization point, a
+cancel-vs-completion linearization rule, bounded latest progress
+snapshots, and exactly-once terminal inbound mailbox publication
+(`background-exec_N-terminal`). The `background_task` intrinsic
+(foreground-only, sequential) provides `status` and idempotent `cancel`.
+
+Agent Status owns the runtime `background_execution` built-in section: the
+executing attempt samples a read-only active snapshot from the background
+registry, the composer builds the section (never an extension provider),
+and the renderer shows active executions only in allocation order.
+
+The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
+ordinary registrations. Bash owns a distinct process group per invocation
+(Unix), an explicit `env_clear()`-based child environment, bounded
+head/tail previews per stream with full raw output spooled to artifacts,
+`TERM -> BASH_TERM_GRACE -> KILL` cancellation, and typed result semantics
+(zero exit success, non-zero exit failed with the code preserved, timeout
+as `TimedOut`, cancellation as `Cancelled`).
 
 ### Layer 3: Model plane
 

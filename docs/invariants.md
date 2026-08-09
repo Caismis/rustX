@@ -85,14 +85,16 @@ stream and exactly one terminal `RuntimeEvent`:
 - Cancellation is observed at deterministic check points (before each
   model event, between tool calls) and races every tool execution (biased
   toward cancellation). Once cancellation is observable while a tool is
-  pending, the loop stops awaiting the tool, drops the pending tool
-  future, records no completion and no tool message, executes no later
-  call, and settles cancelled — the loop never waits for the tool to
-  return. Dropping the future does not guarantee that external work is
-  physically killed; executor-specific cancellation is a later milestone.
-  Every model invocation observes a child signal of the attempt signal.
-  Cancellation is always a terminal cancellation outcome, never
-  completion, and no continuation starts after cancellation is observed.
+  pending, the loop starts no new execution work and every in-flight
+  cancellable foreground execution settles by observing the attempt
+  signal in its execution context (M5); the committed tool-result batch is
+  then settled structurally exactly once — every logical call receives one
+  result slot (including cancelled slots for unstarted work) in model call
+  order — and the attempt settles cancelled. The loop never drops a
+  pending tool future while external work keeps running. Every model
+  invocation observes a child signal of the attempt signal. Cancellation
+  is always a terminal cancellation outcome, never completion, and no
+  continuation starts after cancellation is observed.
 
 - `ModelRequestCompleted.usage` reports the canonical final usage: the
   terminal `Completed.usage` when present, otherwise the latest
@@ -171,6 +173,90 @@ Capability environments are prepared and validated before an atomic revision swa
 ## Tool ordering
 
 Tool execution may be parallel. Runtime completion events may reflect actual completion order. Canonical tool-result messages are committed in the original tool-call order unless a future protocol explicitly defines otherwise.
+
+## Tool plane (M5)
+
+- Foreground/background execution policy and sequential/parallel scheduling
+  are two independent axes: ownership/settlement is decided by
+  `ToolExecutionPolicy`, concurrency within a batch by
+  `ToolConcurrencyPolicy`. The two are never combined into one axis.
+- The canonical tool input schema is tool-owned and never mutated. Reserved
+  runtime invocation metadata (`__rustx_execution` under the `__rustx_`
+  namespace) exists only in the compiled model-facing schema, is required
+  for `ModelSelectable` tools, is extracted and stripped by the runtime, and
+  is never forwarded to any executor. Registration rejects canonical schemas
+  claiming `__rustx_*` properties.
+- The registry is a validity boundary: duplicate ids, duplicate model-facing
+  names, empty identities, invalid or non-root JSON Schema, reserved
+  property collisions, invalid policy combinations, and background-capable
+  `background_task` registrations are rejected. A canonical call whose id
+  and name disagree is a contract violation, never an id-first fallback.
+- Invocation order is frozen: resolve tool, extract/resolve invocation
+  metadata, strip metadata, validate business arguments against the
+  canonical schema, dispatch executor. A business validation failure is a
+  normal failed result slot; the executor never runs.
+- Every valid committed tool-call batch settles structurally exactly once:
+  each logical call receives exactly one attempt-facing result slot
+  (success, failure, cancellation, timeout, validation rejection, or
+  accepted background dispatch with its `ToolExecutionId`), committed in
+  model call order.
+- Foreground work is attempt-owned: observable attempt cancellation reaches
+  cancellable native foreground work through the shared runtime
+  `CancellationSignal` and physically settles it. Background ownership
+  transfers exactly once at the dispatch commit linearization point: before
+  it the attempt can roll the prepared dispatch back, after it only the
+  conversation owns the execution.
+
+## Background executions (M5)
+
+- One conversation owns one authoritative `ConversationBackgroundRegistry`;
+  registry state is authoritative — never messages, never Agent Status
+  text, never Event Journal text. Cross-conversation access is structurally
+  impossible (no global lookup table).
+- `ToolExecutionId` values are conversation-owned, deterministic, and
+  monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
+  allocated under the same synchronization boundary that owns background
+  records.
+- The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
+  with terminal states absorbing; exactly one terminal transition settles
+  an execution.
+- The cancellation-vs-completion race is linearized: the first registry
+  transition that commits either terminal completion or cancellation intent
+  wins. Completion-first makes later cancels idempotent no-ops returning the
+  terminal snapshot; cancellation-intent-first owns settlement
+  (`Cancelling -> Cancelled`).
+- Every successfully dispatched execution reaches exactly one terminal
+  registry state and claims at most one terminal inbound publication
+  (a timestamped `UserMessageBlock` with `UserSource::Runtime` through the
+  conversation mailbox, `background-<exec>-terminal`); publication failure
+  retains the terminal registry state without rolling the execution back.
+- A background dispatch returns an accepted result (`execution_id`, state,
+  tool) without blocking the originating attempt on detached settlement;
+  background completion never reopens or mutates a settled attempt.
+- Agent Status is a read-only projection: the executing attempt samples the
+  active registry snapshot and the runtime-owned `background_execution`
+  built-in section shows only `Starting`/`Running`/`Cancelling` entries in
+  allocation order; extension providers can never register under the
+  reserved id or construct the built-in variant.
+
+## Native tools and Bash (M5)
+
+- Native filesystem tools and Bash operate only inside the canonical
+  workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
+  escape, and symlinks resolving only to targets inside the canonical root.
+- Model-facing output is bounded by named limits; full Bash output is
+  spooled to the conversation artifact store (opaque monotonic
+  `artifact_N` ids outside the model workspace) while bounded head/tail
+  previews are retained, with explicit `TruncationState`.
+- Bash owns a distinct process group per invocation; cancellation/timeout
+  signals the owned group (`TERM`, then `BASH_TERM_GRACE`, then `KILL`) and
+  never signals unrelated runtime processes. The child environment is
+  explicit (`env_clear()` plus runtime-approved basics and authorized
+  entries); parent-process secrets are absent unless explicitly authorized.
+- Bash result semantics are typed: zero exit is success, non-zero exit is a
+  failed result with the exit code preserved, signal death, timeout, and
+  cancellation map to their canonical statuses and are never misreported as
+  a successful non-zero execution.
 
 ## Tool replay
 

@@ -5,8 +5,9 @@
 //! local filesystem storage outside the model workspace, and streaming
 //! spooling so large subprocess output never has to be held entirely in
 //! memory. The mapping from `ArtifactId` to physical path stays internal;
-//! [`FileReference`] remains the model/runtime reference. Conversation-
-//! lifetime retention is sufficient; durable recovery and a database are M8.
+//! [`FileReference`](crate::message::content::FileReference) remains the
+//! model/runtime reference. Conversation-lifetime retention is sufficient;
+//! durable recovery and a database are M8.
 
 use std::fs::File;
 use std::io::Write;

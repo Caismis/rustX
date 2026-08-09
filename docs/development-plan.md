@@ -84,6 +84,12 @@ Exit criteria:
 - A deterministic fixture can execute a complete multi-turn tool-using agent without network access.
 - A live local session can hold a normal multi-turn conversation.
 
+M3's sequential/parallel tool-batch scheduling and deterministic
+tool-result ordering are implemented by the M5 tool plane PR: a
+`Sequential` invocation is an exclusive scheduling barrier, adjacent
+`Parallel` invocations execute concurrently as one group, and canonical
+results are committed in model call order.
+
 ## Milestone 4 — Context engine and compaction
 
 Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
@@ -128,11 +134,10 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
-Remaining under Issue #7 (not implemented by PR #21, the Issue #22
-batching PR, or the Agent Status PR):
-
-- M5-backed background-execution Agent Status integration
-- Live acceptance criteria that remain unverified without credentials
+Issue #7 (M4: context engine and Agent Status) is **completed**; Issue #27
+owns the deferred live multi-compaction/TUI verification, and Issue #8 (M5)
+owns the background-execution Agent Status integration, which is implemented
+by the M5 tool plane PR as a runtime-owned built-in section.
 
 Issue #22 (inbound batching) is implemented in the Issue #22 PR: the
 conversation inbound mailbox foundation (`src/runtime/inbound.rs`),
@@ -142,7 +147,7 @@ drain, safe-boundary agent-loop integration, and the deterministic
 mailbox/race/agent-loop/M4/provider test coverage. The remaining
 cross-issue acceptance work — Agent Status integration with the drained
 batch — is implemented by the Agent Status PR (issue-7/agent-status).
-Background runtime producers remain Issue #8, and mailbox
+Background runtime producers are implemented by Issue #8 (M5), and mailbox
 persistence/recovery remains later milestone work.
 
 Exit criteria:
@@ -156,32 +161,42 @@ Exit criteria:
 
 Deferred to later milestones: durable checkpoint/event storage (M8),
 conversation summarization in the CLI (M10), and any provider fallback or
-routing. M3's explicitly deferred parallel tool scheduling remains
-deferred and is not claimed as implemented; the turn-boundary mailbox
-drain is implemented in the Issue #22 PR as a safe-boundary contract.
+routing. Parallel tool scheduling is implemented by the M5 tool plane PR;
+the turn-boundary mailbox drain is implemented in the Issue #22 PR as a
+safe-boundary contract.
 
 ## Milestone 5 — Native tool plane
 
-Implement the canonical tool registry and executor contract.
+Implemented in the M5 tool plane PR (Issue #8):
 
-Initial native tools:
-
-- Read
-- Write
-- Edit
-- Glob
-- Grep
-- Bash
+- The canonical `ToolExecutor` contract and validating `ToolRegistry`
+  (definition/executor ownership, registration validation, deterministic
+  model-facing ordering, preflight boundary with JSON Schema validation)
+- Two independent policy axes: `ToolExecutionPolicy`
+  (foreground/background ownership) and `ToolConcurrencyPolicy`
+  (sequential/parallel batch scheduling)
+- The compiled `ModelToolDefinition` with the reserved `__rustx_`
+  invocation namespace (`__rustx_execution` for model-selectable tools)
+- `ToolExecutionId` and the conversation-owned
+  `ConversationBackgroundRegistry` with the dispatch ownership commit,
+  lifecycle state machine, cancel-vs-complete linearization, and
+  exactly-once terminal inbound publication
+- The `background_task` runtime intrinsic (status and idempotent cancel)
+- The runtime-owned Agent Status `background_execution` built-in section
+- Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
+  boundary, artifact store, and explicit tool environment
+- Deterministic foreground/background scheduling through the agent loop
+  with structural batch settlement
 
 Bash requirements:
 
 - Full `/bin/bash`
 - Foreground and background execution
 - Separate process groups
-- stdout/stderr capture
+- stdout/stderr/combined capture
 - Timeouts
 - TERM -> grace period -> KILL
-- Large-output truncation with durable full output
+- Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment
 
 Exit criteria:
@@ -261,15 +276,16 @@ Exit criteria:
 
 ## Milestone 9 — Cancellation and runtime supervision
 
-Implement:
+The M5 tool plane PR implements the concrete ownership seams required by
+the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
+cancellable foreground executions (including Bash process-group
+termination), conversation-owned background executions with the
+`background_task` cancel path, and explicit runtime shutdown cancellation of
+active background work. Remaining M9 work:
 
-- Hierarchical cancellation tokens
-- Attempt-owned foreground processes
-- Conversation-owned background processes
-- Graceful draining
-- Runtime idle state
-- Capability mutation guard
-- Capability revision snapshots
+- Hierarchical runtime supervisor tree and generic process supervision
+- Quiescent runtime state machine and graceful draining
+- Capability mutation guard and revision snapshots
 
 Exit criteria:
 

@@ -41,10 +41,10 @@
 //! Every successfully dispatched background execution reaches exactly one
 //! terminal registry state, and a terminal transition claims at most one
 //! runtime inbound notification: a timestamped
-//! [`UserMessageBlock`](crate::message::types::UserMessageBlock) with
-//! [`UserSource::Runtime`](crate::message::types::UserSource::Runtime)
-//! through the owning [`ConversationInboundMailbox`]. Registry notification
-//! state prevents duplicate publication. On publication failure the
+//! [`UserMessageBlock`] with
+//! [`UserSource::Runtime`] through the owning
+//! [`ConversationInboundMailbox`]. Registry notification state prevents
+//! duplicate publication. On publication failure the
 //! authoritative terminal registry state is retained and the failure is
 //! reported without rolling the execution back.
 
