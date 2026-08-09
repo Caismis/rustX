@@ -202,34 +202,33 @@ Bash requirements:
 
 - Full `/bin/bash`
 - Foreground and background execution
-- Separate process groups
+- One per-invocation supervisor process unit (outer reaper-of-last-resort
+  plus inner session/group leader; both subreapers)
 - stdout/stderr/combined capture
 - Timeouts
-- Liveness-aware TERM -> grace period -> KILL with group-quiescence
-  confirmation
+- `TERM -> grace period -> KILL` driven by the invocation supervisor
 - Complete lifecycle ownership: shell-parent exit is not the Bash
   settlement boundary. The invocation settles naturally only when the
-  owned process group is quiescent and the capture is settled; a live
-  descendant in the owned group (pipes held or redirected away) keeps the
-  invocation active under the same deadline and cancellation until it
-  quiesces or cancellation/timeout/process-control failure settles it
-- Reuse-safe process-group ownership: the shell leader (whose pid is the
-  pgid) is kept unreaped as an ownership anchor until settlement, so the
-  numeric pgid cannot be reallocated to a foreign group while signaling
-  may still occur; the shell's exit is observed with `waitid(WNOWAIT)`
-  without reaping; the anchor is released exactly once, by the leader's
-  final reap at settlement, after which the numeric pgid is never
-  referenced again
-- Owned-descendant quiescence via Linux `/proc` membership inspection
-  (processes linked to the group, the leader excluded; a zero count is
-  stable), plus the leader's own exit — not a `killpg(pgid, 0)` probe,
-  which the unreaped leader anchor masks
-- Process-control failures (signaling, waiting, ownership/membership
-  inspection) are explicit failed results; if ownership of a numeric pgid
-  can no longer be proven, no further signal is issued and the invocation
-  fails explicitly
-- Process-group ids derived from the child's own pid (no sentinel group
-  id, so `killpg(0)` is unreachable)
+  shell's terminal status is known, the supervisor reached the kernel
+  child-wait terminal state (every owned child reaped; `ECHILD`), and the
+  capture is settled; a live owned descendant (pipes held or redirected
+  away) keeps the invocation active under the same deadline and
+  cancellation until the supervisor's terminal state or
+  cancellation/timeout/process-control failure settles it
+- Reuse-safe process-group ownership: `TERM`/`KILL` are issued by the
+  inner supervisor with `killpg` against its own process group, whose
+  numeric id is its own pid — provably allocated while it lives; the final
+  signal is the last `killpg`, after which the anchor is released by the
+  reap and no further signal exists
+- Kernel-mediated descendant ownership: shell descendants that outlive the
+  shell are reparented into the invocation supervisor's child domain
+  (`PR_SET_CHILD_SUBREAPER`), and the terminal child-set point is the
+  supervisor's `waitpid(-1)` loop returning `ECHILD` — never a `/proc`
+  membership scan, which is not a linearizable ownership snapshot
+- Process-control failures (supervisor setup, shell spawning,
+  waiting/reaping, signaling, IPC) are explicit failed results; if
+  ownership of a numeric process group can no longer be proven, no further
+  signal is issued and the invocation fails explicitly
 - Explicit artifact-capture failures instead of silent success
 - Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment

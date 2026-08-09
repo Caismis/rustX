@@ -568,9 +568,16 @@ async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
     let workspace = fixture.runtime.workspace().root().to_path_buf();
     let shell_pid_file = workspace.join("shell.pid");
     let descendant_pid_file = workspace.join("descendant.pid");
+    let pgid_file = workspace.join("pgid.txt");
+    // The fixture writes the shell's own pid AND its process-group id
+    // (diagnostic observability inside the fixture; /proc is never the
+    // production ownership authority). The pgid is the invocation's
+    // supervisor-leader pid, which the shell can report itself.
     let command = format!(
-        "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+        "echo $$ > {}; echo $(awk '{{print $5}}' /proc/$$/stat) > {}; \
+         sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
         shell_pid_file.display(),
+        pgid_file.display(),
         descendant_pid_file.display()
     );
     let result = tokio::time::timeout(
@@ -588,19 +595,18 @@ async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
         ToolExecutionStatus::TimedOut,
         "a redirected descendant must never let the invocation settle as Success"
     );
-    // The shell's own pid is the invocation's process-group id.
-    let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
-        .expect("shell pid file")
-        .trim()
-        .parse()
-        .expect("shell pid");
     let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
         .expect("descendant pid file")
         .trim()
         .parse()
         .expect("descendant pid");
+    let pgid: i32 = std::fs::read_to_string(&pgid_file)
+        .expect("pgid file")
+        .trim()
+        .parse()
+        .expect("pgid");
     // The owned process group is quiescent and the descendant is gone.
-    wait_for_group_death(shell_pid).await;
+    wait_for_group_death(pgid).await;
     wait_for_process_death(descendant_pid).await;
 }
 
@@ -629,6 +635,64 @@ async fn bash_natural_descendant_completion_settles_success() {
         "once the owned group quiesces, the shell's natural exit settles Success"
     );
     assert_eq!(json_content(&result)["exit_code"], 0);
+}
+
+/// The mandatory descendant-replacement race regression: A (a subshell)
+/// creates B (a redirected descendant), A exits, B remains owned. The
+/// invocation must remain active while the supervisor still owns B —
+/// settlement is gated on the supervisor's kernel child-wait terminal
+/// state, never on an observational process scan — and only the invocation
+/// timeout settles it.
+#[tokio::test]
+async fn bash_descendant_replacement_keeps_the_invocation_active() {
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let a_pid_file = workspace.join("a.pid");
+    let b_pid_file = workspace.join("b.pid");
+    let pgid_file = workspace.join("pgid.txt");
+    let command = format!(
+        "echo $$ > {}; echo $(awk '{{print $5}}' /proc/$$/stat) > {}; \
+         (sleep 30 >/dev/null 2>&1 & echo $! > {}) & echo $! > {}; wait; exit 0",
+        workspace.join("shell.pid").display(),
+        pgid_file.display(),
+        b_pid_file.display(),
+        a_pid_file.display()
+    );
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        run_tool(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": command, "timeout_ms": 800}),
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(
+        result.status,
+        ToolExecutionStatus::TimedOut,
+        "the invocation must stay active while the supervisor owns B"
+    );
+    let a_pid: i32 = std::fs::read_to_string(&a_pid_file)
+        .expect("a pid file")
+        .trim()
+        .parse()
+        .expect("a pid");
+    let b_pid: i32 = std::fs::read_to_string(&b_pid_file)
+        .expect("b pid file")
+        .trim()
+        .parse()
+        .expect("b pid");
+    let pgid: i32 = std::fs::read_to_string(&pgid_file)
+        .expect("pgid file")
+        .trim()
+        .parse()
+        .expect("pgid");
+    // A is gone; the whole owned domain (B included) is terminal after the
+    // timeout-driven termination.
+    wait_for_process_death(a_pid).await;
+    wait_for_group_death(pgid).await;
+    wait_for_process_death(b_pid).await;
 }
 
 /// Polls the owned process group with the same non-destructive `killpg`

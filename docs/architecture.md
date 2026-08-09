@@ -516,34 +516,39 @@ execution and concurrency policy (foreground-only sequential by default,
 with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
 The only intentionally fixed policy remains the runtime intrinsic
 `background_task`. Bash treats one invocation as one complete lifecycle:
-spawn the owned process group, capture stdout/stderr/combined, wait for
-the shell, and supervise the owned process group until it is quiescent or
-cancellation/timeout/process-control failure settles the invocation —
-shell-parent exit is not by itself the Bash settlement boundary, so a
-descendant that remains in the owned group after the shell exits (holding
-the pipes or having redirected them away) can never escape the
-timeout/cancellation contract. The child runs with an explicit
+spawn one per-invocation supervisor, capture stdout/stderr/combined, let
+the supervisor own and reap the shell and its descendants to the kernel
+child-wait terminal state, and settle only when the shell's terminal status
+is known, the supervisor's terminal child-set report arrived, AND the
+output capture is settled — shell-parent exit is not by itself the Bash
+settlement boundary, so a descendant that remains owned after the shell
+exits (holding the pipes or having redirected them away) can never escape
+the timeout/cancellation contract. The child runs with an explicit
 `env_clear()`-based environment, bounded head/tail previews per stream
-with full raw output spooled to artifacts, liveness-aware
-`TERM -> BASH_TERM_GRACE -> KILL` cancellation with owned-descendant
-quiescence confirmation, process-group ids derived from the child's own
-pid (a failed lookup fails the invocation explicitly; `killpg(0)` is
-structurally unreachable), typed result semantics (zero exit success,
-non-zero exit failed with the code preserved, timeout as `TimedOut`,
-cancellation as `Cancelled`), explicit artifact-capture failures, and
-explicit process-control failures (signaling/waiting/membership errors
-settle as `Failed`, never as a silent `Success`, `Cancelled`, or
-`TimedOut`) — never a silent success that lost the retained output.
+with full raw output spooled to artifacts, `TERM -> BASH_TERM_GRACE ->
+KILL` cancellation driven by the supervisor, typed result semantics (zero
+exit success, non-zero exit failed with the code preserved, timeout as
+`TimedOut`, cancellation as `Cancelled`), explicit artifact-capture
+failures, and explicit process-control failures (supervisor setup, shell
+spawning, waiting/reaping, signaling, and IPC failures settle as `Failed`,
+never as a silent `Success`, `Cancelled`, or `TimedOut`) — never a silent
+success that lost the retained output.
 
-Bash process-group ownership is reuse-safe by construction: the shell
-leader (whose pid is the pgid) is kept unreaped as an ownership anchor
-until settlement, so the kernel cannot reallocate the numeric pgid to a
-foreign group while rustX may still signal it. The shell's exit is
-observed with `waitid(WNOWAIT)` without reaping; descendant quiescence is
-established by Linux `/proc` membership inspection (processes linked to
-the group, the leader excluded); and the leader's final reap — the single
-point that releases the anchor — happens only at settlement, after which
-the numeric pgid is never referenced again.
+Bash process ownership is kernel-mediated and reuse-safe by construction:
+each invocation owns a small supervisor process unit — an outer
+supervisor (rustX child, subreaper, reaper of last resort) plus an inner
+supervisor (session and group leader via `setsid`, subreaper, `/bin/bash`
+parent) — and the shell's descendants live in exactly the invocation's own
+session/process group. `TERM`/`KILL` are issued by the inner supervisor
+with `killpg` against its own group, whose numeric id is its own pid —
+provably allocated while it lives, so the numeric group id can never name a
+foreign process group while signals remain legal. Shell descendants that
+outlive the shell are reparented into the supervisor's child domain
+(`PR_SET_CHILD_SUBREAPER`) rather than rediscovered from `/proc`; the
+terminal ownership point is the supervisor's `waitpid(-1)` loop returning
+`ECHILD` (no owned child remains at all), reported to rustX over a
+`UnixStream` control channel. `/proc` is never the source of truth for
+process ownership or quiescence.
 
 ### Layer 3: Model plane
 

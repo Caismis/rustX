@@ -296,52 +296,61 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   spooled to the conversation artifact store (opaque monotonic
   `artifact_N` ids outside the model workspace) while bounded head/tail
   previews are retained, with explicit `TruncationState`.
-- Bash owns a distinct process group per invocation; cancellation/timeout
-  signals the owned group (`TERM`, then a liveness-aware grace period,
-  then `KILL` when the group is still alive) and never signals unrelated
-  runtime processes. The child environment is explicit (`env_clear()` plus
-  runtime-approved basics and authorized entries); parent-process secrets
-  are absent unless explicitly authorized.
+- Bash owns a distinct process group per invocation inside a dedicated
+  invocation session created by a small per-invocation supervisor;
+  cancellation/timeout signals the owned group (`TERM`, then a bounded
+  grace period, then `KILL` when the group is still alive) and never signals
+  unrelated runtime processes. The child environment is explicit
+  (`env_clear()` plus runtime-approved basics and authorized entries);
+  parent-process secrets are absent unless explicitly authorized.
 - Shell-parent exit is not by itself the Bash settlement boundary: the
-  invocation settles naturally only when both the runtime-owned output
-  capture is settled AND the owned process group is quiescent (no owned
-  descendant is linked to it anymore). A descendant that remains in the
-  owned group after the shell exits — with the pipes either still held or
-  already redirected away — keeps the invocation active under the same
-  deadline and cancellation until the group quiesces or
-  cancellation/timeout/process-control failure settles it.
-- Bash holds a real process-ownership anchor: the shell leader (whose pid
-  is the invocation's process-group id) is kept **unreaped** until
-  settlement. While the leader is unreaped the kernel keeps its pid
-  allocated, so no other process group can ever receive the invocation's
-  numeric pgid. TERM/KILL are issued only while the anchor is held; the
-  anchor is released exactly once, by the leader's final reap at
-  settlement, and afterwards the numeric pgid is never referenced again.
-  A signal can therefore never reach a foreign process group that reused
-  the numeric id — there is no probabilistic "reuse window": while the
-  anchor is held the number provably belongs to this invocation, and after
-  the anchor is released no further signal exists.
-- Descendant quiescence is established by Linux `/proc` membership
-  inspection: processes linked to the invocation's group are counted,
-  excluding the leader anchor. A count of zero is stable (the only
-  remaining member would be the leader zombie, which cannot fork), and is
-  required — together with the leader's own exit — before natural
-  settlement or settlement after termination. `killpg(pgid, 0)` is not a
-  quiescence probe: while the anchor is held the unreaped leader is itself
-  a member, so that probe always reports the group as alive.
-- Process-control failures are never silent: signaling, waiting/reaping,
-  and membership-inspection errors surface as an explicit failed tool
-  result — never as an ordinary `Success`, `Cancelled`, or `TimedOut`. If
-  the runtime can no longer prove that a numeric process group is
-  invocation-owned, it never signals that numeric id again and settles
-  explicitly `Failed`. Cancellation/timeout intent that cannot be
-  established through process control is consistent with the background
-  registry's rule that an explicit process-control failure may override
-  canonical cancellation settlement.
+  invocation settles naturally only when the shell's terminal status is
+  known, the invocation supervisor reached the kernel child-wait terminal
+  state (every owned child reaped), AND the runtime-owned output capture is
+  settled. A descendant that remains owned after the shell exits — with the
+  pipes either still held or already redirected away — keeps the invocation
+  active under the same deadline and cancellation until the supervisor's
+  terminal state or cancellation/timeout/process-control failure settles it.
+- Each Bash invocation owns one invocation-local supervisor process unit
+  (an outer reaper-of-last-resort plus an inner session/group leader that
+  spawns `/bin/bash`; both subreapers). Shell descendants that outlive the
+  shell are reparented into the invocation supervisor's child domain by the
+  kernel (`PR_SET_CHILD_SUBREAPER`) rather than rediscovered from `/proc`.
+  `/proc` enumeration is never the source of truth for process ownership or
+  quiescence.
+- Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
+  issued by the inner supervisor with `killpg` against its own process
+  group, whose numeric id is its own pid — provably allocated exactly while
+  it lives. The final signal is the last `killpg`; afterwards the anchor is
+  released by the reap and no further signal exists. A numeric process-group
+  id that was released can therefore never receive a foreign signal — there
+  is no probabilistic "reuse window". Unrelated rustX/sibling processes live
+  in different sessions and can never join the invocation's process group.
+- The kernel-mediated terminal condition of the invocation-owned child set
+  is the wait contract: the inner supervisor's `waitpid(-1)` loop returns
+  `ECHILD` (no owned child remains at all: the shell and every orphan
+  reaped), and the outer supervisor reaches the same `ECHILD` terminal
+  state for its own child set. `ECHILD` is not an observational snapshot:
+  after it is observed no new owned child can appear, because a live
+  descendant would still be a child of the supervisor. This is the exact
+  lifecycle linearization point; `AllChildrenReaped` is reported over the
+  supervisor control channel and combined with output-capture settlement to
+  produce the tool result.
+- Process-control failures are never silent: supervisor setup, shell
+  spawning, waiting/reaping, signaling, and control-channel failures surface
+  as an explicit failed tool result — never as an ordinary `Success`,
+  `Cancelled`, or `TimedOut`. If ownership of a numeric process group can
+  no longer be proven, no further signal is issued and the invocation fails
+  explicitly. Cancellation/timeout intent that cannot be established
+  through process control is consistent with the background registry's rule
+  that an explicit process-control failure may override canonical
+  cancellation settlement.
 - Bash result semantics are typed: zero exit is success, non-zero exit is a
   failed result with the exit code preserved, signal death, timeout, and
   cancellation map to their canonical statuses and are never misreported as
-  a successful non-zero execution.
+  a successful non-zero execution. Descendant status never replaces the
+  shell's business result; descendants affect when settlement is legal, not
+  the shell's exit code.
 
 ## Tool replay
 
