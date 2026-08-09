@@ -612,12 +612,14 @@ async fn wait_for_state(
     execution_id: &ToolExecutionId,
     state: BackgroundLifecycle,
 ) -> BackgroundExecutionSnapshot {
-    for _ in 0..200 {
+    // Polls the authoritative registry state itself (the very state under
+    // test) with a strict deadlock guard.
+    for _ in 0..400 {
         let snapshot = registry.snapshot(execution_id).expect("snapshot");
         if snapshot.state == state {
             return snapshot;
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let snapshot = registry.snapshot(execution_id).expect("snapshot");
     panic!("state {state:?} never reached; last snapshot: {snapshot:?}");

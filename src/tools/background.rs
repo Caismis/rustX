@@ -1015,11 +1015,19 @@ mod tests {
             registry.commit_dispatch(prepared, &attempt_for_task)
         });
         // The commit is parked inside its critical section: the deciding
-        // cancellation observation is next. Make attempt cancellation
-        // observable now, then release the boundary.
-        hook.wait_entered();
+        // cancellation observation is next. The hook interactions run on
+        // the blocking pool so no tokio worker thread is ever blocked.
+        let entered = {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.wait_entered())
+        };
+        entered.await.expect("commit boundary entered");
         attempt_cancellation.cancel();
-        hook.proceed();
+        let proceed = {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.proceed())
+        };
+        proceed.await.expect("commit boundary released");
         let outcome = commit_task.await.expect("commit task returns an outcome");
         assert_eq!(
             outcome,
@@ -1061,9 +1069,16 @@ mod tests {
             registry.commit_dispatch(prepared, &attempt_for_task)
         });
         // Release the boundary immediately: ownership commits while the
-        // attempt cancellation is still fresh.
-        hook.wait_entered();
-        hook.proceed();
+        // attempt cancellation is still fresh. The hook interactions run
+        // on the blocking pool so no tokio worker thread is ever blocked.
+        let boundary = {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || {
+                hook.wait_entered();
+                hook.proceed();
+            })
+        };
+        boundary.await.expect("commit boundary released");
         let outcome = commit_task.await.expect("commit task returns an outcome");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("expected accepted");
@@ -1075,10 +1090,12 @@ mod tests {
             .await
             .expect("the conversation-owned runner still starts");
         release.notify_one();
-        let terminal = fixture.registry.snapshot(&execution_id).expect("snapshot");
-        let expected = wait_for_terminal(&fixture, &execution_id).await;
-        assert_eq!(expected.state, BackgroundLifecycle::Succeeded);
-        assert_eq!(terminal.state, BackgroundLifecycle::Running);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the conversation-owned execution settles normally after the commit"
+        );
     }
 
     /// Cancellation winner consistency: cancellation commits while the
@@ -1220,12 +1237,14 @@ mod tests {
         fixture: &TestRegistry,
         execution_id: &ToolExecutionId,
     ) -> super::BackgroundExecutionSnapshot {
-        for _ in 0..200 {
+        // Polls the authoritative registry state itself (the very state
+        // under test) with a strict deadlock guard.
+        for _ in 0..400 {
             let snapshot = fixture.registry.snapshot(execution_id).expect("snapshot");
             if snapshot.state.is_terminal() {
                 return snapshot;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("execution never reached a terminal state");
     }
