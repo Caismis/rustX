@@ -25,6 +25,10 @@ pub const BASH_STREAM_PREVIEW_BYTES: usize = 16 * 1024;
 /// group.
 pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 
+/// The bounded window for the final shell-leader reap that releases the
+/// Bash ownership anchor.
+pub const BASH_REAP_GRACE: Duration = Duration::from_secs(2);
+
 /// The default foreground Bash timeout when the model omits `timeout_ms`.
 pub const DEFAULT_FOREGROUND_BASH_TIMEOUT: Duration = Duration::from_secs(120);
 

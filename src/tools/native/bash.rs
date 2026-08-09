@@ -41,49 +41,84 @@
 //! sentinel group id, so `killpg(0, ...)` — which would signal the
 //! caller's own process group — is structurally unreachable.
 //!
-//! Group liveness is queried with the non-destructive `killpg(pgid, 0)`
-//! probe: success means the group has at least one process, `ESRCH` means
-//! the group no longer exists (the quiescence evidence), and `EPERM` means
-//! the group exists but signaling permission is denied (treated as alive).
-//! Any other errno is a [`ProcessControlError`] and settles the invocation
-//! as an explicit failure.
+//! # Ownership anchor
 //!
-//! # Process-group id reuse
+//! A numeric process-group id is **not** stable ownership evidence by
+//! itself: once the invocation's group ceases to exist, the kernel may
+//! assign the same number to an unrelated process group, and a later
+//! `killpg` would target that foreign group. rustX therefore holds a real
+//! ownership anchor: the shell leader is kept **unreaped** until
+//! settlement. While the leader is unreaped the kernel keeps its pid — the
+//! invocation's process-group id — allocated (a zombie's pid is only
+//! released at its reap), so no other process group can ever receive that
+//! numeric id. Signaling is legal exactly while the anchor is held; the
+//! anchor is released exactly once, by the leader's final reap at
+//! settlement, and after that release the numeric process-group id is never
+//! referenced again. A `killpg` can therefore never reach a foreign
+//! process group: while the anchor is held the number provably belongs to
+//! this invocation, and after the anchor is released no further signal
+//! exists.
 //!
-//! The group id is authoritative only while the group is owned. The pgid
-//! number cannot be reallocated to a foreign process group while any
-//! process of this invocation is still linked to it (the group's kernel
-//! pid object is held by its members), so every probe and every signal
-//! issued while the group is alive provably targets this invocation. The
-//! group's disappearance — the release of its last member — is exactly the
-//! event that makes the probe return `ESRCH`; after `ESRCH` is observed
-//! the runtime never touches the pgid again, so a later pid reuse can
-//! never be mistaken for continued ownership. The only residual window is
-//! a foreign process group materializing with the exact freed pgid between
-//! the last positive probe and the next probe; it is bounded by the poll
-//! cadence and documented as the accepted pid-based ownership bound.
+//! # Ownership states
+//!
+//! ```text
+//! Spawned (anchor acquired: leader = group leader)
+//!   ↓ child exits, observed with waitid(WNOWAIT) without reaping
+//! ShellExitedButOwnershipRetained
+//!   ↓ supervisor loop: drain capture + owned-descendant membership scan
+//! DescendantsQuiescent            ── or ──>  Cancellation / Timeout
+//!   ↓ final reap (anchor released;       ↓ TERM/KILL only while the anchor
+//!   pgid never referenced again)          ↓ is held, then quiescence
+//! Settled                                  ↓ confirmation, final reap
+//!                                          Settled (Cancelled/TimedOut)
+//! ```
+//!
+//! The three concepts are kept separate:
+//!
+//! - *ownership anchor* — the unreaped shell leader; what makes signaling
+//!   safe;
+//! - *live descendant membership* — inspected with a Linux `/proc` scan of
+//!   processes linked to the group (the leader excluded); what must reach
+//!   zero before natural settlement or settlement after termination;
+//! - *final reap* — the single point that releases the anchor and makes
+//!   the numeric pgid permanently untouchable.
+//!
+//! # Quiescence
+//!
+//! Descendant quiescence is **not** observed with `killpg(pgid, 0)`: while
+//! the unreaped leader anchor exists it is itself a group member, so that
+//! probe always reports the group as alive and cannot distinguish "only
+//! the anchor remains" from "live descendants remain". Instead, on Linux,
+//! rustX enumerates `/proc` and counts processes whose process-group id
+//! equals the invocation's pgid, excluding the leader. That count reaching
+//! zero is a stable observation: the only remaining member would be the
+//! leader zombie, and a zombie cannot fork, so no new member can ever
+//! appear afterwards. Only then is the leader reaped.
 //!
 //! # Process-control failures
 //!
 //! Signaling, waiting, and group-state probing never swallow their errors:
 //! every [`ProcessControlError`] settles the invocation as an explicit
-//! failed tool result. Cancellation/timeout intent that cannot be
-//! established through process control is never downgraded to a silent
-//! `Success`, `Cancelled`, or `TimedOut`; the failed result is consistent
-//! with the background registry's rule that an explicit
-//! process-control/runtime failure may override canonical cancellation
-//! settlement.
+//! failed tool result. If rustX can no longer prove that a numeric process
+//! group is invocation-owned (or an inspection fails), it never signals
+//! that numeric id again and settles as an explicit failure instead —
+//! safety always precedes settlement convenience. Cancellation/timeout
+//! intent that cannot be established through process control is never
+//! downgraded to a silent `Success`, `Cancelled`, or `TimedOut`; the failed
+//! result is consistent with the background registry's rule that an
+//! explicit process-control/runtime failure may override canonical
+//! cancellation settlement.
 //!
 //! The cancellation path is
 //!
 //! ```text
 //! cancellation/timeout wins
-//! → TERM owned process group
-//! → poll group liveness within BASH_TERM_GRACE
-//! → group quiescent → done
-//! → else KILL owned process group
-//! → poll group liveness within a bounded confirmation window
-//! → reap child
+//! → TERM owned process group (anchor held)
+//! → poll owned-descendant membership within BASH_TERM_GRACE
+//! → quiescent → done
+//! → else KILL owned process group (anchor held)
+//! → poll owned-descendant membership within a bounded confirmation window
+//! → final leader reap (anchor released; pgid never referenced again)
 //! → settle exactly once
 //! ```
 //!
@@ -122,7 +157,7 @@ use crate::message::content::FileReference;
 use crate::runtime::types::CancellationReason;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
-    BASH_STREAM_PREVIEW_BYTES, BASH_TERM_GRACE, DEFAULT_FOREGROUND_BASH_TIMEOUT,
+    BASH_REAP_GRACE, BASH_STREAM_PREVIEW_BYTES, BASH_TERM_GRACE, DEFAULT_FOREGROUND_BASH_TIMEOUT,
 };
 use crate::tools::native::support::failed_result;
 use crate::tools::native::{NativeToolPolicy, native_definition};
@@ -208,8 +243,10 @@ impl ToolExecutor for BashTool {
 /// In non-test builds this type is an empty shell: `BashTool` never holds a
 /// control instance and `run_bash` always receives `None`, so no production
 /// behavior is affected. The seams exist so in-crate regressions can
-/// observe the exact shell-exit boundary and deterministically inject
-/// process-control failures without an operating-system mocking framework.
+/// observe the exact shell-exit boundary, deterministically inject
+/// process-control failures, model the ownership release/reuse transition,
+/// and record every process-group signal attempt without an
+/// operating-system mocking framework.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct BashTestControl {
@@ -223,6 +260,26 @@ pub(crate) struct BashTestControl {
     fail_group_probe: bool,
     #[cfg(test)]
     fail_wait: bool,
+    #[cfg(test)]
+    force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
+}
+
+/// One attempted process-group signal, recorded by the test seam.
+///
+/// `emitted` is `true` only when the signal actually reached the kernel
+/// (`killpg` was invoked); a refused attempt (ownership lost, injected
+/// failure) is recorded with `emitted == false`.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RecordedSignal {
+    /// The numeric process-group id the signal targeted.
+    pub pgid: i32,
+    /// The signal name (`SIGTERM`/`SIGKILL`).
+    pub signal: &'static str,
+    /// Whether the signal was actually emitted to the kernel.
+    pub emitted: bool,
 }
 
 #[cfg(test)]
@@ -237,6 +294,8 @@ impl BashTestControl {
             fail_signal: false,
             fail_group_probe: false,
             fail_wait: false,
+            force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            recorded_signals: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -253,6 +312,30 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn lifecycle(&self) -> &BashLifecycleHook {
         &self.lifecycle
+    }
+
+    /// A shared handle that forces the ownership anchor to read as lost:
+    /// the runtime then behaves as if the owned group's lifetime had ended
+    /// and the numeric pgid might name a foreign group.
+    #[must_use]
+    pub(crate) fn force_anchor_loss_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.force_anchor_loss.clone()
+    }
+
+    /// The recorded process-group signal attempts so far.
+    #[must_use]
+    pub(crate) fn recorded_signals(&self) -> Vec<RecordedSignal> {
+        self.recorded_signals
+            .lock()
+            .expect("recorded signals lock")
+            .clone()
+    }
+
+    fn record_signal(&self, recorded: RecordedSignal) {
+        self.recorded_signals
+            .lock()
+            .expect("recorded signals lock")
+            .push(recorded);
     }
 
     /// Makes every group signal fail with an injected error.
@@ -356,6 +439,14 @@ pub(crate) enum ProcessControlError {
         /// The underlying failure.
         error: String,
     },
+    /// The ownership anchor is no longer held, so the numeric process-group
+    /// id can no longer be proven to belong to this invocation; signaling
+    /// it is permanently forbidden.
+    OwnershipLost {
+        /// The numeric process-group id whose ownership can no longer be
+        /// proven.
+        pgid: i32,
+    },
     /// The owned process group could not be confirmed quiescent within the
     /// bounded post-KILL confirmation window.
     QuiescenceTimeout,
@@ -374,6 +465,11 @@ impl core::fmt::Display for ProcessControlError {
             Self::GroupState { error } => {
                 write!(f, "cannot verify the owned process group: {error}")
             }
+            Self::OwnershipLost { pgid } => write!(
+                f,
+                "cannot prove the process group {pgid} is still owned by this bash \
+                 invocation; signaling it is forbidden"
+            ),
             Self::QuiescenceTimeout => {
                 write!(f, "the owned process group did not become quiescent")
             }
@@ -382,6 +478,40 @@ impl core::fmt::Display for ProcessControlError {
 }
 
 impl std::error::Error for ProcessControlError {}
+
+/// The ownership anchor of one Bash invocation: the unreaped shell leader.
+///
+/// The shell is spawned as its own process-group leader, so the invocation's
+/// process-group id equals the leader's pid. While the leader is unreaped,
+/// the kernel keeps that pid allocated (a zombie's pid is released only at
+/// its reap), so **no other process group can ever receive the invocation's
+/// numeric pgid**. Signaling is legal exactly while the anchor is held; the
+/// anchor is released exactly once, by the leader's final reap at
+/// settlement, and after that release the numeric process-group id is never
+/// referenced again.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BashOwnership {
+    held: bool,
+}
+
+impl BashOwnership {
+    /// Acquires the anchor: the leader is spawned but not yet reaped.
+    fn acquire() -> Self {
+        Self { held: true }
+    }
+
+    /// Whether the anchor is still held (signaling is provably safe).
+    #[must_use]
+    fn held(self) -> bool {
+        self.held
+    }
+
+    /// Releases the anchor (the leader's final reap). After this point no
+    /// process-group signal may ever be issued again.
+    fn release(&mut self) {
+        self.held = false;
+    }
+}
 
 /// The outcome of the child-process wait phase.
 enum WaitOutcome {
@@ -543,6 +673,12 @@ async fn run_bash(
     };
     #[cfg(not(unix))]
     let pgid = None;
+    // The ownership anchor: the unreaped shell leader. Its pid is the
+    // invocation's process-group id; while it is unreaped the numeric pgid
+    // cannot be reallocated, so every signal provably targets this
+    // invocation. It is released exactly once, by the leader's final reap.
+    let leader_pid = pgid.unwrap_or(0);
+    let mut ownership = BashOwnership::acquire();
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -583,21 +719,25 @@ async fn run_bash(
 
     // The wait phase: the shell's own exit raced against cancellation and
     // the invocation timeout (biased: an already-observable cancellation
-    // or an expired deadline wins without starting new work).
+    // or an expired deadline wins without starting new work). The exit is
+    // observed with `waitid(WNOWAIT)` — without reaping — so the ownership
+    // anchor stays valid after the shell exits.
     let start = tokio::time::Instant::now();
+    let mut shell_exit_observer = Box::pin(observe_shell_exit(leader_pid, control));
     let wait_outcome = if let Some(timeout) = timeout {
         tokio::select! {
             biased;
             () = context.cancellation.cancelled() => WaitOutcome::Cancelled,
             () = tokio::time::sleep(timeout) => WaitOutcome::TimedOut,
-            status = wait_for_shell(&mut child, control) => match status {
+            status = &mut shell_exit_observer => match status {
                 Ok(status) => WaitOutcome::Exit(status),
                 Err(error) => {
                     let mut message = format!("cannot wait for /bin/bash: {error}");
-                    if let Err(termination) = terminate_process_group(
+                    if let Err(termination) = terminate_owned_group(
                         pgid,
+                        leader_pid,
                         &mut child,
-                        tokio::time::Instant::now() + BASH_TERM_GRACE,
+                        &mut ownership,
                         control,
                     )
                     .await
@@ -609,6 +749,7 @@ async fn run_bash(
                              {termination}"
                         );
                     }
+                    cleanup_reap(&mut child, &mut ownership);
                     return failed_result(message);
                 }
             },
@@ -617,14 +758,15 @@ async fn run_bash(
         tokio::select! {
             biased;
             () = context.cancellation.cancelled() => WaitOutcome::Cancelled,
-            status = wait_for_shell(&mut child, control) => match status {
+            status = &mut shell_exit_observer => match status {
                 Ok(status) => WaitOutcome::Exit(status),
                 Err(error) => {
                     let mut message = format!("cannot wait for /bin/bash: {error}");
-                    if let Err(termination) = terminate_process_group(
+                    if let Err(termination) = terminate_owned_group(
                         pgid,
+                        leader_pid,
                         &mut child,
-                        tokio::time::Instant::now() + BASH_TERM_GRACE,
+                        &mut ownership,
                         control,
                     )
                     .await
@@ -636,6 +778,7 @@ async fn run_bash(
                              {termination}"
                         );
                     }
+                    cleanup_reap(&mut child, &mut ownership);
                     return failed_result(message);
                 }
             },
@@ -718,10 +861,16 @@ async fn run_bash(
                 }
             }
             if drain_result.is_some() {
-                match process_group_state(pgid, control) {
-                    Ok(GroupState::Gone) => break,
-                    Ok(GroupState::Alive) => {}
+                // Owned-descendant quiescence: no process is linked to the
+                // invocation's group except the (unreaped) leader anchor.
+                // While the anchor is held the numeric pgid cannot be
+                // reallocated, so the scan can never observe a foreign
+                // group.
+                match owned_descendant_members(leader_pid, pgid.unwrap_or(0), control) {
+                    Ok(0) => break,
+                    Ok(_) => {}
                     Err(error) => {
+                        cleanup_reap(&mut child, &mut ownership);
                         return failed_result(format!(
                             "cannot verify the owned bash process group: {error}"
                         ));
@@ -732,32 +881,25 @@ async fn run_bash(
     }
 
     // When cancellation/timeout owns the outcome, the owned process group is
-    // terminated (liveness-aware TERM -> grace -> KILL), the shell reaped,
-    // and the capture re-drained; the pipes then close and the readers
-    // settle. A process-control failure here is an explicit failed result —
-    // never a silent Success/Cancelled/TimedOut.
+    // terminated (TERM -> grace -> KILL, each signal issued only while the
+    // ownership anchor is held), descendant quiescence is confirmed, and the
+    // leader is reaped — releasing the anchor; the numeric process-group id
+    // is never referenced again. On the natural path the supervisor loop
+    // already observed descendant quiescence; only the final reap remains.
+    // A process-control failure here is an explicit failed result — never a
+    // silent Success/Cancelled/TimedOut.
     if settled.is_some() {
-        match terminate_process_group(
-            pgid,
-            &mut child,
-            tokio::time::Instant::now() + BASH_TERM_GRACE,
-            control,
-        )
-        .await
-        {
+        match terminate_owned_group(pgid, leader_pid, &mut child, &mut ownership, control).await {
             Ok(()) => {}
             Err(error) => {
+                cleanup_reap(&mut child, &mut ownership);
                 return failed_result(format!(
                     "cannot terminate the owned bash process group: {error}"
                 ));
             }
         }
-        if let Err(error) = child.wait().await {
-            let error = ProcessControlError::Wait {
-                error: error.to_string(),
-            };
-            return failed_result(format!("cannot reap /bin/bash after termination: {error}"));
-        }
+    } else if let Err(error) = reap_leader(&mut child, &mut ownership, control).await {
+        return failed_result(format!("cannot reap /bin/bash: {error}"));
     }
 
     let capture = if let Some(result) = drain_result {
@@ -998,31 +1140,105 @@ fn owned_pgid(pid: Option<u32>) -> Option<i32> {
 /// the settlement checks — never a test synchronization mechanism.
 const GROUP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
 
-/// The liveness state of the owned process group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GroupState {
-    /// At least one process is still linked to the group.
-    Alive,
-    /// No process is linked to the group anymore; it is quiescent.
-    Gone,
+/// Counts the invocation's owned descendants still linked to its process
+/// group, excluding the leader anchor itself.
+///
+/// On Linux this enumerates `/proc/*/stat` and matches the process-group id
+/// field (field 5) against the invocation's pgid. The leader is excluded by
+/// pid: it may legitimately remain as an unreaped zombie anchor. Every
+/// other match — live or zombie — is an owned descendant; counting zombies
+/// conservatively never claims quiescence before init has reaped them. A
+/// count of zero is stable: the only possible remaining member is the
+/// leader anchor, and a zombie cannot fork, so no new member can ever
+/// appear afterwards.
+///
+/// The scan is only meaningful while the ownership anchor is held: with the
+/// leader unreaped the numeric pgid cannot be reallocated, so every process
+/// the scan finds linked to the group is provably a descendant of this
+/// invocation — never a foreign group.
+///
+/// Any inspection failure is an explicit [`ProcessControlError`]; under a
+/// restricted `/proc` mount rustX fails the invocation explicitly rather
+/// than risking a premature quiescence claim.
+#[cfg(target_os = "linux")]
+fn owned_descendant_members(
+    leader_pid: i32,
+    pgid: i32,
+    control: Option<&BashTestControl>,
+) -> Result<usize, ProcessControlError> {
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_group_probe {
+            return Err(ProcessControlError::GroupState {
+                error: "injected group-state probe failure".to_owned(),
+            });
+        }
+    }
+    #[cfg(not(test))]
+    let _ = control;
+    let entries = std::fs::read_dir("/proc").map_err(|error| ProcessControlError::GroupState {
+        error: format!("cannot enumerate /proc: {error}"),
+    })?;
+    let mut members = 0usize;
+    for entry in entries {
+        // An entry that vanishes mid-scan is a process that exited; it can
+        // no longer be an owned member.
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Some(entry_pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if entry_pid == leader_pid || entry_pid <= 0 {
+            continue;
+        }
+        let stat = match std::fs::read_to_string(entry.path().join("stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(ProcessControlError::GroupState {
+                    error: format!("cannot read /proc/{entry_pid}/stat: {error}"),
+                });
+            }
+        };
+        // `/proc/<pid>/stat` is `pid (comm) state ppid pgrp ...`; `comm` may
+        // contain spaces and parentheses, so the fields are parsed after the
+        // last `)`; the process-group id is the third field after it.
+        let Some(fields) = stat.rsplit_once(')') else {
+            continue;
+        };
+        let entry_pgrp = fields
+            .1
+            .split_whitespace()
+            .nth(2)
+            .and_then(|field| field.parse::<i32>().ok())
+            // An unparseable stat is treated as an owned member: failing
+            // conservatively never claims premature quiescence.
+            .unwrap_or(pgid);
+        if entry_pgrp == pgid {
+            members += 1;
+        }
+    }
+    Ok(members)
 }
 
-/// Queries the liveness of the owned process group with the
-/// non-destructive `killpg(pgid, 0)` probe:
-///
-/// - success => the group has at least one process;
-/// - `ESRCH` => the group no longer exists (the quiescence evidence);
-/// - `EPERM` => the group exists but signaling permission is denied
-///   (treated as alive);
-/// - any other errno is an explicit [`ProcessControlError`].
-///
-/// A `None` group id (non-Unix platforms, where no group exists) is
-/// reported as gone.
-#[cfg(unix)]
-fn process_group_state(
-    pgid: Option<i32>,
+/// Non-Linux Unix has no procfs membership enumeration. The ownership
+/// anchor (the unreaped leader) still makes every signal safe; descendant
+/// quiescence conservatively relies on the group-existence probe. On
+/// platforms where an unreaped leader zombie keeps the group alive for the
+/// probe (like Linux), quiescence is never observed and the invocation
+/// settles only through the deadline/cancellation paths — never with a
+/// premature natural result, and never with a signal to an unproven group.
+#[cfg(all(unix, not(target_os = "linux")))]
+fn owned_descendant_members(
+    leader_pid: i32,
+    pgid: i32,
     control: Option<&BashTestControl>,
-) -> Result<GroupState, ProcessControlError> {
+) -> Result<usize, ProcessControlError> {
     use nix::errno::Errno;
     use nix::sys::signal::killpg;
     use nix::unistd::Pid;
@@ -1036,12 +1252,10 @@ fn process_group_state(
     }
     #[cfg(not(test))]
     let _ = control;
-    let Some(pgid) = pgid else {
-        return Ok(GroupState::Gone);
-    };
+    let _ = leader_pid;
     match killpg(Pid::from_raw(pgid), None) {
-        Ok(()) | Err(Errno::EPERM) => Ok(GroupState::Alive),
-        Err(Errno::ESRCH) => Ok(GroupState::Gone),
+        Ok(()) | Err(Errno::EPERM) => Ok(1),
+        Err(Errno::ESRCH) => Ok(0),
         Err(error) => Err(ProcessControlError::GroupState {
             error: error.to_string(),
         }),
@@ -1049,32 +1263,79 @@ fn process_group_state(
 }
 
 #[cfg(not(unix))]
-fn process_group_state(
-    _pgid: Option<i32>,
+fn owned_descendant_members(
+    _leader_pid: i32,
+    _pgid: i32,
     _control: Option<&BashTestControl>,
-) -> Result<GroupState, ProcessControlError> {
-    Ok(GroupState::Gone)
+) -> Result<usize, ProcessControlError> {
+    Ok(0)
 }
 
 /// Signals the owned process group. On Unix this is a safe `killpg` over
 /// the group id; the group owner is the child itself, so unrelated runtime
 /// processes are never signaled.
 ///
-/// `ESRCH` means the group is already quiescent and is not an error; any
-/// other failure is an explicit [`ProcessControlError`]. A `None` group id
-/// (non-Unix platforms, where no group exists) is a no-op.
+/// # Signal legality
+///
+/// A signal is issued only while the ownership anchor is held: the leader's
+/// pid — the invocation's numeric process-group id — is then still
+/// allocated to this invocation, so the target cannot be a foreign process
+/// group. After the anchor is released (the leader's final reap) signaling
+/// is permanently forbidden and any attempt is an explicit
+/// [`ProcessControlError::OwnershipLost`]. `ESRCH` from the syscall means
+/// the group is already quiescent and is not an error (with the anchor held
+/// this cannot occur on Linux, where the unreaped leader itself is a group
+/// member). A `None` group id (non-Unix platforms, where no group exists)
+/// is a no-op.
 #[cfg(unix)]
 fn signal_process_group(
     pgid: Option<i32>,
     signal: nix::sys::signal::Signal,
+    ownership: BashOwnership,
     control: Option<&BashTestControl>,
 ) -> Result<(), ProcessControlError> {
     use nix::errno::Errno;
     use nix::sys::signal::killpg;
     use nix::unistd::Pid;
+    let Some(pgid) = pgid else {
+        return Ok(());
+    };
+    // INVARIANT: a signal may reach the kernel only while the ownership
+    // anchor is held; afterwards the numeric pgid may name a foreign group
+    // and is never referenced again.
+    if !ownership.held() {
+        #[cfg(test)]
+        if let Some(control) = control {
+            control.record_signal(RecordedSignal {
+                pgid,
+                signal: signal.as_str(),
+                emitted: false,
+            });
+        }
+        return Err(ProcessControlError::OwnershipLost { pgid });
+    }
     #[cfg(test)]
     if let Some(control) = control {
+        if control
+            .force_anchor_loss
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            // The test models the owned group's lifetime having ended: the
+            // same numeric pgid is now logically foreign, so the runtime
+            // must refuse to signal it.
+            control.record_signal(RecordedSignal {
+                pgid,
+                signal: signal.as_str(),
+                emitted: false,
+            });
+            return Err(ProcessControlError::OwnershipLost { pgid });
+        }
         if control.fail_signal {
+            control.record_signal(RecordedSignal {
+                pgid,
+                signal: signal.as_str(),
+                emitted: false,
+            });
             return Err(ProcessControlError::Signal {
                 signal: signal.as_str(),
                 error: "injected signaling failure".to_owned(),
@@ -1083,10 +1344,18 @@ fn signal_process_group(
     }
     #[cfg(not(test))]
     let _ = control;
-    let Some(pgid) = pgid else {
-        return Ok(());
-    };
-    match killpg(Pid::from_raw(pgid), Some(signal)) {
+    let result = killpg(Pid::from_raw(pgid), Some(signal));
+    #[cfg(test)]
+    if let Some(control) = control {
+        if matches!(result, Ok(()) | Err(Errno::ESRCH)) {
+            control.record_signal(RecordedSignal {
+                pgid,
+                signal: signal.as_str(),
+                emitted: true,
+            });
+        }
+    }
+    match result {
         // `ESRCH` means the group already quiesced: not an error.
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
         Err(error) => Err(ProcessControlError::Signal {
@@ -1100,105 +1369,153 @@ fn signal_process_group(
 fn signal_process_group(
     _pgid: Option<i32>,
     _signal: nix::sys::signal::Signal,
+    _ownership: BashOwnership,
     _control: Option<&BashTestControl>,
 ) -> Result<(), ProcessControlError> {
     Ok(())
 }
 
-/// Terminates the owned process group with actual liveness checks:
+/// Terminates the owned process group and completes the invocation's
+/// process control:
 ///
 /// ```text
-/// TERM
-/// poll shell exit + group liveness within the grace deadline
-///   group quiesces during grace => done
-///   deadline reached while alive => KILL
-/// reap the shell (after KILL if it ignored TERM)
-/// poll group liveness within the confirmation deadline
-///   group quiesces => done
-///   still alive after the confirmation deadline => QuiescenceTimeout
+/// TERM (anchor held => provably owned)
+///   poll owned-descendant membership within BASH_TERM_GRACE
+///     quiescent => done
+///   KILL (anchor held)
+///   poll owned-descendant membership within a bounded confirmation window
+///     quiescent => done; members remain => QuiescenceTimeout
+/// final leader reap (anchor released; pgid never referenced again)
 /// ```
 ///
-/// The shell child is reaped as soon as it exits: while the shell leader is
-/// an unreaped zombie it stays linked to the group, so the liveness probe
-/// would keep reporting the group as alive. Reaping is therefore part of
-/// the termination path, not an afterthought. `ESRCH` at any signaling step
-/// means the group already quiesced and is not an error; every other
-/// [`ProcessControlError`] is surfaced. A `None` group id (non-Unix
-/// platforms) is a no-op.
-async fn terminate_process_group(
+/// Every signal is issued only while the ownership anchor is held, so a
+/// numeric pgid that was released and reused can never be signaled. The
+/// leader is reaped only at the very end: while it is unreaped it is the
+/// ownership anchor, and the membership scan excludes it by pid.
+async fn terminate_owned_group(
     pgid: Option<i32>,
+    leader_pid: i32,
     child: &mut tokio::process::Child,
-    grace_deadline: tokio::time::Instant,
+    ownership: &mut BashOwnership,
     control: Option<&BashTestControl>,
 ) -> Result<(), ProcessControlError> {
-    signal_process_group(pgid, nix::sys::signal::Signal::SIGTERM, control)?;
-    // Grace: race the shell's exit against the deadline and poll group
-    // quiescence each tick. Reaping the shell as soon as it dies lets the
-    // probe observe the group's true state.
-    let mut shell_exited = false;
-    loop {
-        if shell_exited {
-            tokio::time::sleep(GROUP_POLL_INTERVAL).await;
-        } else {
-            tokio::select! {
-                biased;
-                result = child.wait() => {
-                    shell_exited = true;
-                    if let Err(error) = result {
-                        return Err(ProcessControlError::Wait {
-                            error: error.to_string(),
-                        });
-                    }
-                }
-                () = tokio::time::sleep(GROUP_POLL_INTERVAL) => {}
-            }
-        }
-        match process_group_state(pgid, control)? {
-            GroupState::Gone => return Ok(()),
-            GroupState::Alive => {}
-        }
-        if tokio::time::Instant::now() >= grace_deadline {
-            break;
-        }
+    signal_process_group(pgid, nix::sys::signal::Signal::SIGTERM, *ownership, control)?;
+    let grace_deadline = tokio::time::Instant::now() + BASH_TERM_GRACE;
+    if wait_for_owned_quiescence(leader_pid, pgid, grace_deadline, control).await? {
+        return reap_leader(child, ownership, control).await;
     }
-    signal_process_group(pgid, nix::sys::signal::Signal::SIGKILL, control)?;
-    if !shell_exited {
-        if let Err(error) = child.wait().await {
-            return Err(ProcessControlError::Wait {
-                error: error.to_string(),
-            });
-        }
-    }
+    signal_process_group(pgid, nix::sys::signal::Signal::SIGKILL, *ownership, control)?;
     let confirm_deadline = tokio::time::Instant::now() + BASH_TERM_GRACE;
-    match wait_for_quiescence(pgid, confirm_deadline, control).await? {
-        GroupState::Gone => Ok(()),
-        GroupState::Alive => Err(ProcessControlError::QuiescenceTimeout),
+    if wait_for_owned_quiescence(leader_pid, pgid, confirm_deadline, control).await? {
+        return reap_leader(child, ownership, control).await;
     }
+    Err(ProcessControlError::QuiescenceTimeout)
 }
 
-/// Polls the owned process group until it is gone or the deadline expires.
-async fn wait_for_quiescence(
+/// Polls owned-descendant membership and the leader's own exit until the
+/// invocation is quiescent or the deadline expires.
+///
+/// Quiescence requires **both** conditions: no owned descendant is linked
+/// to the group (the membership scan excludes the leader by pid) **and**
+/// the shell leader itself has exited. The leader-exit condition matters on
+/// the forced path: a TERM-ignoring leader would otherwise look quiescent
+/// while still running, and the final reap could never complete.
+async fn wait_for_owned_quiescence(
+    leader_pid: i32,
     pgid: Option<i32>,
     deadline: tokio::time::Instant,
     control: Option<&BashTestControl>,
-) -> Result<GroupState, ProcessControlError> {
+) -> Result<bool, ProcessControlError> {
     loop {
-        match process_group_state(pgid, control)? {
-            GroupState::Gone => return Ok(GroupState::Gone),
-            GroupState::Alive => {
+        if owned_descendant_members(leader_pid, pgid.unwrap_or(0), control)? == 0
+            && leader_exited(leader_pid)
+        {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(GROUP_POLL_INTERVAL).await;
+    }
+}
+
+/// Whether the shell leader has exited, observed with `waitid(WNOWAIT)` —
+/// without reaping, so the ownership anchor stays valid. Inspection
+/// failures conservatively report "not exited".
+#[cfg(unix)]
+fn leader_exited(leader_pid: i32) -> bool {
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    match waitid(
+        Id::Pid(nix::unistd::Pid::from_raw(leader_pid)),
+        WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT | WaitPidFlag::WNOHANG,
+    ) {
+        Ok(WaitStatus::StillAlive) | Err(_) => false,
+        Ok(_) => true,
+    }
+}
+
+#[cfg(not(unix))]
+fn leader_exited(_leader_pid: i32) -> bool {
+    true
+}
+
+/// The final leader reap: the single ownership transition that releases the
+/// anchor. Bounded by [`BASH_REAP_GRACE`]; afterwards the numeric
+/// process-group id is never referenced again.
+async fn reap_leader(
+    child: &mut tokio::process::Child,
+    ownership: &mut BashOwnership,
+    control: Option<&BashTestControl>,
+) -> Result<(), ProcessControlError> {
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_wait {
+            return Err(ProcessControlError::Wait {
+                error: "injected bash wait failure".to_owned(),
+            });
+        }
+    }
+    #[cfg(not(test))]
+    let _ = control;
+    let deadline = tokio::time::Instant::now() + BASH_REAP_GRACE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                ownership.release();
+                return Ok(());
+            }
+            Ok(None) => {
                 if tokio::time::Instant::now() >= deadline {
-                    return Ok(GroupState::Alive);
+                    return Err(ProcessControlError::Wait {
+                        error: "the shell leader did not exit for the final reap".to_owned(),
+                    });
                 }
                 tokio::time::sleep(GROUP_POLL_INTERVAL).await;
+            }
+            Err(error) => {
+                return Err(ProcessControlError::Wait {
+                    error: error.to_string(),
+                });
             }
         }
     }
 }
 
-/// Waits for the shell child to exit, with the deterministic test seam for
-/// reaping-failure injection.
-async fn wait_for_shell(
-    child: &mut tokio::process::Child,
+/// Best-effort one-shot reap used on failure paths: reaps the leader when
+/// it is already a zombie and releases the anchor, so a leaked zombie is
+/// avoided whenever possible.
+fn cleanup_reap(child: &mut tokio::process::Child, ownership: &mut BashOwnership) {
+    if let Ok(Some(_)) = child.try_wait() {
+        ownership.release();
+    }
+}
+
+/// Observes the shell leader's exit **without reaping it**: `waitid` with
+/// `WNOWAIT` reports the exit while the leader remains a zombie, so the
+/// ownership anchor stays valid. Polled with the internal cadence; the
+/// returned status is later consumed by the final reap.
+async fn observe_shell_exit(
+    leader_pid: i32,
     control: Option<&BashTestControl>,
 ) -> std::io::Result<std::process::ExitStatus> {
     #[cfg(test)]
@@ -1209,7 +1526,38 @@ async fn wait_for_shell(
     }
     #[cfg(not(test))]
     let _ = control;
-    child.wait().await
+    loop {
+        use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+        match waitid(
+            Id::Pid(nix::unistd::Pid::from_raw(leader_pid)),
+            WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT | WaitPidFlag::WNOHANG,
+        ) {
+            Ok(WaitStatus::StillAlive) => {}
+            Ok(status) => {
+                return exit_status_of(status).ok_or_else(|| {
+                    std::io::Error::other("unexpected waitid status of the shell leader")
+                });
+            }
+            Err(error) => {
+                return Err(std::io::Error::from_raw_os_error(error as i32));
+            }
+        }
+        tokio::time::sleep(GROUP_POLL_INTERVAL).await;
+    }
+}
+
+/// Converts a `WNOWAIT` exit observation into the canonical exit status.
+#[cfg(unix)]
+fn exit_status_of(status: nix::sys::wait::WaitStatus) -> Option<std::process::ExitStatus> {
+    use nix::sys::wait::WaitStatus;
+    use std::os::unix::process::ExitStatusExt;
+    match status {
+        WaitStatus::Exited(_, code) => Some(std::process::ExitStatus::from_raw(code << 8)),
+        WaitStatus::Signaled(_, signal, _) => {
+            Some(std::process::ExitStatus::from_raw(signal as i32))
+        }
+        _ => None,
+    }
 }
 
 /// The signal number of a signal-terminated child, where known.
@@ -1229,7 +1577,7 @@ fn unix_signal_of(exit: std::process::ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BashTestControl, BashTool, GroupState, NAME, owned_pgid, process_group_state};
+    use super::{BashTestControl, BashTool, NAME, owned_pgid};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
@@ -1239,6 +1587,7 @@ mod tests {
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
     };
     use crate::tools::workspace::Workspace;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     struct NoopProgress;
@@ -1349,14 +1698,20 @@ mod tests {
         panic!("process {pid} is still alive after the deadline");
     }
 
-    /// Polls the owned process group until it is provably gone (the same
-    /// `killpg` probe the production logic uses), with a strict deadlock
-    /// guard.
+    /// Polls the owned process group until it is provably gone, using the
+    /// non-destructive `killpg(pgid, 0)` probe, with a strict deadlock
+    /// guard. Valid only after the invocation has settled: the final reap
+    /// has then removed the leader anchor, so `ESRCH` is the true group
+    /// state.
     #[cfg(unix)]
     async fn wait_for_group_death(pgid: i32) {
+        use nix::errno::Errno;
+        use nix::sys::signal::killpg;
+        use nix::unistd::Pid;
         for _ in 0..1000 {
-            if process_group_state(Some(pgid), None) == Ok(GroupState::Gone) {
-                return;
+            match killpg(Pid::from_raw(pgid), None) {
+                Ok(()) | Err(Errno::EPERM) => {}
+                Err(_) => return,
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1583,14 +1938,15 @@ mod tests {
             .expect("shell pid");
         assert!(process_alive(descendant_pid));
         // 2. The test terminates the descendant directly (test-side
-        //    process control, deterministic: no timing assumption), so the
-        //    owned group quiesces naturally.
+        //    process control, deterministic: no timing assumption). The
+        //    leader anchor stays unreaped until the executor settles, so
+        //    group death is observed through the descendant's own death.
         nix::sys::signal::killpg(
             nix::unistd::Pid::from_raw(shell_pid),
             nix::sys::signal::Signal::SIGKILL,
         )
         .expect("test kills the owned group");
-        wait_for_group_death(shell_pid).await;
+        wait_for_process_death(descendant_pid).await;
         // 3. The executor resumes and observes the quiescent group.
         hook.release();
         let result = tokio::time::timeout(Duration::from_secs(20), task)
@@ -1625,9 +1981,15 @@ mod tests {
         let (_dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
-        // The shell records its own pid so the test can clean up the group
-        // after the injected signaling failure leaves it running.
-        let command = format!("echo $$ > {}; sleep 30", shell_pid_file.display());
+        let desc_pid_file = root.join("desc.pid");
+        // The shell records its own pid and the descendant's pid so the
+        // test can clean up the group after the injected signaling failure
+        // leaves it running.
+        let command = format!(
+            "echo $$ > {}; sleep 30 & echo $! > {}; wait",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
         let cancellation = CancellationSignal::new();
         let cancelling = cancellation.clone();
         let task = tokio::spawn(run_with_control(
@@ -1658,18 +2020,26 @@ mod tests {
             result.status
         );
         // The injected failure is the very condition under test, so the
-        // test itself terminates the abandoned group as cleanup.
+        // test itself terminates the abandoned group as cleanup. The
+        // shell leader zombie stays unreaped (no signal ever reached it),
+        // so the group cannot be observed as gone; the descendant's death
+        // is the observable cleanup proof.
         let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
             .expect("shell pid file")
             .trim()
             .parse()
             .expect("shell pid");
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
         nix::sys::signal::killpg(
             nix::unistd::Pid::from_raw(shell_pid),
             nix::sys::signal::Signal::SIGKILL,
         )
         .expect("test cleanup kills the abandoned group");
-        wait_for_group_death(shell_pid).await;
+        wait_for_process_death(descendant_pid).await;
     }
 
     /// A group-state probe failure is an explicit failed result: the
@@ -1717,5 +2087,165 @@ mod tests {
             "an injected wait failure must be an explicit failed result, got {:?}",
             result.status
         );
+    }
+
+    /// The PGID-reuse fail-safe regression: the ownership anchor is
+    /// provably held while the owned group exists; the test then models the
+    /// owned group's lifetime ending with the same numeric PGID logically
+    /// foreign, and proves the runtime emits **zero** signals against that
+    /// numeric PGID afterwards — it settles explicitly `Failed` instead.
+    ///
+    /// The transition is driven by the exact test seam, never by a
+    /// probabilistic kernel PID reuse.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_signals_are_issued_after_ownership_loss() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let desc_pid_file = root.join("desc.pid");
+        let command = format!(
+            "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; wait",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
+        let control = BashTestControl::new();
+        let force_loss = control.force_anchor_loss_handle();
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control.clone(),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // 1. The owned group provably exists: the shell is running.
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        // 2. The owned group's lifetime ends: the same numeric pgid is now
+        //    logically foreign.
+        force_loss.store(true, Ordering::SeqCst);
+        // 3. Cancellation becomes observable; the runtime must refuse to
+        //    signal the (now foreign) numeric pgid and settle Failed.
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "lost ownership must settle explicitly Failed, got {:?}",
+            result.status
+        );
+        // 4. No signal was ever emitted after the ownership release: every
+        //    recorded attempt was refused (emitted == false) and targeted
+        //    the numeric pgid under question.
+        let recorded = control.recorded_signals();
+        assert!(
+            !recorded.is_empty(),
+            "a cancellation was attempted and must have reached the signal path"
+        );
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        for attempt in &recorded {
+            assert_eq!(
+                attempt.pgid, shell_pid,
+                "every refused attempt targets the numeric pgid under question"
+            );
+            assert!(
+                !attempt.emitted,
+                "no signal may be emitted after ownership is lost: {attempt:?}"
+            );
+        }
+        // The group was never signaled, so the test terminates it as
+        // cleanup; the descendant's death is the observable proof.
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(shell_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test cleanup kills the abandoned group");
+        wait_for_process_death(descendant_pid).await;
+        let _ = dir;
+    }
+
+    /// The positive counterpart: during a real cancellation every emitted
+    /// process-group signal targets exactly the invocation's own pgid (the
+    /// shell leader's pid) and only occurs while the ownership anchor is
+    /// held.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_signals_only_target_the_owned_group() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let command = format!(
+            "trap '' TERM; echo $$ > {}; sleep 30",
+            shell_pid_file.display()
+        );
+        let control = BashTestControl::new();
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control.clone(),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+            "a TERM-ignoring shell is KILLed and the cancellation settles, got {:?}",
+            result.status
+        );
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        let recorded = control.recorded_signals();
+        assert!(
+            !recorded.is_empty(),
+            "the termination path must have emitted TERM and/or KILL"
+        );
+        for attempt in &recorded {
+            assert!(
+                attempt.emitted,
+                "every attempt during a held anchor is emitted: {attempt:?}"
+            );
+            assert_eq!(
+                attempt.pgid, shell_pid,
+                "every emitted signal targets the owned process-group id"
+            );
+        }
+        wait_for_group_death(shell_pid).await;
+        let _ = dir;
     }
 }
