@@ -192,11 +192,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `background_task` registrations are rejected. A canonical call whose id
   and name disagree is a contract violation, never an id-first fallback.
 - The native executor implementation and its execution-ownership policy are
-  independent: Read/Write/Edit/Glob/Grep/Bash register under one explicit
-  `NativeToolPolicy` and may use any legal execution policy
-  (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`); the default is
-  foreground-only sequential. Only the runtime intrinsic `background_task`
-  is intentionally fixed (foreground-only, sequential).
+  independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
+  independently selects its execution and concurrency policy through the
+  concrete bounded `NativeToolPolicies` configuration and may use any legal
+  execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
+  the default is foreground-only sequential for every ordinary tool. Only
+  the runtime intrinsic `background_task` is intentionally fixed
+  (foreground-only, sequential) and is outside the configurable set.
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, validate business arguments against the
   canonical schema, dispatch executor. A business validation failure is a
@@ -262,6 +264,15 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   notifications publish into exactly it, and the Agent Loop drains exactly
   it at every safe boundary. An attempt over a tool runtime of a different
   conversation is rejected structurally.
+- A `ConversationToolRuntime` may only contain resources belonging to its
+  own `ConversationId`: a configured mailbox must belong to the same
+  conversation as the runtime, and the mismatch is rejected at construction
+  (before the background registry is built) with a typed
+  `MailboxConversationMismatch` error. An omitted mailbox constructs the
+  canonical mailbox of the runtime's own conversation, so
+  `request.conversation_id == tool_runtime.conversation_id ==
+  tool_runtime.mailbox().conversation_id == background_registry.conversation_id`
+  holds structurally.
 - The artifact store and the model workspace are disjoint filesystem
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
@@ -286,10 +297,34 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   `artifact_N` ids outside the model workspace) while bounded head/tail
   previews are retained, with explicit `TruncationState`.
 - Bash owns a distinct process group per invocation; cancellation/timeout
-  signals the owned group (`TERM`, then `BASH_TERM_GRACE`, then `KILL`) and
-  never signals unrelated runtime processes. The child environment is
-  explicit (`env_clear()` plus runtime-approved basics and authorized
-  entries); parent-process secrets are absent unless explicitly authorized.
+  signals the owned group (`TERM`, then a liveness-aware grace period,
+  then `KILL` when the group is still alive) and never signals unrelated
+  runtime processes. The child environment is explicit (`env_clear()` plus
+  runtime-approved basics and authorized entries); parent-process secrets
+  are absent unless explicitly authorized.
+- Shell-parent exit is not by itself the Bash settlement boundary: the
+  invocation settles naturally only when both the runtime-owned output
+  capture is settled AND the owned process group is quiescent (no process
+  is linked to it anymore). A descendant that remains in the owned group
+  after the shell exits — with the pipes either still held or already
+  redirected away — keeps the invocation active under the same deadline
+  and cancellation until the group quiesces or
+  cancellation/timeout/process-control failure settles it.
+- Group liveness is queried with the non-destructive `killpg(pgid, 0)`
+  probe: success means the group has at least one process, `ESRCH` means
+  the group no longer exists (the quiescence evidence), and `EPERM` means
+  the group exists but signaling permission is denied (treated as alive).
+  The pgid number cannot be reallocated while any invocation process is
+  still linked to the group, and after `ESRCH` is observed the runtime
+  never touches the pgid again, so pid reuse is never mistaken for
+  continued ownership.
+- Process-control failures are never silent: signaling, waiting/reaping,
+  and group-state probing errors surface as an explicit failed tool
+  result — never as an ordinary `Success`, `Cancelled`, or `TimedOut`.
+  Cancellation/timeout intent that cannot be established through process
+  control is consistent with the background registry's rule that an
+  explicit process-control failure may override canonical cancellation
+  settlement.
 - Bash result semantics are typed: zero exit is success, non-zero exit is a
   failed result with the exit code preserved, signal death, timeout, and
   cancellation map to their canonical statuses and are never misreported as

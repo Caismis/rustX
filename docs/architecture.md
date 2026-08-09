@@ -510,24 +510,30 @@ registry, the composer builds the section (never an extension provider),
 and the renderer shows active executions only in allocation order.
 
 The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
-ordinary registrations under one explicit `NativeToolPolicy`
-(execution + concurrency axes; foreground-only sequential by default, with
-`BackgroundOnly` and `ModelSelectable` as legal configuration choices for
-every ordinary native tool). The only intentionally fixed policy remains
-the runtime intrinsic `background_task`. Bash treats one invocation as one
-complete lifecycle: spawn the owned process group, capture
-stdout/stderr/combined, wait for the shell/process group, and drain the
-output — with cancellation and the invocation timeout authoritative until
-the full lifecycle settles, so a shell parent that exits while a
-descendant keeps the owned group and the output pipes open cannot escape.
-The child runs with an explicit `env_clear()`-based environment, bounded
-head/tail previews per stream with full raw output spooled to artifacts,
-`TERM -> BASH_TERM_GRACE -> KILL` cancellation, process-group ids derived
-from the child's own pid (a failed lookup fails the invocation explicitly;
-`killpg(0)` is structurally unreachable), typed result semantics (zero
-exit success, non-zero exit failed with the code preserved, timeout as
-`TimedOut`, cancellation as `Cancelled`), and explicit artifact-capture
-failures — never a silent success that lost the retained output.
+ordinary registrations under the concrete bounded `NativeToolPolicies`
+configuration: each ordinary native tool independently selects its
+execution and concurrency policy (foreground-only sequential by default,
+with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
+The only intentionally fixed policy remains the runtime intrinsic
+`background_task`. Bash treats one invocation as one complete lifecycle:
+spawn the owned process group, capture stdout/stderr/combined, wait for
+the shell, and supervise the owned process group until it is quiescent or
+cancellation/timeout/process-control failure settles the invocation —
+shell-parent exit is not by itself the Bash settlement boundary, so a
+descendant that remains in the owned group after the shell exits (holding
+the pipes or having redirected them away) can never escape the
+timeout/cancellation contract. The child runs with an explicit
+`env_clear()`-based environment, bounded head/tail previews per stream
+with full raw output spooled to artifacts, liveness-aware
+`TERM -> BASH_TERM_GRACE -> KILL` cancellation with group-quiescence
+confirmation, process-group ids derived from the child's own pid (a failed
+lookup fails the invocation explicitly; `killpg(0)` is structurally
+unreachable), typed result semantics (zero exit success, non-zero exit
+failed with the code preserved, timeout as `TimedOut`, cancellation as
+`Cancelled`), explicit artifact-capture failures, and explicit
+process-control failures (signaling/waiting/group-probe errors settle as
+`Failed`, never as a silent `Success`, `Cancelled`, or `TimedOut`) — never
+a silent success that lost the retained output.
 
 ### Layer 3: Model plane
 

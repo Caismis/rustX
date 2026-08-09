@@ -185,11 +185,15 @@ Implemented in the M5 tool plane PR (Issue #8):
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, and explicit tool environment
-- `NativeToolPolicy` (execution + concurrency axes; foreground-only
-  sequential by default) applied to every ordinary native tool, with
-  `background_task` fixed foreground-only sequential
+- The concrete bounded `NativeToolPolicies` configuration: each ordinary
+  native tool independently selects its `NativeToolPolicy` (execution +
+  concurrency axes; foreground-only sequential by default), with
+  `background_task` fixed foreground-only sequential outside the
+  configurable set
 - One canonical conversation mailbox owned by the conversation tool
-  runtime, drained by the Agent Loop at every safe boundary
+  runtime, drained by the Agent Loop at every safe boundary; a configured
+  mailbox must belong to the runtime's own conversation (construction-time
+  identity check)
 - Artifact storage structurally disjoint from the model workspace
 - Deterministic foreground/background scheduling through the agent loop
   with structural batch settlement
@@ -201,10 +205,18 @@ Bash requirements:
 - Separate process groups
 - stdout/stderr/combined capture
 - Timeouts
-- TERM -> grace period -> KILL
-- Complete lifecycle ownership: cancellation/timeout remain authoritative
-  through the output-drain phase, so a shell-parent exit with a live
-  descendant holding the pipes cannot escape
+- Liveness-aware TERM -> grace period -> KILL with group-quiescence
+  confirmation
+- Complete lifecycle ownership: shell-parent exit is not the Bash
+  settlement boundary. The invocation settles naturally only when the
+  owned process group is quiescent and the capture is settled; a live
+  descendant in the owned group (pipes held or redirected away) keeps the
+  invocation active under the same deadline and cancellation until it
+  quiesces or cancellation/timeout/process-control failure settles it
+- Non-destructive `killpg(pgid, 0)` group-liveness probing (ESRCH =
+  quiescent, EPERM = alive, other errno = explicit failure)
+- Process-control failures (signaling, waiting, group-state probing) are
+  explicit failed results, never silent Success/Cancelled/TimedOut
 - Process-group ids derived from the child's own pid (no sentinel group
   id, so `killpg(0)` is unreachable)
 - Explicit artifact-capture failures instead of silent success
