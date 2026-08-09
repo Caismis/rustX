@@ -536,19 +536,41 @@ success that lost the retained output.
 
 Bash process ownership is kernel-mediated and reuse-safe by construction:
 each invocation owns a small supervisor process unit — an outer
-supervisor (rustX child, subreaper, reaper of last resort) plus an inner
-supervisor (session and group leader via `setsid`, subreaper, `/bin/bash`
-parent) — and the shell's descendants live in exactly the invocation's own
-session/process group. `TERM`/`KILL` are issued by the inner supervisor
-with `killpg` against its own group, whose numeric id is its own pid —
-provably allocated while it lives, so the numeric group id can never name a
-foreign process group while signals remain legal. Shell descendants that
-outlive the shell are reparented into the supervisor's child domain
-(`PR_SET_CHILD_SUBREAPER`) rather than rediscovered from `/proc`; the
-terminal ownership point is the supervisor's `waitpid(-1)` loop returning
-`ECHILD` (no owned child remains at all), reported to rustX over a
-`UnixStream` control channel. `/proc` is never the source of truth for
-process ownership or quiescence.
+supervisor (rustX child, subreaper, final containment and reaping
+authority) plus an inner supervisor (session and group leader via
+`setsid`, subreaper, `/bin/bash` parent) — and the shell's descendants
+live in exactly the invocation's own session/process group. `TERM`/`KILL`
+are issued by the inner supervisor with `killpg` against its own group,
+whose numeric id is its own pid — provably allocated while it lives, so
+the numeric group id can never name a foreign process group while signals
+remain legal. Shell descendants that outlive the shell are reparented into
+the supervisor's child domain (`PR_SET_CHILD_SUBREAPER`) rather than
+rediscovered from `/proc`; the terminal ownership point is the wait
+contract with one authoritative reporter — the outer supervisor's
+`waitpid(-1)` loop returning `ECHILD` (no owned child remains at all),
+reported to rustX as the canonical `AllChildrenReaped` over a `UnixStream`
+control channel. `/proc` is never the source of truth for process
+ownership or quiescence.
+
+Every Bash result status — `Success`, `Failed`, `Cancelled`, and
+`TimedOut` — is terminal with respect to the invocation-owned process
+tree: no invocation-owned Bash process remains capable of executing work
+before any result is returned. A detected process-control/runtime failure
+determines the eventual result status but does not itself settle the
+invocation lifecycle: failures before any Bash tree was established may
+return `Failed` immediately, while failures after ownership exists (signal
+failure, wait/reap failure, IPC failure, control-channel abandonment)
+follow the containment lifecycle — the failure is remembered, the outer
+supervisor becomes the active containment authority (it observes the
+inner's terminal state via `waitid(WNOWAIT)` without releasing the
+structural anchor, sends one fallback `SIGKILL` to the still-proven-owned
+group, reaps the inner and every reparented descendant to its `ECHILD`),
+the capture is finalized, and only then is `Failed` returned. Control-
+channel loss is fail-safe: dropping the rustX-side execution future
+instructs the supervisor unit to contain its invocation, so an abandoned
+Bash tree can never escape. The anchor is released only by the final reap
+after the last signal, so a numeric group id whose allocation has ended is
+never signaled.
 
 ### Layer 3: Model plane
 

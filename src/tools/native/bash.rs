@@ -1617,19 +1617,23 @@ mod tests {
     }
 
     /// A signaling failure during cancellation is an explicit failed
-    /// result: cancellation intent that cannot be established through
-    /// process control is never downgraded to a silent `Cancelled`.
+    /// result — and the failure is terminal with respect to the owned
+    /// process tree. The inner supervisor refuses the group signal and
+    /// escalates containment to the outer supervisor, which emits exactly
+    /// one structurally-anchored fallback `SIGKILL` against the owned
+    /// group; `Failed` is returned only after the shell, the descendant,
+    /// and the whole group are provably gone. No test-side process control
+    /// is involved after the result settles.
     #[cfg(unix)]
     #[tokio::test]
     async fn signal_failure_settles_as_an_explicit_failed_result() {
-        let (_dir, artifacts, workspace) = fixture();
+        let (dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
         let desc_pid_file = root.join("desc.pid");
         let anchor_pid_file = root.join("anchor.pid");
         // The shell records its own pid and the descendant's pid so the
-        // test can clean up the group after the injected signaling failure
-        // leaves it running.
+        // test can prove both are terminal when the result exists.
         let command = format!(
             "echo $$ > {}; sleep 30 & echo $! > {}; wait",
             shell_pid_file.display(),
@@ -1637,11 +1641,12 @@ mod tests {
         );
         let cancellation = CancellationSignal::new();
         let cancelling = cancellation.clone();
+        let control = BashTestControl::new()
+            .fail_signal()
+            .anchor_pid_file(anchor_pid_file.clone());
         let task = tokio::spawn(run_with_control(
             command,
-            BashTestControl::new()
-                .fail_signal()
-                .anchor_pid_file(anchor_pid_file.clone()),
+            control.clone(),
             cancellation,
             artifacts.clone(),
             workspace.clone(),
@@ -1666,9 +1671,10 @@ mod tests {
             "an injected signaling failure must be an explicit failed result, got {:?}",
             result.status
         );
-        // The injected failure is the very condition under test, so the
-        // test itself terminates the abandoned group as cleanup. The
-        // descendant's death is the observable cleanup proof.
+        // The failure was terminal: the shell, the descendant, and the
+        // whole owned group are provably gone by the time the result
+        // exists. The outer supervisor's fallback containment did the
+        // work; there is no test-side kill to perform.
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
             .expect("anchor pid file")
             .trim()
@@ -1679,12 +1685,32 @@ mod tests {
             .trim()
             .parse()
             .expect("descendant pid");
-        nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(anchor_pid),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-        .expect("test cleanup kills the abandoned group");
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        wait_for_group_death(anchor_pid).await;
+        wait_for_process_death(shell_pid).await;
         wait_for_process_death(descendant_pid).await;
+        // The containment path is the recorded proof: the inner refused
+        // the group TERM (emitted == false), and the outer's fallback
+        // emitted exactly one SIGKILL against exactly the anchored pgid.
+        let recorded = control.recorded_signals();
+        let refusals: Vec<_> = recorded.iter().filter(|attempt| !attempt.emitted).collect();
+        assert!(
+            !refusals.is_empty(),
+            "the injected signaling failure must have refused the group TERM"
+        );
+        let kills: Vec<_> = recorded.iter().filter(|attempt| attempt.emitted).collect();
+        assert_eq!(
+            kills.len(),
+            1,
+            "fallback containment emits exactly one SIGKILL, got: {recorded:?}"
+        );
+        assert_eq!(kills[0].signal, "SIGKILL");
+        assert_eq!(kills[0].pgid, anchor_pid);
+        let _ = dir;
     }
 
     /// A supervisor setup failure is an explicit failed result: the
@@ -1737,34 +1763,74 @@ mod tests {
         );
     }
 
-    /// A reaping/wait failure is an explicit failed result.
+    /// A wait/reap failure after ownership is established is an explicit
+    /// failed result — and the failure is terminal with respect to the
+    /// owned process tree. The fixture has a real descendant: the inner
+    /// supervisor fails the shell wait and escalates containment to the
+    /// outer supervisor, which terminates the owned group; `Failed` is
+    /// returned only after the descendant and the group are provably gone.
+    /// No test-side process control follows the result.
+    #[cfg(unix)]
     #[tokio::test]
     async fn wait_failure_settles_as_an_explicit_failed_result() {
-        let (_dir, artifacts, workspace) = fixture();
-        let result = run_with_control(
-            "echo hi".to_owned(),
-            BashTestControl::new().fail_wait(),
-            CancellationSignal::new(),
-            artifacts,
-            workspace,
-            None,
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let desc_pid_file = root.join("desc.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        // The shell exits immediately, so the injected wait failure fires
+        // while the redirected descendant is still owned and alive.
+        let command = format!(
+            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            desc_pid_file.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new()
+                    .fail_wait()
+                    .anchor_pid_file(anchor_pid_file.clone()),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                None,
+            ),
         )
-        .await;
+        .await
+        .expect("the invocation settles exactly once");
         assert!(
             matches!(result.status, ToolExecutionStatus::Failed { .. }),
             "an injected wait failure must be an explicit failed result, got {:?}",
             result.status
         );
+        // The failure was terminal: the descendant and the whole owned
+        // group are provably gone by the time the result exists, with no
+        // test-side kill.
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        wait_for_group_death(anchor_pid).await;
+        wait_for_process_death(descendant_pid).await;
+        let _ = dir;
     }
 
-    /// The PGID-reuse fail-safe regression: the ownership anchor (the
-    /// unreaped inner supervisor whose pid is the invocation's process
-    /// group id) provably reads as lost, and the supervisor emits **zero**
-    /// signals against that numeric PGID — it settles explicitly `Failed`
-    /// instead.
-    ///
-    /// The transition is driven by the exact test seam, never by a
-    /// probabilistic kernel PID reuse.
+    /// The PGID-reuse fail-safe regression, strengthened for fallback
+    /// containment: the inner supervisor's ownership anchor reads as lost
+    /// (the exact test seam, never a probabilistic PID reuse), so the
+    /// inner refuses every group signal. Containment escalates to the
+    /// outer supervisor, whose structural anchor — the un-reaped inner
+    /// pid, which is the invocation's process-group id — is still provably
+    /// held, and which emits exactly one fallback `SIGKILL` against
+    /// exactly that anchored pgid. The owned tree dies with it and the
+    /// invocation settles `Failed`; no foreign process group is ever
+    /// signaled and no test-side kill is involved.
     #[cfg(unix)]
     #[tokio::test]
     async fn no_signals_are_issued_after_ownership_loss() {
@@ -1779,9 +1845,9 @@ mod tests {
             desc_pid_file.display()
         );
         let control = BashTestControl::new().anchor_pid_file(anchor_pid_file.clone());
-        // 1. The ownership anchor reads as lost from the start: the runtime
-        //    behaves as if the owned group's lifetime had ended and the
-        //    numeric pgid might name a foreign group.
+        // 1. The ownership anchor reads as lost from the start: the inner
+        //    supervisor behaves as if the owned group's lifetime had ended
+        //    and the numeric pgid might name a foreign group.
         control
             .force_anchor_loss_handle()
             .store(true, Ordering::SeqCst);
@@ -1803,8 +1869,8 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(shell_pid_file.exists(), "the shell pid file never appeared");
-        // 3. Cancellation becomes observable; the supervisor must refuse to
-        //    signal the (now foreign) numeric pgid and settle Failed.
+        // 3. Cancellation becomes observable; the inner supervisor refuses
+        //    to signal the (per its seam, possibly foreign) numeric pgid.
         cancelling.cancel();
         let result = tokio::time::timeout(Duration::from_secs(20), task)
             .await
@@ -1815,9 +1881,12 @@ mod tests {
             "lost ownership must settle explicitly Failed, got {:?}",
             result.status
         );
-        // 4. No signal was ever emitted: every recorded attempt was refused
-        //    (emitted == false) and targeted the numeric pgid under
-        //    question.
+        // 4. The inner supervisor emitted zero signals: every inner attempt
+        //    was refused (emitted == false) and targeted the numeric pgid
+        //    under question. The single emitted signal is the outer
+        //    supervisor's fallback containment SIGKILL against exactly the
+        //    structurally anchored pgid, issued only after the inner's
+        //    refusals.
         let recorded = control.recorded_signals();
         assert!(
             !recorded.is_empty(),
@@ -1831,26 +1900,167 @@ mod tests {
         for attempt in &recorded {
             assert_eq!(
                 attempt.pgid, anchor_pid,
-                "every refused attempt targets the numeric pgid under question"
-            );
-            assert!(
-                !attempt.emitted,
-                "no signal may be emitted after ownership is lost: {attempt:?}"
+                "every attempt targets the numeric pgid under question"
             );
         }
-        // The group was never signaled, so the test terminates it as
-        // cleanup; the descendant's death is the observable proof.
+        let first_emitted = recorded
+            .iter()
+            .position(|attempt| attempt.emitted)
+            .expect("the outer fallback containment must emit exactly one signal");
+        assert_eq!(
+            recorded.iter().filter(|attempt| attempt.emitted).count(),
+            1,
+            "the only emitted signal is the outer's structural fallback containment, got: {recorded:?}"
+        );
+        assert_eq!(recorded[first_emitted].signal, "SIGKILL");
+        assert!(
+            recorded[..first_emitted]
+                .iter()
+                .all(|attempt| !attempt.emitted),
+            "every inner attempt before the fallback containment was refused"
+        );
+        // 5. The owned group was contained and is terminal: the group and
+        //    the descendant are provably gone without any test-side kill.
+        wait_for_group_death(anchor_pid).await;
         let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
             .expect("descendant pid file")
             .trim()
             .parse()
             .expect("descendant pid");
-        nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(anchor_pid),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-        .expect("test cleanup kills the abandoned group");
         wait_for_process_death(descendant_pid).await;
+        let _ = dir;
+    }
+
+    /// The control-channel abandonment regression: the rustX-side owner of
+    /// the invocation disappears (the execution future is dropped, closing
+    /// the rustX end of the control channel) while the owned tree is
+    /// running. The inner supervisor interprets the channel EOF as a
+    /// fail-safe instruction to contain the invocation, and the outer
+    /// supervisor terminates the owned group. Dropping the rustX-side
+    /// execution future can therefore never detach an uncontrolled Bash
+    /// tree; the test performs no process control of its own.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn control_channel_abandonment_contains_the_owned_tree() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let desc_pid_file = root.join("desc.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let command = format!(
+            "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; wait",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
+        let task = tokio::spawn(run_with_control(
+            command,
+            BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        ));
+        // The owned tree provably exists before the owner disappears.
+        for _ in 0..1000 {
+            if shell_pid_file.exists() && anchor_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        assert!(
+            process_alive(descendant_pid),
+            "the descendant must be alive when the owner disappears"
+        );
+        // The execution owner disappears: the future is dropped with no
+        // cancellation request and no result. The test is about ownership
+        // containment, not about a returned ToolExecutionResult.
+        task.abort();
+        let _ = task.await;
+        // The supervisor fail-safe-contained the invocation: the
+        // descendant and the whole owned group are provably gone without
+        // any test-side kill.
+        wait_for_process_death(descendant_pid).await;
+        wait_for_group_death(anchor_pid).await;
+        let _ = dir;
+    }
+
+    /// The fallback-containment counterpart of the unrelated-process
+    /// regression: when the inner supervisor fails to signal and the outer
+    /// supervisor must contain the invocation, only the invocation's own
+    /// session-isolated process group is terminated; an unrelated process
+    /// in the test's own process group survives.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fallback_containment_does_not_kill_unrelated_processes() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        // An unrelated process in the test's own process group.
+        let unrelated = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("unrelated sleep");
+        let unrelated_pid = unrelated.id();
+        let command = format!("echo $$ > {}; sleep 30", shell_pid_file.display());
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            BashTestControl::new()
+                .fail_signal()
+                .anchor_pid_file(anchor_pid_file.clone()),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // The owned shell provably started before cancellation.
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "an injected signaling failure must be an explicit failed result, got {:?}",
+            result.status
+        );
+        // The unrelated process in the test's own process group survived
+        // the fallback containment of the invocation's session-isolated
+        // group.
+        let mut unrelated = unrelated;
+        assert!(
+            unrelated.try_wait().expect("try_wait").is_none(),
+            "the unrelated process (pid {unrelated_pid}) must survive fallback containment"
+        );
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+        // The owned group is terminal.
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        wait_for_group_death(anchor_pid).await;
         let _ = dir;
     }
 

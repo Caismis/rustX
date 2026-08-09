@@ -40,10 +40,11 @@ nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 libc = "0.2"
 
 [lints.rust]
-# The per-invocation Bash supervisor performs exactly one narrowly scoped
-# libc prctl(PR_SET_CHILD_SUBREAPER) call, allowed explicitly in
+# The per-invocation Bash supervisor performs exactly two narrowly scoped
+# libc calls — prctl(PR_SET_CHILD_SUBREAPER) and the SIGTERM no-op handler
+# installation — each allowed explicitly in
 # src/tools/native/bash_supervisor.rs; everything else stays unsafe-free.
-unsafe_code = "warn"
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"
