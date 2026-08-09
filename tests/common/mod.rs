@@ -455,7 +455,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
         },
-        rustx::tools::native::NativeToolPolicy::default(),
+        rustx::tools::native::NativeToolPolicies::default(),
     )
     .expect("native tool registration");
     NativeFixture {

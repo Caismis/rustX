@@ -394,7 +394,9 @@ async fn traversal_tools_do_not_follow_directory_symlinks() {
 fn native_tools_register_under_every_legal_execution_policy() {
     use rustx::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use rustx::tools::executor::{PreflightOutcome, ToolRegistry};
-    use rustx::tools::native::{NativeToolPolicy, NativeToolResources, register_native_tools};
+    use rustx::tools::native::{
+        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
+    };
     use rustx::tools::runtime::ConversationToolRuntime;
     use rustx::tools::types::{
         ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationMode,
@@ -420,10 +422,10 @@ fn native_tools_register_under_every_legal_execution_policy() {
             NativeToolResources {
                 background: runtime.background().clone(),
             },
-            NativeToolPolicy {
+            NativeToolPolicies::uniform(NativeToolPolicy {
                 execution,
                 concurrency: ToolConcurrencyPolicy::Sequential,
-            },
+            }),
         )
         .expect("every legal policy registers every ordinary native tool");
 
@@ -533,6 +535,260 @@ fn native_tools_register_under_every_legal_execution_policy() {
             intrinsic.concurrency_policy,
             ToolConcurrencyPolicy::Sequential,
             "background_task stays sequential"
+        );
+    }
+}
+
+/// The concrete per-tool configuration lets ordinary native tools select
+/// independent execution/concurrency policies in one registry; each
+/// definition preflights under exactly its own policy.
+#[test]
+#[allow(clippy::too_many_lines)] // one coherent mixed-policy matrix
+fn mixed_native_policies_coexist_and_preflight_independently() {
+    use rustx::runtime::identity::{ConversationId, ToolCallId, ToolId};
+    use rustx::tools::executor::{PreflightOutcome, ToolRegistry};
+    use rustx::tools::native::{
+        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
+    };
+    use rustx::tools::runtime::ConversationToolRuntime;
+    use rustx::tools::types::{
+        ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocationMode,
+    };
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let runtime = ConversationToolRuntime::new(
+        ConversationId::new("conv-mixed"),
+        &workspace_root,
+        dir.path().join("artifacts"),
+    )
+    .expect("runtime");
+    let mut registry = ToolRegistry::new();
+    register_native_tools(
+        &mut registry,
+        NativeToolResources {
+            background: runtime.background().clone(),
+        },
+        NativeToolPolicies {
+            read: NativeToolPolicy {
+                execution: ToolExecutionPolicy::ForegroundOnly,
+                concurrency: ToolConcurrencyPolicy::Sequential,
+            },
+            write: NativeToolPolicy {
+                execution: ToolExecutionPolicy::BackgroundOnly,
+                concurrency: ToolConcurrencyPolicy::Sequential,
+            },
+            edit: NativeToolPolicy {
+                execution: ToolExecutionPolicy::ForegroundOnly,
+                concurrency: ToolConcurrencyPolicy::Sequential,
+            },
+            glob: NativeToolPolicy {
+                execution: ToolExecutionPolicy::ForegroundOnly,
+                concurrency: ToolConcurrencyPolicy::Parallel,
+            },
+            grep: NativeToolPolicy {
+                execution: ToolExecutionPolicy::ModelSelectable,
+                concurrency: ToolConcurrencyPolicy::Parallel,
+            },
+            bash: NativeToolPolicy {
+                execution: ToolExecutionPolicy::ModelSelectable,
+                concurrency: ToolConcurrencyPolicy::Sequential,
+            },
+        },
+    )
+    .expect("a mixed policy matrix registers");
+
+    let definitions = registry.definitions();
+    let policy_of = |name: &str| {
+        let definition: &ToolDefinition = definitions
+            .iter()
+            .find(|definition| definition.name == name)
+            .expect("registered tool");
+        (definition.execution_policy, definition.concurrency_policy)
+    };
+    assert_eq!(
+        policy_of("read"),
+        (
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential
+        )
+    );
+    assert_eq!(
+        policy_of("write"),
+        (
+            ToolExecutionPolicy::BackgroundOnly,
+            ToolConcurrencyPolicy::Sequential
+        )
+    );
+    assert_eq!(
+        policy_of("edit"),
+        (
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential
+        )
+    );
+    assert_eq!(
+        policy_of("glob"),
+        (
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Parallel
+        )
+    );
+    assert_eq!(
+        policy_of("grep"),
+        (
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Parallel
+        )
+    );
+    assert_eq!(
+        policy_of("bash"),
+        (
+            ToolExecutionPolicy::ModelSelectable,
+            ToolConcurrencyPolicy::Sequential
+        )
+    );
+    assert_eq!(
+        policy_of("background_task"),
+        (
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential
+        ),
+        "background_task remains outside the configurable set"
+    );
+
+    let call = |id: &str, name: &str, tool_id: &str, arguments: serde_json::Value| ToolCall {
+        id: ToolCallId::new(id),
+        tool_id: ToolId::new(tool_id),
+        name: name.to_owned(),
+        arguments,
+    };
+    let preflight_mode = |call: ToolCall| {
+        let outcome = registry.preflight(&call).expect("preflight");
+        let PreflightOutcome::Ready(prepared) = outcome else {
+            panic!("every mixed-policy native call preflights as ready");
+        };
+        prepared.invocation.mode
+    };
+
+    // Read is foreground-only: no execution field, resolves foreground.
+    assert_eq!(
+        preflight_mode(call(
+            "call-read",
+            "read",
+            "tool-read",
+            serde_json::json!({"path": "a.txt"}),
+        )),
+        ToolInvocationMode::Foreground
+    );
+    // Write is background-only: resolves background with no execution field.
+    assert_eq!(
+        preflight_mode(call(
+            "call-write",
+            "write",
+            "tool-write",
+            serde_json::json!({"path": "a.txt", "content": "x"}),
+        )),
+        ToolInvocationMode::Background
+    );
+    // Grep and Bash are model-selectable: only the compiled model-facing
+    // schema carries the reserved execution field (the canonical
+    // tool-owned schema is never decorated), and the explicit choice is
+    // resolved by preflight.
+    for name in ["grep", "bash"] {
+        let definition = definitions
+            .iter()
+            .find(|definition| definition.name == name)
+            .expect("definition");
+        assert!(
+            definition.input_schema["properties"]["__rustx_execution"].is_null(),
+            "the canonical tool-owned schema of {name} must never carry the reserved field"
+        );
+        let compiled = registry
+            .model_definitions()
+            .into_iter()
+            .find(|compiled| compiled.name == name)
+            .expect("compiled definition");
+        assert!(
+            compiled.input_schema["properties"]["__rustx_execution"].is_object(),
+            "the compiled model-facing schema of {name} carries the execution field"
+        );
+    }
+    let grep_mode = preflight_mode(call(
+        "call-grep",
+        "grep",
+        "tool-grep",
+        serde_json::json!({"__rustx_execution": "background", "pattern": "x"}),
+    ));
+    assert_eq!(grep_mode, ToolInvocationMode::Background);
+    let bash_mode = preflight_mode(call(
+        "call-bash",
+        "bash",
+        "tool-bash",
+        serde_json::json!({"__rustx_execution": "foreground", "command": "echo hi"}),
+    ));
+    assert_eq!(bash_mode, ToolInvocationMode::Foreground);
+}
+
+/// The default per-tool configuration is conservative: every ordinary
+/// native tool is foreground-only sequential.
+#[test]
+fn default_native_policies_are_conservative_for_every_ordinary_tool() {
+    use rustx::runtime::identity::ConversationId;
+    use rustx::tools::executor::ToolRegistry;
+    use rustx::tools::native::{
+        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
+    };
+    use rustx::tools::runtime::ConversationToolRuntime;
+    use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+
+    let defaults = NativeToolPolicies::default();
+    assert_eq!(
+        defaults,
+        NativeToolPolicies::uniform(NativeToolPolicy::default())
+    );
+    for policy in [
+        defaults.read,
+        defaults.write,
+        defaults.edit,
+        defaults.glob,
+        defaults.grep,
+        defaults.bash,
+    ] {
+        assert_eq!(policy.execution, ToolExecutionPolicy::ForegroundOnly);
+        assert_eq!(policy.concurrency, ToolConcurrencyPolicy::Sequential);
+    }
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let runtime = ConversationToolRuntime::new(
+        ConversationId::new("conv-default-policy"),
+        &workspace_root,
+        dir.path().join("artifacts"),
+    )
+    .expect("runtime");
+    let mut registry = ToolRegistry::new();
+    register_native_tools(
+        &mut registry,
+        NativeToolResources {
+            background: runtime.background().clone(),
+        },
+        defaults,
+    )
+    .expect("default policies register");
+    for definition in registry.definitions() {
+        if definition.name == "background_task" {
+            continue;
+        }
+        assert_eq!(
+            definition.execution_policy,
+            ToolExecutionPolicy::ForegroundOnly
+        );
+        assert_eq!(
+            definition.concurrency_policy,
+            ToolConcurrencyPolicy::Sequential
         );
     }
 }

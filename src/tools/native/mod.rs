@@ -3,15 +3,17 @@
 //!
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
 //! their executor implementations and their execution-ownership policies are
-//! independent, so each tool can be registered with any legal
+//! independent, so each tool is configured with its own
 //! [`NativeToolPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
-//! `ModelSelectable`). The only intentionally fixed policy is the runtime
-//! intrinsic `background_task` (foreground-only, sequential), enforced by
-//! the registry itself.
+//! `ModelSelectable`) through the concrete bounded
+//! [`NativeToolPolicies`] configuration. The only intentionally fixed
+//! policy is the runtime intrinsic `background_task` (foreground-only,
+//! sequential), enforced by the registry itself.
 //!
-//! The default policy is foreground-only sequential: the model-facing
-//! surface of the native tool plane is conservative by default, and
-//! `ModelSelectable`/`BackgroundOnly` are explicit configuration choices.
+//! The default is foreground-only sequential for every ordinary native
+//! tool: the model-facing surface of the native tool plane is conservative
+//! by default, and `ModelSelectable`/`BackgroundOnly` are explicit
+//! per-tool configuration choices.
 //!
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
@@ -42,8 +44,8 @@ pub struct NativeToolResources {
     pub background: ConversationBackgroundRegistry,
 }
 
-/// The M5-specific execution-policy configuration of the ordinary native
-/// tools.
+/// The M5-specific execution-policy configuration of one ordinary native
+/// tool.
 ///
 /// This is the one explicit configuration seam Issue #8 requires: the same
 /// native executor implementation is registerable under any legal
@@ -52,9 +54,9 @@ pub struct NativeToolResources {
 /// framework behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeToolPolicy {
-    /// The execution ownership policy of every ordinary native tool.
+    /// The execution ownership policy of the tool.
     pub execution: ToolExecutionPolicy,
-    /// The batch scheduling policy of every ordinary native tool.
+    /// The batch scheduling policy of the tool.
     pub concurrency: ToolConcurrencyPolicy,
 }
 
@@ -68,7 +70,7 @@ impl Default for NativeToolPolicy {
 }
 
 impl NativeToolPolicy {
-    /// A foreground-only sequential native tool plane (the default).
+    /// A foreground-only sequential tool (the default).
     #[must_use]
     pub const fn foreground_only() -> Self {
         Self {
@@ -78,12 +80,62 @@ impl NativeToolPolicy {
     }
 }
 
-/// Registers every native tool with the registry under one explicit policy.
+/// The concrete, bounded per-tool execution-policy configuration of the six
+/// ordinary native tools.
 ///
-/// The ordinary native tools (Read/Write/Edit/Glob/Grep/Bash) receive
-/// `policy`; the runtime intrinsic `background_task` is intentionally
-/// exempt and stays fixed to foreground-only sequential execution, which
-/// the registry enforces regardless of the configured policy.
+/// Execution policy belongs to the registered tool definition, not to the
+/// native tool plane as a whole: each ordinary native tool independently
+/// selects its execution and concurrency policy. This deliberately models
+/// only the six known M5 tools — no generic policy maps, plugin
+/// configuration frameworks, strategy traits, factories, or global
+/// configuration registries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeToolPolicies {
+    /// The policy of the native Read tool.
+    pub read: NativeToolPolicy,
+    /// The policy of the native Write tool.
+    pub write: NativeToolPolicy,
+    /// The policy of the native Edit tool.
+    pub edit: NativeToolPolicy,
+    /// The policy of the native Glob tool.
+    pub glob: NativeToolPolicy,
+    /// The policy of the native Grep tool.
+    pub grep: NativeToolPolicy,
+    /// The policy of the native Bash tool.
+    pub bash: NativeToolPolicy,
+}
+
+impl Default for NativeToolPolicies {
+    fn default() -> Self {
+        Self::uniform(NativeToolPolicy::default())
+    }
+}
+
+impl NativeToolPolicies {
+    /// Applies one policy to every ordinary native tool.
+    #[must_use]
+    pub const fn uniform(policy: NativeToolPolicy) -> Self {
+        Self {
+            read: policy,
+            write: policy,
+            edit: policy,
+            glob: policy,
+            grep: policy,
+            bash: policy,
+        }
+    }
+}
+
+/// Registers every native tool with the registry under its configured
+/// per-tool policy.
+///
+/// Each ordinary native tool definition receives exactly its own policy:
+/// `read` from `policies.read`, `write` from `policies.write`, `edit` from
+/// `policies.edit`, `glob` from `policies.glob`, `grep` from
+/// `policies.grep`, and `bash` from `policies.bash`. The runtime intrinsic
+/// `background_task` is intentionally outside this configurable set and
+/// stays fixed to foreground-only sequential execution, which the registry
+/// enforces regardless of the configured policies.
 ///
 /// # Errors
 ///
@@ -93,7 +145,7 @@ impl NativeToolPolicy {
 pub fn register_native_tools(
     registry: &mut ToolRegistry,
     resources: NativeToolResources,
-    policy: NativeToolPolicy,
+    policies: NativeToolPolicies,
 ) -> Result<(), ToolRegistryError> {
     let NativeToolResources { background } = resources;
     let definitions = [
@@ -103,28 +155,28 @@ pub fn register_native_tools(
                 as Arc<dyn ToolExecutor>,
         ),
         (
-            read::definition(policy),
+            read::definition(policies.read),
             Arc::new(read::ReadTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            write::definition(policy),
+            write::definition(policies.write),
             Arc::new(write::WriteTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            edit::definition(policy),
+            edit::definition(policies.edit),
             Arc::new(edit::EditTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            glob::definition(policy),
+            glob::definition(policies.glob),
             Arc::new(glob::GlobTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            grep::definition(policy),
+            grep::definition(policies.grep),
             Arc::new(grep::GrepTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            bash::definition(policy),
-            Arc::new(bash::BashTool) as Arc<dyn ToolExecutor>,
+            bash::definition(policies.bash),
+            Arc::new(bash::BashTool::new()) as Arc<dyn ToolExecutor>,
         ),
     ];
     for (definition, executor) in definitions {

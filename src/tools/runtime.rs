@@ -23,6 +23,23 @@
 //! Glob/Grep/Bash. Construction canonicalizes both roots and rejects an
 //! artifact root that equals the workspace root, nests inside it, or
 //! contains it (including symlink-resolved overlap).
+//!
+//! # Mailbox identity
+//!
+//! A `ConversationToolRuntime` may only contain resources belonging to its
+//! own [`ConversationId`]. A configured mailbox must belong to the same
+//! conversation as the runtime; a mismatch is rejected at construction,
+//! before the background registry is built, so
+//!
+//! ```text
+//! request.conversation_id
+//! == tool_runtime.conversation_id
+//! == tool_runtime.mailbox().conversation_id
+//! == background_registry.conversation_id
+//! ```
+//!
+//! holds structurally. An omitted mailbox constructs the canonical mailbox
+//! of the runtime's own conversation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -52,6 +69,15 @@ pub enum ConversationRuntimeError {
         /// The canonical artifact root.
         artifacts: PathBuf,
     },
+    /// The configured mailbox belongs to a different conversation: a
+    /// conversation runtime may only bind resources of its own
+    /// [`ConversationId`].
+    MailboxConversationMismatch {
+        /// The conversation the runtime is being constructed for.
+        expected: ConversationId,
+        /// The conversation the configured mailbox belongs to.
+        actual: ConversationId,
+    },
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -68,6 +94,11 @@ impl core::fmt::Display for ConversationRuntimeError {
                  filesystem regions",
                 artifacts.display(),
                 workspace.display()
+            ),
+            Self::MailboxConversationMismatch { expected, actual } => write!(
+                f,
+                "the configured mailbox belongs to conversation {actual}, but this \
+                 conversation tool runtime is being constructed for {expected}",
             ),
         }
     }
@@ -88,7 +119,9 @@ pub struct ConversationRuntimeConfig {
     /// The runtime-private artifact root, disjoint from the workspace.
     pub artifacts_dir: PathBuf,
     /// The canonical conversation inbound mailbox; a fresh mailbox bound to
-    /// the conversation is created when omitted.
+    /// the conversation is created when omitted. A provided mailbox must
+    /// belong to the same conversation as the runtime being constructed;
+    /// a mismatched mailbox is rejected at construction.
     pub mailbox: Option<ConversationInboundMailbox>,
     /// The runtime clock stamping terminal inbound messages; the system
     /// clock is used when omitted.
@@ -166,19 +199,43 @@ impl ConversationToolRuntime {
     /// structurally impossible, so the registry identity and its execution
     /// records are stable for the conversation lifetime.
     ///
+    /// A configured mailbox must belong to the same conversation as the
+    /// runtime itself: a `ConversationToolRuntime` may only contain
+    /// resources belonging to its own [`ConversationId`]. The mismatch is
+    /// rejected here, before the background registry is constructed — never
+    /// deferred to `AgentExecution`.
+    ///
     /// # Errors
     ///
     /// Returns [`ConversationRuntimeError::Workspace`] when the workspace
     /// root is missing, not a directory, or cannot be canonicalized,
     /// [`ConversationRuntimeError::Artifacts`] when the artifact root cannot
-    /// be prepared, and
+    /// be prepared,
     /// [`ConversationRuntimeError::OverlappingStorage`] when the artifact
     /// root and the workspace root overlap (directly, nested, or through a
-    /// symlink).
+    /// symlink), and
+    /// [`ConversationRuntimeError::MailboxConversationMismatch`] when the
+    /// configured mailbox belongs to a different conversation.
     pub fn from_config(
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
     ) -> Result<Self, ConversationRuntimeError> {
+        // The mailbox identity is validated before any resource binding:
+        // the runtime construction boundary owns this invariant, so a
+        // mailbox of another conversation can never enter the registry or
+        // any other runtime resource.
+        let mailbox = match config.mailbox {
+            Some(mailbox) => {
+                if mailbox.conversation_id() != &conversation_id {
+                    return Err(ConversationRuntimeError::MailboxConversationMismatch {
+                        expected: conversation_id.clone(),
+                        actual: mailbox.conversation_id().clone(),
+                    });
+                }
+                mailbox
+            }
+            None => ConversationInboundMailbox::new(conversation_id.clone()),
+        };
         let workspace =
             Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
         let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
@@ -186,9 +243,6 @@ impl ConversationToolRuntime {
         validate_disjoint_storage(workspace.root(), &artifacts_root)?;
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
-        let mailbox = config
-            .mailbox
-            .unwrap_or_else(|| ConversationInboundMailbox::new(conversation_id.clone()));
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -431,6 +485,82 @@ mod tests {
         );
         let enqueued = runtime.background().resources().mailbox.clone();
         assert_eq!(enqueued.conversation_id(), mailbox.conversation_id());
+        fs::remove_dir_all(&dir).expect("remove");
+    }
+
+    /// A configured mailbox belonging to the runtime's own conversation is
+    /// accepted, and the constructed runtime exposes exactly that mailbox.
+    #[test]
+    fn matching_mailbox_conversation_is_accepted() {
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        let dir = unique_dir("mailbox-match");
+        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-A"));
+        let runtime = ConversationToolRuntime::from_config(
+            ConversationId::new("conv-A"),
+            ConversationRuntimeConfig {
+                mailbox: Some(mailbox.clone()),
+                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+            },
+        )
+        .expect("a matching mailbox must be accepted");
+        // The exposed canonical mailbox is the configured one and belongs to
+        // the runtime's own conversation.
+        assert_eq!(
+            runtime.mailbox().conversation_id(),
+            &ConversationId::new("conv-A")
+        );
+        assert_eq!(
+            runtime.background().resources().mailbox.conversation_id(),
+            &ConversationId::new("conv-A")
+        );
+        fs::remove_dir_all(&dir).expect("remove");
+    }
+
+    /// A configured mailbox belonging to a different conversation is
+    /// rejected at construction: the runtime may only bind resources of its
+    /// own conversation.
+    #[test]
+    fn mismatched_mailbox_conversation_is_rejected() {
+        use crate::runtime::inbound::ConversationInboundMailbox;
+        let dir = unique_dir("mailbox-mismatch");
+        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-B"));
+        let error = ConversationToolRuntime::from_config(
+            ConversationId::new("conv-A"),
+            ConversationRuntimeConfig {
+                mailbox: Some(mailbox),
+                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+            },
+        )
+        .expect_err("a foreign mailbox must be rejected");
+        assert_eq!(
+            error,
+            ConversationRuntimeError::MailboxConversationMismatch {
+                expected: ConversationId::new("conv-A"),
+                actual: ConversationId::new("conv-B"),
+            }
+        );
+        fs::remove_dir_all(&dir).expect("remove");
+    }
+
+    /// An omitted mailbox constructs the canonical mailbox of the runtime's
+    /// own conversation.
+    #[test]
+    fn omitted_mailbox_constructs_the_canonical_conversation_mailbox() {
+        let dir = unique_dir("mailbox-omitted");
+        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let runtime = ConversationToolRuntime::new(
+            ConversationId::new("conv-A"),
+            dir.join("workspace"),
+            dir.join("artifacts"),
+        )
+        .expect("runtime");
+        assert_eq!(
+            runtime.mailbox().conversation_id(),
+            &ConversationId::new("conv-A"),
+            "the canonical mailbox belongs to the runtime's own conversation"
+        );
         fs::remove_dir_all(&dir).expect("remove");
     }
 }
