@@ -55,20 +55,42 @@
 //! process group can ever receive the invocation's numeric group id while
 //! signals remain legal. The inner ignores `SIGTERM` (it must survive the
 //! group `TERM` to keep reaping); `SIGKILL` is uncatchable and kills the
-//! inner together with the group, after which the outer supervisor reaps
-//! everything. The final signal is the last `killpg`; afterwards the
-//! anchor is released by the reap and no further signal exists.
+//! inner together with the group. The final signal is the last `killpg`;
+//! afterwards the anchor is released by the reap and no further signal
+//! exists.
+//!
+//! # Failure containment
+//!
+//! When the inner supervisor terminates abnormally while owned work may
+//! still be alive (signal failure, wait/reap failure, IPC failure, control-
+//! channel abandonment), it does **not** simply walk away: it exits with
+//! the dedicated [`INNER_EXIT_CONTAINMENT`] status. The outer supervisor —
+//! the final containment and reaping authority — observes that status
+//! without releasing the inner's identity (`waitid` with `WNOWAIT` keeps
+//! the inner an un-reaped zombie), so the inner pid — the invocation's
+//! process-group id — stays provably allocated. The outer then sends the
+//! one fallback containment `SIGKILL` to that structurally owned group,
+//! reaps the inner and every reparented descendant, and only then releases
+//! the anchor. The numeric group id can therefore never be signaled after
+//! its allocation has ended, and never without structural ownership proof.
 //!
 //! # Terminal ownership point
 //!
-//! The kernel-mediated terminal condition is the classic wait contract:
+//! The kernel-mediated terminal condition is the classic wait contract,
+//! with **one authoritative reporter**:
 //!
 //! - the inner supervisor's `waitpid(-1)` loop returns `ECHILD` — no owned
 //!   child remains at all (the shell reaped, every orphan reaped); it then
-//!   reports `AllChildrenReaped` and exits;
+//!   exits with [`INNER_EXIT_NORMAL`] — inner child-domain completion,
+//!   reported only by its exit status;
 //! - the outer supervisor's `waitpid(-1)` loop returns `ECHILD` — the inner
 //!   and every reparented child are reaped; it then reports
-//!   `AllChildrenReaped` (idempotent) and exits.
+//!   [`MSG_ALL_CHILDREN_REAPED`] and exits.
+//!
+//! The outer's `ECHILD` is the canonical terminal process-tree event of the
+//! whole invocation supervisor unit: after it no invocation-owned process
+//! remains (the shell is reaped, every reparented descendant is reaped, and
+//! the inner anchor itself is released only by this final reap).
 //!
 //! `ECHILD` is not an observational snapshot: it is the kernel's statement
 //! that the waiting process has no children, and after it is observed no
@@ -85,11 +107,13 @@
 //! reads, so the inner's lifecycle events can never be consumed by it).
 //! bash gets a null stdin so it never sees the control channel. Messages
 //! are length-prefixed frames: `[u32 LE length][u8 kind][payload]`. The
-//! inner supervisor writes [`MSG_SHELL_EXITED`], [`MSG_ALL_CHILDREN_REAPED`],
-//! [`MSG_PROCESS_CONTROL_FAILURE`], and [`MSG_SIGNAL_ATTEMPT`] (test
-//! observability); the outer supervisor writes [`MSG_ALL_CHILDREN_REAPED`];
-//! rustX writes [`MSG_TERMINATE`] to request the
-//! `TERM` -> grace -> `KILL` sequence. There is no generic IPC framework.
+//! inner supervisor writes [`MSG_SHELL_EXITED`], [`MSG_PROCESS_CONTROL_FAILURE`],
+//! and [`MSG_SIGNAL_ATTEMPT`] (test observability); the outer supervisor
+//! writes [`MSG_ALL_CHILDREN_REAPED`] — the single authoritative terminal
+//! report — plus [`MSG_PROCESS_CONTROL_FAILURE`] and [`MSG_SIGNAL_ATTEMPT`]
+//! for its fallback containment; rustX writes [`MSG_TERMINATE`] to request
+//! the `TERM` -> grace -> `KILL` sequence. There is no generic IPC
+//! framework.
 //!
 //! # Platform assumption
 //!
@@ -105,7 +129,7 @@ use std::time::Duration;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
 use nix::unistd::{Pid, read, write};
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -154,6 +178,18 @@ const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
 /// rustX -> supervisor: run the `TERM` -> grace -> `KILL` sequence.
 const MSG_TERMINATE: u8 = 0x10;
 
+/// The inner supervisor's exit status for a normal completion: it reached
+/// the kernel `ECHILD` terminal child state (or no owned process tree was
+/// ever created), so the outer supervisor only needs to reap it and its
+/// child domain is provably empty.
+const INNER_EXIT_NORMAL: i32 = 0;
+
+/// The inner supervisor's exit status for an abnormal termination with
+/// possibly-live owned work: the outer supervisor must actively contain
+/// the invocation process group (one structurally-anchored fallback
+/// `SIGKILL`) before reaping.
+const INNER_EXIT_CONTAINMENT: i32 = 42;
+
 /// The internal poll cadence of the supervisor loops (an implementation
 /// detail of the grace period and the wait loops — never a test
 /// synchronization mechanism).
@@ -175,20 +211,30 @@ pub fn run_inner_supervisor() -> ! {
     std::process::exit(exit);
 }
 
-/// The outer supervisor: the reaper of last resort that survives the group
-/// signals and inherits the inner supervisor's children when the inner dies
-/// with them.
+/// The outer supervisor: the final containment and reaping authority. It
+/// survives the invocation group signals (it is outside the group's
+/// session), inherits the inner supervisor's children when the inner dies
+/// with them, and is the only process that reports the canonical terminal
+/// event ([`MSG_ALL_CHILDREN_REAPED`], after its own `ECHILD`).
+///
+/// On abnormal inner termination with possibly-live owned work it becomes
+/// an **active** containment authority: it observes the inner's terminal
+/// state without releasing its identity (`waitid` + `WNOWAIT` keeps the
+/// inner an un-reaped zombie), sends the one fallback containment
+/// `SIGKILL` to the invocation group while the anchor is still provably
+/// allocated, and only then reaps the inner and every reparented
+/// descendant to its `ECHILD`.
 fn run_outer() -> i32 {
     let mut stream = ControlStream;
     if let Err(error) = become_child_subreaper() {
         let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
         return 0;
     }
-    let _inner = match Command::new(supervisor_binary())
+    let inner_pid = match Command::new(supervisor_binary())
         .env("RUSTX_SUPERVISOR_ROLE", ROLE_INNER)
         .spawn()
     {
-        Ok(child) => child,
+        Ok(child) => child.id(),
         Err(error) => {
             let _ = stream.write_failure(&format!(
                 "cannot spawn the invocation anchor supervisor: {error}"
@@ -196,6 +242,82 @@ fn run_outer() -> i32 {
             return 0;
         }
     };
+    // The inner supervisor's pid is the invocation's process-group id and
+    // its structural ownership anchor: while it remains un-reaped, the
+    // numeric group id is provably allocated to this invocation and can
+    // never name a foreign group.
+    let inner_pid =
+        i32::try_from(inner_pid).expect("the inner supervisor pid always fits in an i32");
+    loop {
+        // Observe the inner's terminal state without releasing its
+        // identity. `WNOWAIT` leaves the inner an un-reaped zombie, so a
+        // fallback group signal still has its structural ownership proof
+        // and the anchor is released only by the final reap below.
+        match waitid(
+            Id::Pid(Pid::from_raw(inner_pid)),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+        ) {
+            Ok(WaitStatus::StillAlive) => {}
+            Ok(WaitStatus::Stopped(..) | WaitStatus::Continued(_)) => {}
+            // WEXITED-only waiting: ptrace stops never match.
+            #[cfg(target_os = "linux")]
+            Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
+            Ok(WaitStatus::Exited(_, code)) => {
+                if code != INNER_EXIT_NORMAL {
+                    // Abnormal termination with possibly-live owned work:
+                    // active containment while the anchor is still held.
+                    containment_signal(&mut stream, inner_pid);
+                }
+                return reap_to_terminal(&mut stream);
+            }
+            Ok(WaitStatus::Signaled(..)) => {
+                containment_signal(&mut stream, inner_pid);
+                return reap_to_terminal(&mut stream);
+            }
+            Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => {
+                // The inner is not a child of this supervisor (it was
+                // already reaped by us, which cannot normally happen): the
+                // unit's child domain is terminal.
+                return reap_to_terminal(&mut stream);
+            }
+            Err(error) => {
+                let _ =
+                    stream.write_failure(&format!("cannot observe the invocation anchor: {error}"));
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The outer supervisor's active containment: one final `SIGKILL` to the
+/// invocation's process group. This is issued only while the structural
+/// anchor is held — the inner supervisor is still un-reaped, so the group
+/// id is provably allocated to this invocation — and never afterwards.
+fn containment_signal(stream: &mut ControlStream, pgid: i32) {
+    stream
+        .write_frame(
+            MSG_SIGNAL_ATTEMPT,
+            &signal_attempt_payload(pgid, Signal::SIGKILL, true),
+        )
+        .ok();
+    match killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => {}
+        Err(error) => {
+            let _ = stream.write_failure(&format!(
+                "cannot contain the owned invocation group: {error}"
+            ));
+        }
+    }
+}
+
+/// Reaps the inner anchor and every reparented descendant until the kernel
+/// reports `ECHILD` — the canonical terminal point of the invocation
+/// supervisor unit — and reports it as the single authoritative
+/// `AllChildrenReaped`. The inner anchor is released only by this final
+/// reap; no process-group signal can occur afterwards.
+fn reap_to_terminal(stream: &mut ControlStream) -> i32 {
+    let mut wait_failure_reported = false;
     loop {
         // Reap the inner supervisor and any children reparented to us when
         // the inner died with them. ECHILD — no children at all — is the
@@ -207,9 +329,11 @@ fn run_outer() -> i32 {
                 return 0;
             }
             Err(error) => {
-                let _ =
-                    stream.write_failure(&format!("cannot wait for the owned children: {error}"));
-                return 0;
+                if !wait_failure_reported {
+                    wait_failure_reported = true;
+                    let _ = stream
+                        .write_failure(&format!("cannot wait for the owned children: {error}"));
+                }
             }
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -228,16 +352,16 @@ fn run_inner() -> i32 {
         _ => {
             let _ =
                 stream.write_failure("the bash command is missing from the supervisor environment");
-            return 0;
+            return INNER_EXIT_NORMAL;
         }
     };
     if let Err(error) = nix::unistd::setsid() {
         let _ = stream.write_failure(&format!("cannot create the invocation session: {error}"));
-        return 0;
+        return INNER_EXIT_NORMAL;
     }
     if let Err(error) = become_child_subreaper() {
         let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
-        return 0;
+        return INNER_EXIT_NORMAL;
     }
     // The invocation group TERM targets this process too; it must survive
     // to keep reaping while bash and its descendants handle the TERM.
@@ -248,14 +372,14 @@ fn run_inner() -> i32 {
         let _ = stream.write_failure(&format!(
             "cannot make the control channel non-blocking: {error}"
         ));
-        return 0;
+        return INNER_EXIT_NORMAL;
     }
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
         let _ = std::fs::write(&path, std::process::id().to_string());
     }
     if std::env::var(FAIL_BASH_SPAWN_ENV).is_ok() {
         let _ = stream.write_failure("injected bash spawn failure");
-        return 0;
+        return INNER_EXIT_NORMAL;
     }
     let fail_wait = std::env::var(FAIL_WAIT_ENV).is_ok();
     let fail_signal = std::env::var(FAIL_SIGNAL_ENV).is_ok();
@@ -269,7 +393,7 @@ fn run_inner() -> i32 {
         Ok(child) => child,
         Err(error) => {
             let _ = stream.write_failure(&format!("cannot spawn /bin/bash: {error}"));
-            return 0;
+            return INNER_EXIT_NORMAL;
         }
     };
     // SAFETY-free pid capture: the pid is a positive `u32` from the kernel;
@@ -286,14 +410,14 @@ fn run_inner() -> i32 {
                     shell_reported = true;
                     if fail_wait {
                         let _ = stream.write_failure("injected bash wait failure");
-                        return 0;
+                        return INNER_EXIT_CONTAINMENT;
                     }
                     let mut payload = Vec::with_capacity(9);
                     payload.extend_from_slice(&code.to_le_bytes());
                     payload.push(0);
                     payload.extend_from_slice(&0i32.to_le_bytes());
                     if stream.write_frame(MSG_SHELL_EXITED, &payload).is_err() {
-                        return 0;
+                        return INNER_EXIT_CONTAINMENT;
                     }
                 }
             }
@@ -302,28 +426,29 @@ fn run_inner() -> i32 {
                     shell_reported = true;
                     if fail_wait {
                         let _ = stream.write_failure("injected bash wait failure");
-                        return 0;
+                        return INNER_EXIT_CONTAINMENT;
                     }
                     let mut payload = Vec::with_capacity(9);
                     payload.extend_from_slice(&0i32.to_le_bytes());
                     payload.push(1);
                     payload.extend_from_slice(&(sig as i32).to_le_bytes());
                     if stream.write_frame(MSG_SHELL_EXITED, &payload).is_err() {
-                        return 0;
+                        return INNER_EXIT_CONTAINMENT;
                     }
                 }
             }
             Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
             Err(Errno::ECHILD) => {
                 // No owned child remains at all: the shell and every orphan
-                // are reaped. The kernel-mediated terminal condition.
-                let _ = stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]);
-                return 0;
+                // are reaped — the inner child-domain terminal condition.
+                // The outer supervisor reports the authoritative
+                // AllChildrenReaped after it reaps this process.
+                return INNER_EXIT_NORMAL;
             }
             Err(error) => {
                 let _ =
                     stream.write_failure(&format!("cannot wait for the owned children: {error}"));
-                return 0;
+                return INNER_EXIT_CONTAINMENT;
             }
         }
         // Control frames from rustX (TERMINATE). The channel is
@@ -331,9 +456,11 @@ fn run_inner() -> i32 {
         let mut chunk = [0u8; 256];
         match read(std::io::stdin(), &mut chunk) {
             Ok(0) => {
-                // rustX closed the control channel; the invocation is
-                // abandoned and nobody reads our reports anymore.
-                return 0;
+                // rustX closed the control channel: the invocation is
+                // abandoned and nobody reads our reports anymore. Owned
+                // work may still be alive, so the exit signals the outer
+                // supervisor to fail-safe-contain the invocation.
+                return INNER_EXIT_CONTAINMENT;
             }
             Ok(control_read) => {
                 read_buf.extend_from_slice(&chunk[..control_read]);
@@ -346,13 +473,13 @@ fn run_inner() -> i32 {
                     &mut kill_deadline,
                 ) {
                     let _ = stream.write_failure(&error);
-                    return 0;
+                    return INNER_EXIT_CONTAINMENT;
                 }
             }
             Err(Errno::EAGAIN) => {} // non-blocking; EWOULDBLOCK == EAGAIN on Linux
             Err(error) => {
                 let _ = stream.write_failure(&format!("cannot read the control channel: {error}"));
-                return 0;
+                return INNER_EXIT_CONTAINMENT;
             }
         }
         // The grace period after TERM: if the owned tree has not reached
@@ -366,7 +493,7 @@ fn run_inner() -> i32 {
                 )
                 .ok();
             let _ = killpg(Pid::from_raw(self_pid), Signal::SIGKILL);
-            return 0;
+            return INNER_EXIT_CONTAINMENT;
         }
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -395,20 +522,32 @@ fn handle_frames(
         match kind {
             MSG_TERMINATE => {
                 if fail_signal {
+                    // The injected signaling failure: the TERM cannot be
+                    // delivered, so the termination contract cannot be
+                    // established. The failure must not leave owned work
+                    // running: the error escalates containment to the
+                    // outer supervisor (via INNER_EXIT_CONTAINMENT).
                     stream.write_frame(
                         MSG_SIGNAL_ATTEMPT,
                         &signal_attempt_payload(self_pid, Signal::SIGTERM, false),
                     )?;
-                    stream.write_failure("injected signaling failure")?;
-                    continue;
+                    return Err("injected signaling failure".to_owned());
                 }
                 if force_anchor_loss {
+                    // The ownership anchor reads as lost: the inner
+                    // supervisor refuses to signal a numeric group id it
+                    // can no longer prove is its own. The outer supervisor
+                    // remains the containment authority: it structurally
+                    // owns the un-reaped inner anchor and may perform the
+                    // final fallback signal with that proof.
                     stream.write_frame(
                         MSG_SIGNAL_ATTEMPT,
                         &signal_attempt_payload(self_pid, Signal::SIGTERM, false),
                     )?;
-                    stream.write_failure("cannot prove the invocation process group is still owned; signaling is forbidden")?;
-                    continue;
+                    return Err(
+                        "cannot prove the invocation process group is still owned; signaling is forbidden"
+                            .to_owned(),
+                    );
                 }
                 stream.write_frame(
                     MSG_SIGNAL_ATTEMPT,

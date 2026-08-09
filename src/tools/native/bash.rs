@@ -24,9 +24,9 @@
 //! only when all three of the following are true:
 //!
 //! - the shell's terminal status is known (the supervisor reported it);
-//! - every invocation-owned descendant is terminal and reaped (the
-//!   supervisor reached the kernel child-wait terminal condition and
-//!   reported `AllChildrenReaped`);
+//! - every invocation-owned descendant is terminal and reaped (the outer
+//!   supervisor reached its kernel child-wait terminal condition and
+//!   reported the authoritative `AllChildrenReaped`);
 //! - the runtime-owned output capture is settled.
 //!
 //! Cancellation and the invocation deadline remain authoritative until the
@@ -43,9 +43,21 @@
 //! [`bash_supervisor`]) that spawns `/bin/bash`, reaps the shell, receives
 //! shell descendants that outlive the shell through kernel reparenting, and
 //! keeps reaping until its `waitpid(-1)` loop observes `ECHILD` — the
-//! kernel's statement that no owned child remains. That `ECHILD`
-//! observation is the process-lifecycle linearization point; rustX combines
-//! it with output-capture settlement to produce the tool result.
+//! kernel's statement that no owned child remains. The **outer**
+//! supervisor's `ECHILD` is the single authoritative terminal process-tree
+//! event of the whole supervisor unit; rustX combines it with
+//! output-capture settlement to produce the tool result.
+//!
+//! # Terminal results
+//!
+//! Every Bash `ToolExecutionResult` — `Success`, `Failed`, `Cancelled`,
+//! and `TimedOut` alike — is terminal with respect to the
+//! invocation-owned process tree: no invocation-owned Bash process remains
+//! capable of executing work before any result is returned. A detected
+//! process-control/runtime failure determines the eventual result status
+//! but does not itself settle the invocation lifecycle: owned work is
+//! contained and reaped to the outer supervisor's terminal `ECHILD` (and
+//! the capture settled) before the remembered `Failed` result is returned.
 //!
 //! # Process-group safety
 //!
@@ -63,13 +75,29 @@
 //!
 //! Supervisor setup, shell spawning, waiting/reaping, signaling, and IPC
 //! failures never swallow their errors: they settle the invocation as an
-//! explicit failed tool result. If the supervisor can no longer prove that
-//! the numeric process group is invocation-owned, it refuses to signal and
-//! reports the refusal explicitly. Cancellation/timeout intent that cannot
-//! be established through process control is never downgraded to a silent
-//! `Success`, `Cancelled`, or `TimedOut`; the failed result is consistent
-//! with the background registry's rule that an explicit process-control/
-//! runtime failure may override canonical cancellation settlement.
+//! explicit failed tool result. Failures are separated into two
+//! categories:
+//!
+//! - **Before ownership exists** (no Bash process tree was established:
+//!   control-channel setup failure, supervisor spawn failure, bash spawn
+//!   failure): no cleanup work exists, so an immediate `Failed` is valid.
+//! - **After ownership exists** (signal failure, wait/reap failure,
+//!   malformed IPC, control-channel read failure, unexpected supervisor
+//!   exit, rustX control-channel abandonment): the failure is remembered,
+//!   the outer supervisor actively contains the invocation (one
+//!   structurally-anchored fallback `SIGKILL` to the owned group), every
+//!   owned process is reaped to the outer `ECHILD`, the capture is
+//!   finalized, and only then is the remembered `Failed` result returned.
+//!
+//! If the supervisor can no longer prove that the numeric process group is
+//! invocation-owned, it refuses to signal and reports the refusal
+//! explicitly; the outer supervisor's fallback containment signals only
+//! while its structural anchor (the unreaped inner pid, which is the group
+//! id) is held. Cancellation/timeout intent that cannot be established
+//! through process control is never downgraded to a silent `Success`,
+//! `Cancelled`, or `TimedOut`; the failed result is consistent with the
+//! background registry's rule that an explicit process-control/runtime
+//! failure may override canonical cancellation settlement.
 //!
 //! # Output capture
 //!
@@ -691,13 +719,17 @@ async fn run_bash_unix(
     drop(combined_tx);
 
     // The lifecycle supervision loop: the supervisor's events (shell exit,
-    // all-children-reaped, process-control failures, signal attempts) race
-    // cancellation and the invocation timeout (biased: an already
-    // observable cancellation or an expired deadline wins without starting
-    // new work). Shell-parent exit is not settlement: the invocation
-    // settles only when the supervisor's terminal child-set report AND the
-    // output capture are both settled — unless cancellation, the deadline,
-    // or a process-control failure owns the outcome first.
+    // the outer supervisor's all-children-reaped, process-control
+    // failures, signal attempts) race cancellation and the invocation
+    // timeout (biased: an already observable cancellation or an expired
+    // deadline wins without starting new work). Shell-parent exit is not
+    // settlement, and neither is a detected failure: the invocation
+    // settles only when the capture is settled AND the owned child set is
+    // terminal (the outer supervisor's authoritative AllChildrenReaped)
+    // AND some outcome intent is known. A failure determines the eventual
+    // result status but never settles the invocation lifecycle by itself:
+    // owned work must be contained and terminal before any result —
+    // `Success`, `Failed`, `Cancelled`, or `TimedOut` — is returned.
     let start = tokio::time::Instant::now();
     let mut exit_status = None;
     let mut children_terminal = false;
@@ -707,16 +739,12 @@ async fn run_bash_unix(
     let mut terminate_sent = false;
     let mut terminate_deadline: Option<tokio::time::Instant> = None;
     loop {
-        if let Some(message) = failure.take() {
-            let _ = child.try_wait();
-            return failed_result(format!("bash process control failed: {message}"));
-        }
-        // The terminal settlement: shell status known, owned child set
-        // terminal, capture settled — or the termination path (cancellation/
-        // timeout) with the owned child set terminal and the capture
-        // settled.
-        let terminal_events = exit_status.is_some() && children_terminal;
-        if drain_result.is_some() && (settled.is_some() || terminal_events) {
+        // Outcome intent and lifecycle settlement are distinct: the loop
+        // may break only when the capture is settled, the owned child set
+        // is terminal, and an outcome intent (failure, cancellation/
+        // timeout, or the shell's natural status) is known.
+        let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
+        if drain_result.is_some() && children_terminal && outcome_intent {
             break;
         }
         // After TERMINATE the supervisor performs TERM -> grace -> KILL;
@@ -794,14 +822,21 @@ async fn run_bash_unix(
                     let _ = (pgid, signal, emitted);
                 }
                 Ok(None) => {
-                    // The supervisor exited (control channel EOF). It exits
-                    // only after its terminal child set, so a missing shell
-                    // status or terminal report here is an explicit
-                    // failure.
-                    if terminal_events {
-                        break;
+                    // The supervisor unit exited (control channel EOF). The
+                    // outer supervisor is the sole terminal-report
+                    // authority: it exits only after its own ECHILD (having
+                    // reported AllChildrenReaped) or before any owned
+                    // process tree existed. A missing terminal report here
+                    // therefore proves no invocation-owned process remains
+                    // in the unit's child domain; the unit is terminal
+                    // either way.
+                    if !children_terminal {
+                        failure =
+                            Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
+                        children_terminal = true;
+                    } else if !outcome_intent {
+                        failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
                     }
-                    failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
                 }
                 Err(error) => {
                     failure = Some(error);
@@ -812,6 +847,12 @@ async fn run_bash_unix(
             }
         }
     }
+
+    // The supervisor unit is terminal by now: its pipes closed (which
+    // settled the capture) or the control channel reached EOF. Reap the
+    // direct child; the bound is a deadlock guard only — the outer
+    // supervisor exits promptly after its terminal report.
+    let _ = tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, child.wait()).await;
 
     // The supervisor exits only after its terminal child set, closing the
     // capture pipes; the bounded drain re-drain completes the capture.
@@ -837,10 +878,17 @@ async fn run_bash_unix(
     let (stdout_reference, stderr_reference, combined_reference) = match capture {
         Ok(references) => references,
         Err(error) => {
-            if settled.is_some() {
-                // The cancellation/timeout owns the outcome; the capture of
-                // a terminated process tree is inherently partial and is
-                // never reported as successful retention.
+            // The outcome is already owned (failure or cancellation/
+            // timeout): the capture of a terminated process tree is
+            // inherently partial and is never reported as successful
+            // retention. The root-cause failure is never overwritten by the
+            // later capture condition; at most the capture detail is
+            // appended to it.
+            if let Some(message) = failure.as_mut() {
+                message.push_str("; output capture: ");
+                message.push_str(&error);
+            }
+            if settled.is_some() || failure.is_some() {
                 (None, None, None)
             } else {
                 return failed_result(format!("bash output capture failed: {error}"));
@@ -864,9 +912,18 @@ async fn run_bash_unix(
         .clone()
         .finish();
 
+    // Outcome precedence: an explicit process-control/runtime failure wins
+    // over cancellation/timeout intent, which wins over the natural shell
+    // result — but in every case the owned process tree is already
+    // terminal, so the returned status is terminal with respect to the
+    // invocation-owned process tree.
     let mut status = ToolExecutionStatus::Success;
     let mut exit_code = None;
-    if let Some(settled) = settled {
+    if let Some(failure_message) = failure {
+        status = ToolExecutionStatus::Failed {
+            error: format!("bash process control failed: {failure_message}"),
+        };
+    } else if let Some(settled) = settled {
         // Cancellation/timeout owns settlement and wins over any partial
         // natural exit data.
         status = match settled {
