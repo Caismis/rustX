@@ -525,15 +525,25 @@ the pipes or having redirected them away) can never escape the
 timeout/cancellation contract. The child runs with an explicit
 `env_clear()`-based environment, bounded head/tail previews per stream
 with full raw output spooled to artifacts, liveness-aware
-`TERM -> BASH_TERM_GRACE -> KILL` cancellation with group-quiescence
-confirmation, process-group ids derived from the child's own pid (a failed
-lookup fails the invocation explicitly; `killpg(0)` is structurally
-unreachable), typed result semantics (zero exit success, non-zero exit
-failed with the code preserved, timeout as `TimedOut`, cancellation as
-`Cancelled`), explicit artifact-capture failures, and explicit
-process-control failures (signaling/waiting/group-probe errors settle as
-`Failed`, never as a silent `Success`, `Cancelled`, or `TimedOut`) — never
-a silent success that lost the retained output.
+`TERM -> BASH_TERM_GRACE -> KILL` cancellation with owned-descendant
+quiescence confirmation, process-group ids derived from the child's own
+pid (a failed lookup fails the invocation explicitly; `killpg(0)` is
+structurally unreachable), typed result semantics (zero exit success,
+non-zero exit failed with the code preserved, timeout as `TimedOut`,
+cancellation as `Cancelled`), explicit artifact-capture failures, and
+explicit process-control failures (signaling/waiting/membership errors
+settle as `Failed`, never as a silent `Success`, `Cancelled`, or
+`TimedOut`) — never a silent success that lost the retained output.
+
+Bash process-group ownership is reuse-safe by construction: the shell
+leader (whose pid is the pgid) is kept unreaped as an ownership anchor
+until settlement, so the kernel cannot reallocate the numeric pgid to a
+foreign group while rustX may still signal it. The shell's exit is
+observed with `waitid(WNOWAIT)` without reaping; descendant quiescence is
+established by Linux `/proc` membership inspection (processes linked to
+the group, the leader excluded); and the leader's final reap — the single
+point that releases the anchor — happens only at settlement, after which
+the numeric pgid is never referenced again.
 
 ### Layer 3: Model plane
 

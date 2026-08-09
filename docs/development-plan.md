@@ -213,10 +213,21 @@ Bash requirements:
   descendant in the owned group (pipes held or redirected away) keeps the
   invocation active under the same deadline and cancellation until it
   quiesces or cancellation/timeout/process-control failure settles it
-- Non-destructive `killpg(pgid, 0)` group-liveness probing (ESRCH =
-  quiescent, EPERM = alive, other errno = explicit failure)
-- Process-control failures (signaling, waiting, group-state probing) are
-  explicit failed results, never silent Success/Cancelled/TimedOut
+- Reuse-safe process-group ownership: the shell leader (whose pid is the
+  pgid) is kept unreaped as an ownership anchor until settlement, so the
+  numeric pgid cannot be reallocated to a foreign group while signaling
+  may still occur; the shell's exit is observed with `waitid(WNOWAIT)`
+  without reaping; the anchor is released exactly once, by the leader's
+  final reap at settlement, after which the numeric pgid is never
+  referenced again
+- Owned-descendant quiescence via Linux `/proc` membership inspection
+  (processes linked to the group, the leader excluded; a zero count is
+  stable), plus the leader's own exit — not a `killpg(pgid, 0)` probe,
+  which the unreaped leader anchor masks
+- Process-control failures (signaling, waiting, ownership/membership
+  inspection) are explicit failed results; if ownership of a numeric pgid
+  can no longer be proven, no further signal is issued and the invocation
+  fails explicitly
 - Process-group ids derived from the child's own pid (no sentinel group
   id, so `killpg(0)` is unreachable)
 - Explicit artifact-capture failures instead of silent success

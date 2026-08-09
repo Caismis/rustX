@@ -304,27 +304,40 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   are absent unless explicitly authorized.
 - Shell-parent exit is not by itself the Bash settlement boundary: the
   invocation settles naturally only when both the runtime-owned output
-  capture is settled AND the owned process group is quiescent (no process
-  is linked to it anymore). A descendant that remains in the owned group
-  after the shell exits — with the pipes either still held or already
-  redirected away — keeps the invocation active under the same deadline
-  and cancellation until the group quiesces or
+  capture is settled AND the owned process group is quiescent (no owned
+  descendant is linked to it anymore). A descendant that remains in the
+  owned group after the shell exits — with the pipes either still held or
+  already redirected away — keeps the invocation active under the same
+  deadline and cancellation until the group quiesces or
   cancellation/timeout/process-control failure settles it.
-- Group liveness is queried with the non-destructive `killpg(pgid, 0)`
-  probe: success means the group has at least one process, `ESRCH` means
-  the group no longer exists (the quiescence evidence), and `EPERM` means
-  the group exists but signaling permission is denied (treated as alive).
-  The pgid number cannot be reallocated while any invocation process is
-  still linked to the group, and after `ESRCH` is observed the runtime
-  never touches the pgid again, so pid reuse is never mistaken for
-  continued ownership.
+- Bash holds a real process-ownership anchor: the shell leader (whose pid
+  is the invocation's process-group id) is kept **unreaped** until
+  settlement. While the leader is unreaped the kernel keeps its pid
+  allocated, so no other process group can ever receive the invocation's
+  numeric pgid. TERM/KILL are issued only while the anchor is held; the
+  anchor is released exactly once, by the leader's final reap at
+  settlement, and afterwards the numeric pgid is never referenced again.
+  A signal can therefore never reach a foreign process group that reused
+  the numeric id — there is no probabilistic "reuse window": while the
+  anchor is held the number provably belongs to this invocation, and after
+  the anchor is released no further signal exists.
+- Descendant quiescence is established by Linux `/proc` membership
+  inspection: processes linked to the invocation's group are counted,
+  excluding the leader anchor. A count of zero is stable (the only
+  remaining member would be the leader zombie, which cannot fork), and is
+  required — together with the leader's own exit — before natural
+  settlement or settlement after termination. `killpg(pgid, 0)` is not a
+  quiescence probe: while the anchor is held the unreaped leader is itself
+  a member, so that probe always reports the group as alive.
 - Process-control failures are never silent: signaling, waiting/reaping,
-  and group-state probing errors surface as an explicit failed tool
-  result — never as an ordinary `Success`, `Cancelled`, or `TimedOut`.
-  Cancellation/timeout intent that cannot be established through process
-  control is consistent with the background registry's rule that an
-  explicit process-control failure may override canonical cancellation
-  settlement.
+  and membership-inspection errors surface as an explicit failed tool
+  result — never as an ordinary `Success`, `Cancelled`, or `TimedOut`. If
+  the runtime can no longer prove that a numeric process group is
+  invocation-owned, it never signals that numeric id again and settles
+  explicitly `Failed`. Cancellation/timeout intent that cannot be
+  established through process control is consistent with the background
+  registry's rule that an explicit process-control failure may override
+  canonical cancellation settlement.
 - Bash result semantics are typed: zero exit is success, non-zero exit is a
   failed result with the exit code preserved, signal death, timeout, and
   cancellation map to their canonical statuses and are never misreported as
