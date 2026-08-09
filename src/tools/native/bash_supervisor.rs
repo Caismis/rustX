@@ -1,0 +1,526 @@
+//! The per-invocation Bash process supervisor (Linux).
+//!
+//! Each Bash invocation owns one small supervisor composed of two
+//! processes:
+//!
+//! ```text
+//! rustX
+//!   └─ outer supervisor (rustX child; subreaper; reaper of last resort)
+//!        └─ inner supervisor (outer child; setsid → invocation session/group leader;
+//!                              subreaper; /bin/bash parent; orphan reaper; IPC peer)
+//!             └─ /bin/bash -c <command>
+//!                  └─ descendants
+//! ```
+//!
+//! The supervisor exists only for the lifetime of one Bash invocation. It
+//! is a plain `std` process (no tokio runtime) and owns nothing but process
+//! lifecycle: it never touches agent-loop state, tool-registry state,
+//! artifacts, provider translation, or model history.
+//!
+//! # Why two processes
+//!
+//! The invocation must be **terminable** (`TERM`/`KILL` reach bash and its
+//! descendants) and **reapable** (someone must wait for every owned child
+//! and reach a kernel-mediated terminal state). The two requirements
+//! conflict inside one process: a process inside the killable group dies
+//! with it, and a process outside the group cannot be the group's anchor.
+//! The outer supervisor therefore survives the group signals and acts as
+//! the reaper of last resort, while the inner supervisor anchors the
+//! invocation's session/process group, reaps the shell and its orphans
+//! during the normal lifecycle, and performs the `TERM` -> grace -> `KILL`
+//! sequence on its own group.
+//!
+//! # Session, group, and ownership
+//!
+//! The inner supervisor calls `setsid()`: it becomes the leader of a fresh
+//! session and of the session's first process group, whose numeric id is
+//! the inner supervisor's own pid. `/bin/bash` is spawned without a new
+//! process group, so bash and every descendant live in exactly that one
+//! invocation-owned group inside the invocation-owned session. Unrelated
+//! rustX/sibling processes live in different sessions, so they can never
+//! join the invocation's process group (`setpgid` across sessions fails
+//! with `EPERM`).
+//!
+//! Both supervisor processes call `PR_SET_CHILD_SUBREAPER`, so a shell
+//! descendant that outlives the shell is reparented into the inner
+//! supervisor's child domain (nearest subreaper ancestor) instead of being
+//! rediscovered from `/proc`, and the outer supervisor inherits the inner's
+//! children if the inner dies with them.
+//!
+//! # Signal ownership
+//!
+//! `TERM`/`KILL` are issued by the inner supervisor with `killpg` against
+//! **its own process group**, whose numeric id is its own pid — provably
+//! allocated exactly while the inner supervisor lives, so no foreign
+//! process group can ever receive the invocation's numeric group id while
+//! signals remain legal. The inner ignores `SIGTERM` (it must survive the
+//! group `TERM` to keep reaping); `SIGKILL` is uncatchable and kills the
+//! inner together with the group, after which the outer supervisor reaps
+//! everything. The final signal is the last `killpg`; afterwards the
+//! anchor is released by the reap and no further signal exists.
+//!
+//! # Terminal ownership point
+//!
+//! The kernel-mediated terminal condition is the classic wait contract:
+//!
+//! - the inner supervisor's `waitpid(-1)` loop returns `ECHILD` — no owned
+//!   child remains at all (the shell reaped, every orphan reaped); it then
+//!   reports `AllChildrenReaped` and exits;
+//! - the outer supervisor's `waitpid(-1)` loop returns `ECHILD` — the inner
+//!   and every reparented child are reaped; it then reports
+//!   `AllChildrenReaped` (idempotent) and exits.
+//!
+//! `ECHILD` is not an observational snapshot: it is the kernel's statement
+//! that the waiting process has no children, and after it is observed no
+//! new child can appear (the shell cannot fork after it is reaped, and a
+//! live descendant would still be a child of the supervisor). This is the
+//! exact lifecycle linearization point; the rustX side combines it with
+//! output-capture settlement to produce the tool result.
+//!
+//! # IPC
+//!
+//! rustX creates one `UnixStream` pair. The child end becomes the outer
+//! supervisor's stdin (fd 0) and is inherited by the inner supervisor,
+//! which is the only supervisor process that reads it (the outer never
+//! reads, so the inner's lifecycle events can never be consumed by it).
+//! bash gets a null stdin so it never sees the control channel. Messages
+//! are length-prefixed frames: `[u32 LE length][u8 kind][payload]`. The
+//! inner supervisor writes [`MSG_SHELL_EXITED`], [`MSG_ALL_CHILDREN_REAPED`],
+//! [`MSG_PROCESS_CONTROL_FAILURE`], and [`MSG_SIGNAL_ATTEMPT`] (test
+//! observability); the outer supervisor writes [`MSG_ALL_CHILDREN_REAPED`];
+//! rustX writes [`MSG_TERMINATE`] to request the
+//! `TERM` -> grace -> `KILL` sequence. There is no generic IPC framework.
+//!
+//! # Platform assumption
+//!
+//! The subreaper mechanism is Linux-specific (`PR_SET_CHILD_SUBREAPER`).
+//! The crate already requires `/bin/bash`; the lifecycle contract is
+//! claimed only on Linux. On other Unix platforms the supervisor reports an
+//! explicit setup failure, which settles the invocation as `Failed` — the
+//! same contract is never silently weakened.
+
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::sys::signal::{Signal, killpg};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::{Pid, read, write};
+
+/// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
+pub const ROLE_OUTER: &str = "outer";
+
+/// The inner supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
+pub const ROLE_INNER: &str = "inner";
+
+/// The environment variable carrying the `/bin/bash -c` command into the
+/// supervisor (the command travels in argv today; the environment simply
+/// carries it to the inner process that actually spawns bash).
+pub const COMMAND_ENV: &str = "RUSTX_SUPERVISOR_COMMAND";
+
+/// The optional test-observability environment variable naming a file the
+/// inner supervisor writes its own pid into (the invocation's process-group
+/// id). Never set in production.
+pub const ANCHOR_PID_FILE_ENV: &str = "RUSTX_SUPERVISOR_ANCHOR_PID_FILE";
+
+/// Test-only injection: the inner supervisor refuses every group signal.
+pub const FAIL_SIGNAL_ENV: &str = "RUSTX_TEST_FAIL_SIGNAL";
+
+/// Test-only injection: the inner supervisor fails the shell wait/reap.
+pub const FAIL_WAIT_ENV: &str = "RUSTX_TEST_FAIL_WAIT";
+
+/// Test-only injection: the inner supervisor fails the bash spawn.
+pub const FAIL_BASH_SPAWN_ENV: &str = "RUSTX_TEST_FAIL_BASH_SPAWN";
+
+/// Test-only injection: the invocation ownership anchor reads as lost, so
+/// the inner supervisor refuses every group signal.
+pub const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
+
+/// The shell's canonical exit status: `{ exit_code: i32 LE, signaled: u8,
+/// signal: i32 LE }`.
+const MSG_SHELL_EXITED: u8 = 0x02;
+
+/// All invocation-owned children are reaped (kernel `ECHILD` reached).
+const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
+
+/// A process-control failure; payload is the human-readable message.
+const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
+
+/// One attempted group signal for test observability:
+/// `{ pgid: i32 LE, signal: i32 LE, emitted: u8 }`.
+const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
+
+/// rustX -> supervisor: run the `TERM` -> grace -> `KILL` sequence.
+const MSG_TERMINATE: u8 = 0x10;
+
+/// The internal poll cadence of the supervisor loops (an implementation
+/// detail of the grace period and the wait loops — never a test
+/// synchronization mechanism).
+const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// The `TERM` -> `KILL` grace period, kept in sync with
+/// `crate::tools::limits::BASH_TERM_GRACE`.
+const TERM_GRACE: Duration = Duration::from_secs(2);
+
+/// Runs the outer supervisor; never returns.
+pub fn run_outer_supervisor() -> ! {
+    let exit = run_outer();
+    std::process::exit(exit);
+}
+
+/// Runs the inner supervisor; never returns.
+pub fn run_inner_supervisor() -> ! {
+    let exit = run_inner();
+    std::process::exit(exit);
+}
+
+/// The outer supervisor: the reaper of last resort that survives the group
+/// signals and inherits the inner supervisor's children when the inner dies
+/// with them.
+fn run_outer() -> i32 {
+    let mut stream = ControlStream;
+    if let Err(error) = become_child_subreaper() {
+        let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
+        return 0;
+    }
+    let _inner = match Command::new(supervisor_binary())
+        .env("RUSTX_SUPERVISOR_ROLE", ROLE_INNER)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = stream.write_failure(&format!(
+                "cannot spawn the invocation anchor supervisor: {error}"
+            ));
+            return 0;
+        }
+    };
+    loop {
+        // Reap the inner supervisor and any children reparented to us when
+        // the inner died with them. ECHILD — no children at all — is the
+        // kernel-mediated terminal condition of this supervisor.
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => {
+                let _ = stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]);
+                return 0;
+            }
+            Err(error) => {
+                let _ =
+                    stream.write_failure(&format!("cannot wait for the owned children: {error}"));
+                return 0;
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The inner supervisor: the invocation's session/group leader, the shell's
+/// parent, the orphan reaper that reaches the kernel `ECHILD` terminal
+/// state during the normal lifecycle, and the IPC peer that performs the
+/// `TERM` -> grace -> `KILL` sequence on its own group.
+#[allow(clippy::too_many_lines)] // one coherent session/spawn/reap/terminate pipeline
+fn run_inner() -> i32 {
+    let mut stream = ControlStream;
+    let command = match std::env::var(COMMAND_ENV) {
+        Ok(command) if !command.is_empty() => command,
+        _ => {
+            let _ =
+                stream.write_failure("the bash command is missing from the supervisor environment");
+            return 0;
+        }
+    };
+    if let Err(error) = nix::unistd::setsid() {
+        let _ = stream.write_failure(&format!("cannot create the invocation session: {error}"));
+        return 0;
+    }
+    if let Err(error) = become_child_subreaper() {
+        let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
+        return 0;
+    }
+    // The invocation group TERM targets this process too; it must survive
+    // to keep reaping while bash and its descendants handle the TERM.
+    let _ = ignore_group_term();
+    // The control channel is non-blocking so the loop can poll for the
+    // TERMINATE request without blocking the reap loop.
+    if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
+        let _ = stream.write_failure(&format!(
+            "cannot make the control channel non-blocking: {error}"
+        ));
+        return 0;
+    }
+    if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
+        let _ = std::fs::write(&path, std::process::id().to_string());
+    }
+    if std::env::var(FAIL_BASH_SPAWN_ENV).is_ok() {
+        let _ = stream.write_failure("injected bash spawn failure");
+        return 0;
+    }
+    let fail_wait = std::env::var(FAIL_WAIT_ENV).is_ok();
+    let fail_signal = std::env::var(FAIL_SIGNAL_ENV).is_ok();
+    let force_anchor_loss = std::env::var(FORCE_ANCHOR_LOSS_ENV).is_ok();
+    let bash = match Command::new("/bin/bash")
+        .arg("-c")
+        .arg(&command)
+        .stdin(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = stream.write_failure(&format!("cannot spawn /bin/bash: {error}"));
+            return 0;
+        }
+    };
+    // SAFETY-free pid capture: the pid is a positive `u32` from the kernel;
+    // it is only compared against `waitpid` pids of the same conversion.
+    let bash_pid = i32::try_from(bash.id()).unwrap_or(0);
+    let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    let mut shell_reported = false;
+    let mut read_buf: Vec<u8> = Vec::with_capacity(256);
+    let mut kill_deadline: Option<std::time::Instant> = None;
+    loop {
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
+            Ok(WaitStatus::Exited(pid, code)) => {
+                if pid.as_raw() == bash_pid && !shell_reported {
+                    shell_reported = true;
+                    if fail_wait {
+                        let _ = stream.write_failure("injected bash wait failure");
+                        return 0;
+                    }
+                    let mut payload = Vec::with_capacity(9);
+                    payload.extend_from_slice(&code.to_le_bytes());
+                    payload.push(0);
+                    payload.extend_from_slice(&0i32.to_le_bytes());
+                    if stream.write_frame(MSG_SHELL_EXITED, &payload).is_err() {
+                        return 0;
+                    }
+                }
+            }
+            Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                if pid.as_raw() == bash_pid && !shell_reported {
+                    shell_reported = true;
+                    if fail_wait {
+                        let _ = stream.write_failure("injected bash wait failure");
+                        return 0;
+                    }
+                    let mut payload = Vec::with_capacity(9);
+                    payload.extend_from_slice(&0i32.to_le_bytes());
+                    payload.push(1);
+                    payload.extend_from_slice(&(sig as i32).to_le_bytes());
+                    if stream.write_frame(MSG_SHELL_EXITED, &payload).is_err() {
+                        return 0;
+                    }
+                }
+            }
+            Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => {
+                // No owned child remains at all: the shell and every orphan
+                // are reaped. The kernel-mediated terminal condition.
+                let _ = stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]);
+                return 0;
+            }
+            Err(error) => {
+                let _ =
+                    stream.write_failure(&format!("cannot wait for the owned children: {error}"));
+                return 0;
+            }
+        }
+        // Control frames from rustX (TERMINATE). The channel is
+        // non-blocking; the poll cadence keeps this loop deterministic.
+        let mut chunk = [0u8; 256];
+        match read(std::io::stdin(), &mut chunk) {
+            Ok(0) => {
+                // rustX closed the control channel; the invocation is
+                // abandoned and nobody reads our reports anymore.
+                return 0;
+            }
+            Ok(control_read) => {
+                read_buf.extend_from_slice(&chunk[..control_read]);
+                if let Err(error) = handle_frames(
+                    &mut read_buf,
+                    &mut stream,
+                    self_pid,
+                    fail_signal,
+                    force_anchor_loss,
+                    &mut kill_deadline,
+                ) {
+                    let _ = stream.write_failure(&error);
+                    return 0;
+                }
+            }
+            Err(Errno::EAGAIN) => {} // non-blocking; EWOULDBLOCK == EAGAIN on Linux
+            Err(error) => {
+                let _ = stream.write_failure(&format!("cannot read the control channel: {error}"));
+                return 0;
+            }
+        }
+        // The grace period after TERM: if the owned tree has not reached
+        // its terminal child set by the deadline, KILL the invocation group
+        // (including this process; the outer supervisor reaps everything).
+        if kill_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+            stream
+                .write_frame(
+                    MSG_SIGNAL_ATTEMPT,
+                    &signal_attempt_payload(self_pid, Signal::SIGKILL, true),
+                )
+                .ok();
+            let _ = killpg(Pid::from_raw(self_pid), Signal::SIGKILL);
+            return 0;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Parses complete control frames out of `buf` and handles them.
+fn handle_frames(
+    buf: &mut Vec<u8>,
+    stream: &mut ControlStream,
+    self_pid: i32,
+    fail_signal: bool,
+    force_anchor_loss: bool,
+    kill_deadline: &mut Option<std::time::Instant>,
+) -> Result<(), String> {
+    loop {
+        if buf.len() < 4 {
+            return Ok(());
+        }
+        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        if buf.len() < 4 + len {
+            return Ok(());
+        }
+        let kind = buf[4];
+        let _payload = buf[5..4 + len].to_vec();
+        buf.drain(..4 + len);
+        match kind {
+            MSG_TERMINATE => {
+                if fail_signal {
+                    stream.write_frame(
+                        MSG_SIGNAL_ATTEMPT,
+                        &signal_attempt_payload(self_pid, Signal::SIGTERM, false),
+                    )?;
+                    stream.write_failure("injected signaling failure")?;
+                    continue;
+                }
+                if force_anchor_loss {
+                    stream.write_frame(
+                        MSG_SIGNAL_ATTEMPT,
+                        &signal_attempt_payload(self_pid, Signal::SIGTERM, false),
+                    )?;
+                    stream.write_failure("cannot prove the invocation process group is still owned; signaling is forbidden")?;
+                    continue;
+                }
+                stream.write_frame(
+                    MSG_SIGNAL_ATTEMPT,
+                    &signal_attempt_payload(self_pid, Signal::SIGTERM, true),
+                )?;
+                match killpg(Pid::from_raw(self_pid), Signal::SIGTERM) {
+                    Ok(()) | Err(Errno::ESRCH) => {}
+                    Err(error) => {
+                        return Err(format!(
+                            "cannot send SIGTERM to the owned process group: {error}"
+                        ));
+                    }
+                }
+                // The grace period: the owned tree either reaches its
+                // terminal child set (ECHILD in the main loop) or is KILLed
+                // at the deadline.
+                if kill_deadline.is_none() {
+                    *kill_deadline = Some(std::time::Instant::now() + TERM_GRACE);
+                }
+            }
+            other => return Err(format!("unknown control message kind {other:#04x}")),
+        }
+    }
+}
+
+/// The supervisor's control stream: fd 0 (stdin), the inherited socket end.
+struct ControlStream;
+
+impl ControlStream {
+    /// Writes one length-prefixed frame: `[u32 LE length][kind][payload]`.
+    #[allow(clippy::unused_self)] // the handle exists to be explicit about the control stream
+    fn write_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), String> {
+        let mut frame = Vec::with_capacity(4 + 1 + payload.len());
+        let frame_len = u32::try_from(1 + payload.len())
+            .map_err(|_| "the control frame is too large".to_owned())?;
+        frame.extend_from_slice(&frame_len.to_le_bytes());
+        frame.push(kind);
+        frame.extend_from_slice(payload);
+        write(std::io::stdin(), &frame)
+            .map_err(|error| format!("cannot write to the control channel: {error}"))?;
+        Ok(())
+    }
+
+    /// Reports a process-control failure frame.
+    fn write_failure(&mut self, message: &str) -> Result<(), String> {
+        self.write_frame(MSG_PROCESS_CONTROL_FAILURE, message.as_bytes())
+    }
+}
+
+/// The `SIGNAL_ATTEMPT` payload for one attempted group signal.
+fn signal_attempt_payload(pgid: i32, sig: Signal, emitted: bool) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(9);
+    payload.extend_from_slice(&pgid.to_le_bytes());
+    payload.extend_from_slice(&(sig as i32).to_le_bytes());
+    payload.push(u8::from(emitted));
+    payload
+}
+
+/// The binary to re-execute for the inner supervisor: this process itself.
+fn supervisor_binary() -> std::path::PathBuf {
+    std::env::current_exe().expect("current executable")
+}
+
+/// `PR_SET_CHILD_SUBREAPER`: orphaned descendants of the shell reparent
+/// into this process's child domain instead of being rediscovered from
+/// `/proc`.
+///
+/// This is the single narrowly scoped `libc` call of the crate; everything
+/// else stays unsafe-free. Linux-only: the lifecycle contract is claimed
+/// only where the kernel provides the subreaper mechanism.
+#[allow(unsafe_code)]
+fn become_child_subreaper() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: prctl with PR_SET_CHILD_SUBREAPER and a literal 1 is a
+        // single scalar syscall with no pointer arguments.
+        let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("the invocation supervisor requires Linux (PR_SET_CHILD_SUBREAPER)".to_owned())
+    }
+}
+
+/// The no-op `SIGTERM` handler of the inner supervisor: the invocation
+/// group `TERM` must not kill the inner supervisor while bash and its
+/// descendants handle it.
+///
+/// A **caught** handler (not `SIG_IGN`) is required: `exec` resets caught
+/// dispositions to the default, so `/bin/bash` starts with a default
+/// `SIGTERM` disposition and its own `trap '...' TERM` handlers stay
+/// effective. An ignored signal would be inherited by bash, and a
+/// non-interactive shell cannot re-trap a signal that was ignored on entry.
+///
+/// This is the second narrowly scoped `libc` call of the crate (besides
+/// [`become_child_subreaper`]); the handled signal is delivered to the
+/// process only by the invocation's own `killpg`, and the handler runs no
+/// application code beyond a return.
+extern "C" fn ignore_sigterm(_signal: libc::c_int) {}
+
+#[allow(unsafe_code)]
+fn ignore_group_term() -> Result<(), String> {
+    // SAFETY: installing a no-op handler with no pointer payload is a
+    // single scalar libc call; the handler never dereferences anything.
+    let handler = ignore_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    let result = unsafe { libc::signal(libc::SIGTERM, handler) };
+    if result == libc::SIG_ERR {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}

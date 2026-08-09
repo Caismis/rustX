@@ -20,6 +20,12 @@
 
 mod background_task;
 mod bash;
+// The supervisor process entry points are reachable only from main.rs
+// (supervisor-mode dispatch) and from test binaries via self-exec; they are
+// documented-hidden binary entry points, never tool-plane API.
+#[cfg(unix)]
+#[doc(hidden)]
+pub mod bash_supervisor;
 mod edit;
 mod glob;
 mod grep;

@@ -25,9 +25,11 @@ pub const BASH_STREAM_PREVIEW_BYTES: usize = 16 * 1024;
 /// group.
 pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 
-/// The bounded window for the final shell-leader reap that releases the
-/// Bash ownership anchor.
-pub const BASH_REAP_GRACE: Duration = Duration::from_secs(2);
+/// The bounded window after a Bash TERMINATE request (cancellation or
+/// timeout) in which the invocation supervisor must report its terminal
+/// child set and the output capture must settle. Covers the supervisor's
+/// own TERM grace plus the KILL/reap/drain tail.
+pub const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
 /// The default foreground Bash timeout when the model omits `timeout_ms`.
 pub const DEFAULT_FOREGROUND_BASH_TIMEOUT: Duration = Duration::from_secs(120);
