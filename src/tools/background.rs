@@ -612,6 +612,20 @@ impl ConversationBackgroundRegistry {
             .expect("background registry lock poisoned")
     }
 
+    /// The runner-owned start boundary: the published `Starting` record
+    /// transitions to `Running` immediately before the executor begins.
+    /// A record already claimed by cancellation intent stays `Cancelling`.
+    pub fn mark_running(&self, execution_id: &ToolExecutionId) {
+        let mut state = self.state();
+        let Some(index) = state.index.get(execution_id).copied() else {
+            return;
+        };
+        let record = &mut state.records[index];
+        if record.lifecycle == BackgroundLifecycle::Starting {
+            record.lifecycle = BackgroundLifecycle::Running;
+        }
+    }
+
     /// Rolls a prepared dispatch back: the runner is aborted and the private
     /// record is dropped. No detached execution exists afterwards.
     fn rollback_prepared(&self, execution_id: &ToolExecutionId) {
@@ -633,6 +647,7 @@ impl ConversationBackgroundRegistry {
         let registry = self.clone();
         tokio::spawn(async move {
             gate.notified().await;
+            registry.mark_running(&execution_id);
             let reporter = BackgroundProgressReporter {
                 registry: registry.clone(),
                 execution_id: execution_id.clone(),

@@ -155,10 +155,13 @@ impl PreviewCapture {
             "\n...[truncated {} bytes]...\n",
             self.total - self.limit as u64
         );
-        let mut out = Vec::with_capacity(self.head.len() + marker.len() + self.tail.len());
-        out.extend_from_slice(&self.head);
+        let content = self.limit.saturating_sub(marker.len());
+        let head = &self.head[..self.head.len().min(content / 2)];
+        let tail_keep = content - head.len();
+        let mut out = Vec::with_capacity(self.limit);
+        out.extend_from_slice(head);
         out.extend_from_slice(marker.as_bytes());
-        out.extend_from_slice(&self.tail);
+        out.extend_from_slice(&self.tail[self.tail.len().saturating_sub(tail_keep)..]);
         (String::from_utf8_lossy(&out).into_owned(), true)
     }
 }

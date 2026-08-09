@@ -39,10 +39,11 @@ pub fn bounded_preview(data: &[u8], limit: usize) -> (Vec<u8>, bool) {
     if data.len() <= limit {
         return (data.to_vec(), false);
     }
-    let head = limit / 2;
-    let tail = limit - head;
     let marker = format!("\n...[truncated {} bytes]...\n", data.len() - limit);
-    let mut out = Vec::with_capacity(limit + marker.len());
+    let content = limit.saturating_sub(marker.len());
+    let head = content / 2;
+    let tail = content - head;
+    let mut out = Vec::with_capacity(limit);
     out.extend_from_slice(&data[..head]);
     out.extend_from_slice(marker.as_bytes());
     out.extend_from_slice(&data[data.len() - tail..]);

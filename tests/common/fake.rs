@@ -197,6 +197,7 @@ pub struct FakeTool {
     release: Option<Arc<Notify>>,
     calls: watch::Sender<Vec<ToolInvocation>>,
     started: watch::Sender<bool>,
+    completed: watch::Sender<Vec<String>>,
 }
 
 impl FakeTool {
@@ -209,6 +210,7 @@ impl FakeTool {
             release: None,
             calls: watch::Sender::new(Vec::new()),
             started: watch::Sender::new(false),
+            completed: watch::Sender::new(Vec::new()),
         }
     }
 
@@ -223,6 +225,7 @@ impl FakeTool {
                 release: Some(release.clone()),
                 calls: watch::Sender::new(Vec::new()),
                 started: watch::Sender::new(false),
+                completed: watch::Sender::new(Vec::new()),
             },
             release,
         )
@@ -249,6 +252,13 @@ impl FakeTool {
         self.started.subscribe()
     }
 
+    /// A receiver observing the physical completion order of this tool's
+    /// executions, recorded when each execution future resolves.
+    #[must_use]
+    pub fn completed(&self) -> watch::Receiver<Vec<String>> {
+        self.completed.subscribe()
+    }
+
     /// Registers the fake tool (definition + executor) with a registry.
     pub fn register(self, registry: &mut ToolRegistry) {
         registry
@@ -268,12 +278,13 @@ impl ToolExecutor for FakeTool {
             .send_modify(|calls| calls.push(invocation.clone()));
         let release = self.release.clone();
         let result = self.result.clone();
+        let completed = self.completed.clone();
         Box::pin(async move {
-            if let Some(release) = release {
+            let outcome = if let Some(release) = release {
                 tokio::select! {
                     biased;
                     () = context.cancellation.cancelled() => {
-                        return ToolExecutionResult {
+                        ToolExecutionResult {
                             status: ToolExecutionStatus::Cancelled {
                                 reason: rustx::runtime::types::CancellationReason::UserRequested,
                             },
@@ -282,13 +293,40 @@ impl ToolExecutor for FakeTool {
                             exit_code: None,
                             artifacts: Vec::new(),
                             truncation: None,
-                        };
+                        }
                     }
-                    () = release.notified() => {}
+                    () = release.notified() => result,
                 }
-            }
-            result
+            } else {
+                result
+            };
+            completed.send_modify(|order| order.push(invocation.tool_name.clone()));
+            outcome
         })
+    }
+}
+
+/// A canonical inbound user message fixture.
+#[must_use]
+pub fn inbound_message(
+    id: &str,
+    text: &str,
+    source: rustx::message::types::UserSource,
+) -> rustx::message::types::UserMessageBlock {
+    rustx::message::types::UserMessageBlock {
+        id: rustx::runtime::identity::MessageId::new(id),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: text.to_owned(),
+            },
+        )],
+        source,
+        kind: rustx::message::types::InboundKind::Message,
+        timestamp: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-08-09T12:00:00Z")
+                .expect("fixed timestamp")
+                .with_timezone(&chrono::Utc),
+        ),
     }
 }
 

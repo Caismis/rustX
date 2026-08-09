@@ -19,6 +19,8 @@ pub mod schema;
 pub mod types;
 pub mod workspace;
 
+pub use native::{NativeToolResources, register_native_tools};
+
 pub use artifacts::{ArtifactError, ArtifactStore, ArtifactWriter};
 pub use background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
