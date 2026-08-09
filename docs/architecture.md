@@ -275,15 +275,18 @@ The M3 test suite drives the loop with scripted fixture models and tools
 `RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
 execution phases from traces (`tests/common/mod.rs`).
 
-The Issue #22 inbound batching integration is additive:
-`AgentExecution::with_inbound_mailbox` attaches the conversation mailbox
-(rejecting a mismatched conversation), and at every safe turn boundary the
-loop performs exactly one finite watermark-bounded drain and appends every
+The Issue #22 inbound batching integration is canonical:
+`ConversationToolRuntime` owns the one conversation inbound mailbox, and at
+every safe turn boundary the loop performs exactly one finite
+watermark-bounded drain of `tool_runtime.mailbox()` and appends every
 drained message as its own canonical `UserMessageBlock` before the next
-model request. Mailbox attachment adds the safe-boundary
-cancellation-before-selection rule; observable cancellation before every
-model turn is a generic Agent Loop invariant for all executions. See
-`docs/agent-loop.md` section 9 for the full boundary description.
+model request. The loop and the background runtime provably share one
+mailbox: an `AgentExecution` over a tool runtime of a different
+conversation is rejected structurally at construction. Mailbox draining
+adds the safe-boundary cancellation-before-selection rule; observable
+cancellation before every model turn is a generic Agent Loop invariant for
+all executions. See `docs/agent-loop.md` section 9 for the full boundary
+description.
 
 ### Layer 2: Context engine
 
@@ -465,19 +468,41 @@ canonical call whose id and name disagree is a contract violation. Tool
 definitions reach the model in deterministic registration order, and the
 context engine accounts the exact compiled definitions.
 
-One conversation owns one `ConversationToolRuntime`: the canonical
+One conversation owns one `ConversationToolRuntime`, constructed exactly
+once from a bounded `ConversationRuntimeConfig` that binds the mailbox,
+the clock, the event sink, the environment, the workspace, and the
+artifact store; after construction the conversation background registry
+identity and its execution records are stable and can never be replaced
+or reset by a configuration change. The runtime owns the canonical
 `Workspace` boundary (canonicalized root; relative paths only; no `..`
-escape; symlinks contained), the `ArtifactStore` (opaque monotonic
-`artifact_N` ids, streaming spooling outside the model workspace), the
-explicit `ToolEnvironment`, and the authoritative
-`ConversationBackgroundRegistry`. Background executions own a deterministic
-`exec_N` `ToolExecutionId`, a lifecycle state machine
-(`Starting -> Running -> Cancelling -> terminal`), a two-stage dispatch
-with an explicit ownership commit linearization point, a
-cancel-vs-completion linearization rule, bounded latest progress
+escape; symlinks contained) and the `ArtifactStore` (opaque monotonic
+`artifact_N` ids, streaming spooling). The artifact root and the
+workspace root must be disjoint filesystem regions: equal roots, nested
+roots, and symlink-resolved overlap are rejected at construction, so
+runtime-private output files are never observable through Glob/Grep/Bash.
+The explicit `ToolEnvironment` and the authoritative
+`ConversationBackgroundRegistry` complete the bundle. Background
+executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle
+state machine (`Starting -> Running -> Cancelling -> terminal`), a
+two-stage dispatch with an explicit ownership commit linearization
+point, a cancel-vs-completion linearization rule, bounded latest progress
 snapshots, and exactly-once terminal inbound mailbox publication
 (`background-exec_N-terminal`). The `background_task` intrinsic
 (foreground-only, sequential) provides `status` and idempotent `cancel`.
+
+The dispatch ownership commit is the background linearization point: the
+registry synchronization boundary is acquired first and the final
+attempt-cancellation observation happens at that same protected boundary.
+Cancellation observable there rolls the prepared dispatch back completely
+(no published record, no accepted result, the runner never begins);
+ownership wins commits exactly once and a later attempt cancellation can
+never reclaim the detached execution. Cancellation intent that commits
+first retains its reason and canonicalizes the final terminal result, so
+the registry winner and the stored result always agree (only an explicit
+process-control failure after cancellation intent settles as `Failed`).
+All progress entering runtime state and events passes through one shared
+UTF-8-safe bound (`bound_tool_progress`) used by both foreground and
+background paths.
 
 Agent Status owns the runtime `background_execution` built-in section: the
 executing attempt samples a read-only active snapshot from the background
@@ -485,12 +510,24 @@ registry, the composer builds the section (never an extension provider),
 and the renderer shows active executions only in allocation order.
 
 The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
-ordinary registrations. Bash owns a distinct process group per invocation
-(Unix), an explicit `env_clear()`-based child environment, bounded
+ordinary registrations under one explicit `NativeToolPolicy`
+(execution + concurrency axes; foreground-only sequential by default, with
+`BackgroundOnly` and `ModelSelectable` as legal configuration choices for
+every ordinary native tool). The only intentionally fixed policy remains
+the runtime intrinsic `background_task`. Bash treats one invocation as one
+complete lifecycle: spawn the owned process group, capture
+stdout/stderr/combined, wait for the shell/process group, and drain the
+output — with cancellation and the invocation timeout authoritative until
+the full lifecycle settles, so a shell parent that exits while a
+descendant keeps the owned group and the output pipes open cannot escape.
+The child runs with an explicit `env_clear()`-based environment, bounded
 head/tail previews per stream with full raw output spooled to artifacts,
-`TERM -> BASH_TERM_GRACE -> KILL` cancellation, and typed result semantics
-(zero exit success, non-zero exit failed with the code preserved, timeout
-as `TimedOut`, cancellation as `Cancelled`).
+`TERM -> BASH_TERM_GRACE -> KILL` cancellation, process-group ids derived
+from the child's own pid (a failed lookup fails the invocation explicitly;
+`killpg(0)` is structurally unreachable), typed result semantics (zero
+exit success, non-zero exit failed with the code preserved, timeout as
+`TimedOut`, cancellation as `Cancelled`), and explicit artifact-capture
+failures — never a silent success that lost the retained output.
 
 ### Layer 3: Model plane
 

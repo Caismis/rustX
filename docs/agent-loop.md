@@ -248,11 +248,15 @@ state.
 
 The conversation inbound mailbox (`src/runtime/inbound.rs`) is a narrow
 runtime-owned coordination contract: a per-conversation in-memory queue for
-asynchronous user-role messages arriving while an attempt is running. It is
-attached to an execution through `AgentExecution::with_inbound_mailbox`
-(which rejects a mailbox of a different conversation) and adds the mailbox
-safe-boundary rules below; generic cancellation timing is unchanged by
-attachment.
+asynchronous user-role messages arriving while an attempt is running. One
+conversation owns one canonical mailbox, held by the conversation tool
+runtime (`ConversationToolRuntime`); the loop drains exactly
+`tool_runtime.mailbox()` at every safe boundary, so background terminal
+notifications always enter the same mailbox the Agent Loop drains, and no
+second mailbox injection API can split the ordering domain. An
+`AgentExecution` whose request conversation differs from the tool runtime's
+conversation is rejected structurally at construction. The mailbox adds the
+safe-boundary rules below; generic cancellation timing is unchanged.
 
 Ownership model:
 

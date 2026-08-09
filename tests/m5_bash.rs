@@ -286,15 +286,33 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
     let unrelated_pid = unrelated.id();
     let fixture = native_fixture();
     let cancellation = CancellationSignal::new();
+    // The ready marker proves the tool's own child is running inside the
+    // workspace before cancellation fires; the unrelated process in the
+    // test's own process group must never observe the group signal.
+    let ready = fixture
+        .runtime
+        .workspace()
+        .root()
+        .join("unrelated-ready.marker");
+    let ready_for_controller = ready.clone();
     let cancelling = cancellation.clone();
     let controller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        for _ in 0..200 {
+            if ready_for_controller.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            ready_for_controller.exists(),
+            "the tool child readiness marker never appeared"
+        );
         cancelling.cancel();
     });
     let result = run_tool_with_cancellation(
         &fixture,
         "bash",
-        serde_json::json!({"command": "sleep 30"}),
+        serde_json::json!({"command": format!("touch {}; sleep 30", ready.display())}),
         cancellation,
     )
     .await;

@@ -191,6 +191,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   property collisions, invalid policy combinations, and background-capable
   `background_task` registrations are rejected. A canonical call whose id
   and name disagree is a contract violation, never an id-first fallback.
+- The native executor implementation and its execution-ownership policy are
+  independent: Read/Write/Edit/Glob/Grep/Bash register under one explicit
+  `NativeToolPolicy` and may use any legal execution policy
+  (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`); the default is
+  foreground-only sequential. Only the runtime intrinsic `background_task`
+  is intentionally fixed (foreground-only, sequential).
 - Invocation order is frozen: resolve tool, extract/resolve invocation
   metadata, strip metadata, validate business arguments against the
   canonical schema, dispatch executor. A business validation failure is a
@@ -213,6 +219,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   registry state is authoritative — never messages, never Agent Status
   text, never Event Journal text. Cross-conversation access is structurally
   impossible (no global lookup table).
+- The conversation tool runtime binds every background-runtime dependency
+  (mailbox, clock, event sink, environment, workspace, artifact store)
+  exactly once at construction; the background-registry identity and its
+  execution records can never be replaced or reset by a configuration
+  change.
 - `ToolExecutionId` values are conversation-owned, deterministic, and
   monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
   allocated under the same synchronization boundary that owns background
@@ -220,11 +231,24 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
   with terminal states absorbing; exactly one terminal transition settles
   an execution.
+- The dispatch ownership commit is the background linearization point: the
+  registry synchronization boundary is acquired first, the deciding
+  attempt-cancellation observation happens at that same protected boundary,
+  and the prepared→owned transition follows. Cancellation observable at the
+  boundary rolls the prepared dispatch back completely (no published
+  record, no accepted result, runner never begins); ownership wins commits
+  exactly once and later attempt cancellation can never reclaim the
+  execution.
 - The cancellation-vs-completion race is linearized: the first registry
   transition that commits either terminal completion or cancellation intent
   wins. Completion-first makes later cancels idempotent no-ops returning the
   terminal snapshot; cancellation-intent-first owns settlement
-  (`Cancelling -> Cancelled`).
+  (`Cancelling -> Cancelled`) and canonicalizes the stored terminal result
+  to `Cancelled` with the retained reason, so a normal executor return
+  (`Success`, `TimedOut`, `Interrupted`, executor-level `Cancelled`) can
+  never contradict the registry winner. Only an explicit
+  runtime/process-control failure after cancellation intent settles as
+  `Failed`.
 - Every successfully dispatched execution reaches exactly one terminal
   registry state and claims at most one terminal inbound publication
   (a timestamped `UserMessageBlock` with `UserSource::Runtime` through the
@@ -233,6 +257,19 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - A background dispatch returns an accepted result (`execution_id`, state,
   tool) without blocking the originating attempt on detached settlement;
   background completion never reopens or mutates a settled attempt.
+- One conversation has one canonical inbound mailbox ordering domain: the
+  conversation tool runtime owns the mailbox, background terminal
+  notifications publish into exactly it, and the Agent Loop drains exactly
+  it at every safe boundary. An attempt over a tool runtime of a different
+  conversation is rejected structurally.
+- The artifact store and the model workspace are disjoint filesystem
+  regions: construction rejects an artifact root that equals the workspace
+  root, nests inside it, or contains it — including symlink-resolved
+  overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
+- All progress entering runtime state and events passes through one shared
+  UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
+  background registry produce the same normalized value, and an oversized
+  multibyte message can never panic or strand an execution.
 - Agent Status is a read-only projection: the executing attempt samples the
   active registry snapshot and the runtime-owned `background_execution`
   built-in section shows only `Starting`/`Running`/`Cancelling` entries in

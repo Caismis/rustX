@@ -185,6 +185,12 @@ Implemented in the M5 tool plane PR (Issue #8):
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, and explicit tool environment
+- `NativeToolPolicy` (execution + concurrency axes; foreground-only
+  sequential by default) applied to every ordinary native tool, with
+  `background_task` fixed foreground-only sequential
+- One canonical conversation mailbox owned by the conversation tool
+  runtime, drained by the Agent Loop at every safe boundary
+- Artifact storage structurally disjoint from the model workspace
 - Deterministic foreground/background scheduling through the agent loop
   with structural batch settlement
 
@@ -196,6 +202,12 @@ Bash requirements:
 - stdout/stderr/combined capture
 - Timeouts
 - TERM -> grace period -> KILL
+- Complete lifecycle ownership: cancellation/timeout remain authoritative
+  through the output-drain phase, so a shell-parent exit with a live
+  descendant holding the pipes cannot escape
+- Process-group ids derived from the child's own pid (no sentinel group
+  id, so `killpg(0)` is unreachable)
+- Explicit artifact-capture failures instead of silent success
 - Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment
 
