@@ -9,16 +9,25 @@
 //!
 //! # Complete lifecycle ownership
 //!
-//! A Bash invocation is treated as one complete lifecycle: spawn the owned
-//! process group, read stdout/stderr, wait for the shell/process group,
-//! cancellation/timeout, TERM, grace, KILL if necessary, reap, complete the
-//! output draining, finalize the artifacts, and produce a single canonical
-//! result. Cancellation and the invocation timeout remain authoritative
-//! until the full lifecycle settles: if the shell parent exits while a
-//! descendant still belongs to the owned process group and keeps the output
-//! pipes open, the drain phase still races cancellation/timeout and can
-//! terminate the group, so a shell-parent exit can never let descendant
-//! work escape the timeout/cancellation contract.
+//! A Bash invocation is one complete lifecycle: spawn the owned process
+//! group, read stdout/stderr, wait for the shell, supervise the owned
+//! process group to quiescence, handle cancellation/timeout with a
+//! liveness-aware TERM -> grace -> KILL, reap, complete the output
+//! draining, finalize the artifacts, and produce a single canonical
+//! result.
+//!
+//! Shell-parent exit is **not** by itself the Bash settlement boundary:
+//! the shell may exit while a descendant still belongs to the
+//! invocation-owned process group, with the output pipes either still held
+//! or already redirected away. The invocation therefore settles naturally
+//! only when both the runtime-owned output capture is settled **and** the
+//! owned process group is quiescent — or when an explicit
+//! cancellation/timeout/process-control failure settles the invocation.
+//! Cancellation and the invocation deadline remain authoritative until the
+//! complete lifecycle settles: they terminate the owned group, so a
+//! shell-parent exit can never let descendant work escape the
+//! timeout/cancellation contract, even when the descendant no longer holds
+//! the rustX pipes.
 //!
 //! # Process-group safety
 //!
@@ -32,13 +41,48 @@
 //! sentinel group id, so `killpg(0, ...)` — which would signal the
 //! caller's own process group — is structurally unreachable.
 //!
+//! Group liveness is queried with the non-destructive `killpg(pgid, 0)`
+//! probe: success means the group has at least one process, `ESRCH` means
+//! the group no longer exists (the quiescence evidence), and `EPERM` means
+//! the group exists but signaling permission is denied (treated as alive).
+//! Any other errno is a [`ProcessControlError`] and settles the invocation
+//! as an explicit failure.
+//!
+//! # Process-group id reuse
+//!
+//! The group id is authoritative only while the group is owned. The pgid
+//! number cannot be reallocated to a foreign process group while any
+//! process of this invocation is still linked to it (the group's kernel
+//! pid object is held by its members), so every probe and every signal
+//! issued while the group is alive provably targets this invocation. The
+//! group's disappearance — the release of its last member — is exactly the
+//! event that makes the probe return `ESRCH`; after `ESRCH` is observed
+//! the runtime never touches the pgid again, so a later pid reuse can
+//! never be mistaken for continued ownership. The only residual window is
+//! a foreign process group materializing with the exact freed pgid between
+//! the last positive probe and the next probe; it is bounded by the poll
+//! cadence and documented as the accepted pid-based ownership bound.
+//!
+//! # Process-control failures
+//!
+//! Signaling, waiting, and group-state probing never swallow their errors:
+//! every [`ProcessControlError`] settles the invocation as an explicit
+//! failed tool result. Cancellation/timeout intent that cannot be
+//! established through process control is never downgraded to a silent
+//! `Success`, `Cancelled`, or `TimedOut`; the failed result is consistent
+//! with the background registry's rule that an explicit
+//! process-control/runtime failure may override canonical cancellation
+//! settlement.
+//!
 //! The cancellation path is
 //!
 //! ```text
 //! cancellation/timeout wins
 //! → TERM owned process group
-//! → wait BASH_TERM_GRACE
-//! → if still alive, KILL owned process group
+//! → poll group liveness within BASH_TERM_GRACE
+//! → group quiescent → done
+//! → else KILL owned process group
+//! → poll group liveness within a bounded confirmation window
 //! → reap child
 //! → settle exactly once
 //! ```
@@ -112,7 +156,37 @@ pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
 }
 
 /// The native Bash executor.
-pub struct BashTool;
+pub struct BashTool {
+    #[cfg(test)]
+    control: Option<BashTestControl>,
+}
+
+impl BashTool {
+    /// A Bash executor without test seams.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            #[cfg(test)]
+            control: None,
+        }
+    }
+
+    /// Installs the deterministic lifecycle/process-control seams used only
+    /// by in-crate regressions.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_test_control(control: BashTestControl) -> Self {
+        Self {
+            control: Some(control),
+        }
+    }
+}
+
+impl Default for BashTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ToolExecutor for BashTool {
     fn execute<'a>(
@@ -120,9 +194,194 @@ impl ToolExecutor for BashTool {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
-        Box::pin(async move { run_bash(&invocation, &context).await })
+        #[cfg(test)]
+        let control = self.control.clone();
+        #[cfg(test)]
+        return Box::pin(async move { run_bash(&invocation, &context, control.as_ref()).await });
+        #[cfg(not(test))]
+        Box::pin(async move { run_bash(&invocation, &context, None).await })
     }
 }
+
+/// The test-only control seams of one Bash invocation.
+///
+/// In non-test builds this type is an empty shell: `BashTool` never holds a
+/// control instance and `run_bash` always receives `None`, so no production
+/// behavior is affected. The seams exist so in-crate regressions can
+/// observe the exact shell-exit boundary and deterministically inject
+/// process-control failures without an operating-system mocking framework.
+#[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
+#[derive(Clone)]
+pub(crate) struct BashTestControl {
+    #[cfg(test)]
+    lifecycle: BashLifecycleHook,
+    #[cfg(test)]
+    pause_at_shell_exit: bool,
+    #[cfg(test)]
+    fail_signal: bool,
+    #[cfg(test)]
+    fail_group_probe: bool,
+    #[cfg(test)]
+    fail_wait: bool,
+}
+
+#[cfg(test)]
+impl BashTestControl {
+    /// A control bundle without failures; the lifecycle hook is present but
+    /// not armed, so an executor never parks on it unless the test arms it.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            lifecycle: BashLifecycleHook::new(),
+            pause_at_shell_exit: false,
+            fail_signal: false,
+            fail_group_probe: false,
+            fail_wait: false,
+        }
+    }
+
+    /// Arms the exact shell-exit boundary: the executor parks after the
+    /// shell's natural exit until the test releases it.
+    #[must_use]
+    pub(crate) fn pause_at_shell_exit(mut self) -> Self {
+        self.pause_at_shell_exit = true;
+        self
+    }
+
+    /// The lifecycle hook; tests subscribe to the exact shell-exit
+    /// boundary and release the parked executor through it.
+    #[must_use]
+    pub(crate) fn lifecycle(&self) -> &BashLifecycleHook {
+        &self.lifecycle
+    }
+
+    /// Makes every group signal fail with an injected error.
+    #[must_use]
+    pub(crate) fn fail_signal(mut self) -> Self {
+        self.fail_signal = true;
+        self
+    }
+
+    /// Makes every group-state probe fail with an injected error.
+    #[must_use]
+    pub(crate) fn fail_group_probe(mut self) -> Self {
+        self.fail_group_probe = true;
+        self
+    }
+
+    /// Makes the shell wait fail with an injected error.
+    #[must_use]
+    pub(crate) fn fail_wait(mut self) -> Self {
+        self.fail_wait = true;
+        self
+    }
+}
+
+/// The exact shell-exit lifecycle boundary of one invocation, observable
+/// only by in-crate tests.
+///
+/// The executor signals the boundary exactly once — after `child.wait()`
+/// returned the shell's natural exit and before any natural-settlement or
+/// group-quiescence handling — and then parks until the test releases it.
+/// Both sides are `tokio::sync::watch`-based, so the test can never miss
+/// the boundary and the executor can never be released too early.
+#[cfg_attr(not(test), allow(dead_code))] // empty in non-test builds
+#[derive(Clone)]
+pub(crate) struct BashLifecycleHook {
+    #[cfg(test)]
+    shell_exit_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(test)]
+    proceed_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(test)]
+    proceed_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+#[cfg(test)]
+impl BashLifecycleHook {
+    fn new() -> Self {
+        let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
+        let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
+        Self {
+            shell_exit_tx,
+            proceed_tx,
+            proceed_rx,
+        }
+    }
+
+    /// Executor side: signals the exact shell-exit boundary and parks until
+    /// the test releases the executor.
+    async fn pause_after_shell_exit(&self) {
+        let _ = self.shell_exit_tx.send(true);
+        let mut proceed = self.proceed_rx.clone();
+        let _ = proceed.changed().await;
+    }
+
+    /// Test side: waits until the executor provably observed the shell's
+    /// natural exit and parked at the boundary.
+    async fn await_shell_exit(&self) {
+        let mut rx = self.shell_exit_tx.subscribe();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    /// Test side: releases the parked executor.
+    fn release(&self) {
+        let _ = self.proceed_tx.send(true);
+    }
+}
+
+/// A process-control failure of the owned Bash invocation.
+///
+/// Signaling, waiting, and group-state probing never silently fail: a
+/// failure that undermines ownership or settlement surfaces through this
+/// error and settles the invocation as an explicit failed result, never as
+/// an ordinary `Success`, `Cancelled`, or `TimedOut`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessControlError {
+    /// Signaling the owned process group failed.
+    Signal {
+        /// The signal that could not be delivered.
+        signal: &'static str,
+        /// The underlying failure.
+        error: String,
+    },
+    /// Waiting for/reaping the shell child failed.
+    Wait {
+        /// The underlying failure.
+        error: String,
+    },
+    /// Probing the owned process-group state failed.
+    GroupState {
+        /// The underlying failure.
+        error: String,
+    },
+    /// The owned process group could not be confirmed quiescent within the
+    /// bounded post-KILL confirmation window.
+    QuiescenceTimeout,
+}
+
+impl core::fmt::Display for ProcessControlError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Signal { signal, error } => {
+                write!(
+                    f,
+                    "cannot send {signal} to the owned process group: {error}"
+                )
+            }
+            Self::Wait { error } => write!(f, "cannot wait for the bash child: {error}"),
+            Self::GroupState { error } => {
+                write!(f, "cannot verify the owned process group: {error}")
+            }
+            Self::QuiescenceTimeout => {
+                write!(f, "the owned process group did not become quiescent")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ProcessControlError {}
 
 /// The outcome of the child-process wait phase.
 enum WaitOutcome {
@@ -137,13 +396,6 @@ type StreamReferences = (
     Option<FileReference>,
     Option<FileReference>,
 );
-
-/// The outcome of the output-drain phase.
-enum DrainOutcome {
-    Done(Box<Result<StreamReferences, String>>),
-    Cancelled,
-    TimedOut,
-}
 
 /// The settlement kind when cancellation/timeout owns the invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,11 +470,14 @@ impl PreviewCapture {
 /// One output reader task handle.
 type StreamHandle = tokio::task::JoinHandle<Result<Option<FileReference>, String>>;
 
-#[allow(clippy::too_many_lines)] // one coherent spawn/wait/drain/settle pipeline
+#[allow(clippy::too_many_lines)] // one coherent spawn/wait/settle/settle pipeline
 async fn run_bash(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
+    control: Option<&BashTestControl>,
 ) -> ToolExecutionResult {
+    #[cfg(not(test))]
+    let _ = control;
     let Some(object) = invocation.arguments.as_object() else {
         return failed_result("bash arguments must be an object");
     };
@@ -335,11 +590,26 @@ async fn run_bash(
             biased;
             () = context.cancellation.cancelled() => WaitOutcome::Cancelled,
             () = tokio::time::sleep(timeout) => WaitOutcome::TimedOut,
-            status = child.wait() => match status {
+            status = wait_for_shell(&mut child, control) => match status {
                 Ok(status) => WaitOutcome::Exit(status),
                 Err(error) => {
-                    terminate_process_group(pgid).await;
-                    return failed_result(format!("cannot wait for /bin/bash: {error}"));
+                    let mut message = format!("cannot wait for /bin/bash: {error}");
+                    if let Err(termination) = terminate_process_group(
+                        pgid,
+                        &mut child,
+                        tokio::time::Instant::now() + BASH_TERM_GRACE,
+                        control,
+                    )
+                    .await
+                    {
+                        use std::fmt::Write as _;
+                        let _ = write!(
+                            message,
+                            "; additionally, terminating the owned process group failed: \
+                             {termination}"
+                        );
+                    }
+                    return failed_result(message);
                 }
             },
         }
@@ -347,11 +617,26 @@ async fn run_bash(
         tokio::select! {
             biased;
             () = context.cancellation.cancelled() => WaitOutcome::Cancelled,
-            status = child.wait() => match status {
+            status = wait_for_shell(&mut child, control) => match status {
                 Ok(status) => WaitOutcome::Exit(status),
                 Err(error) => {
-                    terminate_process_group(pgid).await;
-                    return failed_result(format!("cannot wait for /bin/bash: {error}"));
+                    let mut message = format!("cannot wait for /bin/bash: {error}");
+                    if let Err(termination) = terminate_process_group(
+                        pgid,
+                        &mut child,
+                        tokio::time::Instant::now() + BASH_TERM_GRACE,
+                        control,
+                    )
+                    .await
+                    {
+                        use std::fmt::Write as _;
+                        let _ = write!(
+                            message,
+                            "; additionally, terminating the owned process group failed: \
+                             {termination}"
+                        );
+                    }
+                    return failed_result(message);
                 }
             },
         }
@@ -365,59 +650,125 @@ async fn run_bash(
         WaitOutcome::TimedOut => settled = Some(Settled::TimedOut),
     }
 
-    // When the wait phase was terminated by cancellation/timeout, the
-    // owned process group is terminated and the shell reaped before the
-    // output drain; the pipes then close and the readers settle.
-    if settled.is_some() {
-        terminate_process_group(pgid).await;
-        let _ = child.wait().await;
+    // The exact shell-exit boundary of a natural exit, observed only by
+    // in-crate tests: when armed, the executor signals that `child.wait()`
+    // returned the shell's natural exit and parks before any
+    // natural-settlement or group-quiescence handling begins.
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.pause_at_shell_exit && exit_status.is_some() {
+            control.lifecycle.pause_after_shell_exit().await;
+        }
     }
 
-    // The drain phase: cancellation and the remaining invocation timeout
-    // stay authoritative until the complete lifecycle settles. A shell
-    // parent that exited while a descendant keeps the owned group and the
-    // output pipes alive cannot escape: the drain phase terminates the
-    // group and then re-drains.
-    let drain_outcome = if settled.is_some() {
-        DrainOutcome::Done(Box::new(
-            await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task).await,
-        ))
-    } else if let Some(timeout) = timeout {
-        let remaining = timeout.saturating_sub(start.elapsed());
-        tokio::select! {
-            biased;
-            () = context.cancellation.cancelled() => DrainOutcome::Cancelled,
-            () = tokio::time::sleep(remaining) => DrainOutcome::TimedOut,
-            result = await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task) => {
-                DrainOutcome::Done(Box::new(result))
+    // The natural-exit settlement supervisor: shell-parent exit is not by
+    // itself the Bash settlement boundary. The invocation settles only when
+    // the owned process group is quiescent (no process is linked to it) AND
+    // the output capture is settled — unless cancellation, the invocation
+    // deadline, or a process-control failure owns the outcome first.
+    let mut drain_result: Option<Box<Result<StreamReferences, String>>> = None;
+    if settled.is_none() {
+        let mut drain = Box::pin(await_drain(
+            &mut stdout_task,
+            &mut stderr_task,
+            &mut combined_task,
+        ));
+        let deadline = timeout.map(|timeout| start + timeout);
+        loop {
+            if drain_result.is_none() {
+                tokio::select! {
+                    biased;
+                    () = context.cancellation.cancelled() => {
+                        settled = Some(Settled::Cancelled);
+                        break;
+                    }
+                    () = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        settled = Some(Settled::TimedOut);
+                        break;
+                    }
+                    result = &mut drain => {
+                        drain_result = Some(Box::new(result));
+                    }
+                    () = tokio::time::sleep(GROUP_POLL_INTERVAL) => {}
+                }
+            } else {
+                // The capture is settled; only group quiescence,
+                // cancellation, and the invocation deadline remain.
+                tokio::select! {
+                    biased;
+                    () = context.cancellation.cancelled() => {
+                        settled = Some(Settled::Cancelled);
+                        break;
+                    }
+                    () = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        settled = Some(Settled::TimedOut);
+                        break;
+                    }
+                    () = tokio::time::sleep(GROUP_POLL_INTERVAL) => {}
+                }
+            }
+            if drain_result.is_some() {
+                match process_group_state(pgid, control) {
+                    Ok(GroupState::Gone) => break,
+                    Ok(GroupState::Alive) => {}
+                    Err(error) => {
+                        return failed_result(format!(
+                            "cannot verify the owned bash process group: {error}"
+                        ));
+                    }
+                }
             }
         }
-    } else {
-        tokio::select! {
-            biased;
-            () = context.cancellation.cancelled() => DrainOutcome::Cancelled,
-            result = await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task) => {
-                DrainOutcome::Done(Box::new(result))
-            }
-        }
-    };
+    }
 
-    let capture = match drain_outcome {
-        DrainOutcome::Done(result) => *result,
-        DrainOutcome::Cancelled => {
-            // Cancellation remains authoritative during the drain: the
-            // owned group is terminated, which closes the pipes and lets
-            // the readers settle. The shell parent already exited and was
-            // reaped in the wait phase.
-            settled = Some(Settled::Cancelled);
-            terminate_process_group(pgid).await;
-            await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task).await
+    // When cancellation/timeout owns the outcome, the owned process group is
+    // terminated (liveness-aware TERM -> grace -> KILL), the shell reaped,
+    // and the capture re-drained; the pipes then close and the readers
+    // settle. A process-control failure here is an explicit failed result —
+    // never a silent Success/Cancelled/TimedOut.
+    if settled.is_some() {
+        match terminate_process_group(
+            pgid,
+            &mut child,
+            tokio::time::Instant::now() + BASH_TERM_GRACE,
+            control,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(error) => {
+                return failed_result(format!(
+                    "cannot terminate the owned bash process group: {error}"
+                ));
+            }
         }
-        DrainOutcome::TimedOut => {
-            settled = Some(Settled::TimedOut);
-            terminate_process_group(pgid).await;
-            await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task).await
+        if let Err(error) = child.wait().await {
+            let error = ProcessControlError::Wait {
+                error: error.to_string(),
+            };
+            return failed_result(format!("cannot reap /bin/bash after termination: {error}"));
         }
+    }
+
+    let capture = if let Some(result) = drain_result {
+        // The capture already completed while the settle supervisor loop
+        // was running; its result is reused — a completed JoinHandle must
+        // never be polled again.
+        *result
+    } else {
+        // The capture never completed (the pipes stayed open), so the
+        // terminated group's pipes are re-drained exactly once.
+        await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task).await
     };
 
     let (stdout_reference, stderr_reference, combined_reference) = match capture {
@@ -642,15 +993,223 @@ fn owned_pgid(pid: Option<u32>) -> Option<i32> {
     pid.and_then(|pid| i32::try_from(pid).ok())
 }
 
-/// Terminates the owned process group: TERM, then after
-/// [`BASH_TERM_GRACE`] a KILL. A `None` group id (non-Unix platforms,
-/// where no group exists) is a no-op.
-async fn terminate_process_group(pgid: Option<i32>) {
-    if let Some(pgid) = pgid {
-        signal_process_group(pgid, true);
-        tokio::time::sleep(BASH_TERM_GRACE).await;
-        signal_process_group(pgid, false);
+/// The internal poll cadence of liveness-aware termination and natural
+/// settlement supervision. An implementation detail of the grace period and
+/// the settlement checks — never a test synchronization mechanism.
+const GROUP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// The liveness state of the owned process group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupState {
+    /// At least one process is still linked to the group.
+    Alive,
+    /// No process is linked to the group anymore; it is quiescent.
+    Gone,
+}
+
+/// Queries the liveness of the owned process group with the
+/// non-destructive `killpg(pgid, 0)` probe:
+///
+/// - success => the group has at least one process;
+/// - `ESRCH` => the group no longer exists (the quiescence evidence);
+/// - `EPERM` => the group exists but signaling permission is denied
+///   (treated as alive);
+/// - any other errno is an explicit [`ProcessControlError`].
+///
+/// A `None` group id (non-Unix platforms, where no group exists) is
+/// reported as gone.
+#[cfg(unix)]
+fn process_group_state(
+    pgid: Option<i32>,
+    control: Option<&BashTestControl>,
+) -> Result<GroupState, ProcessControlError> {
+    use nix::errno::Errno;
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_group_probe {
+            return Err(ProcessControlError::GroupState {
+                error: "injected group-state probe failure".to_owned(),
+            });
+        }
     }
+    #[cfg(not(test))]
+    let _ = control;
+    let Some(pgid) = pgid else {
+        return Ok(GroupState::Gone);
+    };
+    match killpg(Pid::from_raw(pgid), None) {
+        Ok(()) | Err(Errno::EPERM) => Ok(GroupState::Alive),
+        Err(Errno::ESRCH) => Ok(GroupState::Gone),
+        Err(error) => Err(ProcessControlError::GroupState {
+            error: error.to_string(),
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+fn process_group_state(
+    _pgid: Option<i32>,
+    _control: Option<&BashTestControl>,
+) -> Result<GroupState, ProcessControlError> {
+    Ok(GroupState::Gone)
+}
+
+/// Signals the owned process group. On Unix this is a safe `killpg` over
+/// the group id; the group owner is the child itself, so unrelated runtime
+/// processes are never signaled.
+///
+/// `ESRCH` means the group is already quiescent and is not an error; any
+/// other failure is an explicit [`ProcessControlError`]. A `None` group id
+/// (non-Unix platforms, where no group exists) is a no-op.
+#[cfg(unix)]
+fn signal_process_group(
+    pgid: Option<i32>,
+    signal: nix::sys::signal::Signal,
+    control: Option<&BashTestControl>,
+) -> Result<(), ProcessControlError> {
+    use nix::errno::Errno;
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_signal {
+            return Err(ProcessControlError::Signal {
+                signal: signal.as_str(),
+                error: "injected signaling failure".to_owned(),
+            });
+        }
+    }
+    #[cfg(not(test))]
+    let _ = control;
+    let Some(pgid) = pgid else {
+        return Ok(());
+    };
+    match killpg(Pid::from_raw(pgid), Some(signal)) {
+        // `ESRCH` means the group already quiesced: not an error.
+        Ok(()) | Err(Errno::ESRCH) => Ok(()),
+        Err(error) => Err(ProcessControlError::Signal {
+            signal: signal.as_str(),
+            error: error.to_string(),
+        }),
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_process_group(
+    _pgid: Option<i32>,
+    _signal: nix::sys::signal::Signal,
+    _control: Option<&BashTestControl>,
+) -> Result<(), ProcessControlError> {
+    Ok(())
+}
+
+/// Terminates the owned process group with actual liveness checks:
+///
+/// ```text
+/// TERM
+/// poll shell exit + group liveness within the grace deadline
+///   group quiesces during grace => done
+///   deadline reached while alive => KILL
+/// reap the shell (after KILL if it ignored TERM)
+/// poll group liveness within the confirmation deadline
+///   group quiesces => done
+///   still alive after the confirmation deadline => QuiescenceTimeout
+/// ```
+///
+/// The shell child is reaped as soon as it exits: while the shell leader is
+/// an unreaped zombie it stays linked to the group, so the liveness probe
+/// would keep reporting the group as alive. Reaping is therefore part of
+/// the termination path, not an afterthought. `ESRCH` at any signaling step
+/// means the group already quiesced and is not an error; every other
+/// [`ProcessControlError`] is surfaced. A `None` group id (non-Unix
+/// platforms) is a no-op.
+async fn terminate_process_group(
+    pgid: Option<i32>,
+    child: &mut tokio::process::Child,
+    grace_deadline: tokio::time::Instant,
+    control: Option<&BashTestControl>,
+) -> Result<(), ProcessControlError> {
+    signal_process_group(pgid, nix::sys::signal::Signal::SIGTERM, control)?;
+    // Grace: race the shell's exit against the deadline and poll group
+    // quiescence each tick. Reaping the shell as soon as it dies lets the
+    // probe observe the group's true state.
+    let mut shell_exited = false;
+    loop {
+        if shell_exited {
+            tokio::time::sleep(GROUP_POLL_INTERVAL).await;
+        } else {
+            tokio::select! {
+                biased;
+                result = child.wait() => {
+                    shell_exited = true;
+                    if let Err(error) = result {
+                        return Err(ProcessControlError::Wait {
+                            error: error.to_string(),
+                        });
+                    }
+                }
+                () = tokio::time::sleep(GROUP_POLL_INTERVAL) => {}
+            }
+        }
+        match process_group_state(pgid, control)? {
+            GroupState::Gone => return Ok(()),
+            GroupState::Alive => {}
+        }
+        if tokio::time::Instant::now() >= grace_deadline {
+            break;
+        }
+    }
+    signal_process_group(pgid, nix::sys::signal::Signal::SIGKILL, control)?;
+    if !shell_exited {
+        if let Err(error) = child.wait().await {
+            return Err(ProcessControlError::Wait {
+                error: error.to_string(),
+            });
+        }
+    }
+    let confirm_deadline = tokio::time::Instant::now() + BASH_TERM_GRACE;
+    match wait_for_quiescence(pgid, confirm_deadline, control).await? {
+        GroupState::Gone => Ok(()),
+        GroupState::Alive => Err(ProcessControlError::QuiescenceTimeout),
+    }
+}
+
+/// Polls the owned process group until it is gone or the deadline expires.
+async fn wait_for_quiescence(
+    pgid: Option<i32>,
+    deadline: tokio::time::Instant,
+    control: Option<&BashTestControl>,
+) -> Result<GroupState, ProcessControlError> {
+    loop {
+        match process_group_state(pgid, control)? {
+            GroupState::Gone => return Ok(GroupState::Gone),
+            GroupState::Alive => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Ok(GroupState::Alive);
+                }
+                tokio::time::sleep(GROUP_POLL_INTERVAL).await;
+            }
+        }
+    }
+}
+
+/// Waits for the shell child to exit, with the deterministic test seam for
+/// reaping-failure injection.
+async fn wait_for_shell(
+    child: &mut tokio::process::Child,
+    control: Option<&BashTestControl>,
+) -> std::io::Result<std::process::ExitStatus> {
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_wait {
+            return Err(std::io::Error::other("injected bash wait failure"));
+        }
+    }
+    #[cfg(not(test))]
+    let _ = control;
+    child.wait().await
 }
 
 /// The signal number of a signal-terminated child, where known.
@@ -668,39 +1227,19 @@ fn unix_signal_of(exit: std::process::ExitStatus) -> String {
     }
 }
 
-/// Signals the owned process group. On Unix this is a safe `killpg` over
-/// the group id; the group owner is the child itself, so unrelated runtime
-/// processes are never signaled.
-fn signal_process_group(pgid: i32, term: bool) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, killpg};
-        use nix::unistd::Pid;
-        let signal = if term {
-            Signal::SIGTERM
-        } else {
-            Signal::SIGKILL
-        };
-        let _ = killpg(Pid::from_raw(pgid), signal);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (pgid, term);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{NAME, owned_pgid, run_bash};
+    use super::{BashTestControl, BashTool, GroupState, NAME, owned_pgid, process_group_state};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::environment::ToolEnvironment;
-    use crate::tools::executor::{ProgressReporter, ToolExecutionContext};
+    use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
     use crate::tools::types::{
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
     };
     use crate::tools::workspace::Workspace;
+    use std::time::Duration;
 
     struct NoopProgress;
 
@@ -729,22 +1268,99 @@ mod tests {
         }
     }
 
+    fn invocation_with_timeout(command: &str, timeout_ms: u64) -> ToolInvocation {
+        ToolInvocation {
+            call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: NAME.to_owned(),
+            mode: ToolInvocationMode::Foreground,
+            arguments: serde_json::json!({"command": command, "timeout_ms": timeout_ms}),
+        }
+    }
+
     async fn run_with(
         command: &str,
         artifacts: &ArtifactStore,
         workspace: &Workspace,
     ) -> ToolExecutionResult {
+        run_with_control(
+            command.to_owned(),
+            BashTestControl::new(),
+            CancellationSignal::new(),
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        )
+        .await
+    }
+
+    /// Executes one invocation through the executor with explicit test
+    /// control seams and a caller-controlled cancellation signal. Takes
+    /// owned values so it can be spawned without borrowing.
+    #[allow(clippy::too_many_arguments)] // a bounded test-only fixture surface
+    async fn run_with_control(
+        command: String,
+        control: BashTestControl,
+        cancellation: CancellationSignal,
+        artifacts: ArtifactStore,
+        workspace: Workspace,
+        timeout_ms: Option<u64>,
+    ) -> ToolExecutionResult {
+        let tool = BashTool::with_test_control(control);
         let reporter = NoopProgress;
         let context = ToolExecutionContext {
             conversation_id: &ConversationId::new("conv-1"),
             execution_id: None,
-            cancellation: CancellationSignal::new(),
-            workspace,
+            cancellation,
+            workspace: &workspace,
             progress: &reporter,
-            artifacts,
+            artifacts: &artifacts,
             environment: &ToolEnvironment::new(),
         };
-        run_bash(&invocation(command), &context).await
+        let invocation = match timeout_ms {
+            Some(ms) => invocation_with_timeout(&command, ms),
+            None => invocation(&command),
+        };
+        tool.execute(invocation, context).await
+    }
+
+    /// Whether a specific process still exists, using the same
+    /// non-destructive signal-0 probe as the production group liveness
+    /// check.
+    #[cfg(unix)]
+    fn process_alive(pid: i32) -> bool {
+        match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None) {
+            Err(nix::errno::Errno::ESRCH) => false,
+            Ok(()) | Err(_) => true,
+        }
+    }
+
+    /// Polls a process until it is provably gone (ESRCH), with a strict
+    /// deadlock guard. Polling the authoritative OS process state with a
+    /// deadline is the test's proof; there is no assumed interleaving.
+    #[cfg(unix)]
+    async fn wait_for_process_death(pid: i32) {
+        for _ in 0..1000 {
+            if !process_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process {pid} is still alive after the deadline");
+    }
+
+    /// Polls the owned process group until it is provably gone (the same
+    /// `killpg` probe the production logic uses), with a strict deadlock
+    /// guard.
+    #[cfg(unix)]
+    async fn wait_for_group_death(pgid: i32) {
+        for _ in 0..1000 {
+            if process_group_state(Some(pgid), None) == Ok(GroupState::Gone) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process group {pgid} is still alive after the deadline");
     }
 
     /// The process-group id is derived from the spawned child's own pid;
@@ -799,6 +1415,307 @@ mod tests {
         assert!(
             !matches!(result.status, ToolExecutionStatus::Success),
             "successful retention must never be reported while full output is lost"
+        );
+    }
+
+    /// A shell parent that exits while a redirected descendant stays in the
+    /// owned process group (`sleep 30 >/dev/null 2>&1 & exit 0`) cannot
+    /// settle the invocation: the descendant no longer holds the rustX
+    /// pipes, so the capture alone would finish — but the invocation stays
+    /// active until the owned process group is quiescent or the timeout
+    /// settles it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn redirected_descendant_does_not_escape_the_owned_group() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let desc_pid_file = root.join("desc.pid");
+        let command = format!(
+            "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new(),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                Some(500),
+            ),
+        )
+        .await
+        .expect("the invocation settles exactly once");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::TimedOut,
+            "a redirected descendant must not let the invocation settle as Success"
+        );
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        // The owned process group is quiescent and the descendant is gone.
+        wait_for_group_death(shell_pid).await;
+        wait_for_process_death(descendant_pid).await;
+        let _ = dir;
+    }
+
+    /// The exact shell-exit boundary regression: the executor provably
+    /// observed the shell parent's natural exit and parked before any
+    /// settlement handling; the descendant is provably alive at that
+    /// boundary; only then does cancellation become observable. The result
+    /// is `Cancelled` and the owned group is terminated.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let desc_pid_file = root.join("desc.pid");
+        let command = format!(
+            "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
+        let control = BashTestControl::new().pause_at_shell_exit();
+        let hook = control.lifecycle().clone();
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control,
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // 1. The exact boundary: the shell parent exited and the executor
+        //    is parked before natural settlement/group-quiescence handling.
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
+            .await
+            .expect("the shell-exit boundary is observed");
+        // 2. The descendant is provably still alive at the boundary.
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        assert!(
+            process_alive(descendant_pid),
+            "the descendant must still be alive at the exact shell-exit boundary"
+        );
+        // 3. Cancellation becomes observable after the boundary.
+        cancelling.cancel();
+        // 4. The executor resumes.
+        hook.release();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles exactly once")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+            "late cancellation after the shell-parent exit must be Cancelled, got {:?}",
+            result.status
+        );
+        // 5. The owned group is terminated and quiescent; the descendant is
+        //    gone.
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        wait_for_group_death(shell_pid).await;
+        wait_for_process_death(descendant_pid).await;
+        let _ = dir;
+    }
+
+    /// Natural settlement requires group quiescence: at the exact
+    /// shell-exit boundary the invocation is provably not yet settled while
+    /// the descendant is alive; once the descendant exits naturally and the
+    /// owned group quiesces, the shell's natural successful exit settles
+    /// the invocation as `Success`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn natural_success_requires_group_quiescence() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let desc_pid_file = root.join("desc.pid");
+        let command = format!(
+            "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            shell_pid_file.display(),
+            desc_pid_file.display()
+        );
+        let control = BashTestControl::new().pause_at_shell_exit();
+        let hook = control.lifecycle().clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control,
+            CancellationSignal::new(),
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // 1. The exact boundary: shell exited, executor parked, descendant
+        //    still alive — the invocation must not have settled yet.
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
+            .await
+            .expect("the shell-exit boundary is observed");
+        let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
+            .expect("descendant pid file")
+            .trim()
+            .parse()
+            .expect("descendant pid");
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        assert!(process_alive(descendant_pid));
+        // 2. The test terminates the descendant directly (test-side
+        //    process control, deterministic: no timing assumption), so the
+        //    owned group quiesces naturally.
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(shell_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test kills the owned group");
+        wait_for_group_death(shell_pid).await;
+        // 3. The executor resumes and observes the quiescent group.
+        hook.release();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles exactly once")
+            .expect("executor task");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Success,
+            "once the owned group is quiescent, the shell's natural exit settles Success"
+        );
+        let exit_code = result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                crate::tools::types::ToolResultContent::Json { value } => {
+                    value["exit_code"].as_i64()
+                }
+                _ => None,
+            })
+            .expect("exit code in the JSON result");
+        assert_eq!(exit_code, 0);
+        let _ = dir;
+    }
+
+    /// A signaling failure during cancellation is an explicit failed
+    /// result: cancellation intent that cannot be established through
+    /// process control is never downgraded to a silent `Cancelled`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn signal_failure_settles_as_an_explicit_failed_result() {
+        let (_dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        // The shell records its own pid so the test can clean up the group
+        // after the injected signaling failure leaves it running.
+        let command = format!("echo $$ > {}; sleep 30", shell_pid_file.display());
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            BashTestControl::new().fail_signal(),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // The shell provably started (its pid file exists) before the
+        // cancellation becomes observable.
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "an injected signaling failure must be an explicit failed result, got {:?}",
+            result.status
+        );
+        // The injected failure is the very condition under test, so the
+        // test itself terminates the abandoned group as cleanup.
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(shell_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test cleanup kills the abandoned group");
+        wait_for_group_death(shell_pid).await;
+    }
+
+    /// A group-state probe failure is an explicit failed result: the
+    /// runtime cannot establish settlement, so it never reports an ordinary
+    /// natural outcome.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn group_probe_failure_settles_as_an_explicit_failed_result() {
+        let (_dir, artifacts, workspace) = fixture();
+        let result = run_with_control(
+            "exit 0".to_owned(),
+            BashTestControl::new().fail_group_probe(),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "an injected group-probe failure must be an explicit failed result, got {:?}",
+            result.status
+        );
+        assert!(
+            !matches!(result.status, ToolExecutionStatus::Success),
+            "natural settlement requires verified group quiescence"
+        );
+    }
+
+    /// A reaping/wait failure is an explicit failed result.
+    #[tokio::test]
+    async fn wait_failure_settles_as_an_explicit_failed_result() {
+        let (_dir, artifacts, workspace) = fixture();
+        let result = run_with_control(
+            "echo hi".to_owned(),
+            BashTestControl::new().fail_wait(),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "an injected wait failure must be an explicit failed result, got {:?}",
+            result.status
         );
     }
 }
