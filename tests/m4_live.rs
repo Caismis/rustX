@@ -96,6 +96,7 @@ async fn live_step(
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await
 }

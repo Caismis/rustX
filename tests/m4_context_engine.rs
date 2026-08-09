@@ -1312,6 +1312,7 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -1424,6 +1425,7 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2283,6 +2285,7 @@ async fn proactive_compaction_before_the_next_turn() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2460,6 +2463,7 @@ async fn below_threshold_runs_without_compaction() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2517,6 +2521,7 @@ async fn overflow_compact_and_retry_succeeds() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2629,6 +2634,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2701,6 +2707,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2775,6 +2782,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2850,6 +2858,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -2916,6 +2925,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
             runtime,
             &tool_runtime,
         )
+        .expect("conversation identity matches the tool runtime")
         .run()
         .await;
 
@@ -2987,6 +2997,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -3130,6 +3141,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -3216,6 +3228,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -3289,6 +3302,7 @@ async fn no_progress_compaction_fails_without_retry() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -3359,7 +3373,8 @@ async fn cancel_before_proactive_compaction() {
         &cancellation,
         runtime,
         &tool_runtime,
-    );
+    )
+    .expect("conversation identity matches the tool runtime");
     // Wait until the model stream was fully consumed, then cancel while the
     // tool is parked: the loop settles cancelled before any later turn could
     // compact.
@@ -3416,7 +3431,8 @@ async fn cancel_while_summary_generation_is_pending() {
         &cancellation,
         runtime,
         &tool_runtime,
-    );
+    )
+    .expect("conversation identity matches the tool runtime");
     // Wait until the summarizer parked, then cancel.
     let mut parked = parked;
     let controller_cancellation = cancellation.clone();
@@ -3515,6 +3531,7 @@ async fn run_continuation_case(
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     let requests = model.requests();
@@ -3916,6 +3933,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         runtime,
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
 
@@ -4085,7 +4103,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
     );
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
@@ -4094,8 +4112,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
         runtime,
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox belongs to the request conversation")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     controller.await.expect("controller task");
@@ -4161,7 +4178,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let runtime = runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone());
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
@@ -4170,8 +4187,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         runtime,
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox belongs to the request conversation")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     controller.await.expect("controller task");
@@ -4324,7 +4340,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "hi")], 0),
         &model,
@@ -4333,8 +4349,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
         runtime,
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox belongs to the request conversation")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     controller.await.expect("controller task");

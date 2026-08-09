@@ -103,6 +103,7 @@ async fn run(
         runtime(),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await
 }
@@ -2473,14 +2474,15 @@ fn block_id(block: &MessageBlock) -> String {
     }
 }
 
-/// Runs the attempt with a mailbox attached to the request conversation.
+/// Runs the attempt with the given mailbox bound as the canonical
+/// conversation mailbox of the tool runtime.
 async fn run_with_mailbox(
     model: &FakeModel,
     tools: &ToolRegistry,
     cancellation: &AgentCancellation,
     mailbox: ConversationInboundMailbox,
 ) -> AgentExecutionResult {
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox);
     AgentExecution::new(
         request("attempt-1"),
         model,
@@ -2489,20 +2491,20 @@ async fn run_with_mailbox(
         runtime(),
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox belongs to the request conversation")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await
 }
 
-/// Attaching a mailbox of a different conversation is rejected explicitly.
+/// An attempt over a tool runtime of a different conversation is rejected
+/// structurally: the request conversation and the conversation tool runtime
+/// (and therefore its canonical mailbox) must agree.
 #[tokio::test]
-async fn mailbox_conversation_mismatch_is_rejected() {
+async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
     let model = FakeModel::new(Vec::new());
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let foreign = ConversationInboundMailbox::new(ConversationId::new("conv-other"));
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-other");
     let error = AgentExecution::new(
         request("attempt-1"),
         &model,
@@ -2511,7 +2513,6 @@ async fn mailbox_conversation_mismatch_is_rejected() {
         runtime(),
         &tool_runtime,
     )
-    .with_inbound_mailbox(foreign)
     .err()
     .expect("a mismatched conversation must be rejected");
     assert!(matches!(error, MailboxError::ConversationMismatch { .. }));

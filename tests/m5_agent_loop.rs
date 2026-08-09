@@ -82,22 +82,21 @@ async fn run(
     cancellation: &AgentCancellation,
     mailbox: Option<rustx::runtime::inbound::ConversationInboundMailbox>,
 ) -> AgentExecutionResult {
-    let tool_runtime = common::tool_runtime("conv-1");
-    let execution = AgentExecution::new(
+    let tool_runtime = match mailbox {
+        Some(mailbox) => common::tool_runtime_with_mailbox("conv-1", mailbox),
+        None => common::tool_runtime("conv-1"),
+    };
+    AgentExecution::new(
         request(),
         model,
         tools,
         cancellation,
         runtime(),
         &tool_runtime,
-    );
-    let execution = match mailbox {
-        Some(mailbox) => execution
-            .with_inbound_mailbox(mailbox)
-            .expect("mailbox belongs to the request conversation"),
-        None => execution,
-    };
-    execution.run().await
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await
 }
 
 fn started() -> ModelEvent {

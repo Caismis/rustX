@@ -37,11 +37,12 @@
 //! execution model — no no-context/unbounded mode and no Agent Status
 //! disable flag. Agent Status is composed whenever a pending
 //! [`FreshInboundTurn`] exists and is consumed by the first successful model
-//! invocation that observes it. The conversation inbound mailbox is opt-in
-//! via [`AgentExecution::with_inbound_mailbox`], which adds the mailbox
-//! safe-boundary rules. Cancellation is a generic Agent Loop invariant for
-//! every execution: observable cancellation is checked before every model
-//! turn begins.
+//! invocation that observes it. The conversation inbound mailbox is owned by
+//! the conversation tool runtime: the loop drains exactly
+//! `tool_runtime.mailbox()` at every safe boundary, so background terminal
+//! notifications always enter the same mailbox the Agent Loop drains.
+//! Cancellation is a generic Agent Loop invariant for every execution:
+//! observable cancellation is checked before every model turn begins.
 
 use futures_util::StreamExt;
 
@@ -61,9 +62,7 @@ use crate::model::types::{
 };
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
-use crate::runtime::inbound::{
-    ConversationInboundMailbox, FreshInboundTurn, InitialTurnTrigger, MailboxError,
-};
+use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
@@ -160,9 +159,10 @@ pub struct AgentExecutionResult {
 ///
 /// The loop borrows the model adapter, the immutable tool registry, the
 /// attempt cancellation signal, and owns the mandatory M4 context runtime,
+/// the conversation tool runtime (whose canonical mailbox the loop drains),
 /// the execution state machine, the committed history, the retained
-/// continuation state, the pending fresh inbound trigger, the conversation
-/// inbound mailbox handle (when attached), and the runtime event trace.
+/// continuation state, the pending fresh inbound trigger, and the runtime
+/// event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
@@ -183,11 +183,6 @@ pub struct AgentExecution<'a> {
     context_runtime: ContextRuntime<'a>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
-    /// The conversation inbound mailbox, when attached. The mailbox stays
-    /// external to the execution: the execution object is a consumer that
-    /// performs one finite drain per safe boundary, never the authoritative
-    /// conversation queue store.
-    mailbox: Option<ConversationInboundMailbox>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
@@ -231,14 +226,28 @@ enum Terminal {
 
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, tool registry,
-    /// cancellation signal, and the mandatory M4 context runtime.
+    /// cancellation signal, the mandatory M4 context runtime, and the
+    /// conversation tool runtime.
+    ///
+    /// The conversation tool runtime binds the conversation identity, the
+    /// canonical inbound mailbox, and the background registry together:
+    /// the attempt must belong to the same conversation, otherwise the
+    /// execution is rejected structurally. The loop drains exactly
+    /// `tool_runtime.mailbox()` at every safe boundary, so background
+    /// terminal notifications always enter the mailbox the Agent Loop
+    /// drains.
     ///
     /// The context runtime is required: there is exactly one normal
     /// execution model — canonical history is always projected through the
     /// context engine, and Agent Status is composed whenever a pending fresh
     /// inbound turn exists. There is no no-context mode and no Agent Status
     /// disable flag.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::ConversationMismatch`] when the request's
+    /// conversation differs from the conversation tool runtime's
+    /// conversation (and therefore its canonical mailbox).
     pub fn new(
         request: AgentExecutionRequest,
         adapter: &'a dyn ModelAdapter,
@@ -246,8 +255,14 @@ impl<'a> AgentExecution<'a> {
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime<'a>,
         tool_runtime: &'a ConversationToolRuntime,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, MailboxError> {
+        if tool_runtime.conversation_id() != &request.conversation_id {
+            return Err(MailboxError::ConversationMismatch {
+                expected: request.conversation_id.clone(),
+                actual: tool_runtime.conversation_id().clone(),
+            });
+        }
+        Ok(Self {
             history: request.initial_messages.clone(),
             request,
             adapter,
@@ -262,43 +277,11 @@ impl<'a> AgentExecution<'a> {
             context_runtime,
             observed: None,
             last_request_fingerprint: None,
-            mailbox: None,
             #[cfg(test)]
             continuation_pause: None,
             turn: 0,
             terminal_emitted: false,
-        }
-    }
-
-    /// Attaches the conversation inbound mailbox of the attempt's
-    /// conversation.
-    ///
-    /// The mailbox is conversation-owned coordination that stays external to
-    /// the execution: at every safe turn boundary the loop performs exactly
-    /// one finite atomic drain and appends every drained inbound message as
-    /// its own canonical `UserMessageBlock` before the next model request.
-    /// The drained batch becomes one new `FreshInboundTurn`, so the next
-    /// model request carries exactly one Agent Status snapshot targeting the
-    /// final drained message. The mailbox must belong to the same
-    /// conversation as the request; a mismatched conversation is rejected
-    /// explicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MailboxError::ConversationMismatch`] when the mailbox
-    /// belongs to a different conversation than the request.
-    pub fn with_inbound_mailbox(
-        mut self,
-        mailbox: ConversationInboundMailbox,
-    ) -> Result<Self, MailboxError> {
-        if mailbox.conversation_id() != &self.request.conversation_id {
-            return Err(MailboxError::ConversationMismatch {
-                expected: self.request.conversation_id.clone(),
-                actual: mailbox.conversation_id().clone(),
-            });
-        }
-        self.mailbox = Some(mailbox);
-        Ok(self)
+        })
     }
 
     /// Runs the attempt to its single terminal outcome.
@@ -621,11 +604,13 @@ impl<'a> AgentExecution<'a> {
     ///
     /// This function is mailbox-owned semantics only, separate from the
     /// generic Agent Loop cancellation checkpoint (which lives in `run()`
-    /// before every model turn). With no mailbox attached there is no
-    /// snapshot work: the function returns `Ok(false)` immediately and
-    /// observes no mailbox state. With a mailbox attached, cancellation
-    /// wins before batch selection: when cancellation is already
-    /// observable, no drain happens, all pending items stay in the
+    /// before every model turn). The conversation tool runtime owns the one
+    /// canonical mailbox of the conversation; the loop drains exactly that
+    /// mailbox, so background terminal notifications always enter the same
+    /// mailbox the Agent Loop drains. With no pending items the snapshot
+    /// observes no mailbox state and the function returns `Ok(false)`.
+    /// Cancellation wins before batch selection: when cancellation is
+    /// already observable, no drain happens, all pending items stay in the
     /// mailbox, and the attempt settles cancelled. Otherwise one atomic
     /// drain is performed and, once drained, the complete batch is
     /// appended synchronously as distinct canonical `UserMessageBlock`
@@ -639,13 +624,10 @@ impl<'a> AgentExecution<'a> {
     /// turn.
     ///
     /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
-    /// when no mailbox is attached or the snapshot observed an empty
-    /// mailbox, and the attempt terminal when cancellation was observable
-    /// before the snapshot.
+    /// when the snapshot observed an empty mailbox, and the attempt
+    /// terminal when cancellation was observable before the snapshot.
     fn safe_boundary_drain(&mut self) -> Result<bool, Terminal> {
-        let Some(mailbox) = &self.mailbox else {
-            return Ok(false);
-        };
+        let mailbox = self.tool_runtime.mailbox();
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -1883,16 +1865,27 @@ mod tests {
     /// scripted request, so no compaction ever triggers in these tests.
     /// A conversation tool runtime over a temporary workspace.
     fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
+        tool_runtime_with_mailbox(None)
+    }
+
+    /// A conversation tool runtime over a temporary workspace with an
+    /// optional explicitly configured conversation mailbox.
+    fn tool_runtime_with_mailbox(
+        mailbox: Option<ConversationInboundMailbox>,
+    ) -> crate::tools::runtime::ConversationToolRuntime {
+        use crate::tools::runtime::ConversationRuntimeConfig;
         let dir = std::env::temp_dir().join(format!(
             "rustx-agent-crate-tests-{}-{}",
             std::process::id(),
             std::thread::current().name().unwrap_or("worker")
         ));
-        let _ = std::fs::create_dir_all(&dir);
-        crate::tools::runtime::ConversationToolRuntime::new(
+        let _ = std::fs::create_dir_all(dir.join("workspace"));
+        crate::tools::runtime::ConversationToolRuntime::from_config(
             ConversationId::new("conv-1"),
-            &dir,
-            dir.join("artifacts"),
+            ConversationRuntimeConfig {
+                mailbox,
+                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+            },
         )
         .expect("tool runtime")
     }
@@ -2095,7 +2088,8 @@ mod tests {
             &cancellation,
             runtime(),
             &tool_runtime,
-        );
+        )
+        .expect("conversation identity matches the tool runtime");
         execution.continuation_pause = Some(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
@@ -2172,7 +2166,7 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let mut execution = AgentExecution::new(
             request(),
             &adapter,
@@ -2180,13 +2174,10 @@ mod tests {
             &cancellation,
             runtime(),
             &tool_runtime,
-        );
+        )
+        .expect("conversation identity matches the tool runtime");
         execution.continuation_pause = Some(pause);
-        let result = execution
-            .with_inbound_mailbox(mailbox.clone())
-            .expect("mailbox belongs to the request conversation")
-            .run()
-            .await;
+        let result = execution.run().await;
         controller.await.expect("controller task");
 
         assert_eq!(

@@ -336,17 +336,42 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
 ///
 /// Fake tools never touch the workspace, so M3/M4 tests share one runtime
 /// per conversation id; native-tool tests use isolated temporary workspaces.
+/// The artifact root is a sibling of the workspace root, never nested
+/// inside it.
 #[must_use]
 pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::ConversationToolRuntime {
     let dir = std::env::temp_dir().join(format!(
         "rustx-tool-runtime-{conversation_id}-{}",
         std::process::id()
     ));
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::create_dir_all(dir.join("workspace"));
     rustx::tools::runtime::ConversationToolRuntime::new(
         rustx::runtime::identity::ConversationId::new(conversation_id),
-        &dir,
+        dir.join("workspace"),
         dir.join("artifacts"),
+    )
+    .expect("tool runtime")
+}
+
+/// A conversation tool runtime bound to an explicitly configured canonical
+/// conversation mailbox.
+#[must_use]
+pub fn tool_runtime_with_mailbox(
+    conversation_id: &str,
+    mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
+) -> rustx::tools::runtime::ConversationToolRuntime {
+    use rustx::tools::runtime::ConversationRuntimeConfig;
+    let dir = std::env::temp_dir().join(format!(
+        "rustx-tool-runtime-{conversation_id}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(dir.join("workspace"));
+    rustx::tools::runtime::ConversationToolRuntime::from_config(
+        rustx::runtime::identity::ConversationId::new(conversation_id),
+        ConversationRuntimeConfig {
+            mailbox: Some(mailbox),
+            ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+        },
     )
     .expect("tool runtime")
 }
@@ -406,6 +431,7 @@ pub fn native_fixture() -> NativeFixture {
 /// A native tool fixture with an explicit authorized tool environment.
 #[must_use]
 pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> NativeFixture {
+    use rustx::tools::runtime::ConversationRuntimeConfig;
     let dir = tempfile::tempdir().expect("temporary workspace");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
@@ -414,20 +440,22 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
     let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::new(conversation_id.clone());
     let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
         .expect("authorized environment");
-    let runtime = rustx::tools::runtime::ConversationToolRuntime::new(
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
-        &workspace_root,
-        &artifacts,
+        ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            environment: Some(environment),
+            ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone())
-    .with_environment(environment);
+    .expect("tool runtime");
     let mut registry = rustx::tools::executor::ToolRegistry::new();
     rustx::tools::native::register_native_tools(
         &mut registry,
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
         },
+        rustx::tools::native::NativeToolPolicy::default(),
     )
     .expect("native tool registration");
     NativeFixture {

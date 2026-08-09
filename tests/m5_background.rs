@@ -692,12 +692,12 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
     }
 }
 
-/// Runs the loop with a shared mailbox over the given tool registry.
+/// Runs the loop over the given tool registry and tool runtime; the runtime
+/// owns the canonical conversation mailbox the loop drains.
 async fn run_with_mailbox(
     model: &FakeModel,
     tools: &ToolRegistry,
     cancellation: &AgentCancellation,
-    mailbox: ConversationInboundMailbox,
     tool_runtime: &ConversationToolRuntime,
 ) -> AgentExecutionResult {
     AgentExecution::new(
@@ -708,8 +708,7 @@ async fn run_with_mailbox(
         runtime(),
         tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox belongs to the request conversation")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await
 }
@@ -735,13 +734,17 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::new(
+    let tool_runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv-1"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                dir.path().join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone());
+    .expect("tool runtime");
 
     let call = scripted(
         "call-1",
@@ -782,13 +785,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(
-            &model,
-            &tools,
-            &cancellation,
-            mailbox.clone(),
-            &tool_runtime,
-        ),
+        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("attempt terminates without the detached terminal");
@@ -858,13 +855,17 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::new(
+    let tool_runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv-1"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                dir.path().join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone());
+    .expect("tool runtime");
 
     let call_fg = scripted("call-fg", "tool-fg", "fg", serde_json::json!({}));
     let call_bg = scripted(
@@ -940,13 +941,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(
-            &model,
-            &tools,
-            &cancellation,
-            mailbox.clone(),
-            &tool_runtime,
-        ),
+        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -992,13 +987,17 @@ async fn terminal_inbound_after_snapshot_waits_for_the_next_batch() {
             UserSource::Human,
         ))
         .expect("enqueue human message");
-    let tool_runtime = ConversationToolRuntime::new(
+    let tool_runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv-1"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                dir.path().join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone());
+    .expect("tool runtime");
 
     let call_bg = scripted(
         "call-bg",
@@ -1057,13 +1056,7 @@ async fn terminal_inbound_after_snapshot_waits_for_the_next_batch() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(
-            &model,
-            &tools,
-            &cancellation,
-            mailbox.clone(),
-            &tool_runtime,
-        ),
+        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -1336,13 +1329,17 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::new(
+    let tool_runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv-1"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                dir.path().join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone());
+    .expect("tool runtime");
 
     let call_b1 = scripted(
         "call-b1",
@@ -1432,13 +1429,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(15),
-        run_with_mailbox(
-            &model,
-            &tools,
-            &cancellation,
-            mailbox.clone(),
-            &tool_runtime,
-        ),
+        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -1484,13 +1475,17 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::new(
+    let tool_runtime = ConversationToolRuntime::from_config(
         ConversationId::new("conv-1"),
-        &workspace_root,
-        dir.path().join("artifacts"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace_root,
+                dir.path().join("artifacts"),
+            )
+        },
     )
-    .expect("tool runtime")
-    .with_mailbox(mailbox.clone());
+    .expect("tool runtime");
 
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
     let model = FakeModel::new(vec![
@@ -1524,7 +1519,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let _result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(&model, &tools, &cancellation, mailbox, &tool_runtime),
+        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");

@@ -8,8 +8,8 @@
 use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::native::native_definition;
 use crate::tools::native::support::{failed_result, success_json};
+use crate::tools::native::{NativeToolPolicy, native_definition};
 use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation};
 
 /// The canonical model-facing name of the tool.
@@ -17,7 +17,7 @@ pub const NAME: &str = "write";
 
 /// The canonical business schema of the tool.
 #[must_use]
-pub fn definition() -> ToolDefinition {
+pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
     native_definition(
         "tool-write",
         NAME,
@@ -31,6 +31,7 @@ pub fn definition() -> ToolDefinition {
             "required": ["path", "content"],
             "additionalProperties": false
         }),
+        policy,
     )
 }
 

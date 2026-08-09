@@ -2,9 +2,16 @@
 //! normal [`ToolDefinition`] + [`ToolExecutor`] registrations.
 //!
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
-//! their definitions may choose any execution policy through normal
-//! registration/configuration. The only intentionally fixed policy is the
-//! runtime intrinsic `background_task` (foreground-only, sequential).
+//! their executor implementations and their execution-ownership policies are
+//! independent, so each tool can be registered with any legal
+//! [`NativeToolPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
+//! `ModelSelectable`). The only intentionally fixed policy is the runtime
+//! intrinsic `background_task` (foreground-only, sequential), enforced by
+//! the registry itself.
+//!
+//! The default policy is foreground-only sequential: the model-facing
+//! surface of the native tool plane is conservative by default, and
+//! `ModelSelectable`/`BackgroundOnly` are explicit configuration choices.
 //!
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
@@ -35,7 +42,48 @@ pub struct NativeToolResources {
     pub background: ConversationBackgroundRegistry,
 }
 
-/// Registers every native tool with the registry.
+/// The M5-specific execution-policy configuration of the ordinary native
+/// tools.
+///
+/// This is the one explicit configuration seam Issue #8 requires: the same
+/// native executor implementation is registerable under any legal
+/// execution/ownership policy. It deliberately models only the two real M5
+/// policy axes; there is no generic plugin/strategy/global configuration
+/// framework behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeToolPolicy {
+    /// The execution ownership policy of every ordinary native tool.
+    pub execution: ToolExecutionPolicy,
+    /// The batch scheduling policy of every ordinary native tool.
+    pub concurrency: ToolConcurrencyPolicy,
+}
+
+impl Default for NativeToolPolicy {
+    fn default() -> Self {
+        Self {
+            execution: ToolExecutionPolicy::ForegroundOnly,
+            concurrency: ToolConcurrencyPolicy::Sequential,
+        }
+    }
+}
+
+impl NativeToolPolicy {
+    /// A foreground-only sequential native tool plane (the default).
+    #[must_use]
+    pub const fn foreground_only() -> Self {
+        Self {
+            execution: ToolExecutionPolicy::ForegroundOnly,
+            concurrency: ToolConcurrencyPolicy::Sequential,
+        }
+    }
+}
+
+/// Registers every native tool with the registry under one explicit policy.
+///
+/// The ordinary native tools (Read/Write/Edit/Glob/Grep/Bash) receive
+/// `policy`; the runtime intrinsic `background_task` is intentionally
+/// exempt and stays fixed to foreground-only sequential execution, which
+/// the registry enforces regardless of the configured policy.
 ///
 /// # Errors
 ///
@@ -45,6 +93,7 @@ pub struct NativeToolResources {
 pub fn register_native_tools(
     registry: &mut ToolRegistry,
     resources: NativeToolResources,
+    policy: NativeToolPolicy,
 ) -> Result<(), ToolRegistryError> {
     let NativeToolResources { background } = resources;
     let definitions = [
@@ -54,27 +103,27 @@ pub fn register_native_tools(
                 as Arc<dyn ToolExecutor>,
         ),
         (
-            read::definition(),
+            read::definition(policy),
             Arc::new(read::ReadTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            write::definition(),
+            write::definition(policy),
             Arc::new(write::WriteTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            edit::definition(),
+            edit::definition(policy),
             Arc::new(edit::EditTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            glob::definition(),
+            glob::definition(policy),
             Arc::new(glob::GlobTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            grep::definition(),
+            grep::definition(policy),
             Arc::new(grep::GrepTool) as Arc<dyn ToolExecutor>,
         ),
         (
-            bash::definition(),
+            bash::definition(policy),
             Arc::new(bash::BashTool) as Arc<dyn ToolExecutor>,
         ),
     ];
@@ -84,26 +133,21 @@ pub fn register_native_tools(
     Ok(())
 }
 
-/// The canonical native tool policies: foreground-only sequential by
-/// default; `ModelSelectable` is a legal configuration choice for every
-/// native tool.
-const NATIVE_EXECUTION: ToolExecutionPolicy = ToolExecutionPolicy::ModelSelectable;
-const NATIVE_CONCURRENCY: ToolConcurrencyPolicy = ToolConcurrencyPolicy::Sequential;
-
-/// Builds a canonical native tool definition.
+/// Builds a canonical native tool definition under the configured policy.
 fn native_definition(
     id: &str,
     name: &str,
     description: &str,
     schema: serde_json::Value,
+    policy: NativeToolPolicy,
 ) -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new(id),
         name: name.to_owned(),
         description: description.to_owned(),
         input_schema: schema,
-        execution_policy: NATIVE_EXECUTION,
-        concurrency_policy: NATIVE_CONCURRENCY,
+        execution_policy: policy.execution,
+        concurrency_policy: policy.concurrency,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

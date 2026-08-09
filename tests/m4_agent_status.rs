@@ -848,7 +848,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
         inbound_time,
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -868,6 +868,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -913,7 +914,7 @@ async fn runtime_originated_inbound_triggers_status() {
         inbound_time,
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-runtime-1")]).expect("turn");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -933,6 +934,7 @@ async fn runtime_originated_inbound_triggers_status() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -965,7 +967,7 @@ async fn no_role_heuristic_triggers_status() {
         summary_user("msg-summary-1", "earlier history"),
         historical_user("msg-old-1", "old message"),
     ];
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
         &model,
@@ -980,6 +982,7 @@ async fn no_role_heuristic_triggers_status() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1009,7 +1012,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
     let trigger = InitialTurnTrigger::FreshInbound(
         FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn"),
     );
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![initial], trigger, None),
         &model,
@@ -1024,6 +1027,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1071,7 +1075,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             timestamp: Some(utc("2026-08-07T12:30:00Z")),
         })
         .expect("enqueue B");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1091,8 +1095,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
         ),
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox bound")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1175,7 +1178,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             timestamp: Some(utc("2026-08-08T11:00:00Z")),
         })
         .expect("enqueue B");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1195,8 +1198,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
         ),
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox bound")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1249,7 +1251,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             timestamp: Some(utc("2026-08-07T12:01:00Z")),
         })
         .expect("enqueue B");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1269,8 +1271,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
         ),
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox bound")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1340,7 +1341,7 @@ async fn foreground_tool_continuation_has_no_status() {
     let inbound_time = utc("2026-08-07T12:00:00Z");
     let initial = fresh_user("msg-inbound-1", "run it", UserSource::Human, inbound_time);
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1360,6 +1361,7 @@ async fn foreground_tool_continuation_has_no_status() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1403,7 +1405,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
         ),
     ];
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime("conv-status-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1423,6 +1425,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
         ),
         &tool_runtime,
     )
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     assert_completed(&result);
@@ -1678,7 +1681,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
     });
     // Window 400: the turn-2 projection (u0 + agent-1 + A + B + status =
     // 338) fits, but the provider overflows anyway; the retry compacts.
-    let tool_runtime = common::tool_runtime("conv-1");
+    let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1701,8 +1704,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
         ),
         &tool_runtime,
     )
-    .with_inbound_mailbox(mailbox)
-    .expect("mailbox bound")
+    .expect("conversation identity matches the tool runtime")
     .run()
     .await;
     controller.await.expect("controller task");
