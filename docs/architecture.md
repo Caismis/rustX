@@ -534,16 +534,21 @@ spawning, waiting/reaping, signaling, and IPC failures settle as `Failed`,
 never as a silent `Success`, `Cancelled`, or `TimedOut`) — never a silent
 success that lost the retained output.
 
-**The Bash invocation ownership boundary is its dedicated process
-group.** The invocation owns, guarantees termination of, and bases its
-settlement on exactly the processes that remain in that group; ordinary
-shell descendants remain owned while they stay in it. A process that
-explicitly leaves the group/session (via `setsid` or `setpgid`) is outside
-the invocation's cancellation/terminality contract: it is never signaled
-by the group `TERM`/`KILL`, and it never blocks terminal settlement.
-Subreaper adoption is a reaping implementation detail, not an ownership
-claim — adopted children outside the group are reaped for hygiene and
-handed to init when the supervisor exits.
+**The Bash invocation ownership boundary is its dedicated process group,
+and membership is immutable for Bash descendants.** A Bash invocation
+executes inside one fixed rustX-owned process group. Process-group/session
+mutation from Bash descendants is rejected so the ownership boundary
+cannot be escaped or partially hidden: the inner supervisor installs a
+narrow inherited seccomp policy between its own `setsid()` setup and the
+`/bin/bash` spawn that rejects `setsid(2)` and `setpgid(2)` with `EPERM`
+(the only syscalls that can change process-group/session membership on
+Linux; seccomp filters are inherited across `fork`/`exec` and can only
+become more restrictive). A command such as `setsid sleep 30` fails
+deterministically and nothing leaves the invocation group. This
+restriction is what makes the supervisor's kernel child-wait terminal
+proof complete: an in-domain descendant cannot remain hidden behind an
+ancestor that left the domain. Subreaper adoption is a reaping
+implementation detail, not an ownership claim.
 
 Bash process ownership is kernel-mediated and reuse-safe by construction:
 each invocation owns a small supervisor process unit — an outer
@@ -562,12 +567,18 @@ supervisor's `waitid(Id::PGid)` returning `ECHILD` (no child of the outer
 remains in the invocation group, the inner anchor itself released by that
 same wait strictly after any fallback containment signal), reported to
 rustX as the canonical `AllChildrenReaped` over a `UnixStream` control
-channel. A live group member keeps the group-scoped wait from returning
-`ECHILD`; an adopted child that left the group/session never matches and
-can never block settlement. `/proc` is never the source of truth for
-process ownership or quiescence, and `killpg(..., 0)` probes are never the
-terminal point (an un-reaped leader zombie keeps the numeric group
-observable).
+channel. `P_PGID` alone observes only the waiting process's children, not
+arbitrary group members; its `ECHILD` is a complete whole-group terminal
+proof only because membership is immutable — every in-group process other
+than the inner supervisor is a bash descendant that can never leave the
+group, and when the shell (or any in-group ancestor) exits, the kernel
+reparents its in-group children directly into the nearest subreaper's
+child domain (the inner supervisor while it lives, the outer supervisor
+after it). A live group member keeps the group-scoped wait from returning
+`ECHILD` in every reachable topology; there is no hidden-grandchild state.
+`/proc` is never the source of truth for process ownership or quiescence,
+and `killpg(..., 0)` probes are never the terminal point (an un-reaped
+leader zombie keeps the numeric group observable).
 
 Every Bash result status — `Success`, `Failed`, `Cancelled`, and
 `TimedOut` — is terminal with respect to the invocation-owned process
@@ -582,15 +593,24 @@ supervisor becomes the active containment authority (it observes the
 inner's terminal state via `waitid(WNOWAIT)` without releasing the
 structural anchor, sends one fallback `SIGKILL` to the still-proven-owned
 group, and releases the anchor only through the group-scoped wait), the
-capture is finalized, and only then is `Failed` returned. If the owned
-group cannot be proven terminal within the bounded confirmation window,
-the invocation settles as an explicit bounded process-control failure — it
-never waits indefinitely for an out-of-domain process. Control-channel
-loss is fail-safe: dropping the rustX-side execution future instructs the
-supervisor unit to contain its invocation, so an abandoned owned group can
-never escape. The anchor is released only by the final reap after the last
-signal, so a numeric group id whose allocation has ended is never
-signaled.
+capture is finalized, and only then is `Failed` returned. The bounded
+confirmation window is a real deadline of the state machine: after a
+`TERMINATE` request the unit must report its terminal child set within
+`BASH_TERMINATION_CONFIRMATION`, and the output capture must settle within
+the same window of the terminal child set; if either expires, the
+invocation settles as an explicit bounded process-control failure — the
+output reader tasks are force-finalized (aborted) instead of awaited — so
+a wedged supervisor unit or capture never becomes an unbounded wait. The
+outer supervisor also un-wedges a `SIGSTOP`-frozen inner anchor with
+`SIGKILL`, so a stopped containment chain cannot strand the owned group;
+the only residual state in which rustX cannot prove owned-group
+terminality from outside the unit (a unit frozen beyond the outer
+supervisor's reach) is surfaced explicitly by the bounded failure.
+Control-channel loss remains fail-safe: dropping the rustX-side execution
+future instructs the supervisor unit to contain its invocation, so an
+abandoned owned group can never escape. The anchor is released only by the
+final reap after the last signal, so a numeric group id whose allocation
+has ended is never signaled.
 
 ### Layer 3: Model plane
 

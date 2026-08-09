@@ -215,12 +215,16 @@ Bash requirements:
   invocation active under the same deadline and cancellation until the
   owned group is terminal or cancellation/timeout/process-control failure
   settles it
-- **Process-group-scoped ownership**: the invocation's ownership boundary
-  is its dedicated process group. A descendant that explicitly leaves the
-  group/session (`setsid`/`setpgid`) is outside the cancellation/terminality
-  contract: it is never signaled by the group `TERM`/`KILL` and never
-  blocks terminal settlement; subreaper adoption of such children is a
-  reaping detail, not an ownership claim
+- **Fixed process-group-scoped ownership**: the invocation's ownership
+  boundary is its dedicated process group, and membership is immutable for
+  Bash descendants. The inner supervisor installs a narrow inherited
+  seccomp policy (after its own `setsid()` setup, before the `/bin/bash`
+  spawn) that rejects `setsid`/`setpgid` with `EPERM` — the only syscalls
+  that can change process-group/session membership on Linux — so a
+  descendant can never leave the group or hide an in-group process behind
+  an out-of-group ancestor. A `setsid` escape attempt fails deterministically;
+  subreaper adoption of such children is a reaping detail, not an ownership
+  claim
 - Reuse-safe process-group ownership: `TERM`/`KILL` are issued by the
   inner supervisor with `killpg` against its own process group, whose
   numeric id is its own pid — provably allocated while it lives; the final
@@ -230,13 +234,25 @@ Bash requirements:
   shell are reparented into the invocation supervisor's child domain
   (`PR_SET_CHILD_SUBREAPER`), and the terminal point is the group-scoped
   wait (`waitid` with `Id::PGid`) returning `ECHILD` at the outer
-  supervisor — never a `/proc` membership scan and never a `killpg(..., 0)`
-  probe (an un-reaped leader zombie keeps the numeric group observable)
+  supervisor — a complete whole-group proof only because membership is
+  immutable (an in-group process is always a matching child of the
+  supervisor that owns the gate) — never a `/proc` membership scan and
+  never a `killpg(..., 0)` probe (an un-reaped leader zombie keeps the
+  numeric group observable)
 - Process-control failures (supervisor setup, shell spawning,
-  waiting/reaping, signaling, IPC, SIGTERM handler installation) are
+  waiting/reaping, signaling, IPC, SIGTERM handler installation, fixed-
+  membership restriction installation) are
   explicit failed results; if ownership of a numeric process group can no
   longer be proven, no further signal is issued and the invocation fails
   explicitly
+- Bounded confirmation contract: after a `TERMINATE` request the
+  supervisor unit must report its terminal child set within
+  `BASH_TERMINATION_CONFIRMATION`, and the output capture must settle
+  within the same window of the terminal child set; an expired deadline
+  settles as an explicit bounded process-control failure with the reader
+  tasks force-finalized (aborted) — no wedged unit or capture is ever an
+  unbounded wait. The outer supervisor un-wedges a `SIGSTOP`-frozen inner
+  anchor with `SIGKILL`
 - Explicit artifact-capture failures instead of silent success
 - Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment

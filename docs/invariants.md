@@ -313,18 +313,22 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   owned group is terminal or cancellation/timeout/process-control failure
   settles it.
 - **The Bash invocation ownership boundary is its dedicated process
-  group.** The invocation owns, guarantees termination of, and bases its
-  settlement on exactly the processes that remain in that group. Ordinary
-  shell descendants remain owned while they stay in the group. A process
-  that explicitly leaves the group/session (for example via `setsid` or
-  `setpgid`) is outside the invocation's cancellation/terminality contract:
-  it is never signaled by the group `TERM`/`KILL`, and it must never block
-  terminal settlement. **Subreaper adoption is a process-reaping
-  implementation detail and does not by itself expand semantic ownership
-  beyond the defined process-group boundary**: adopted children outside the
-  group are reaped for hygiene when they die and are handed to init when
-  the supervisor exits, but they never keep an invocation alive whose
-  owned group is terminal.
+  group, and membership is immutable for Bash descendants.** A Bash
+  invocation executes inside one fixed rustX-owned process group.
+  Process-group/session mutation from Bash descendants is rejected so the
+  ownership boundary cannot be escaped or partially hidden: the inner
+  supervisor installs a narrow inherited seccomp policy between its own
+  `setsid()` setup and the `/bin/bash` spawn that rejects `setsid(2)` and
+  `setpgid(2)` with `EPERM` (the only syscalls that can change
+  process-group/session membership on Linux; seccomp filters are inherited
+  across `fork`/`exec` and can only become more restrictive). A command
+  such as `setsid sleep 30` therefore fails deterministically and nothing
+  leaves the invocation group. This restriction is what makes the
+  supervisor's kernel child-wait terminal proof complete: an in-domain
+  descendant cannot remain hidden behind an ancestor that left the domain.
+  Subreaper adoption is a process-reaping implementation detail and does
+  not by itself expand semantic ownership beyond the defined
+  process-group boundary.
 - **Every Bash result status — `Success`, `Failed`, `Cancelled`, and
   `TimedOut` — is terminal with respect to the invocation-owned process
   group**: no invocation-owned Bash process remains capable of executing
@@ -335,10 +339,19 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   supervisor's group-scoped wait reaches its terminal `ECHILD`, the capture
   is finalized, and only then is the remembered `Failed` result returned. A
   `Failed` result can therefore never be observed while owned work is still
-  alive. If the owned group cannot be proven terminal within the bounded
-  confirmation window, the invocation settles as an explicit bounded
-  process-control failure — it never waits indefinitely for an
-  out-of-domain process.
+  alive.
+- **The bounded confirmation window is a real deadline of the state
+  machine**: after a `TERMINATE` request, the supervisor unit must report
+  its terminal child set within `BASH_TERMINATION_CONFIRMATION`, and the
+  output capture must settle within the same window of the terminal child
+  set. If either expires, the invocation settles as an explicit bounded
+  process-control failure — the output reader tasks are force-finalized
+  (aborted) instead of awaited — so no wedged supervisor unit or capture
+  can turn the confirmation contract into an unbounded wait. The only
+  residual state in which rustX cannot prove owned-group terminality from
+  outside the supervisor unit (a unit frozen at the kernel level beyond the
+  outer supervisor's reach) is surfaced explicitly by that bounded failure;
+  it is never hidden behind an ordinary result.
 - Each Bash invocation owns one invocation-local supervisor process unit
   (an outer reaper-of-last-resort plus an inner session/group leader that
   spawns `/bin/bash`; both subreapers). Shell descendants that outlive the
@@ -363,22 +376,29 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   ended is never signaled.
 - The kernel-mediated terminal condition of the invocation-owned process
   group is the **group-scoped wait**, with one authoritative reporter:
-  `waitid` with `Id::PGid` matches only children inside the invocation
-  group, so the inner supervisor's group-scoped wait returning `ECHILD`
-  means the shell and every owned member are reaped (inner child-domain
-  completion, reported only by its exit status), while the outer
-  supervisor's group-scoped wait returning `ECHILD` — no child of the outer
-  remains in the invocation group, the inner anchor itself released by that
-  same wait strictly after any fallback containment signal — is the
-  canonical terminal process-tree event of the whole supervisor unit,
-  reported as `AllChildrenReaped`. A live group member is a matching child
-  and keeps the group-scoped wait from returning `ECHILD`; an adopted child
-  that left the group/session is not in the group and can never block it.
-  This is the exact lifecycle linearization point; rustX combines the outer
+  `waitid` with `Id::PGid` matches children of the waiting process inside
+  the invocation group. `P_PGID` alone observes only the waiting process's
+  children — not arbitrary group members — so its `ECHILD` is a complete
+  whole-group terminal proof only because membership is immutable: every
+  in-group process other than the inner supervisor is a bash descendant
+  that can never leave the group, and when the shell (or any in-group
+  ancestor) exits, the kernel reparents its in-group children directly into
+  the nearest subreaper's child domain (the inner supervisor while it
+  lives, the outer supervisor after it). The inner supervisor's group-
+  scoped wait returning `ECHILD` therefore means every in-group child of
+  the inner is reaped (inner child-domain completion, reported only by its
+  exit status), while the outer supervisor's group-scoped wait returning
+  `ECHILD` — no child of the outer remains in the invocation group, the
+  inner anchor itself released by that same wait strictly after any
+  fallback containment signal — is the canonical terminal process-tree
+  event of the whole supervisor unit, reported as `AllChildrenReaped`. A
+  live group member keeps the group-scoped wait from returning `ECHILD` in
+  every reachable topology; there is no hidden-grandchild state. This is
+  the exact lifecycle linearization point; rustX combines the outer
   `AllChildrenReaped` with output-capture settlement to produce the tool
-  result. `killpg(..., 0)` probes are never the terminal point: an un-reaped
-  group-leader zombie keeps the numeric group observable, so probes cannot
-  distinguish live members from the anchored zombie.
+  result. `killpg(..., 0)` probes are never the terminal point: an
+  un-reaped group-leader zombie keeps the numeric group observable, so
+  probes cannot distinguish live members from the anchored zombie.
 - Process-control failures are never silent: supervisor setup, shell
   spawning, waiting/reaping, signaling, and control-channel failures surface
   as an explicit failed tool result — never as an ordinary `Success`,

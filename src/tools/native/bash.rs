@@ -35,20 +35,35 @@
 //! owned group work escape the timeout/cancellation contract, even when the
 //! descendant no longer holds the rustX pipes.
 //!
+//! # Fixed invocation process group
+//!
+//! A Bash invocation executes inside one fixed rustX-owned process group.
+//! Process-group/session mutation from Bash descendants is rejected so the
+//! ownership boundary cannot be escaped or partially hidden: the inner
+//! supervisor installs a narrow inherited seccomp policy between its own
+//! `setsid()` setup and the `/bin/bash` spawn that rejects `setsid(2)` and
+//! `setpgid(2)` with `EPERM` (see [`bash_supervisor`]). `setsid`/`setpgid`
+//! are the only syscalls that can change process-group/session membership
+//! on Linux, and seccomp filters are inherited across `fork`/`exec` and can
+//! only become more restrictive. A command such as `setsid sleep 30`
+//! therefore fails deterministically (the utility exits non-zero) and
+//! nothing leaves the invocation group.
+//!
+//! This restriction is what makes the supervisor's kernel child-wait
+//! terminal proof complete: an in-domain descendant cannot remain hidden
+//! behind an ancestor that left the domain. See the "Ownership boundary"
+//! section below and [`bash_supervisor`] for the full argument.
+//!
 //! # Ownership boundary
 //!
 //! The Bash invocation's ownership boundary is its dedicated process
 //! group. The invocation owns, guarantees termination of, and bases its
-//! settlement on exactly the processes that remain in that group; a
-//! descendant that explicitly leaves the group/session (for example via
-//! `setsid` or `setpgid`) has intentionally escaped the Bash execution
-//! domain and is no longer part of the tool's owned lifecycle. Such an
-//! escaped process is never signaled by the group `TERM`/`KILL`, and it
-//! must never block terminal settlement. Subreaper adoption of escaped
-//! children is a reaping implementation detail, not an ownership claim:
-//! adopted children outside the group are reaped for hygiene when they
-//! die and are handed to init when the supervisor exits, but they never
-//! keep an invocation alive whose owned group is terminal.
+//! settlement on exactly the processes that remain in that group. Because
+//! group membership is immutable for bash descendants, every process ever
+//! spawned by the shell — background children, subshells, replacement
+//! processes — remains in the invocation group for its whole lifetime:
+//! **there is no way to leave the owned execution domain from inside a
+//! Bash command**.
 //!
 //! # Invocation supervisor
 //!
@@ -58,11 +73,23 @@
 //! [`bash_supervisor`]) that spawns `/bin/bash`, reaps the shell, receives
 //! shell descendants that outlive the shell through kernel reparenting, and
 //! settles on the kernel's **group-scoped wait** — `waitid` with `Id::PGid`
-//! — which matches only children inside the invocation process group and
-//! returns `ECHILD` exactly when the group's child domain is terminal. The
-//! **outer** supervisor's group-scoped `ECHILD` is the single authoritative
-//! terminal process-tree event of the whole supervisor unit; rustX combines
-//! it with output-capture settlement to produce the tool result.
+//! — which matches children of the waiting process inside the invocation
+//! process group and returns `ECHILD` exactly when no such child remains.
+//!
+//! `waitid(P_PGID)` alone observes only the waiting process's children, not
+//! arbitrary group members; the fixed-membership invariant is what makes
+//! its `ECHILD` a complete whole-group terminal proof. With membership
+//! immutable, every in-group process other than the inner supervisor is a
+//! bash descendant: while the shell lives, the shell itself is a matching
+//! child of the inner supervisor and blocks the gate, and when the shell
+//! (or any in-group ancestor) exits, the kernel reparents its in-group
+//! children directly into the nearest subreaper's child domain — the inner
+//! supervisor while it lives, the outer supervisor after it. There is
+//! therefore no state in which an in-group process is not a matching child
+//! of the supervisor that owns the gate. The **outer** supervisor's
+//! group-scoped `ECHILD` is the single authoritative terminal process-tree
+//! event of the whole supervisor unit; rustX combines it with
+//! output-capture settlement to produce the tool result.
 //!
 //! # Terminal results
 //!
@@ -74,10 +101,20 @@
 //! but does not itself settle the invocation lifecycle: owned work is
 //! contained and the owned group reaped to the outer supervisor's terminal
 //! group-scoped `ECHILD` (and the capture settled) before the remembered
-//! `Failed` result is returned. If the owned group cannot be proven
-//! terminal within the bounded confirmation window, the invocation settles
-//! as an explicit bounded process-control failure — it never waits
-//! indefinitely for an out-of-domain process.
+//! `Failed` result is returned.
+//!
+//! The bounded confirmation window is a **real deadline** of the state
+//! machine: after a TERMINATE request, the supervisor must report its
+//! terminal child set within [`BASH_TERMINATION_CONFIRMATION`], and the
+//! output capture must settle within the same window of the terminal child
+//! set. If either expires, the invocation settles as an explicit bounded
+//! process-control failure — the reader tasks are force-finalized instead
+//! of awaited — so no wedged supervisor or capture can ever turn the
+//! confirmation contract into an unbounded wait. The only residual state
+//! in which rustX cannot prove owned-group terminality from outside the
+//! supervisor unit (a unit frozen at the kernel level beyond the outer
+//! supervisor's reach) is surfaced explicitly by that bounded failure; it
+//! is never hidden behind an ordinary result.
 //!
 //! # Process-group safety
 //!
@@ -273,6 +310,8 @@ pub(crate) struct BashTestControl {
     anchor_pid_file: Option<std::path::PathBuf>,
     #[cfg(test)]
     recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
+    #[cfg(test)]
+    capture_hold: Option<CaptureHold>,
 }
 
 /// One attempted process-group signal, recorded by the test seam.
@@ -308,6 +347,7 @@ impl BashTestControl {
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             anchor_pid_file: None,
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
+            capture_hold: None,
         }
     }
 
@@ -397,7 +437,78 @@ impl BashTestControl {
         self.fail_sigterm_handler = true;
         self
     }
+
+    /// Arms the deterministic stuck-capture seam: the stdout output reader
+    /// provably parks after EOF and stays open until the invocation's
+    /// bounded settlement path force-finalizes it. Test-only; never a
+    /// production configuration.
+    #[must_use]
+    pub(crate) fn hold_stdout_capture(mut self) -> Self {
+        self.capture_hold = Some(CaptureHold::new());
+        self
+    }
+
+    /// The armed capture-hold seam handle (test side).
+    #[must_use]
+    pub(crate) fn capture_hold(&self) -> Option<&CaptureHold> {
+        self.capture_hold.as_ref()
+    }
 }
+
+/// The test-only seam that holds one output reader task open: the stdout
+/// reader parks after EOF until the invocation's bounded settlement path
+/// force-finalizes it. This is how the regressions prove that a wedged
+/// capture can never turn the bounded confirmation contract into an
+/// unbounded wait.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct CaptureHold {
+    parked_tx: tokio::sync::watch::Sender<bool>,
+    parked_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+#[cfg(test)]
+impl CaptureHold {
+    fn new() -> Self {
+        let (parked_tx, parked_rx) = tokio::sync::watch::channel(false);
+        Self {
+            parked_tx,
+            parked_rx,
+        }
+    }
+
+    /// The reader-side handle handed to the stdout spool task.
+    fn reader(&self) -> CaptureHoldReader {
+        CaptureHoldReader {
+            parked: self.parked_tx.clone(),
+        }
+    }
+
+    /// Test side: waits until the stdout reader provably parked after EOF.
+    async fn await_parked(&self) {
+        let mut rx = self.parked_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+}
+
+/// The reader-side capture-hold handle: parks the stdout spool task after
+/// EOF until the bounded settlement path aborts it.
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct CaptureHoldReader {
+    parked: tokio::sync::watch::Sender<bool>,
+}
+
+/// The capture-park handle passed to the output readers: `Some` only in
+/// test builds. In non-test builds the seam type is uninhabited, so no
+/// reader can ever park.
+#[cfg(test)]
+type CapturePark = Option<CaptureHoldReader>;
+/// See [`CapturePark`]: the non-test seam is uninhabited.
+#[cfg(not(test))]
+type CapturePark = Option<std::convert::Infallible>;
 
 /// The exact shell-exit lifecycle boundary of one invocation, observable
 /// only by in-crate tests.
@@ -464,8 +575,18 @@ pub(crate) enum ProcessControlError {
     /// The supervisor exited before reporting terminal child ownership.
     UnexpectedSupervisorExit,
     /// The owned process tree did not become terminal within the bounded
-    /// confirmation window after termination was requested.
+    /// confirmation window after termination was requested. This is the
+    /// bounded settlement escape hatch for a wedged supervisor unit: the
+    /// invocation settles as an explicit bounded failure instead of waiting
+    /// indefinitely.
     QuiescenceTimeout,
+    /// The output capture did not settle within the bounded confirmation
+    /// window after the owned process tree reached its terminal state.
+    /// This is the bounded settlement escape hatch for a wedged capture:
+    /// the reader tasks are force-finalized and the invocation settles as
+    /// an explicit bounded failure — the confirmation contract is a real
+    /// bound, never an unbounded wait.
+    CaptureTimeout,
 }
 
 impl core::fmt::Display for ProcessControlError {
@@ -478,6 +599,10 @@ impl core::fmt::Display for ProcessControlError {
             Self::QuiescenceTimeout => {
                 write!(f, "the owned bash process tree did not become terminal")
             }
+            Self::CaptureTimeout => write!(
+                f,
+                "the bash output capture did not settle within the bounded confirmation window"
+            ),
         }
     }
 }
@@ -733,6 +858,12 @@ async fn run_bash_unix(
     let mut stdout_task = None;
     let mut stderr_task = None;
     if let Some(pipe) = stdout_pipe {
+        #[cfg(test)]
+        let stdout_park: CapturePark = control
+            .and_then(|control| control.capture_hold())
+            .map(CaptureHold::reader);
+        #[cfg(not(test))]
+        let stdout_park: CapturePark = None;
         stdout_task = Some(tokio::spawn(spool_stream(
             pipe,
             context.artifacts.clone(),
@@ -740,9 +871,11 @@ async fn run_bash_unix(
             combined_tx.clone(),
             0,
             "stdout",
+            stdout_park,
         )));
     }
     if let Some(pipe) = stderr_pipe {
+        let stderr_park: CapturePark = None;
         stderr_task = Some(tokio::spawn(spool_stream(
             pipe,
             context.artifacts.clone(),
@@ -750,6 +883,7 @@ async fn run_bash_unix(
             combined_tx.clone(),
             1,
             "stderr",
+            stderr_park,
         )));
     }
     drop(combined_tx);
@@ -774,24 +908,32 @@ async fn run_bash_unix(
     let mut drain_result: Option<Box<Result<StreamReferences, String>>> = None;
     let mut terminate_sent = false;
     let mut terminate_deadline: Option<tokio::time::Instant> = None;
+    let mut capture_deadline: Option<tokio::time::Instant> = None;
     let mut bounded_settle = false;
     loop {
         // Outcome intent and lifecycle settlement are distinct: the loop
-        // may break only when the capture is settled, an outcome intent
-        // (failure, cancellation/timeout, or the shell's natural status) is
-        // known, and either the owned child set is terminal or the bounded
-        // confirmation window has expired into an explicit failure.
+        // may break only when an outcome intent (failure,
+        // cancellation/timeout, or the shell's natural status) is known
+        // and either the owned child set is terminal or the bounded
+        // settlement path already decided the outcome. The bounded path
+        // also breaks without a settled capture: the reader tasks are
+        // force-finalized after the loop, so a wedged capture can never
+        // turn the bounded confirmation contract into an unbounded wait.
         let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
-        if drain_result.is_some() && outcome_intent && (children_terminal || bounded_settle) {
+        if outcome_intent
+            && (children_terminal || bounded_settle)
+            && (drain_result.is_some() || bounded_settle)
+        {
             break;
         }
         // After TERMINATE the supervisor performs TERM -> grace -> KILL;
         // the owned group must reach its terminal state within the bounded
-        // confirmation window. An expired deadline must actually let the
-        // state machine terminate: the invocation settles as an explicit
-        // bounded process-control failure instead of waiting indefinitely
-        // for an out-of-domain or wedged process — never a premature
-        // Success/Cancelled/TimedOut.
+        // confirmation window. An expired deadline settles the invocation
+        // as an explicit bounded process-control failure instead of waiting
+        // indefinitely for a wedged unit — never a premature
+        // Success/Cancelled/TimedOut. The timer arms of the select below
+        // are the real deadline enforcement; the checks here also cover
+        // iterations that woke for another reason.
         if terminate_sent
             && !children_terminal
             && terminate_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
@@ -799,6 +941,21 @@ async fn run_bash_unix(
             failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
             bounded_settle = true;
             continue;
+        }
+        // Once the outcome intent is known and the owned child set is
+        // terminal, the output capture must settle within the same bounded
+        // window: a capture wedged on reader or artifact I/O must not turn
+        // the contract into an unbounded wait.
+        if outcome_intent && children_terminal && drain_result.is_none() {
+            if capture_deadline.is_none() {
+                capture_deadline =
+                    Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
+            }
+            if tokio::time::Instant::now() >= capture_deadline.expect("set above") {
+                failure = Some(ProcessControlError::CaptureTimeout.to_string());
+                bounded_settle = true;
+                continue;
+            }
         }
         // The drain future polls the output reader tasks; a completed
         // JoinHandle must never be polled again, so the drain arm is
@@ -887,6 +1044,28 @@ async fn run_bash_unix(
             result = &mut drain, if drain_result.is_none() => {
                 drain_result = Some(Box::new(result));
             }
+            // The bounded confirmation timer: a real deadline, enforced by
+            // the select even while every other arm pends.
+            () = async {
+                match terminate_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if terminate_sent && !children_terminal && !bounded_settle => {
+                failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
+                bounded_settle = true;
+            }
+            // The bounded capture timer: the output capture must settle
+            // within the confirmation window of the terminal child set.
+            () = async {
+                match capture_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if capture_deadline.is_some() && drain_result.is_none() && !bounded_settle => {
+                failure = Some(ProcessControlError::CaptureTimeout.to_string());
+                bounded_settle = true;
+            }
         }
     }
 
@@ -896,25 +1075,31 @@ async fn run_bash_unix(
     // supervisor exits promptly after its terminal report.
     let _ = tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, child.wait()).await;
 
-    // The supervisor exits only after its terminal child set, closing the
-    // capture pipes; the bounded drain re-drain completes the capture.
+    // The capture settled while the supervision loop was running, or the
+    // bounded settlement path force-finalized it: the only way to leave the
+    // loop without the capture settled is bounded_settle, and then the
+    // reader tasks are aborted instead of awaited — a wedged capture must
+    // never turn the bounded contract into an unbounded wait. The abort
+    // drops each task's artifact handle, so the incomplete artifact is
+    // finalized and never referenced.
     let capture = if let Some(result) = drain_result {
-        // The capture already completed while the supervision loop was
-        // running; its result is reused — a completed JoinHandle must never
-        // be polled again.
         *result
     } else {
-        match tokio::time::timeout(
-            BASH_TERMINATION_CONFIRMATION,
-            await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                Err("the bash output capture did not settle within the bounded window".to_owned())
-            }
+        debug_assert!(
+            bounded_settle,
+            "only the bounded path leaves the loop with an open capture"
+        );
+        if let Some(handle) = &stdout_task {
+            handle.abort();
         }
+        if let Some(handle) = &stderr_task {
+            handle.abort();
+        }
+        combined_task.abort();
+        Err(
+            "the bash output capture was force-finalized after the bounded settlement window"
+                .to_owned(),
+        )
     };
 
     let (stdout_reference, stderr_reference, combined_reference) = match capture {
@@ -1142,10 +1327,13 @@ async fn spool_stream<R>(
     combined_tx: tokio::sync::mpsc::Sender<(u8, Vec<u8>)>,
     stream_id: u8,
     name: &'static str,
+    park: CapturePark,
 ) -> Result<Option<FileReference>, String>
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    #[cfg(not(test))]
+    let _ = park;
     let mut artifact: Option<(
         crate::runtime::identity::ArtifactId,
         crate::tools::artifacts::ArtifactWriter,
@@ -1183,6 +1371,14 @@ where
             .map_err(|error| format!("cannot write the {name} artifact: {error}"))?;
     }
     drop(combined_tx);
+    #[cfg(test)]
+    if let Some(park) = park {
+        // The deterministic stuck-capture seam: park provably after EOF and
+        // stay open until the bounded settlement path force-finalizes
+        // (aborts) this task.
+        park.parked.send(true).ok();
+        std::future::pending::<()>().await;
+    }
     Ok(artifact.map(|(id, _)| FileReference {
         artifact_id: id,
         name: Some(format!("{name}.log")),
@@ -1380,6 +1576,17 @@ mod tests {
             Err(nix::errno::Errno::ESRCH) => false,
             Ok(()) | Err(_) => true,
         }
+    }
+
+    /// The process-group id of a fixture process, from `/proc/<pid>/stat`
+    /// (test-only fixture-topology inspection; `/proc` is never the
+    /// production ownership authority).
+    #[cfg(unix)]
+    fn pgrp_of(pid: i32) -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = stat.rfind(')')?;
+        let fields: Vec<&str> = stat[close + 1..].split_whitespace().collect();
+        fields.get(2)?.parse().ok()
     }
 
     /// Polls a process until it is provably gone (ESRCH), with a strict
@@ -2280,26 +2487,25 @@ mod tests {
         let _ = dir;
     }
 
-    /// The escaped-descendant regression (reproducer): a descendant that
-    /// explicitly leaves the invocation session/group via `setsid` is
-    /// outside the owned execution domain (Contract B). The shell's natural
-    /// exit must settle the invocation once the owned group is terminal —
-    /// the escaped process must neither block settlement nor be claimed as
-    /// rustX-owned. The escaped process is cleaned up by the test as an
-    /// explicitly out-of-domain fixture, never described as runtime
-    /// containment.
+    /// The direct `setsid` escape-attempt regression: membership mutation
+    /// is rejected for bash descendants (the inherited syscall restriction),
+    /// so `setsid sleep 30` cannot leave the invocation group. The `setsid`
+    /// utility fails deterministically with `EPERM` and exits non-zero; the
+    /// recorded pid is provably terminal afterwards — nothing escaped the
+    /// owned domain — and the shell's natural exit settles ordinary
+    /// `Success` once the owned group is terminal.
     #[cfg(unix)]
     #[tokio::test]
-    async fn escaped_descendant_does_not_block_natural_settlement() {
+    async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
         let (dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
-        let escaped_pid_file = root.join("escaped.pid");
+        let attempt_pid_file = root.join("attempt.pid");
         let anchor_pid_file = root.join("anchor.pid");
         let command = format!(
             "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
             shell_pid_file.display(),
-            escaped_pid_file.display()
+            attempt_pid_file.display()
         );
         let result = tokio::time::timeout(
             Duration::from_secs(20),
@@ -2313,15 +2519,11 @@ mod tests {
             ),
         )
         .await
-        .expect(
-            "the invocation settles exactly once (bounded, not blocked by the escaped process)",
-        );
-        // The shell's natural exit settles Success: the owned group is
-        // terminal and the escaped process is out of domain.
+        .expect("the invocation settles exactly once (bounded)");
         assert_eq!(
             result.status,
             ToolExecutionStatus::Success,
-            "the owned group is terminal; the shell's natural exit settles Success, got {:?}",
+            "the rejected escape attempt leaves the owned group terminal; the natural exit settles Success, got {:?}",
             result.status
         );
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
@@ -2334,43 +2536,37 @@ mod tests {
             .trim()
             .parse()
             .expect("shell pid");
-        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
-            .expect("escaped pid file")
+        let attempt_pid: i32 = std::fs::read_to_string(&attempt_pid_file)
+            .expect("attempt pid file")
             .trim()
             .parse()
-            .expect("escaped pid");
-        // The owned group is terminal (the anchor is released with the
-        // final reap) and the shell is gone.
+            .expect("attempt pid");
+        // The owned group is terminal and the shell is gone; the escaped
+        // `sleep` never came into existence — the recorded attempt pid is
+        // provably dead instead of alive out of domain.
         wait_for_group_death(anchor_pid).await;
         wait_for_process_death(shell_pid).await;
-        // The escaped process intentionally left the owned domain and is
-        // still alive. The test cleans it up as an explicitly out-of-domain
-        // fixture; this is not rustX-owned containment.
-        assert!(
-            process_alive(escaped_pid),
-            "the escaped process is outside the owned domain and must still be alive"
-        );
-        kill_escaped_fixture(escaped_pid).await;
+        wait_for_process_death(attempt_pid).await;
         let _ = dir;
     }
 
-    /// The escaped-descendant timeout regression: the shell stays alive in
-    /// the owned group while the escaped descendant runs elsewhere; the
-    /// invocation timeout owns the outcome and settles `TimedOut` in
-    /// bounded time — the escaped process does not block the group's
-    /// termination or the settlement.
+    /// The direct `setsid` escape-attempt timeout regression: the shell
+    /// stays alive in the owned group while the rejected `setsid` attempt
+    /// cannot leave it. The invocation timeout owns the outcome and settles
+    /// `TimedOut` in bounded time with the whole owned group terminal; the
+    /// recorded attempt pid is provably dead afterwards.
     #[cfg(unix)]
     #[tokio::test]
-    async fn escaped_descendant_timeout_settles_boundedly() {
+    async fn setsid_escape_attempt_times_out_with_the_owned_group() {
         let (dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
-        let escaped_pid_file = root.join("escaped.pid");
+        let attempt_pid_file = root.join("attempt.pid");
         let anchor_pid_file = root.join("anchor.pid");
         let command = format!(
             "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; sleep 30",
             shell_pid_file.display(),
-            escaped_pid_file.display()
+            attempt_pid_file.display()
         );
         let result = tokio::time::timeout(
             Duration::from_secs(20),
@@ -2388,7 +2584,7 @@ mod tests {
         assert_eq!(
             result.status,
             ToolExecutionStatus::TimedOut,
-            "the timeout owns the owned group; the escaped process must not block it, got {:?}",
+            "the timeout owns the owned group; the rejected attempt must not leave anything, got {:?}",
             result.status
         );
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
@@ -2401,38 +2597,33 @@ mod tests {
             .trim()
             .parse()
             .expect("shell pid");
-        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
-            .expect("escaped pid file")
+        let attempt_pid: i32 = std::fs::read_to_string(&attempt_pid_file)
+            .expect("attempt pid file")
             .trim()
             .parse()
-            .expect("escaped pid");
-        // The owned group and shell are terminal; the escaped process
-        // survives out of domain.
+            .expect("attempt pid");
         wait_for_group_death(anchor_pid).await;
         wait_for_process_death(shell_pid).await;
-        assert!(
-            process_alive(escaped_pid),
-            "the escaped process must survive the owned-group termination"
-        );
-        kill_escaped_fixture(escaped_pid).await;
+        wait_for_process_death(attempt_pid).await;
         let _ = dir;
     }
 
-    /// The escaped-descendant cancellation regression: cancellation
-    /// terminates the owned group and settles `Cancelled` in bounded time
-    /// while the escaped descendant continues out of domain.
+    /// The direct `setsid` escape-attempt cancellation regression:
+    /// cancellation terminates the owned group — the rejected attempt
+    /// cannot survive it — and settles `Cancelled` in bounded time with the
+    /// recorded attempt pid provably dead.
     #[cfg(unix)]
     #[tokio::test]
-    async fn escaped_descendant_cancellation_settles_boundedly() {
+    async fn setsid_escape_attempt_cancels_with_the_owned_group() {
         let (dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
-        let escaped_pid_file = root.join("escaped.pid");
+        let attempt_pid_file = root.join("attempt.pid");
         let anchor_pid_file = root.join("anchor.pid");
         let command = format!(
             "echo $$ > {}; setsid sleep 30 >/dev/null 2>&1 & echo $! > {}; sleep 30",
             shell_pid_file.display(),
-            escaped_pid_file.display()
+            attempt_pid_file.display()
         );
         let cancellation = CancellationSignal::new();
         let cancelling = cancellation.clone();
@@ -2459,7 +2650,7 @@ mod tests {
             .expect("executor task");
         assert!(
             matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
-            "cancellation owns the owned group; the escaped process must not block it, got {:?}",
+            "cancellation owns the owned group; the rejected attempt must not survive it, got {:?}",
             result.status
         );
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
@@ -2467,56 +2658,217 @@ mod tests {
             .trim()
             .parse()
             .expect("anchor pid");
-        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
-            .expect("escaped pid file")
+        let attempt_pid: i32 = std::fs::read_to_string(&attempt_pid_file)
+            .expect("attempt pid file")
             .trim()
             .parse()
-            .expect("escaped pid");
+            .expect("attempt pid");
         wait_for_group_death(anchor_pid).await;
-        assert!(
-            process_alive(escaped_pid),
-            "the escaped process must survive the owned-group termination"
-        );
-        kill_escaped_fixture(escaped_pid).await;
+        wait_for_process_death(attempt_pid).await;
         let _ = dir;
     }
 
-    /// The non-terminating escaped-descendant regression: an escaped
-    /// process that never exits naturally must not keep the invocation
-    /// active (the old outer-`ECHILD` gate would have waited forever). The
-    /// invocation settles from the owned group's terminality alone.
+    /// The mandatory hidden-grandchild regression (reproducer): A (a
+    /// subshell) creates B (a redirected descendant), A itself attempts to
+    /// leave the invocation group/session via `exec setsid`, the main shell
+    /// exits. The invocation must NOT settle while B is owned: no canonical
+    /// result may become terminal while any process still belongs to the
+    /// invocation-owned process group. At the exact shell-exit boundary the
+    /// test proves the fixture topology before evaluating settlement.
     #[cfg(unix)]
     #[tokio::test]
-    async fn non_terminating_escaped_descendant_does_not_block_settlement() {
+    async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
         let (dir, artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let shell_pid_file = root.join("shell.pid");
-        let escaped_pid_file = root.join("escaped.pid");
+        let a_pid_file = root.join("a.pid");
+        let b_pid_file = root.join("b.pid");
         let anchor_pid_file = root.join("anchor.pid");
         let command = format!(
-            "echo $$ > {}; setsid sh -c 'trap \"\" TERM; while :; do sleep 1; done' >/dev/null 2>&1 & echo $! > {}; exit 0",
+            "echo $$ > {}; sh -c 'sleep 30 >/dev/null 2>&1 & echo $! > {}; \
+             exec setsid sleep 30 >/dev/null 2>&1' & echo $! > {}; exit 0",
             shell_pid_file.display(),
-            escaped_pid_file.display()
+            b_pid_file.display(),
+            a_pid_file.display()
         );
-        let result = tokio::time::timeout(
-            Duration::from_secs(20),
-            run_with_control(
-                command,
-                BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
-                CancellationSignal::new(),
-                artifacts,
-                workspace,
-                Some(10_000),
-            ),
-        )
-        .await
-        .expect(
-            "the invocation settles exactly once (bounded, never waits for the escaped process)",
+        let control = BashTestControl::new()
+            .pause_at_shell_exit()
+            .anchor_pid_file(anchor_pid_file.clone());
+        let hook = control.lifecycle().clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control,
+            CancellationSignal::new(),
+            artifacts.clone(),
+            workspace.clone(),
+            Some(800),
+        ));
+        // 1. The exact shell-exit boundary: the main shell exited after
+        //    backgrounding A; the executor is parked before any settlement
+        //    handling.
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
+            .await
+            .expect("the shell-exit boundary is observed");
+        // 2. A and B provably exist (A creates B before its own escape
+        //    attempt). The poll queries the fixture's own pid files — the
+        //    authoritative process state — with a strict deadlock guard.
+        for _ in 0..1000 {
+            if a_pid_file.exists() && b_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+            .expect("shell pid file")
+            .trim()
+            .parse()
+            .expect("shell pid");
+        let a_pid: i32 = std::fs::read_to_string(&a_pid_file)
+            .expect("a pid file")
+            .trim()
+            .parse()
+            .expect("a pid");
+        let b_pid: i32 = std::fs::read_to_string(&b_pid_file)
+            .expect("b pid file")
+            .trim()
+            .parse()
+            .expect("b pid");
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        assert!(
+            !process_alive(shell_pid),
+            "the shell parent must be terminal at the boundary"
         );
+        assert!(
+            process_alive(b_pid),
+            "B must still be alive at the shell-exit boundary"
+        );
+        // 3. The authoritative fixture topology: B belongs to the
+        //    invocation-owned process group, and A — if it is still alive —
+        //    must belong to it too. No state may exist where A is out of
+        //    group while a live B remains hidden inside the owned group.
+        assert_eq!(
+            pgrp_of(b_pid),
+            Some(anchor_pid),
+            "B must still belong to the invocation-owned process group"
+        );
+        if process_alive(a_pid) {
+            assert_eq!(
+                pgrp_of(a_pid),
+                Some(anchor_pid),
+                "A must still belong to the invocation-owned process group"
+            );
+        }
+        // 4. The executor resumes; the invocation must NOT settle while B
+        //    is owned — only the invocation timeout can settle it.
+        hook.release();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles exactly once")
+            .expect("executor task");
         assert_eq!(
             result.status,
-            ToolExecutionStatus::Success,
-            "the owned group is terminal; the non-terminating escaped process is out of domain, got {:?}",
+            ToolExecutionStatus::TimedOut,
+            "the invocation must stay active while B is owned, got {:?}",
+            result.status
+        );
+        // 5. After the timeout-driven termination the whole owned domain is
+        //    terminal: B and the group are gone (A either died in the group
+        //    or was terminated with it).
+        wait_for_process_death(b_pid).await;
+        wait_for_group_death(anchor_pid).await;
+        let _ = dir;
+    }
+
+    /// The bounded-settlement regression: the stdout capture reader is held
+    /// open deterministically past the bounded confirmation window (the
+    /// test-only seam, never a production configuration). The owned process
+    /// tree is already terminal, so only the capture can be wedged; the
+    /// state machine must still settle within the strict outer bound — the
+    /// capture is force-finalized (the reader task is aborted) and the
+    /// invocation settles as an explicit bounded `Failed`. No unbounded
+    /// wait remains.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stuck_capture_settles_boundedly_as_an_explicit_failure() {
+        let (dir, artifacts, workspace) = fixture();
+        let control = BashTestControl::new().hold_stdout_capture();
+        let hold = control.capture_hold().expect("capture hold seam").clone();
+        let task = tokio::spawn(run_with_control(
+            "echo hello".to_owned(),
+            control,
+            CancellationSignal::new(),
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        // The stdout reader provably parked after EOF; the shell exited and
+        // the owned group is terminal, so only the capture can be wedged.
+        tokio::time::timeout(Duration::from_secs(15), hold.await_parked())
+            .await
+            .expect("the stdout reader parks after EOF");
+        // The bounded confirmation window expires into an explicit bounded
+        // failure within the strict outer bound.
+        let result = tokio::time::timeout(Duration::from_secs(25), task)
+            .await
+            .expect("the invocation settles within the strict outer bound")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "a wedged capture must settle as an explicit bounded failure, got {:?}",
+            result.status
+        );
+        let _ = dir;
+    }
+
+    /// The stopped-anchor regression: a `SIGSTOP` of the inner supervisor
+    /// freezes the whole containment chain (TERMINATE is never processed).
+    /// The outer supervisor detects the frozen anchor, un-wedges it with
+    /// `SIGKILL`, contains the invocation group, and the cancellation
+    /// settles normally with the owned group terminal — the bounded
+    /// confirmation path is never reached.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stopped_anchor_supervisor_is_contained_by_the_outer() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        // The fixture freezes its own supervisor: bash's parent is the
+        // inner supervisor (the invocation's anchor). `sleep 30` keeps the
+        // owned group alive while the anchor is stopped.
+        let command = format!(
+            "echo $$ > {}; kill -STOP $PPID; sleep 30",
+            shell_pid_file.display()
+        );
+        let cancellation = CancellationSignal::new();
+        let cancelling = cancellation.clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            BashTestControl::new().anchor_pid_file(anchor_pid_file.clone()),
+            cancellation,
+            artifacts.clone(),
+            workspace.clone(),
+            None,
+        ));
+        for _ in 0..1000 {
+            if shell_pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        cancelling.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
+            "a frozen anchor must still settle the owned group as Cancelled, got {:?}",
             result.status
         );
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
@@ -2524,30 +2876,49 @@ mod tests {
             .trim()
             .parse()
             .expect("anchor pid");
-        let escaped_pid: i32 = std::fs::read_to_string(&escaped_pid_file)
-            .expect("escaped pid file")
-            .trim()
-            .parse()
-            .expect("escaped pid");
         wait_for_group_death(anchor_pid).await;
-        assert!(
-            process_alive(escaped_pid),
-            "the non-terminating escaped process must still be alive"
-        );
-        kill_escaped_fixture(escaped_pid).await;
         let _ = dir;
     }
 
-    /// Terminates one explicitly out-of-domain escaped fixture process.
-    /// This is test-side cleanup of a process the contract intentionally
-    /// classifies outside the invocation's ownership; it is never presented
-    /// as rustX-owned containment.
+    /// The `setpgid` mutation regression: `setpgid(2)` is rejected for bash
+    /// descendants exactly like `setsid(2)` — membership cannot be changed
+    /// without creating a session either. The syscall fails with `EPERM`
+    /// and the command exits non-zero; nothing leaves the invocation group.
     #[cfg(unix)]
-    async fn kill_escaped_fixture(pid: i32) {
-        let _ = nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGKILL,
+    #[tokio::test]
+    async fn setpgid_escape_attempt_is_rejected() {
+        let Ok(_python) = std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+        else {
+            eprintln!("skipping setpgid regression: python3 is unavailable");
+            return;
+        };
+        let (_dir, artifacts, workspace) = fixture();
+        let result = run_with(
+            "python3 -c \"import os; os.setpgid(0, 0)\"",
+            &artifacts,
+            &workspace,
+        )
+        .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "a setpgid mutation attempt must fail explicitly, got {:?}",
+            result.status
         );
-        wait_for_process_death(pid).await;
+        let stderr = result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                crate::tools::types::ToolResultContent::Json { value } => {
+                    value["stderr"].as_str().map(str::to_owned)
+                }
+                _ => None,
+            })
+            .expect("stderr in the JSON result");
+        assert!(
+            stderr.contains("Operation not permitted"),
+            "the setpgid syscall must be rejected with EPERM, stderr: {stderr}"
+        );
     }
 }
