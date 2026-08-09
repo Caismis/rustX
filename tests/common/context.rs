@@ -15,7 +15,7 @@ use rustx::context::{
     SummaryRequest, TokenEstimator,
 };
 use rustx::message::types::{InboundKind, MessageBlock};
-use rustx::tools::types::ToolDefinition;
+use rustx::tools::types::ModelToolDefinition;
 use tokio::sync::watch;
 
 /// One scripted step of a fake summarizer invocation.
@@ -84,7 +84,7 @@ impl ContextSummarizer for FakeContextSummarizer {
     fn summarize(
         &self,
         request: SummaryRequest,
-        cancellation: rustx::model::ModelCancellation,
+        cancellation: rustx::runtime::CancellationSignal,
     ) -> BoxFuture<'_, Result<String, ContextError>> {
         self.requests
             .lock()
@@ -158,7 +158,7 @@ impl TokenEstimator for ScriptedEstimator {
     fn estimate_input(
         &self,
         projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         let mut total = tool_definitions.len() as u64 * self.per_tool;
         total += self.items_estimate(projection);

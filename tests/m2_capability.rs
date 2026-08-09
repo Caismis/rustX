@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{describe_events, simple_request, sse_fixture, tool};
+use common::{describe_events, simple_request, sse_fixture};
 use rustx::message::content::{ImageReference, TextBlock};
 use rustx::message::types::{
     AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority,
@@ -111,7 +111,7 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             timestamp: None,
         }),
     ];
-    request.tools = vec![tool("list_directory", "tool-list")];
+    request.tools = vec![common::model_tool("list_directory", "tool-list")];
     request
 }
 

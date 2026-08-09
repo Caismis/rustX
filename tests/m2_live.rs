@@ -68,7 +68,7 @@ fn live_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
 /// normalized content, and a legitimate terminal event.
 async fn run_live(adapter: &dyn ModelAdapter, request: ModelRequest) {
     use futures_util::StreamExt;
-    let cancellation = rustx::model::ModelCancellation::new();
+    let cancellation = rustx::runtime::CancellationSignal::new();
     let mut stream = adapter.stream(request, cancellation);
     let mut started = false;
     let mut saw_content = false;
@@ -194,7 +194,7 @@ async fn live_openai_chat_tool_call() {
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use rustx::runtime::identity::{MessageId, ToolId};
-    use rustx::tools::types::{ToolDefinition, ToolExecutionMode, ToolOrigin, ToolReplayPolicy};
+    use rustx::tools::types::ModelToolDefinition;
 
     let Some(key) = openai_key() else {
         eprintln!("skipping live_openai_chat_tool_call: OPENAI_API_KEY is not set");
@@ -214,7 +214,7 @@ async fn live_openai_chat_tool_call() {
             kind: InboundKind::Message,
             timestamp: None,
         })],
-        tools: vec![ToolDefinition {
+        tools: vec![ModelToolDefinition {
             id: ToolId::new("tool-weather"),
             name: "get_weather".to_owned(),
             description: "Get the current weather for a location".to_owned(),
@@ -223,9 +223,6 @@ async fn live_openai_chat_tool_call() {
                 "properties": {"location": {"type": "string"}},
                 "required": ["location"],
             }),
-            execution_mode: ToolExecutionMode::Sequential,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
         }],
         agent_status: None,
         reasoning: ReasoningEffort::Medium,
@@ -233,7 +230,7 @@ async fn live_openai_chat_tool_call() {
         continuation: None,
     };
     let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
-    let cancellation = rustx::model::ModelCancellation::new();
+    let cancellation = rustx::runtime::CancellationSignal::new();
     let mut stream = adapter.stream(request, cancellation);
     let mut saw_tool_call = false;
     let mut terminal = None;

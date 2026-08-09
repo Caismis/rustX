@@ -19,9 +19,9 @@ use crate::message::types::{
     UserMessageBlock, UserSource,
 };
 use crate::model::adapter::ModelAdapter;
-use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::MessageId;
 
 /// One item of newly retired canonical content fed to the summarizer.
@@ -89,7 +89,7 @@ pub trait ContextSummarizer: Send + Sync {
     fn summarize(
         &self,
         request: SummaryRequest,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     ) -> BoxFuture<'_, Result<String, ContextError>>;
 }
 
@@ -157,7 +157,7 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
     fn summarize(
         &self,
         request: SummaryRequest,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     ) -> BoxFuture<'_, Result<String, ContextError>> {
         Box::pin(async move {
             let input = ModelBackedSummarizer::serialize_input(&request);

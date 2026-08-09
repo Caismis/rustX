@@ -35,7 +35,7 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, To
 use rustx::runtime::inbound::{ConversationInboundMailbox, MailboxError};
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::ToolCall;
+use rustx::tools::types::{ToolCall, ToolExecutionStatus};
 
 fn request(attempt: &str) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -94,9 +94,17 @@ async fn run(
     tools: &ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> AgentExecutionResult {
-    AgentExecution::new(request("attempt-1"), model, tools, cancellation, runtime())
-        .run()
-        .await
+    let tool_runtime = common::tool_runtime("conv-1");
+    AgentExecution::new(
+        request("attempt-1"),
+        model,
+        tools,
+        cancellation,
+        runtime(),
+        &tool_runtime,
+    )
+    .run()
+    .await
 }
 
 /// The terminal events of an attempt.
@@ -487,14 +495,13 @@ async fn tool_calls_execute_in_block_order() {
     ]);
 
     let mut tools = ToolRegistry::new();
-    tools.insert(FakeTool::new(
+    FakeTool::new(
         common::tool("alpha", "tool-alpha"),
         success_result("alpha ok"),
-    ));
-    tools.insert(FakeTool::new(
-        common::tool("beta", "tool-beta"),
-        success_result("beta ok"),
-    ));
+    )
+    .register(&mut tools);
+    FakeTool::new(common::tool("beta", "tool-beta"), success_result("beta ok"))
+        .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -553,10 +560,7 @@ async fn continuation_starts_after_tool_completion() {
         ],
     ]);
     let mut tools = ToolRegistry::new();
-    tools.insert(FakeTool::new(
-        common::tool("alpha", "tool-alpha"),
-        success_result("ok"),
-    ));
+    FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -692,7 +696,7 @@ async fn single_tool_call_then_continuation() {
         success_result("listed"),
     );
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -739,7 +743,7 @@ async fn tool_receives_exact_canonical_arguments() {
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut calls = tool.calls();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -750,8 +754,9 @@ async fn tool_receives_exact_canonical_arguments() {
         serde_json::json!({"path": ".", "options": {"recursive": true}}),
         "the tool receives the exact canonical arguments"
     );
-    assert_eq!(received[0].name, "alpha");
+    assert_eq!(received[0].tool_name, "alpha");
     assert_eq!(received[0].tool_id, ToolId::new("tool-alpha"));
+    assert_eq!(received[0].call_id, ToolCallId::new("call-1"));
     assert_single_terminal(&result.events);
 }
 
@@ -780,7 +785,7 @@ async fn tool_result_passed_back_verbatim() {
     let expected_result = success_result("exact output");
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), expected_result.clone());
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let _ = run(&model, &tools, &cancellation).await;
 
@@ -906,8 +911,8 @@ async fn unknown_tool_fails_deterministically() {
     );
     assert_eq!(
         result.messages.len(),
-        2,
-        "the completed agent message is committed; no tool message exists"
+        1,
+        "the agent tool-call message is never committed: preflight rejects          the structurally unresolvable call before the message commit"
     );
 }
 
@@ -938,7 +943,7 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
     let failed = failed_result("boom");
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), failed.clone());
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -1000,14 +1005,8 @@ async fn multiple_ordered_tool_calls_continue_once() {
         ],
     ]);
     let mut tools = ToolRegistry::new();
-    tools.insert(FakeTool::new(
-        common::tool("alpha", "tool-alpha"),
-        success_result("a"),
-    ));
-    tools.insert(FakeTool::new(
-        common::tool("beta", "tool-beta"),
-        success_result("b"),
-    ));
+    FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("a")).register(&mut tools);
+    FakeTool::new(common::tool("beta", "tool-beta"), success_result("b")).register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -1137,60 +1136,11 @@ async fn cancellation_during_generation_after_partial_text() {
 }
 
 /// The exact trace of a tool call interrupted by cancellation.
-fn expected_interrupted_tool_trace() -> Vec<RuntimeEvent> {
-    vec![
-        RuntimeEvent::AttemptStarted {
-            attempt_id: AttemptId::new("attempt-1"),
-        },
-        RuntimeEvent::TurnStarted,
-        RuntimeEvent::ModelRequestStarted {
-            model: "fake-model".to_owned(),
-        },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
-        },
-        RuntimeEvent::ToolCallStarted {
-            message_id: agent_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: rustx::tools::types::ToolCallStart {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".to_owned(),
-            },
-        },
-        RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: agent_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call_id: ToolCallId::new("call-1"),
-            arguments_delta: "{}".to_owned(),
-        },
-        RuntimeEvent::ToolCallCompleted {
-            message_id: agent_message_id(1),
-            block_index: rustx::message::types::ContentBlockIndex::new(0),
-            call: ToolCall {
-                id: ToolCallId::new("call-1"),
-                tool_id: ToolId::new("tool-alpha"),
-                name: "alpha".to_owned(),
-                arguments: serde_json::json!({}),
-            },
-        },
-        RuntimeEvent::ModelRequestCompleted {
-            finish_reason: ModelFinishReason::ToolCalls,
-            usage: None,
-        },
-        RuntimeEvent::ToolExecutionStarted {
-            tool_call_id: ToolCallId::new("call-1"),
-            tool_id: ToolId::new("tool-alpha"),
-        },
-        RuntimeEvent::AttemptCancelled {
-            attempt_id: AttemptId::new("attempt-1"),
-            reason: CancellationReason::UserRequested,
-        },
-    ]
-}
-
-/// Cancellation interrupts waiting for a tool: the loop stops awaiting the
-/// parked tool, settles cancelled promptly, and never records a completion.
+/// Cancellation interrupts waiting for a tool with structural settlement:
+/// the parked foreground execution observes the attempt signal and settles
+/// as cancelled, the cancelled result slot is committed as a canonical tool
+/// message, and only then does the attempt settle cancelled. The batch is
+/// structurally complete exactly once.
 #[tokio::test]
 async fn cancellation_interrupts_waiting_for_tool() {
     let call = ScriptedCall {
@@ -1212,7 +1162,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
         FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
     let mut tool_started = tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
@@ -1230,26 +1180,55 @@ async fn cancellation_interrupts_waiting_for_tool() {
     .expect("run must terminate without the tool returning");
     controller.await.expect("controller task");
 
-    assert_trace(&result.events, &expected_interrupted_tool_trace());
     assert_single_terminal(&result.events);
+    let terminal = result.events.last().expect("terminal event");
+    assert!(matches!(terminal, RuntimeEvent::AttemptCancelled { .. }));
     assert!(
         result
             .events
             .iter()
-            .all(|event| { !matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }) }),
-        "no completion is recorded for the interrupted tool"
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
+            .count()
+            == 1,
+        "the interrupted execution still settles exactly once with a cancelled result"
+    );
+    let completed = result
+        .events
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ToolExecutionCompleted { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .expect("one completion");
+    assert_eq!(
+        completed.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested
+        },
+        "the committed result slot is a cancelled result"
+    );
+    assert!(
+        result
+            .events
+            .iter()
+            .position(|event| matches!(event, RuntimeEvent::TurnCompleted))
+            .is_some_and(|position| position < result.events.len() - 1),
+        "the structurally complete batch commits before the terminal event"
     );
     assert_eq!(
         model.requests().len(),
         1,
         "no continuation starts after cancellation"
     );
-    assert!(
-        result
-            .messages
-            .iter()
-            .all(|message| !matches!(message, MessageBlock::Tool(_))),
-        "no tool message is appended for the interrupted tool"
+    let tool_messages: Vec<&MessageBlock> = result
+        .messages
+        .iter()
+        .filter(|message| matches!(message, MessageBlock::Tool(_)))
+        .collect();
+    assert_eq!(
+        tool_messages.len(),
+        1,
+        "the cancelled result slot is committed as exactly one tool message"
     );
     assert!(
         !matches!(result.outcome, AttemptOutcome::Completed { .. }),
@@ -1269,9 +1248,11 @@ async fn cancellation_interrupts_waiting_for_tool() {
 }
 
 /// Cancellation while waiting for a later tool call of the batch: earlier
-/// results stay recorded, the pending tool is interrupted, and no further
-/// execution progress happens.
+/// results stay recorded, the pending foreground execution settles as
+/// cancelled, and the structurally complete result batch commits in original
+/// model call order before the attempt settles cancelled.
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn cancellation_interrupts_later_tool_call() {
     let first = ScriptedCall {
         id: "call-1",
@@ -1300,8 +1281,8 @@ async fn cancellation_interrupts_later_tool_call() {
         FakeTool::parking(common::tool("beta", "tool-beta"), success_result("b"));
     let mut second_started = second_tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(first_tool);
-    tools.insert(second_tool);
+    first_tool.register(&mut tools);
+    second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
@@ -1329,13 +1310,29 @@ async fn cancellation_interrupts_later_tool_call() {
             _ => None,
         })
         .collect();
-    assert_eq!(executed, vec!["call-1"], "only the first tool completed");
-    assert!(
-        result
-            .events
-            .iter()
-            .any(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { tool_call_id, .. } if tool_call_id.as_str() == "call-2")),
-        "the second tool started before cancellation"
+    assert_eq!(
+        executed,
+        vec!["call-1", "call-2"],
+        "both executions settle exactly once; the second settles as cancelled"
+    );
+    let second_result = result
+        .events
+        .iter()
+        .find_map(|event| match event {
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id,
+                result,
+                ..
+            } if tool_call_id.as_str() == "call-2" => Some(result.clone()),
+            _ => None,
+        })
+        .expect("call-2 completion");
+    assert_eq!(
+        second_result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested
+        },
+        "the later call receives a cancelled result slot"
     );
     assert_single_terminal(&result.events);
     assert!(matches!(
@@ -1349,8 +1346,20 @@ async fn cancellation_interrupts_later_tool_call() {
         .collect();
     assert_eq!(
         tool_messages.len(),
-        1,
-        "only the first tool result is recorded"
+        2,
+        "both result slots commit as canonical tool messages"
+    );
+    let call_ids: Vec<&str> = tool_messages
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool.tool_call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        call_ids,
+        vec!["call-1", "call-2"],
+        "canonical tool messages commit in original model call order"
     );
     assert_eq!(
         model.requests().len(),
@@ -1390,7 +1399,7 @@ async fn cancellation_during_continuation_generation() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mut emitted = model.emitted();
     let controller_cancellation = cancellation.clone();
@@ -1505,7 +1514,7 @@ async fn continuation_state_propagates_losslessly() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -1566,7 +1575,7 @@ async fn opaque_continuation_is_never_inspected() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
     assert_eq!(
@@ -1608,7 +1617,7 @@ async fn missing_required_continuation_fails_explicitly() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -1659,7 +1668,7 @@ async fn no_reasoning_state_is_fabricated() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
 
@@ -1874,7 +1883,7 @@ async fn replay_tool_execution() {
     ]);
     let tool = FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, &tools, &cancellation).await;
     assert_eq!(
@@ -2077,7 +2086,7 @@ async fn cancellation_from_waiting_for_tool_settles_the_machine_to_failed() {
         FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
     let mut tool_started = tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
@@ -2144,10 +2153,8 @@ async fn replay_settlement_cannot_diverge_from_machine() {
             },
             {
                 let mut tools = ToolRegistry::new();
-                tools.insert(FakeTool::new(
-                    common::tool("alpha", "tool-alpha"),
-                    success_result("ok"),
-                ));
+                FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok"))
+                    .register(&mut tools);
                 tools
             },
         ),
@@ -2473,11 +2480,19 @@ async fn run_with_mailbox(
     cancellation: &AgentCancellation,
     mailbox: ConversationInboundMailbox,
 ) -> AgentExecutionResult {
-    AgentExecution::new(request("attempt-1"), model, tools, cancellation, runtime())
-        .with_inbound_mailbox(mailbox)
-        .expect("mailbox belongs to the request conversation")
-        .run()
-        .await
+    let tool_runtime = common::tool_runtime("conv-1");
+    AgentExecution::new(
+        request("attempt-1"),
+        model,
+        tools,
+        cancellation,
+        runtime(),
+        &tool_runtime,
+    )
+    .with_inbound_mailbox(mailbox)
+    .expect("mailbox belongs to the request conversation")
+    .run()
+    .await
 }
 
 /// Attaching a mailbox of a different conversation is rejected explicitly.
@@ -2487,12 +2502,14 @@ async fn mailbox_conversation_mismatch_is_rejected() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let foreign = ConversationInboundMailbox::new(ConversationId::new("conv-other"));
+    let tool_runtime = common::tool_runtime("conv-1");
     let error = AgentExecution::new(
         request("attempt-1"),
         &model,
         &tools,
         &cancellation,
         runtime(),
+        &tool_runtime,
     )
     .with_inbound_mailbox(foreign)
     .err()
@@ -2529,7 +2546,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
         success_result("listed"),
     );
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
@@ -2592,7 +2609,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     );
     let mut tool_started = tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
@@ -2697,7 +2714,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     );
     let mut tool_started = tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
@@ -2968,8 +2985,8 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     let mut first_started = first_tool.started();
     let mut second_started = second_tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(first_tool);
-    tools.insert(second_tool);
+    first_tool.register(&mut tools);
+    second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
@@ -3231,8 +3248,8 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     let mut first_started = first_tool.started();
     let mut second_started = second_tool.started();
     let mut tools = ToolRegistry::new();
-    tools.insert(first_tool);
-    tools.insert(second_tool);
+    first_tool.register(&mut tools);
+    second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();

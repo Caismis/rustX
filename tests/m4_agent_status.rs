@@ -440,6 +440,7 @@ fn temporal_section_is_first_and_mandatory() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     assert_eq!(status.sections.len(), 2);
@@ -483,6 +484,7 @@ fn extension_providers_cannot_construct_built_in_sections() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     assert_eq!(
@@ -521,6 +523,7 @@ fn extensions_preserve_registration_order() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     let ids: Vec<String> = status
@@ -555,6 +558,7 @@ fn structured_facts_render_through_the_canonical_renderer() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     let AgentStatusSectionData::Facts { facts } = &status.sections[1].data else {
@@ -638,6 +642,7 @@ fn registered_section_identity_is_frozen_at_registration() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     assert_eq!(
@@ -684,6 +689,7 @@ fn registered_identity_cannot_mutate_into_a_duplicate() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     let ids: Vec<String> = status
@@ -717,6 +723,7 @@ fn section_identity_is_queried_only_at_registration() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     let _ = composer.provider_ids();
@@ -736,6 +743,7 @@ fn optional_provider_absence_is_deterministic() {
     let context = AgentStatusRenderContext {
         inbound_message_time: utc("2026-08-08T16:30:58Z"),
         timezone: None,
+        background: Vec::new(),
     };
     let first = composer.compose(&context).expect("first compose");
     let second = composer.compose(&context).expect("second compose");
@@ -757,6 +765,7 @@ fn provider_failure_is_not_silently_omitted() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect_err("provider failure must propagate");
     assert_eq!(error.kind, ContextErrorKind::StatusFailed);
@@ -777,6 +786,7 @@ fn temporal_rendering_is_exact_with_timezone() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: Some(Tz::Asia__Tokyo),
+            background: Vec::new(),
         })
         .expect("compose");
     let rendered = render_agent_status(&status);
@@ -799,6 +809,7 @@ fn temporal_rendering_is_utc_without_timezone_line() {
         .compose(&AgentStatusRenderContext {
             inbound_message_time: utc("2026-08-08T16:30:58Z"),
             timezone: None,
+            background: Vec::new(),
         })
         .expect("compose");
     let rendered = render_agent_status(&status);
@@ -837,6 +848,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
         inbound_time,
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -854,6 +866,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
             store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -900,6 +913,7 @@ async fn runtime_originated_inbound_triggers_status() {
         inbound_time,
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-runtime-1")]).expect("turn");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -917,6 +931,7 @@ async fn runtime_originated_inbound_triggers_status() {
             store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -950,6 +965,7 @@ async fn no_role_heuristic_triggers_status() {
         summary_user("msg-summary-1", "earlier history"),
         historical_user("msg-old-1", "old message"),
     ];
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
         &model,
@@ -962,6 +978,7 @@ async fn no_role_heuristic_triggers_status() {
             store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -992,6 +1009,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
     let trigger = InitialTurnTrigger::FreshInbound(
         FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn"),
     );
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![initial], trigger, None),
         &model,
@@ -1004,6 +1022,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
             store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -1052,6 +1071,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             timestamp: Some(utc("2026-08-07T12:30:00Z")),
         })
         .expect("enqueue B");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1069,6 +1089,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox bound")
@@ -1154,6 +1175,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             timestamp: Some(utc("2026-08-08T11:00:00Z")),
         })
         .expect("enqueue B");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1171,6 +1193,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             store,
             Arc::new(FixedClock(utc("2026-08-08T13:00:00Z"))),
         ),
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox bound")
@@ -1226,6 +1249,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             timestamp: Some(utc("2026-08-07T12:01:00Z")),
         })
         .expect("enqueue B");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1243,6 +1267,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox bound")
@@ -1305,15 +1330,17 @@ async fn foreground_tool_continuation_has_no_status() {
     tool_script.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
     let model = FakeModel::new(vec![tool_script, stop_script()]);
     let mut tools = ToolRegistry::new();
-    tools.insert(common::fake::FakeTool::new(
+    common::fake::FakeTool::new(
         common::tool("alpha", "tool-alpha"),
         common::fake::success_result("ok"),
-    ));
+    )
+    .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
     let inbound_time = utc("2026-08-07T12:00:00Z");
     let initial = fresh_user("msg-inbound-1", "run it", UserSource::Human, inbound_time);
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1331,6 +1358,7 @@ async fn foreground_tool_continuation_has_no_status() {
             store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -1375,6 +1403,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
         ),
     ];
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1392,6 +1421,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
             store.clone(),
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -1648,6 +1678,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
     });
     // Window 400: the turn-2 projection (u0 + agent-1 + A + B + status =
     // 338) fits, but the provider overflows anyway; the retry compacts.
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1668,6 +1699,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
                 utc("2026-08-07T13:05:00Z"),
             ])),
         ),
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox bound")
@@ -2084,7 +2116,7 @@ async fn anthropic_appends_status_without_breaking_tool_result_grouping() {
             inbound_user("msg-b", "actually do not deploy it"),
         ],
     );
-    request.tools = vec![common::tool("alpha", "tool-alpha")];
+    request.tools = vec![common::model_tool("alpha", "tool-alpha")];
     let events = common::collect_events(&adapter, request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =

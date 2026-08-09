@@ -1,24 +1,34 @@
-//! RustX-owned cancellation for model invocations.
+//! RustX-owned cancellation signal.
 //!
-//! The adapter interface exposes [`ModelCancellation`] instead of a
-//! provider-specific abort handle. It is a small wrapper around a
-//! `tokio_util` cancellation token so adapter stream loops can select
-//! between the next provider stream item and the cancellation signal.
+//! [`CancellationSignal`] is the one runtime-owned cancellation primitive
+//! shared by the model plane and the tool plane: model adapter invocations,
+//! the compaction summarizer, foreground tool execution, and detached
+//! background executions all observe the same underlying signal mechanism.
+//! There is exactly one generic cancellation model in the runtime.
+//!
+//! The signal itself is semantics-free: it does not own an attempt reason,
+//! a background lifecycle, or any execution ownership. [`AgentCancellation`]
+//! wraps it with the attempt cancellation reason, and the background
+//! registry owns its own background cancellation state.
+//!
+//! [`AgentCancellation`]: crate::agent::cancellation::AgentCancellation
 
 use tokio_util::sync::CancellationToken;
 
-/// Cancellation signal for one model invocation.
+/// Cancellation signal for one operation.
 ///
-/// Cancelling the token makes every pending [`ModelCancellation::cancelled`]
-/// future resolve immediately. Adapters stop consuming the provider stream,
-/// drop the underlying HTTP stream, do not retry, and terminate with
-/// `Failed(Cancelled)`.
+/// Cancelling the signal makes every pending [`CancellationSignal::cancelled`]
+/// future resolve immediately. Model adapters stop consuming the provider
+/// stream, drop the underlying HTTP stream, do not retry, and terminate with
+/// `Failed(Cancelled)`; cancellable tool executors settle their external work
+/// (for example by terminating an owned process group) and return a
+/// normalized cancelled result.
 #[derive(Clone, Debug, Default)]
-pub struct ModelCancellation {
+pub struct CancellationSignal {
     token: CancellationToken,
 }
 
-impl ModelCancellation {
+impl CancellationSignal {
     /// Creates a new cancellation signal.
     #[must_use]
     pub fn new() -> Self {
@@ -27,14 +37,14 @@ impl ModelCancellation {
         }
     }
 
-    /// Requests cancellation of the associated invocation.
+    /// Requests cancellation of the associated operation.
     pub fn cancel(&self) {
         self.token.cancel();
     }
 
     /// Creates a child signal: cancelling this signal cancels the child, so
-    /// an attempt-level signal can fan out one invocation signal per model
-    /// request while all of them terminate together.
+    /// one owner can fan out one signal per operation while all of them
+    /// terminate together.
     #[must_use]
     pub fn child(&self) -> Self {
         Self {
@@ -56,13 +66,13 @@ impl ModelCancellation {
 
 #[cfg(test)]
 mod tests {
-    use super::ModelCancellation;
+    use super::CancellationSignal;
 
     /// A fresh cancellation signal is not cancelled and resolves `cancelled`
     /// only after `cancel` is invoked.
     #[tokio::test]
     async fn cancellation_signal_transitions() {
-        let signal = ModelCancellation::new();
+        let signal = CancellationSignal::new();
         assert!(!signal.is_cancelled());
         signal.cancel();
         assert!(signal.is_cancelled());
@@ -72,7 +82,7 @@ mod tests {
     /// Clones share the same underlying signal.
     #[tokio::test]
     async fn cloned_signals_share_cancellation() {
-        let first = ModelCancellation::new();
+        let first = CancellationSignal::new();
         let second = first.clone();
         first.cancel();
         second.cancelled().await;
@@ -83,7 +93,7 @@ mod tests {
     /// awaited, which is how a stream loop notices an early cancellation.
     #[tokio::test]
     async fn cancelled_after_the_fact_resolves_immediately() {
-        let signal = ModelCancellation::new();
+        let signal = CancellationSignal::new();
         signal.cancel();
         tokio::time::timeout(std::time::Duration::from_secs(1), signal.cancelled())
             .await
@@ -91,10 +101,10 @@ mod tests {
     }
 
     /// A child signal is cancelled when its parent is cancelled, so one
-    /// attempt-level signal governs every model invocation of the attempt.
+    /// owner-level signal can govern every operation of an owner.
     #[tokio::test]
     async fn child_signals_follow_parent_cancellation() {
-        let parent = ModelCancellation::new();
+        let parent = CancellationSignal::new();
         let child = parent.child();
         assert!(!child.is_cancelled());
         parent.cancel();

@@ -6,7 +6,9 @@
 
 mod common;
 
-use common::{collect_events, describe_events, error_fixture, simple_request, sse_fixture, tool};
+use common::{
+    collect_events, describe_events, error_fixture, model_tool, simple_request, sse_fixture,
+};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{AgentContentBlock, ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
@@ -32,8 +34,8 @@ fn adapter(
 fn request_with_tools(prompt: &str) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", prompt);
     request.tools = vec![
-        tool("list_directory", "tool-list"),
-        tool("bash", "tool-bash"),
+        model_tool("list_directory", "tool-list"),
+        model_tool("bash", "tool-bash"),
     ];
     request
 }

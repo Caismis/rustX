@@ -1,21 +1,23 @@
 //! Attempt-level cancellation for the agent loop.
 //!
 //! [`AgentCancellation`] is the deterministic cancellation trigger of one
-//! attempt. It reuses the existing rustX-owned cancellation mechanism
-//! ([`ModelCancellation`] around a tokio-util cancellation token): the agent
-//! signal carries the cancellation reason the terminal event must report,
-//! and every model invocation of the attempt receives a child signal so one
-//! attempt-level cancel terminates the in-flight provider request through
-//! the existing adapter contract.
+//! attempt. It wraps the runtime-owned [`CancellationSignal`] (the one
+//! generic cancellation primitive shared by the model plane and the tool
+//! plane) with the attempt cancellation reason the terminal event must
+//! report, and every model invocation of the attempt receives a child signal
+//! so one attempt-level cancel terminates the in-flight provider request
+//! through the existing adapter contract.
 //!
 //! The loop races tool execution against this signal: once cancellation is
-//! observable while a tool is pending, the loop stops awaiting the tool,
-//! drops the pending tool future, and settles cancelled. Dropping the future
-//! does not guarantee that external work is physically killed; the tool
-//! interface exposes no cancellation handle in M3, and executor-specific
-//! cancellation is a later milestone.
+//! observable while a tool is pending, the loop stops starting new work, and
+//! every in-flight cancellable foreground execution observes the same signal
+//! through its [`ToolExecutionContext`] and physically settles (for example
+//! by terminating an owned process group). A committed valid tool-call batch
+//! is structurally settled exactly once before the attempt terminal event.
+//!
+//! [`ToolExecutionContext`]: crate::tools::executor::ToolExecutionContext
 
-use crate::model::ModelCancellation;
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::types::CancellationReason;
 
 /// The cancellation signal of one agent attempt.
@@ -26,7 +28,7 @@ use crate::runtime::types::CancellationReason;
 /// signal resolve immediately.
 #[derive(Clone, Debug)]
 pub struct AgentCancellation {
-    signal: ModelCancellation,
+    signal: CancellationSignal,
     reason: CancellationReason,
 }
 
@@ -36,7 +38,7 @@ impl AgentCancellation {
     #[must_use]
     pub fn new(reason: CancellationReason) -> Self {
         Self {
-            signal: ModelCancellation::new(),
+            signal: CancellationSignal::new(),
             reason,
         }
     }
@@ -63,9 +65,19 @@ impl AgentCancellation {
         self.signal.cancelled().await;
     }
 
+    /// The underlying runtime-owned cancellation signal of the attempt.
+    ///
+    /// Foreground tool executions receive this signal in their execution
+    /// context, so attempt cancellation physically reaches cancellable
+    /// native foreground work.
+    #[must_use]
+    pub fn signal(&self) -> CancellationSignal {
+        self.signal.clone()
+    }
+
     /// A model-invocation signal cancelled together with this attempt signal.
     #[must_use]
-    pub fn model_cancellation(&self) -> ModelCancellation {
+    pub fn model_cancellation(&self) -> CancellationSignal {
         self.signal.child()
     }
 }
@@ -97,5 +109,15 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), invocation.cancelled())
             .await
             .expect("invocation must be cancelled with the attempt");
+    }
+
+    /// Foreground tool executions receive the attempt's underlying signal.
+    #[tokio::test]
+    async fn tool_executions_share_the_attempt_signal() {
+        let signal = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_signal = signal.signal();
+        assert!(!tool_signal.is_cancelled());
+        signal.cancel();
+        assert!(tool_signal.is_cancelled());
     }
 }

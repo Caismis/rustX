@@ -21,10 +21,11 @@
 
 use futures_util::StreamExt;
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCancellation, ModelEvent,
-    ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter, ReasoningEffort,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelEvent, ModelProtocol,
+    ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
+    ReasoningEffort,
 };
+use rustx::runtime::CancellationSignal;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -54,7 +55,7 @@ fn main() {
 
     let runtime = tokio::runtime::Runtime::new().expect("build tokio runtime");
     runtime.block_on(async move {
-        let cancellation = ModelCancellation::new();
+        let cancellation = CancellationSignal::new();
         let mut stream = adapter.stream(request, cancellation);
         while let Some(event) = stream.next().await {
             match &event {

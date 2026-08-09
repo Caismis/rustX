@@ -10,10 +10,10 @@ use std::pin::Pin;
 
 use futures_util::Stream;
 
-use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::error::ModelError;
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest};
+use crate::runtime::cancellation::CancellationSignal;
 
 /// A boxed canonical model event stream.
 pub type ModelEventStream = Pin<Box<dyn Stream<Item = ModelEvent> + Send + 'static>>;
@@ -38,7 +38,7 @@ pub trait ModelAdapter: Send + Sync {
     ///
     /// The returned stream is the only channel of information about the
     /// invocation; the adapter retains no hidden state afterwards.
-    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream;
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream;
 }
 
 /// A single-event stream that fails with the given normalized error, without

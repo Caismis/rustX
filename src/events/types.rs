@@ -60,10 +60,10 @@ use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolId, TurnId,
+    AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult};
+use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
 pub const EVENT_SCHEMA_VERSION: u16 = 1;
@@ -258,8 +258,12 @@ pub enum RuntimeEvent {
         tool_call_id: ToolCallId,
         /// Identity of the executed tool.
         tool_id: ToolId,
-        /// A progress notification.
-        progress: String,
+        /// The detached runtime execution instance for background work,
+        /// `None` for foreground executions. No fake execution id is
+        /// invented for foreground calls.
+        execution_id: Option<ToolExecutionId>,
+        /// The bounded structured progress notification.
+        progress: ToolProgress,
     },
     /// Tool execution finished and produced a normalized result.
     ToolExecutionCompleted {

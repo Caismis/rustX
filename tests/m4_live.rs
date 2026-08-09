@@ -8,17 +8,18 @@
 //! OPENAI_API_KEY=... cargo test --test m4_live -- --ignored
 //! ```
 //!
-//! The scenario starts with canonical conversation history, uses a
-//! deliberately small rustX context threshold, continues the conversation
-//! across enough attempts to force at least two compactions, reuses one
-//! checkpoint store across the conversation, uses the model-backed
-//! `ContextSummarizer`, and verifies that the checkpoint generation
-//! advances at least twice and that every model request completes
-//! coherently. When credentials are unavailable the test skips and reports
-//! `NOT RUN`; it never claims to have passed.
-//!
-//! Never print secrets.
+mod common;
 
+/// The scenario starts with canonical conversation history, uses a
+/// deliberately small rustX context threshold, continues the conversation
+/// across enough attempts to force at least two compactions, reuses one
+/// checkpoint store across the conversation, uses the model-backed
+/// `ContextSummarizer`, and verifies that the checkpoint generation
+/// advances at least twice and that every model request completes
+/// coherently. When credentials are unavailable the test skips and reports
+/// `NOT RUN`; it never claims to have passed.
+///
+/// Never print secrets.
 use std::sync::Arc;
 
 use rustx::agent::{
@@ -86,9 +87,17 @@ async fn live_step(
         store,
     )
     .expect("live context runtime");
-    AgentExecution::new(request, adapter, tools, &cancellation, runtime)
-        .run()
-        .await
+    let tool_runtime = common::tool_runtime("conv-1");
+    AgentExecution::new(
+        request,
+        adapter,
+        tools,
+        &cancellation,
+        runtime,
+        &tool_runtime,
+    )
+    .run()
+    .await
 }
 
 /// Live repeated-compaction validation over one shared conversation.

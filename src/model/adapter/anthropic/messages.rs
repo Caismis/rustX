@@ -19,7 +19,6 @@ use reqwest::header::HeaderValue;
 
 use crate::message::types::ContentBlockIndex;
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
@@ -27,6 +26,7 @@ use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use crate::runtime::identity::{ToolCallId, ToolId};
 use crate::tools::types::{ToolCall, ToolCallStart};
@@ -87,7 +87,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
         ModelProtocol::AnthropicMessages
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
@@ -227,7 +227,7 @@ async fn open_stream(
     anthropic_version: &str,
     http_client: &reqwest::Client,
     wire_request: &super::mapping::WireRequest,
-    cancellation: ModelCancellation,
+    cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
         .post(url)
@@ -282,7 +282,7 @@ async fn open_stream(
 async fn streaming_pull(
     stream: &mut SseStream,
     normalizer: &mut AnthropicStreamNormalizer,
-    cancellation: &ModelCancellation,
+    cancellation: &CancellationSignal,
     pending: &mut std::collections::VecDeque<ModelEvent>,
 ) {
     while pending.is_empty() {
@@ -352,7 +352,7 @@ enum AnthropicPhase {
         http_client: reqwest::Client,
         wire_request: super::mapping::WireRequest,
         normalizer: AnthropicStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Opening {
         api_key: String,
@@ -361,12 +361,12 @@ enum AnthropicPhase {
         http_client: reqwest::Client,
         wire_request: super::mapping::WireRequest,
         normalizer: AnthropicStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Streaming {
         stream: SseStream,
         normalizer: AnthropicStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
         pending: std::collections::VecDeque<ModelEvent>,
     },
     Finished,

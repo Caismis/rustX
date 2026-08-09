@@ -3,6 +3,7 @@
 //! These types are shared by tool, model, and event contracts. They are plain
 //! runtime-owned data and never reference provider SDK or storage types.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Why an operation was cancelled.
@@ -77,9 +78,31 @@ pub enum RuntimeError {
     },
 }
 
+/// A runtime-owned UTC clock boundary.
+///
+/// State-machine code that must stamp deterministic timestamps (for example
+/// background terminal inbound messages) goes through this narrow
+/// abstraction; no production code calls `Utc::now()` directly in testable
+/// state-machine code. Tests use a fixed/scripted clock so snapshots are
+/// deterministic.
+pub trait RuntimeClock: Send + Sync {
+    /// The current UTC instant.
+    fn now(&self) -> DateTime<Utc>;
+}
+
+/// The production clock: system UTC time.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemClock;
+
+impl RuntimeClock for SystemClock {
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CancellationReason, RuntimeError};
+    use super::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
 
     /// Cancellation reasons use a stable serialized representation.
     #[test]
@@ -89,6 +112,13 @@ mod tests {
         assert_eq!(json, "\"parent_cancelled\"");
         let decoded: CancellationReason = serde_json::from_str(&json).expect("deserialize reason");
         assert_eq!(decoded, value);
+    }
+
+    /// The system clock returns a valid UTC instant.
+    #[test]
+    fn system_clock_reports_utc_instants() {
+        let instant = SystemClock.now();
+        assert!(instant.timestamp() > 0, "a real UTC instant is reported");
     }
 
     /// Runtime errors round-trip with an explicit discriminator.

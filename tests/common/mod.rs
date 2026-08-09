@@ -234,7 +234,7 @@ pub async fn collect_events(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
 ) -> Vec<rustx::model::ModelEvent> {
-    let cancellation = rustx::model::ModelCancellation::new();
+    let cancellation = rustx::runtime::CancellationSignal::new();
     let mut stream = adapter.stream(request, cancellation);
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
@@ -247,7 +247,7 @@ pub async fn collect_events(
 pub async fn collect_events_with_cancellation(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
-    cancellation: rustx::model::ModelCancellation,
+    cancellation: rustx::runtime::CancellationSignal,
 ) -> Vec<rustx::model::ModelEvent> {
     let mut stream = adapter.stream(request, cancellation);
     let mut events = Vec::new();
@@ -315,17 +315,51 @@ pub fn simple_request(
 /// One canonical tool definition used by adapter tests.
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
-    use rustx::tools::types::{ToolDefinition, ToolExecutionMode, ToolOrigin, ToolReplayPolicy};
+    use rustx::tools::types::{
+        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+    };
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        execution_mode: ToolExecutionMode::Parallel,
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        concurrency_policy: ToolConcurrencyPolicy::Sequential,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Mcp {
             server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
         },
+    }
+}
+
+/// A conversation tool runtime over a unique temporary workspace.
+///
+/// Fake tools never touch the workspace, so M3/M4 tests share one runtime
+/// per conversation id; native-tool tests use isolated temporary workspaces.
+#[must_use]
+pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::ConversationToolRuntime {
+    let dir = std::env::temp_dir().join(format!(
+        "rustx-tool-runtime-{conversation_id}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    rustx::tools::runtime::ConversationToolRuntime::new(
+        rustx::runtime::identity::ConversationId::new(conversation_id),
+        &dir,
+        dir.join("artifacts"),
+    )
+    .expect("tool runtime")
+}
+
+/// One canonical compiled model-facing tool definition used by adapter
+/// tests.
+pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
+    use rustx::runtime::identity::ToolId;
+    rustx::tools::types::ModelToolDefinition {
+        id: ToolId::new(id),
+        name: name.to_owned(),
+        description: format!("Tool {name}"),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
     }
 }
 

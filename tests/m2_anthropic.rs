@@ -5,7 +5,9 @@
 
 mod common;
 
-use common::{collect_events, describe_events, error_fixture, simple_request, sse_fixture, tool};
+use common::{
+    collect_events, describe_events, error_fixture, model_tool, simple_request, sse_fixture,
+};
 use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
@@ -24,9 +26,9 @@ fn adapter(server: &common::FixtureServer) -> AnthropicMessagesAdapter {
 fn request_with_tools(prompt: &str) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", prompt);
     request.tools = vec![
-        tool("list_directory", "tool-list"),
-        tool("read_file", "tool-read"),
-        tool("get_weather", "tool-weather"),
+        model_tool("list_directory", "tool-list"),
+        model_tool("read_file", "tool-read"),
+        model_tool("get_weather", "tool-weather"),
     ];
     request
 }

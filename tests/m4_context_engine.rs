@@ -314,10 +314,7 @@ fn scripted_call() -> ScriptedCall {
 
 fn tool_registry_with_alpha() -> ToolRegistry {
     let mut tools = ToolRegistry::new();
-    tools.insert(FakeTool::new(
-        common::tool("alpha", "tool-alpha"),
-        success_result("ok"),
-    ));
+    FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
     tools
 }
 
@@ -460,8 +457,8 @@ fn tool_definitions_contribute_to_the_request_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi")];
     let tools = vec![
-        common::tool("alpha", "tool-alpha"),
-        common::tool("beta", "tool-beta"),
+        common::model_tool("alpha", "tool-alpha"),
+        common::model_tool("beta", "tool-beta"),
     ];
     let without_tools = engine
         .build_projection(&history, None, &[], None, None)
@@ -484,7 +481,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
         user("u2", ""),
         agent("a2", vec![text_block("y")]),
     ];
-    let tools = vec![common::tool("alpha", "tool-alpha")];
+    let tools = vec![common::model_tool("alpha", "tool-alpha")];
     // Target 20: with conversation weights of 10/10, retiring u1 and a1
     // retains exactly u2+a2 = 20. If the huge tool weight counted toward the
     // target, the engine would retire everything instead.
@@ -1306,12 +1303,14 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
         user("u3", ""),
         user("u4", ""),
     ];
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -1416,12 +1415,14 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
         system("sys-2", "trusted"),
         user("u3", ""),
     ];
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2273,12 +2274,14 @@ async fn proactive_compaction_before_the_next_turn() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2448,12 +2451,14 @@ async fn below_threshold_runs_without_compaction() {
         summarizer,
         store.clone(),
     );
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2483,6 +2488,7 @@ async fn below_threshold_runs_without_compaction() {
 /// and a cleared continuation; the retry succeeds and the attempt emits
 /// exactly one terminal event.
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn overflow_compact_and_retry_succeeds() {
     let model = FakeModel::new(vec![
         vec![
@@ -2502,12 +2508,14 @@ async fn overflow_compact_and_retry_succeeds() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2612,12 +2620,14 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2682,12 +2692,14 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2754,12 +2766,14 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2827,12 +2841,14 @@ async fn overflow_retry_budget_is_per_model_turn() {
         FakeSummaryStep::Return("summary-2".to_owned()),
     ]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -2891,12 +2907,14 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
         let summarizer =
             FakeContextSummarizer::new(vec![FakeSummaryStep::Return(bad_summary.to_owned())]);
         let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+        let tool_runtime = common::tool_runtime("conv-1");
         let result = AgentExecution::new(
             request("attempt-1", vec![user("msg-user-1", "hi")], 0),
             &model,
             &tools,
             &cancellation,
             runtime,
+            &tool_runtime,
         )
         .run()
         .await;
@@ -2960,12 +2978,14 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         "summary generation refused",
     ))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -3096,6 +3116,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
     composer
         .register(Arc::new(FailingStatusProvider))
         .expect("register");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
         &model,
@@ -3107,6 +3128,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
             store,
             composer,
         ),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -3185,12 +3207,14 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         user("msg-old-2", "older"),
         fresh_user("msg-inbound-1", "fresh instruction"),
     ];
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         fresh_request("attempt-1", initial),
         &model,
         &tools,
         &cancellation,
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
+        &tool_runtime,
     )
     .run()
     .await;
@@ -3256,12 +3280,14 @@ async fn no_progress_compaction_fails_without_retry() {
     // 400 bytes estimate 101 tokens >= the 100-token replaced context.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("x".repeat(400))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -3317,7 +3343,7 @@ async fn cancel_before_proactive_compaction() {
     let (tool, _release) =
         FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("ok"));
     let mut tools = ToolRegistry::new();
-    tools.insert(tool);
+    tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("s".to_owned())]);
@@ -3325,12 +3351,14 @@ async fn cancel_before_proactive_compaction() {
     // (210 tokens) would require proactive compaction at turn 2 — which
     // never starts because cancellation settles the attempt first.
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     );
     // Wait until the model stream was fully consumed, then cancel while the
     // tool is parked: the loop settles cancelled before any later turn could
@@ -3380,12 +3408,14 @@ async fn cancel_while_summary_generation_is_pending() {
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::ParkUntilCancelled]);
     let parked = summarizer.parked();
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
+    let tool_runtime = common::tool_runtime("conv-1");
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     );
     // Wait until the summarizer parked, then cancel.
     let mut parked = parked;
@@ -3476,12 +3506,14 @@ async fn run_continuation_case(
         summarizer,
         InMemoryCheckpointStore::new().shared(),
     );
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -3617,7 +3649,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         split_turn_prefix: None,
     };
     let text = summarizer
-        .summarize(request.clone(), rustx::model::ModelCancellation::new())
+        .summarize(request.clone(), rustx::runtime::CancellationSignal::new())
         .await
         .expect("summary");
     assert_eq!(text, "summary text");
@@ -3695,7 +3727,7 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
             split_turn_prefix: None,
         };
         let error = summarizer
-            .summarize(request, rustx::model::ModelCancellation::new())
+            .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
             .expect_err("must fail");
         assert_eq!(error.kind, expected);
@@ -3742,7 +3774,7 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
             split_turn_prefix: None,
         };
         let error = summarizer
-            .summarize(request, rustx::model::ModelCancellation::new())
+            .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
             .expect_err("invalid summary must fail");
         assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
@@ -3793,7 +3825,7 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
             split_turn_prefix: None,
         };
         let error = summarizer
-            .summarize(request, rustx::model::ModelCancellation::new())
+            .summarize(request, rustx::runtime::CancellationSignal::new())
             .await
             .expect_err("malformed stream must fail");
         assert_eq!(error.kind, ContextErrorKind::SummaryFailed);
@@ -3813,7 +3845,7 @@ async fn model_backed_summarizer_aborts_on_cancellation() {
             max_output_tokens: 64,
         },
     );
-    let cancellation = rustx::model::ModelCancellation::new();
+    let cancellation = rustx::runtime::CancellationSignal::new();
     let request = SummaryRequest {
         previous_summary: None,
         newly_retired: vec![],
@@ -3875,12 +3907,14 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         store.clone(),
     )
     .expect("runtime");
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .run()
     .await;
@@ -4051,12 +4085,14 @@ async fn m4_projection_contains_drained_batch_before_request() {
     );
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")
@@ -4125,12 +4161,14 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let runtime = runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone());
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")
@@ -4286,12 +4324,14 @@ async fn m4_drain_retains_continuation_without_compaction() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
+    let tool_runtime = common::tool_runtime("conv-1");
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "hi")], 0),
         &model,
         &tools,
         &cancellation,
         runtime,
+        &tool_runtime,
     )
     .with_inbound_mailbox(mailbox)
     .expect("mailbox belongs to the request conversation")

@@ -14,19 +14,22 @@
 //! capability guards, recovery, and process ownership are later milestones
 //! and are not implemented here.
 
+pub mod cancellation;
 pub mod continuation;
 pub mod identity;
 pub mod inbound;
 pub mod types;
 
+pub use cancellation::CancellationSignal;
 pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
-    McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolId, ToolVersionId, TurnId,
+    McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId,
+    ToolVersionId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
-pub use types::{CancellationReason, RuntimeError};
+pub use types::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
