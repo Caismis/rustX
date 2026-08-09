@@ -611,7 +611,7 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
   `output_tokens_details.thinking_tokens` maps to
   `UsageDetails::reasoning_tokens`, and `cache_read_input_tokens` maps to
   `UsageDetails::cached_input_tokens` without double counting.
-- Cancellation is a rustX-owned signal (`ModelCancellation`) flowing through
+- Cancellation is the runtime-owned `CancellationSignal` flowing through
   the common interface; the network-opening await itself is
   cancellation-aware (a cancellation while waiting for response headers
   aborts the in-flight request), an in-flight invocation stops consuming the

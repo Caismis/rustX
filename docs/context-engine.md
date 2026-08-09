@@ -324,7 +324,7 @@ The summary service is provider-neutral and fakeable:
 
 ```rust
 pub trait ContextSummarizer: Send + Sync {
-    fn summarize(&self, request: SummaryRequest, cancellation: ModelCancellation)
+    fn summarize(&self, request: SummaryRequest, cancellation: CancellationSignal)
         -> BoxFuture<'_, Result<String, ContextError>>;
 }
 ```
