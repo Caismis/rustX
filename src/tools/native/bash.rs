@@ -11,29 +11,44 @@
 //!
 //! A Bash invocation is one complete lifecycle: spawn one per-invocation
 //! supervisor (see [`bash_supervisor`]), read stdout/stderr, wait for the
-//! shell, let the supervisor own and reap the invocation's process tree to
-//! its kernel-mediated terminal state, handle cancellation/timeout with a
+//! shell, let the supervisor own the invocation's process group to its
+//! kernel-mediated terminal state, handle cancellation/timeout with a
 //! `TERM` -> grace -> `KILL` sequence inside the supervisor, complete the
 //! output draining, finalize the artifacts, and produce a single canonical
 //! result.
 //!
 //! Shell-parent exit is **not** by itself the Bash settlement boundary:
 //! the shell may exit while a descendant still belongs to the
-//! invocation-owned process domain, with the output pipes either still held
+//! invocation-owned process group, with the output pipes either still held
 //! or already redirected away. The invocation therefore settles naturally
 //! only when all three of the following are true:
 //!
 //! - the shell's terminal status is known (the supervisor reported it);
-//! - every invocation-owned descendant is terminal and reaped (the outer
-//!   supervisor reached its kernel child-wait terminal condition and
-//!   reported the authoritative `AllChildrenReaped`);
+//! - the invocation-owned process group is terminal (the supervisor's
+//!   group-scoped wait reached `ECHILD` and the outer supervisor reported
+//!   the authoritative `AllChildrenReaped`);
 //! - the runtime-owned output capture is settled.
 //!
 //! Cancellation and the invocation deadline remain authoritative until the
 //! complete lifecycle settles: they trigger the supervisor's
 //! `TERM` -> grace -> `KILL` sequence, so a shell-parent exit can never let
-//! descendant work escape the timeout/cancellation contract, even when the
+//! owned group work escape the timeout/cancellation contract, even when the
 //! descendant no longer holds the rustX pipes.
+//!
+//! # Ownership boundary
+//!
+//! The Bash invocation's ownership boundary is its dedicated process
+//! group. The invocation owns, guarantees termination of, and bases its
+//! settlement on exactly the processes that remain in that group; a
+//! descendant that explicitly leaves the group/session (for example via
+//! `setsid` or `setpgid`) has intentionally escaped the Bash execution
+//! domain and is no longer part of the tool's owned lifecycle. Such an
+//! escaped process is never signaled by the group `TERM`/`KILL`, and it
+//! must never block terminal settlement. Subreaper adoption of escaped
+//! children is a reaping implementation detail, not an ownership claim:
+//! adopted children outside the group are reaped for hygiene when they
+//! die and are handed to init when the supervisor exits, but they never
+//! keep an invocation alive whose owned group is terminal.
 //!
 //! # Invocation supervisor
 //!
@@ -42,22 +57,27 @@
 //! (outer supervisor + inner session/group leader, both subreapers; see
 //! [`bash_supervisor`]) that spawns `/bin/bash`, reaps the shell, receives
 //! shell descendants that outlive the shell through kernel reparenting, and
-//! keeps reaping until its `waitpid(-1)` loop observes `ECHILD` — the
-//! kernel's statement that no owned child remains. The **outer**
-//! supervisor's `ECHILD` is the single authoritative terminal process-tree
-//! event of the whole supervisor unit; rustX combines it with
-//! output-capture settlement to produce the tool result.
+//! settles on the kernel's **group-scoped wait** — `waitid` with `Id::PGid`
+//! — which matches only children inside the invocation process group and
+//! returns `ECHILD` exactly when the group's child domain is terminal. The
+//! **outer** supervisor's group-scoped `ECHILD` is the single authoritative
+//! terminal process-tree event of the whole supervisor unit; rustX combines
+//! it with output-capture settlement to produce the tool result.
 //!
 //! # Terminal results
 //!
 //! Every Bash `ToolExecutionResult` — `Success`, `Failed`, `Cancelled`,
-//! and `TimedOut` alike — is terminal with respect to the
-//! invocation-owned process tree: no invocation-owned Bash process remains
-//! capable of executing work before any result is returned. A detected
+//! and `TimedOut` alike — is terminal with respect to the invocation-owned
+//! process group: no invocation-owned Bash process remains capable of
+//! executing work before any result is returned. A detected
 //! process-control/runtime failure determines the eventual result status
 //! but does not itself settle the invocation lifecycle: owned work is
-//! contained and reaped to the outer supervisor's terminal `ECHILD` (and
-//! the capture settled) before the remembered `Failed` result is returned.
+//! contained and the owned group reaped to the outer supervisor's terminal
+//! group-scoped `ECHILD` (and the capture settled) before the remembered
+//! `Failed` result is returned. If the owned group cannot be proven
+//! terminal within the bounded confirmation window, the invocation settles
+//! as an explicit bounded process-control failure — it never waits
+//! indefinitely for an out-of-domain process.
 //!
 //! # Process-group safety
 //!
@@ -80,14 +100,15 @@
 //!
 //! - **Before ownership exists** (no Bash process tree was established:
 //!   control-channel setup failure, supervisor spawn failure, bash spawn
-//!   failure): no cleanup work exists, so an immediate `Failed` is valid.
+//!   failure, SIGTERM handler-installation failure): no cleanup work
+//!   exists, so an immediate `Failed` is valid.
 //! - **After ownership exists** (signal failure, wait/reap failure,
 //!   malformed IPC, control-channel read failure, unexpected supervisor
 //!   exit, rustX control-channel abandonment): the failure is remembered,
 //!   the outer supervisor actively contains the invocation (one
-//!   structurally-anchored fallback `SIGKILL` to the owned group), every
-//!   owned process is reaped to the outer `ECHILD`, the capture is
-//!   finalized, and only then is the remembered `Failed` result returned.
+//!   structurally-anchored fallback `SIGKILL` to the owned group), the
+//!   owned group reaches its terminal state, the capture is finalized, and
+//!   only then is the remembered `Failed` result returned.
 //!
 //! If the supervisor can no longer prove that the numeric process group is
 //! invocation-owned, it refuses to signal and reports the refusal
@@ -136,7 +157,8 @@ use crate::tools::limits::{
 };
 #[cfg(test)]
 use crate::tools::native::bash_supervisor::{
-    ANCHOR_PID_FILE_ENV, FAIL_BASH_SPAWN_ENV, FAIL_SIGNAL_ENV, FAIL_WAIT_ENV, FORCE_ANCHOR_LOSS_ENV,
+    ANCHOR_PID_FILE_ENV, FAIL_BASH_SPAWN_ENV, FAIL_SIGNAL_ENV, FAIL_SIGTERM_HANDLER_ENV,
+    FAIL_WAIT_ENV, FORCE_ANCHOR_LOSS_ENV,
 };
 use crate::tools::native::bash_supervisor::{COMMAND_ENV, ROLE_OUTER};
 use crate::tools::native::support::failed_result;
@@ -244,6 +266,8 @@ pub(crate) struct BashTestControl {
     #[cfg(test)]
     fail_wait: bool,
     #[cfg(test)]
+    fail_sigterm_handler: bool,
+    #[cfg(test)]
     force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     anchor_pid_file: Option<std::path::PathBuf>,
@@ -280,6 +304,7 @@ impl BashTestControl {
             fail_bash_spawn: false,
             fail_signal: false,
             fail_wait: false,
+            fail_sigterm_handler: false,
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             anchor_pid_file: None,
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
@@ -362,6 +387,14 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn fail_wait(mut self) -> Self {
         self.fail_wait = true;
+        self
+    }
+
+    /// Makes the inner supervisor's SIGTERM handler installation fail with
+    /// an injected error (a pre-ownership setup failure).
+    #[must_use]
+    pub(crate) fn fail_sigterm_handler(mut self) -> Self {
+        self.fail_sigterm_handler = true;
         self
     }
 }
@@ -638,6 +671,9 @@ async fn run_bash_unix(
         if control.fail_bash_spawn {
             supervisor.env(FAIL_BASH_SPAWN_ENV, "1");
         }
+        if control.fail_sigterm_handler {
+            supervisor.env(FAIL_SIGTERM_HANDLER_ENV, "1");
+        }
         if control
             .force_anchor_loss
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -738,24 +774,30 @@ async fn run_bash_unix(
     let mut drain_result: Option<Box<Result<StreamReferences, String>>> = None;
     let mut terminate_sent = false;
     let mut terminate_deadline: Option<tokio::time::Instant> = None;
+    let mut bounded_settle = false;
     loop {
         // Outcome intent and lifecycle settlement are distinct: the loop
-        // may break only when the capture is settled, the owned child set
-        // is terminal, and an outcome intent (failure, cancellation/
-        // timeout, or the shell's natural status) is known.
+        // may break only when the capture is settled, an outcome intent
+        // (failure, cancellation/timeout, or the shell's natural status) is
+        // known, and either the owned child set is terminal or the bounded
+        // confirmation window has expired into an explicit failure.
         let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
-        if drain_result.is_some() && children_terminal && outcome_intent {
+        if drain_result.is_some() && outcome_intent && (children_terminal || bounded_settle) {
             break;
         }
         // After TERMINATE the supervisor performs TERM -> grace -> KILL;
-        // the owned tree must reach its terminal child set within the
-        // bounded confirmation window, or the settlement is an explicit
-        // failure — never a premature Success/Cancelled/TimedOut.
+        // the owned group must reach its terminal state within the bounded
+        // confirmation window. An expired deadline must actually let the
+        // state machine terminate: the invocation settles as an explicit
+        // bounded process-control failure instead of waiting indefinitely
+        // for an out-of-domain or wedged process — never a premature
+        // Success/Cancelled/TimedOut.
         if terminate_sent
             && !children_terminal
             && terminate_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
         {
             failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
+            bounded_settle = true;
             continue;
         }
         // The drain future polls the output reader tasks; a completed
