@@ -534,8 +534,8 @@ async fn bash_raw_non_utf8_output_is_preserved_in_the_artifact() {
 
 /// A shell parent that exits while a descendant stays in the owned process
 /// group and keeps the output pipe open cannot escape the invocation
-/// timeout: the drain phase still owns the complete lifecycle and
-/// terminates the group.
+/// timeout: the runtime keeps supervising the owned group and terminates
+/// it.
 #[tokio::test]
 async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
     let fixture = native_fixture();
@@ -554,6 +554,114 @@ async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
         ToolExecutionStatus::TimedOut,
         "the timeout owns the complete lifecycle: a descendant holding the pipe cannot escape"
     );
+}
+
+/// The missing Scenario-D regression: the descendant redirects its
+/// stdout/stderr away from the rustX pipes, so the output capture can
+/// finish while the owned process group is still alive. Shell-parent exit
+/// must still not settle the invocation: the tool returns `TimedOut`, the
+/// owned process group is quiescent, and the recorded descendant PID is
+/// provably gone.
+#[tokio::test]
+async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let shell_pid_file = workspace.join("shell.pid");
+    let descendant_pid_file = workspace.join("descendant.pid");
+    let command = format!(
+        "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+        shell_pid_file.display(),
+        descendant_pid_file.display()
+    );
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        run_tool(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": command, "timeout_ms": 500}),
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(
+        result.status,
+        ToolExecutionStatus::TimedOut,
+        "a redirected descendant must never let the invocation settle as Success"
+    );
+    // The shell's own pid is the invocation's process-group id.
+    let shell_pid: i32 = std::fs::read_to_string(&shell_pid_file)
+        .expect("shell pid file")
+        .trim()
+        .parse()
+        .expect("shell pid");
+    let descendant_pid: i32 = std::fs::read_to_string(&descendant_pid_file)
+        .expect("descendant pid file")
+        .trim()
+        .parse()
+        .expect("descendant pid");
+    // The owned process group is quiescent and the descendant is gone.
+    wait_for_group_death(shell_pid).await;
+    wait_for_process_death(descendant_pid).await;
+}
+
+/// A short-lived redirected descendant that exits naturally lets the owned
+/// group quiesce before the invocation deadline: the shell's natural exit
+/// then settles the command as ordinary `Success`.
+#[tokio::test]
+async fn bash_natural_descendant_completion_settles_success() {
+    let fixture = native_fixture();
+    let result = tokio::time::timeout(
+        Duration::from_secs(20),
+        run_tool(
+            &fixture,
+            "bash",
+            serde_json::json!({
+                "command": "sleep 0.2 >/dev/null 2>&1 & exit 0",
+                "timeout_ms": 10_000
+            }),
+        ),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(
+        result.status,
+        ToolExecutionStatus::Success,
+        "once the owned group quiesces, the shell's natural exit settles Success"
+    );
+    assert_eq!(json_content(&result)["exit_code"], 0);
+}
+
+/// Polls the owned process group with the same non-destructive `killpg`
+/// probe the production logic uses (the authoritative OS state), with a
+/// strict deadlock guard.
+async fn wait_for_group_death(pgid: i32) {
+    use nix::errno::Errno;
+    use nix::sys::signal::killpg;
+    use nix::unistd::Pid;
+    for _ in 0..1000 {
+        match killpg(Pid::from_raw(pgid), None) {
+            Ok(()) | Err(Errno::EPERM) => {}
+            Err(_) => return,
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("process group {pgid} is still alive after the deadline");
+}
+
+/// Polls a specific process until it is provably gone (the signal-0 probe
+/// returns `ESRCH`), with a strict deadlock guard.
+async fn wait_for_process_death(pid: i32) {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    for _ in 0..1000 {
+        match kill(Pid::from_raw(pid), None) {
+            Ok(()) | Err(Errno::EPERM) => {}
+            Err(_) => return,
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("process {pid} is still alive after the deadline");
 }
 
 /// Cancellation after the shell parent exited remains effective during the

@@ -2371,29 +2371,13 @@ mod tests {
             // 2. Wait until the detached runner is provably started, then
             //    settle it: the terminal enqueue can only ever acquire the
             //    mailbox lock after the parked drain.
-            eprintln!(
-                "DBG ctrl: snapshot observed @ {:.3}s",
-                std::time::Instant::now().elapsed().as_secs_f64()
-            );
             started
                 .wait_for(|started| *started)
                 .await
                 .expect("bg runner started");
-            eprintln!(
-                "DBG ctrl: started observed @ {:.3}s",
-                std::time::Instant::now().elapsed().as_secs_f64()
-            );
             release.notify_one();
-            eprintln!(
-                "DBG ctrl: notified @ {:.3}s",
-                std::time::Instant::now().elapsed().as_secs_f64()
-            );
             // 3. Release the parked drain: its batch is [human] only.
             release_tx.send(()).expect("release the first drain");
-            eprintln!(
-                "DBG ctrl: drain released @ {:.3}s",
-                std::time::Instant::now().elapsed().as_secs_f64()
-            );
             // 4. The terminal enqueue is inside its critical section with
             //    its sequence computed but the item not yet published.
             // 4/5. Publish the terminal (the resume token is pre-buffered,

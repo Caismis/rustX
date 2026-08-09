@@ -43,3 +43,4 @@ pedantic = "warn"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+nix = { version = "0.31.3", features = ["signal", "process"] }
