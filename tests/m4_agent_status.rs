@@ -1604,14 +1604,28 @@ fn status_snapshot_changes_fingerprint_and_observed_measurement_scope() {
         input_tokens: 42,
     };
     let with_one = engine
-        .build_projection(&history, None, &[], Some(&observed), Some(&snapshot_one), None)
+        .build_projection(
+            &history,
+            None,
+            &[],
+            Some(&observed),
+            Some(&snapshot_one),
+            None,
+        )
         .expect("projection one measured");
     assert_eq!(
         with_one.estimated_input.source,
         TokenMeasurementSource::ProviderReported
     );
     let with_two = engine
-        .build_projection(&history, None, &[], Some(&observed), Some(&snapshot_two), None)
+        .build_projection(
+            &history,
+            None,
+            &[],
+            Some(&observed),
+            Some(&snapshot_two),
+            None,
+        )
         .expect("projection two");
     assert_eq!(
         with_two.estimated_input.source,

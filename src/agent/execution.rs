@@ -46,6 +46,7 @@
 
 use futures_util::StreamExt;
 
+use crate::capabilities::AttemptCapabilityLease;
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
@@ -57,7 +58,6 @@ use crate::model::adapter::{ModelAdapter, ModelEventStream};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
-use crate::capabilities::AttemptCapabilityLease;
 use crate::model::types::{
     AgentStatusAttachment, ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort,
     SkillCatalogAttachment,
@@ -232,8 +232,8 @@ impl<'a> AgentExecution<'a> {
     /// runtime, and the conversation tool runtime.
     ///
     /// The attempt capability lease pins the immutable capability snapshot
-    /// (revision, ToolRegistry handle, Skill catalog, environment
-    /// identities, and the effective ToolEnvironment) for the complete
+    /// (revision, `ToolRegistry` handle, Skill catalog, environment
+    /// identities, and the effective `ToolEnvironment`) for the complete
     /// lifetime of this attempt: every model/tool cycle inside the attempt
     /// uses exactly that snapshot and never re-discovers Skills. The
     /// execution cannot be constructed without a lease — there is no
@@ -814,7 +814,7 @@ impl<'a> AgentExecution<'a> {
         self.capability.snapshot().skill_catalog_attachment()
     }
 
-    /// The immutable ToolRegistry handle of the pinned capability snapshot.
+    /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
     fn tool_registry(&self) -> &ToolRegistry {
         self.capability.snapshot().tool_registry()
     }
@@ -2088,7 +2088,6 @@ mod tests {
             release_tx.send(()).expect("release the execution");
         })
     }
-
 
     /// Builds the attempt capability lease over the given tool registry and
     /// conversation tool runtime: empty Skill set, base environment, and a

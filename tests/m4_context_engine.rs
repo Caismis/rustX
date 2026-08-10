@@ -501,7 +501,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             &tools,
             0,
             &rustx::context::CompactionConstraints::default(),
-                )
+        )
         .expect("plan");
     let plan_expensive = expensive
         .plan_compaction(
@@ -511,7 +511,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             &tools,
             0,
             &rustx::context::CompactionConstraints::default(),
-                )
+        )
         .expect("plan");
     // Identical retention decision: the tool weight changes the full request
     // estimate but never the recent-conversation target.

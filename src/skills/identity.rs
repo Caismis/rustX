@@ -54,7 +54,7 @@ pub fn package_version_id(
     for relative in files {
         let path = package_root.join(relative);
         let len = std::fs::metadata(&path)
-            .map_err(|error| format!("cannot stat {path:?}: {error}"))?
+            .map_err(|error| format!("cannot stat {}: {error}", path.display()))?
             .len();
         hasher.update(format!("path={}\n", relative.display()));
         hasher.update(format!("len={len}\n"));
@@ -67,12 +67,12 @@ pub fn package_version_id(
             continue;
         }
         let mut file = std::fs::File::open(&path)
-            .map_err(|error| format!("cannot open {path:?}: {error}"))?;
-        let mut buffer = [0u8; 64 * 1024];
+            .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+        let mut buffer = vec![0u8; 64 * 1024];
         loop {
             let read = file
                 .read(&mut buffer)
-                .map_err(|error| format!("cannot read {path:?}: {error}"))?;
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
             if read == 0 {
                 break;
             }
@@ -83,7 +83,8 @@ pub fn package_version_id(
     let mut hex = String::with_capacity(71);
     hex.push_str("sha256:");
     for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
     }
     Ok(SkillVersionId::new(hex))
 }
@@ -141,8 +142,11 @@ mod tests {
         let (_dir, package) = package_dir();
         let markdown = std::fs::read(package.join("SKILL.md")).expect("read");
         let before = package_version_id(&package, &files_of(&package), &markdown).expect("id");
-        std::fs::write(package.join("SKILL.md"), "---\nname: pdf\ndescription: A pdf skill\n---\nchanged body\n")
-            .expect("write");
+        std::fs::write(
+            package.join("SKILL.md"),
+            "---\nname: pdf\ndescription: A pdf skill\n---\nchanged body\n",
+        )
+        .expect("write");
         let markdown = std::fs::read(package.join("SKILL.md")).expect("read");
         let after = package_version_id(&package, &files_of(&package), &markdown).expect("id");
         assert_ne!(before, after);

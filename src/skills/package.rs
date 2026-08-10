@@ -124,7 +124,7 @@ impl core::fmt::Display for SkillPackageError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::SkillRootNotDirectory(path) => {
-                write!(f, "the skill root {path:?} is not a directory")
+                write!(f, "the skill root {} is not a directory", path.display())
             }
             Self::InvalidName {
                 directory,
@@ -282,7 +282,11 @@ impl SkillDiscovery {
     /// Returns [`SkillPackageError`] for a malformed Skill root or any
     /// malformed candidate package.
     pub fn discover(&self) -> Result<Vec<SkillPackage>, SkillPackageError> {
-        let skills_root = self.workspace.root().join(SKILLS_DIRECTORY).join(SKILLS_ROOT);
+        let skills_root = self
+            .workspace
+            .root()
+            .join(SKILLS_DIRECTORY)
+            .join(SKILLS_ROOT);
         if !skills_root.exists() {
             return Ok(Vec::new());
         }
@@ -290,11 +294,10 @@ impl SkillDiscovery {
             return Err(SkillPackageError::SkillRootNotDirectory(skills_root));
         }
         let mut candidates: Vec<(String, PathBuf)> = Vec::new();
-        let entries = std::fs::read_dir(&skills_root)
-            .map_err(|error| SkillPackageError::Io {
-                path: skills_root.display().to_string(),
-                detail: error.to_string(),
-            })?;
+        let entries = std::fs::read_dir(&skills_root).map_err(|error| SkillPackageError::Io {
+            path: skills_root.display().to_string(),
+            detail: error.to_string(),
+        })?;
         for entry in entries {
             let entry = entry.map_err(|error| SkillPackageError::Io {
                 path: skills_root.display().to_string(),
@@ -331,12 +334,10 @@ impl SkillDiscovery {
 
 /// Parses, validates, and hashes one Skill package directory.
 fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, SkillPackageError> {
-    validate_skill_name(directory_name).map_err(|detail| {
-        SkillPackageError::InvalidName {
-            directory: directory_name.to_owned(),
-            name: directory_name.to_owned(),
-            detail,
-        }
+    validate_skill_name(directory_name).map_err(|detail| SkillPackageError::InvalidName {
+        directory: directory_name.to_owned(),
+        name: directory_name.to_owned(),
+        detail,
     })?;
     let skill_markdown = root.join(SKILL_MARKDOWN_FILE);
     let markdown_meta = std::fs::symlink_metadata(&skill_markdown).map_err(|_| {
@@ -392,7 +393,8 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
     }
     if let Some(compatibility) = &frontmatter.compatibility {
         let compatibility = compatibility.trim();
-        if compatibility.is_empty() || compatibility.chars().count() > MAX_SKILL_COMPATIBILITY_CHARS {
+        if compatibility.is_empty() || compatibility.chars().count() > MAX_SKILL_COMPATIBILITY_CHARS
+        {
             return Err(SkillPackageError::InvalidCompatibility {
                 directory: directory_name.to_owned(),
                 detail: format!(
@@ -413,11 +415,12 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
     // with package-internal symlinks rejected.
     let mut files = Vec::new();
     walk_package_files(root, root, &mut files)?;
-    let version_id = package_version_id(root, &files, &markdown_bytes)
-        .map_err(|detail| SkillPackageError::Io {
+    let version_id = package_version_id(root, &files, &markdown_bytes).map_err(|detail| {
+        SkillPackageError::Io {
             path: root.display().to_string(),
             detail,
-        })?;
+        }
+    })?;
     Ok(SkillPackage {
         id: SkillId::new(directory_name.to_owned()),
         version_id,
@@ -439,12 +442,12 @@ fn walk_package_files(
     directory: &Path,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), SkillPackageError> {
-    let mut entries = std::fs::read_dir(directory).map_err(|error| SkillPackageError::Io {
+    let entries = std::fs::read_dir(directory).map_err(|error| SkillPackageError::Io {
         path: directory.display().to_string(),
         detail: error.to_string(),
     })?;
     let mut paths = Vec::new();
-    while let Some(entry) = entries.next() {
+    for entry in entries {
         let entry = entry.map_err(|error| SkillPackageError::Io {
             path: directory.display().to_string(),
             detail: error.to_string(),
@@ -453,12 +456,11 @@ fn walk_package_files(
     }
     paths.sort();
     for path in paths {
-        let file_type = std::fs::symlink_metadata(&path).map_err(|error| {
-            SkillPackageError::Io {
+        let file_type =
+            std::fs::symlink_metadata(&path).map_err(|error| SkillPackageError::Io {
                 path: path.display().to_string(),
                 detail: error.to_string(),
-            }
-        })?;
+            })?;
         if file_type.file_type().is_symlink() {
             return Err(SkillPackageError::UnsupportedSymlink {
                 path: path.display().to_string(),
@@ -467,12 +469,10 @@ fn walk_package_files(
         if file_type.is_dir() {
             walk_package_files(root, &path, files)?;
         } else if file_type.is_file() {
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|_| SkillPackageError::Io {
-                    path: path.display().to_string(),
-                    detail: "cannot relativize the package file".to_owned(),
-                })?;
+            let relative = path.strip_prefix(root).map_err(|_| SkillPackageError::Io {
+                path: path.display().to_string(),
+                detail: "cannot relativize the package file".to_owned(),
+            })?;
             files.push(relative.to_path_buf());
         }
     }
@@ -495,13 +495,10 @@ fn validate_skill_name(name: &str) -> Result<(), String> {
     if name.contains("--") {
         return Err("name must not contain consecutive hyphens".to_owned());
     }
-    if !name
-        .chars()
-        .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
-    {
-        return Err(
-            "name may contain only lowercase letters, numbers, and hyphens".to_owned(),
-        );
+    if !name.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
+        return Err("name may contain only lowercase letters, numbers, and hyphens".to_owned());
     }
     Ok(())
 }
@@ -520,7 +517,7 @@ struct Frontmatter {
 /// The serde target of the standard frontmatter fields.
 ///
 /// `metadata` is parsed as a map of YAML values so the standard
-/// string-to-string constraint is enforced explicitly: serde_yaml would
+/// string-to-string constraint is enforced explicitly: `serde_yaml` would
 /// otherwise coerce scalar numbers into strings.
 #[derive(serde::Deserialize)]
 struct FrontmatterSerde {
@@ -549,8 +546,9 @@ enum FrontmatterFailure {
 impl From<FrontmatterFailure> for String {
     fn from(failure: FrontmatterFailure) -> Self {
         match failure {
-            FrontmatterFailure::Malformed(detail) => detail,
-            FrontmatterFailure::InvalidMetadata(detail) => detail,
+            FrontmatterFailure::Malformed(detail) | FrontmatterFailure::InvalidMetadata(detail) => {
+                detail
+            }
         }
     }
 }
@@ -575,8 +573,9 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> 
             "SKILL.md frontmatter is missing its closing delimiter".to_owned(),
         )
     })?;
-    let frontmatter: FrontmatterSerde = serde_yaml::from_str(yaml_block)
-        .map_err(|error| FrontmatterFailure::Malformed(format!("frontmatter is not valid YAML: {error}")))?;
+    let frontmatter: FrontmatterSerde = serde_yaml::from_str(yaml_block).map_err(|error| {
+        FrontmatterFailure::Malformed(format!("frontmatter is not valid YAML: {error}"))
+    })?;
     // The standard requires metadata to be a string-to-string map; a
     // non-string value is malformed (never coerced).
     let mut metadata = BTreeMap::new();

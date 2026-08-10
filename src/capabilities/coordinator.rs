@@ -12,9 +12,7 @@ use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
 };
-use crate::skills::{
-    SkillDiscovery, SkillSnapshot, merge_dependency_manifests,
-};
+use crate::skills::{SkillDiscovery, SkillSnapshot, merge_dependency_manifests};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::ToolRegistry;
 use crate::tools::workspace::Workspace;
@@ -24,9 +22,9 @@ use crate::tools::workspace::Workspace;
 pub struct CapabilityCoordinatorConfig {
     /// The canonical conversation Workspace (the Skill root anchor).
     pub workspace: Workspace,
-    /// The immutable ToolRegistry handle of the capability set.
+    /// The immutable `ToolRegistry` handle of the capability set.
     pub tool_registry: Arc<ToolRegistry>,
-    /// The base authorized ToolEnvironment (without Skill overlays).
+    /// The base authorized `ToolEnvironment` (without Skill overlays).
     pub base_environment: ToolEnvironment,
     /// The caller-configured runtime-private environment store root,
     /// disjoint from the Workspace.
@@ -108,9 +106,12 @@ impl CapabilityCoordinator {
     /// Returns [`CapabilityPreparationError`] when the environment store
     /// root overlaps the Workspace or cannot be established.
     pub fn new(config: CapabilityCoordinatorConfig) -> Result<Self, CapabilityPreparationError> {
-        Self::with_backend(config, Arc::new(RunnerBackedSkillEnvironmentBackend::new(
-            Arc::new(RunnerBackedProcessRunner),
-        )))
+        Self::with_backend(
+            config,
+            Arc::new(RunnerBackedSkillEnvironmentBackend::new(Arc::new(
+                RunnerBackedProcessRunner,
+            ))),
+        )
     }
 
     /// The coordinator constructor with an explicit materialization
@@ -123,15 +124,16 @@ impl CapabilityCoordinator {
         config: CapabilityCoordinatorConfig,
         backend: Arc<dyn SkillEnvironmentBackend>,
     ) -> Result<Self, CapabilityPreparationError> {
-        let store_root = std::fs::canonicalize(&config.environment_store_root).unwrap_or_else(|_| {
-            config.environment_store_root.clone()
-        });
+        let store_root = std::fs::canonicalize(&config.environment_store_root)
+            .unwrap_or_else(|_| config.environment_store_root.clone());
         if store_root.starts_with(config.workspace.root())
             || config.workspace.root().starts_with(&store_root)
         {
-            return Err(CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
-                store_root: config.environment_store_root.display().to_string(),
-            });
+            return Err(
+                CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
+                    store_root: config.environment_store_root.display().to_string(),
+                },
+            );
         }
         let environment_store = EnvironmentStore::new(config.environment_store_root, backend)?;
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
@@ -163,6 +165,11 @@ impl CapabilityCoordinator {
     }
 
     /// The current active capability snapshot.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
     #[must_use]
     pub fn current_snapshot(&self) -> Arc<CapabilitySnapshot> {
         self.inner
@@ -185,6 +192,11 @@ impl CapabilityCoordinator {
     ///
     /// Returns [`CapabilityPreparationError`] for discovery, conflict,
     /// environment, or store failures.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
@@ -240,6 +252,11 @@ impl CapabilityCoordinator {
     /// Returns [`CapabilityCommitError::Busy`] while an attempt lease is
     /// active and [`CapabilityCommitError::StaleCandidate`] for an obsolete
     /// base revision.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
     pub fn commit(
         &self,
         candidate: PreparedCapabilityCandidate,
@@ -252,7 +269,13 @@ impl CapabilityCoordinator {
         // TEST-ONLY commit-boundary hook: the lock is held and the deciding
         // quiescence observation is next.
         #[cfg(test)]
-        if let Some(hook) = self.inner.commit_hook.lock().expect("commit hook lock").clone() {
+        if let Some(hook) = self
+            .inner
+            .commit_hook
+            .lock()
+            .expect("commit hook lock")
+            .clone()
+        {
             hook.enter();
         }
         if candidate.base_revision != state.revision {
@@ -290,6 +313,11 @@ impl CapabilityCoordinator {
     /// synchronization boundary, so a commit that wins first is observed by
     /// the next acquisition and an acquisition that wins first makes the
     /// next commit observe busy.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
     #[must_use]
     pub fn acquire_attempt_lease(&self) -> AttemptCapabilityLease {
         let mut state = self
@@ -306,6 +334,11 @@ impl CapabilityCoordinator {
     }
 
     /// The number of active attempt leases (test/observability).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
     #[must_use]
     pub fn active_attempts(&self) -> u64 {
         self.inner
@@ -495,9 +528,7 @@ body
         let candidate = prepare(&coordinator).await;
 
         let coordinator_for_task = coordinator.clone();
-        let commit_task = std::thread::spawn(move || {
-            coordinator_for_task.commit(candidate)
-        });
+        let commit_task = std::thread::spawn(move || coordinator_for_task.commit(candidate));
         hook.wait_entered();
         // The commit is parked before the deciding quiescence observation;
         // the attempt lease is still held (the coordinator lock is
@@ -574,7 +605,10 @@ body
         let (_dir, coordinator) = coordinator();
         let lease = coordinator.acquire_attempt_lease();
         let candidate = prepare(&coordinator).await;
-        assert_eq!(coordinator.commit(candidate), Err(CapabilityCommitError::Busy));
+        assert_eq!(
+            coordinator.commit(candidate),
+            Err(CapabilityCommitError::Busy)
+        );
         drop(lease);
         assert_eq!(coordinator.active_attempts(), 0);
         let candidate = prepare(&coordinator).await;

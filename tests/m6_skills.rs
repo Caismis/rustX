@@ -30,7 +30,8 @@ fn write_skill(
     if !metadata.is_empty() {
         frontmatter.push_str("metadata:\n");
         for (key, value) in metadata {
-            frontmatter.push_str(&format!("  {key}: '{value}'\n"));
+            use std::fmt::Write as _;
+            let _ = writeln!(frontmatter, "  {key}: '{value}'");
         }
     }
     frontmatter.push_str("---\n");
@@ -53,7 +54,9 @@ fn discover(workspace: &Workspace) -> Vec<rustx::skills::SkillPackage> {
 #[test]
 fn missing_skill_root_is_an_empty_skill_set() {
     let (_dir, workspace) = fixture();
-    let packages = SkillDiscovery::new(&workspace).discover().expect("discover");
+    let packages = SkillDiscovery::new(&workspace)
+        .discover()
+        .expect("discover");
     assert!(packages.is_empty());
 }
 
@@ -107,7 +110,9 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    let error = SkillDiscovery::new(&workspace).discover().expect_err("rejected");
+    let error = SkillDiscovery::new(&workspace)
+        .discover()
+        .expect_err("rejected");
     assert!(matches!(
         error,
         SkillPackageError::NameDirectoryMismatch { .. }
@@ -127,7 +132,9 @@ fn invalid_standard_names_are_rejected() {
             format!("---\nname: {bad}\ndescription: A skill.\n---\nbody\n"),
         )
         .expect("SKILL.md");
-        let error = SkillDiscovery::new(&workspace).discover().expect_err("rejected");
+        let error = SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected");
         assert!(
             matches!(error, SkillPackageError::InvalidName { .. }),
             "name {bad:?} must be rejected, got {error:?}"
@@ -147,7 +154,9 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::InvalidDescription { .. }
     ));
     std::fs::write(
@@ -159,7 +168,9 @@ fn empty_and_oversized_descriptions_are_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::InvalidDescription { .. }
     ));
 }
@@ -175,7 +186,9 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::MalformedFrontmatter { .. }
     ));
     // A missing closing delimiter is malformed too.
@@ -185,7 +198,9 @@ fn malformed_yaml_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::MalformedFrontmatter { .. }
     ));
 }
@@ -203,7 +218,9 @@ fn malformed_metadata_is_rejected() {
     )
     .expect("SKILL.md");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::MalformedMetadata { .. }
     ));
 }
@@ -214,7 +231,9 @@ fn malformed_metadata_is_rejected() {
 fn candidate_without_skill_markdown_is_rejected() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
-    let error = SkillDiscovery::new(&workspace).discover().expect_err("rejected");
+    let error = SkillDiscovery::new(&workspace)
+        .discover()
+        .expect_err("rejected");
     assert!(matches!(
         error,
         SkillPackageError::MissingSkillMarkdown { .. }
@@ -227,13 +246,7 @@ fn candidate_without_skill_markdown_is_rejected() {
 fn nested_packages_are_not_recursively_discovered() {
     let (dir, workspace) = fixture();
     write_skill(dir.path(), "outer", "Outer skill.", &[], "body\n");
-    write_skill(
-        dir.path(),
-        "outer",
-        "Outer skill.",
-        &[],
-        "body\n",
-    );
+    write_skill(dir.path(), "outer", "Outer skill.", &[], "body\n");
     // A nested package-looking directory inside the outer package.
     let nested = dir.path().join(".agents/skills/outer/nested");
     std::fs::create_dir_all(&nested).expect("nested dir");
@@ -262,19 +275,23 @@ fn package_symlinks_are_rejected() {
     )
     .expect("symlink root");
     assert!(matches!(
-        SkillDiscovery::new(&workspace).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::UnsupportedSymlink { .. }
     ));
 
-    let (_dir2, workspace2) = fixture();
-    write_skill(_dir2.path(), "skill", "A skill.", &[], "body\n");
+    let (dir2, workspace2) = fixture();
+    write_skill(dir2.path(), "skill", "A skill.", &[], "body\n");
     std::os::unix::fs::symlink(
-        _dir2.path().join("elsewhere"),
-        _dir2.path().join(".agents/skills/skill/scripts"),
+        dir2.path().join("elsewhere"),
+        dir2.path().join(".agents/skills/skill/scripts"),
     )
     .expect("internal symlink");
     assert!(matches!(
-        SkillDiscovery::new(&workspace2).discover().expect_err("rejected"),
+        SkillDiscovery::new(&workspace2)
+            .discover()
+            .expect_err("rejected"),
         SkillPackageError::UnsupportedSymlink { .. }
     ));
 }
@@ -371,8 +388,36 @@ fn same_bytes_same_version_identity_across_workspaces() {
     write_skill(dir_a.path(), "pdf", "PDF skill.", &[], "body\n");
     let (dir_b, workspace_b) = fixture();
     write_skill(dir_b.path(), "pdf", "PDF skill.", &[], "body\n");
-    assert_eq!(version_id(&workspace_a, "pdf"), version_id(&workspace_b, "pdf"));
+    assert_eq!(
+        version_id(&workspace_a, "pdf"),
+        version_id(&workspace_b, "pdf")
+    );
     assert_eq!(version_id(&workspace_a, "pdf").as_str().len(), 7 + 64);
+}
+
+/// Filesystem enumeration order never enters the digest: two packages
+/// with identical content created in different orders produce the same
+/// identity.
+#[test]
+fn filesystem_enumeration_order_does_not_affect_the_digest() {
+    let (dir_a, workspace_a) = fixture();
+    write_skill(dir_a.path(), "pdf", "PDF skill.", &[], "body\n");
+    let scripts = dir_a.path().join(".agents/skills/pdf/scripts");
+    std::fs::create_dir_all(&scripts).expect("scripts");
+    std::fs::write(scripts.join("z.py"), "print('z')\n").expect("z");
+    std::fs::write(scripts.join("a.py"), "print('a')\n").expect("a");
+
+    let (dir_b, workspace_b) = fixture();
+    write_skill(dir_b.path(), "pdf", "PDF skill.", &[], "body\n");
+    let scripts_b = dir_b.path().join(".agents/skills/pdf/scripts");
+    std::fs::create_dir_all(&scripts_b).expect("scripts");
+    std::fs::write(scripts_b.join("a.py"), "print('a')\n").expect("a");
+    std::fs::write(scripts_b.join("z.py"), "print('z')\n").expect("z");
+
+    assert_eq!(
+        version_id(&workspace_a, "pdf"),
+        version_id(&workspace_b, "pdf")
+    );
 }
 
 /// File mtimes never enter the digest.
@@ -383,8 +428,11 @@ fn file_mtime_does_not_affect_the_digest() {
     let before = version_id(&workspace, "pdf");
     let path = dir.path().join(".agents/skills/pdf/SKILL.md");
     let past = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
-    let file = std::fs::File::options().write(true).open(&path).expect("open");
-    file.set_modified(past.into()).expect("set mtime");
+    let file = std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("open");
+    file.set_modified(past).expect("set mtime");
     drop(file);
     let after = version_id(&workspace, "pdf");
     assert_eq!(before, after);
@@ -460,9 +508,11 @@ fn dependency_change_changes_the_version_identity() {
     assert_ne!(before, version_id(&workspace, "pdf"));
 
     let description_version = version_id(&workspace, "pdf");
-    let deps: BTreeMap<String, String> =
-        [("pypdf".to_owned(), "5.10.0".to_owned())].into_iter().collect();
-    let env_digest = python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps);
+    let deps: BTreeMap<String, String> = [("pypdf".to_owned(), "5.10.0".to_owned())]
+        .into_iter()
+        .collect();
+    let env_digest =
+        python_environment_digest("linux", "x86_64", "Python 3.12.3", "pip 24.0", &deps);
     write_skill(
         dir.path(),
         "pdf",
@@ -527,8 +577,15 @@ fn exact_dependency_objects_parse_deterministically() {
 #[test]
 fn unsupported_declarations_are_rejected() {
     for bad in [
-        ">=1.0", "~=1.0", "==1.0", "1.0.*", "1.0[extra]", "1.0; python_version<'3.9'",
-        "https://example.com/pkg.tar.gz", "git+https://example.com/repo.git", "../local",
+        ">=1.0",
+        "~=1.0",
+        "==1.0",
+        "1.0.*",
+        "1.0[extra]",
+        "1.0; python_version<'3.9'",
+        "https://example.com/pkg.tar.gz",
+        "git+https://example.com/repo.git",
+        "../local",
     ] {
         let result = rustx::skills::parse_python_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
         assert!(
@@ -537,8 +594,16 @@ fn unsupported_declarations_are_rejected() {
         );
     }
     for bad in [
-        "^1.0.0", "~1.0.0", ">=1.0.0", "1.0.x", "*", "latest", "1.0.0 || 2.0.0",
-        "git+https://example.com/repo.git", "workspace:*", "file:../pkg",
+        "^1.0.0",
+        "~1.0.0",
+        ">=1.0.0",
+        "1.0.x",
+        "*",
+        "latest",
+        "1.0.0 || 2.0.0",
+        "git+https://example.com/repo.git",
+        "workspace:*",
+        "file:../pkg",
     ] {
         let result = rustx::skills::parse_node_dependencies(&format!(r#"{{"pkg":"{bad}"}}"#));
         assert!(
@@ -614,7 +679,9 @@ fn malformed_dependency_declaration_fails_the_transaction() {
         &[("rustx.python-dependencies", r#"{"pypdf":"not a version"}"#)],
         "body\n",
     );
-    let error = SkillDiscovery::new(&workspace).discover().expect_err("rejected");
+    let error = SkillDiscovery::new(&workspace)
+        .discover()
+        .expect_err("rejected");
     assert!(matches!(
         error,
         SkillPackageError::InvalidDependencyDeclaration { .. }
@@ -631,12 +698,23 @@ fn malformed_dependency_declaration_fails_the_transaction() {
 #[test]
 fn catalog_rendering_is_exact_and_never_leaks_workspace_paths() {
     let (dir, workspace) = fixture();
-    write_skill(dir.path(), "pdf", "Create, edit, inspect, and transform PDF documents.", &[], "body\n");
-    write_skill(dir.path(), "slides", "Create and modify presentation decks.", &[], "body\n");
-    let packages = discover(&workspace);
-    let snapshot = rustx::skills::SkillSnapshot::new(
-        packages.into_iter().map(std::sync::Arc::new).collect(),
+    write_skill(
+        dir.path(),
+        "pdf",
+        "Create, edit, inspect, and transform PDF documents.",
+        &[],
+        "body\n",
     );
+    write_skill(
+        dir.path(),
+        "slides",
+        "Create and modify presentation decks.",
+        &[],
+        "body\n",
+    );
+    let packages = discover(&workspace);
+    let snapshot =
+        rustx::skills::SkillSnapshot::new(packages.into_iter().map(std::sync::Arc::new).collect());
     let rendered = snapshot.render_catalog().expect("catalog");
     assert_eq!(
         rendered,
@@ -707,8 +785,9 @@ fn environment_digests_are_deterministic() {
     );
 
     // Python and Node digests are distinct identities.
-    let node_deps: BTreeMap<String, String> =
-        [("pdf-lib".to_owned(), "1.17.1".to_owned())].into_iter().collect();
+    let node_deps: BTreeMap<String, String> = [("pdf-lib".to_owned(), "1.17.1".to_owned())]
+        .into_iter()
+        .collect();
     let node_digest = node_environment_digest("linux", "x86_64", "v22.1.0", "10.2.3", &node_deps);
     assert_ne!(
         node_digest.as_str(),

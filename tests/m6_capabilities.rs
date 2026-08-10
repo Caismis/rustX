@@ -22,10 +22,10 @@ use rustx::tools::background::{
 };
 use rustx::tools::environment::ToolEnvironment;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
-use rustx::tools::workspace::Workspace;
 use rustx::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
 };
+use rustx::tools::workspace::Workspace;
 
 #[path = "common/mod.rs"]
 mod common;
@@ -33,7 +33,7 @@ mod common;
 /// One conversation fixture: workspace (with skills), environment store,
 /// artifact store, mailbox, background registry, and the coordinator.
 struct Conversation {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     pub workspace: Workspace,
     pub background: ConversationBackgroundRegistry,
     pub coordinator: CapabilityCoordinator,
@@ -47,7 +47,8 @@ fn write_skill(root: &std::path::Path, name: &str, description: &str, deps: &[(&
     if !deps.is_empty() {
         frontmatter.push_str("metadata:\n");
         for (key, value) in deps {
-            frontmatter.push_str(&format!("  {key}: '{value}'\n"));
+            use std::fmt::Write as _;
+            let _ = writeln!(frontmatter, "  {key}: '{value}'");
         }
     }
     frontmatter.push_str("---\nbody\n");
@@ -55,11 +56,17 @@ fn write_skill(root: &std::path::Path, name: &str, description: &str, deps: &[(&
 }
 
 fn python_deps(json: &str) -> (&'static str, &'static str) {
-    ("rustx.python-dependencies", Box::leak(json.to_owned().into_boxed_str()))
+    (
+        "rustx.python-dependencies",
+        Box::leak(json.to_owned().into_boxed_str()),
+    )
 }
 
 fn node_deps(json: &str) -> (&'static str, &'static str) {
-    ("rustx.node-dependencies", Box::leak(json.to_owned().into_boxed_str()))
+    (
+        "rustx.node-dependencies",
+        Box::leak(json.to_owned().into_boxed_str()),
+    )
 }
 
 fn conversation() -> Conversation {
@@ -93,7 +100,7 @@ fn conversation() -> Conversation {
     )
     .expect("coordinator");
     Conversation {
-        _dir: dir,
+        dir,
         workspace,
         background,
         coordinator,
@@ -105,7 +112,11 @@ async fn prepare_and_commit(
     coordinator: &CapabilityCoordinator,
 ) -> rustx::capabilities::CapabilitySnapshot {
     let candidate = coordinator.prepare_candidate().await.expect("prepare");
-    coordinator.commit(candidate).expect("commit").as_ref().clone()
+    coordinator
+        .commit(candidate)
+        .expect("commit")
+        .as_ref()
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +151,9 @@ async fn compatible_skills_share_one_merged_environment_per_ecosystem() {
     let python = snapshot.python_environment().expect("python env");
     let node = snapshot.node_environment().expect("node env");
     assert_eq!(
-        conversation.backend.materialization_count(Ecosystem::Python),
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
         1,
         "one shared Python environment, never one per Skill"
     );
@@ -218,8 +231,8 @@ async fn published_identical_digest_is_reused_and_never_modified() {
     );
     let first = prepare_and_commit(&conversation.coordinator).await;
     let python = first.python_environment().expect("python env");
-    let marker_before = std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE))
-        .expect("marker");
+    let marker_before =
+        std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)).expect("marker");
     let modified_before = std::fs::metadata(python.root.join("bin/python"))
         .expect("env file")
         .modified()
@@ -228,20 +241,98 @@ async fn published_identical_digest_is_reused_and_never_modified() {
     // A second preparation with the same declarations reuses the published
     // digest directory without installing into it again.
     let second = prepare_and_commit(&conversation.coordinator).await;
-    assert_eq!(second.python_environment().expect("env").digest, python.digest);
     assert_eq!(
-        conversation.backend.materialization_count(Ecosystem::Python),
+        second.python_environment().expect("env").digest,
+        python.digest
+    );
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
         1,
         "a published environment is never installed into again"
     );
-    let marker_after = std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE))
-        .expect("marker");
+    let marker_after =
+        std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)).expect("marker");
     assert_eq!(marker_before, marker_after);
     let modified_after = std::fs::metadata(python.root.join("bin/python"))
         .expect("env file")
         .modified()
         .expect("mtime");
-    assert_eq!(modified_before, modified_after, "reuse never mutates the environment");
+    assert_eq!(
+        modified_before, modified_after,
+        "reuse never mutates the environment"
+    );
+}
+
+/// The absolute environment store path never changes the environment
+/// digest: two stores in different roots with the same inputs produce the
+/// same digest.
+#[tokio::test]
+async fn absolute_store_path_does_not_change_the_digest() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    let first = prepare_and_commit(&conversation.coordinator).await;
+    let digest = first.python_environment().expect("env").digest.clone();
+
+    let conversation_two = {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let conversation_id = ConversationId::new("conv-m6-two");
+        let mailbox = ConversationInboundMailbox::new(conversation_id.clone());
+        let background = ConversationBackgroundRegistry::new(
+            conversation_id,
+            BackgroundResources {
+                mailbox,
+                workspace: workspace.clone(),
+                artifacts: ArtifactStore::new(
+                    ConversationId::new("conv-m6-two"),
+                    dir.path().join("artifacts"),
+                )
+                .expect("artifacts"),
+                clock: Arc::new(rustx::runtime::SystemClock),
+                event_sink: None,
+            },
+        );
+        let _ = background;
+        let backend = common::FakeSkillEnvironmentBackend::new();
+        let coordinator = CapabilityCoordinator::with_backend(
+            CapabilityCoordinatorConfig {
+                workspace: workspace.clone(),
+                tool_registry: Arc::new(ToolRegistry::new()),
+                base_environment: ToolEnvironment::new(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+            Arc::new(backend.clone()),
+        )
+        .expect("coordinator");
+        Conversation {
+            dir,
+            workspace,
+            background,
+            coordinator,
+            backend,
+        }
+    };
+    write_skill(
+        conversation_two.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    let second = prepare_and_commit(&conversation_two.coordinator).await;
+    assert_eq!(
+        second.python_environment().expect("env").digest,
+        digest,
+        "the store root is never part of the environment identity"
+    );
 }
 
 /// A corrupt published manifest means the digest directory is never
@@ -289,9 +380,14 @@ async fn materialization_failure_leaves_the_active_capability_unchanged() {
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
     let revision = snapshot.revision();
-    assert!(snapshot.python_environment().is_some(), "revision N has an environment");
+    assert!(
+        snapshot.python_environment().is_some(),
+        "revision N has an environment"
+    );
 
-    conversation.backend.fail_python_materialization("injected install failure");
+    conversation
+        .backend
+        .fail_python_materialization("injected install failure");
     write_skill(
         conversation.workspace.root(),
         "pdf",
@@ -323,7 +419,7 @@ async fn materialization_failure_leaves_the_active_capability_unchanged() {
             .effective_environment()
             .child_environment(conversation.workspace.root())
             .first()
-            .map(|_| conversation._dir.path().join("skill-env"))
+            .map(|_| conversation.dir.path().join("skill-env"))
             .expect("store root"),
     )
     .expect("store exists");
@@ -349,7 +445,7 @@ async fn atomic_publication_is_the_only_reusable_point() {
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
     let gate = conversation.backend.install_materialize_gate();
-    let store_root = conversation._dir.path().join("skill-env").join("python");
+    let store_root = conversation.dir.path().join("skill-env").join("python");
     let prepare_task = {
         let coordinator = conversation.coordinator.clone();
         tokio::spawn(async move { coordinator.prepare_candidate().await })
@@ -358,7 +454,13 @@ async fn atomic_publication_is_the_only_reusable_point() {
     // Materialization began; no digest directory is reusable yet.
     let entries: Vec<String> = std::fs::read_dir(&store_root)
         .expect("store")
-        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     assert!(
         !entries.iter().any(|name| !name.starts_with(".staging-")),
@@ -368,7 +470,13 @@ async fn atomic_publication_is_the_only_reusable_point() {
     prepare_task.await.expect("prepare task").expect("prepare");
     let entries: Vec<String> = std::fs::read_dir(&store_root)
         .expect("store")
-        .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     assert!(
         entries
@@ -444,8 +552,15 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         "PDF skill.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    let candidate = conversation.coordinator.prepare_candidate().await.expect("prepare");
-    let error = conversation.coordinator.commit(candidate).expect_err("busy");
+    let candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
+    let error = conversation
+        .coordinator
+        .commit(candidate)
+        .expect_err("busy");
     assert_eq!(error, rustx::capabilities::CapabilityCommitError::Busy);
     assert_eq!(
         conversation.coordinator.current_snapshot().revision(),
@@ -460,7 +575,11 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
         "PDF skill.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    let candidate = conversation.coordinator.prepare_candidate().await.expect("prepare");
+    let candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     let committed = conversation.coordinator.commit(candidate).expect("commit");
     assert_eq!(
         committed.revision(),
@@ -489,7 +608,11 @@ async fn candidate_preparation_cannot_mutate_an_active_attempt() {
         "PDF skill.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    let _candidate = conversation.coordinator.prepare_candidate().await.expect("prepare");
+    let _candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     assert_eq!(
         lease.snapshot().as_ref(),
         &*pinned,
@@ -504,7 +627,11 @@ async fn candidate_preparation_cannot_mutate_an_active_attempt() {
 async fn unchanged_preparation_is_a_noop() {
     let conversation = conversation();
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let candidate = conversation.coordinator.prepare_candidate().await.expect("prepare");
+    let candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     let committed = conversation.coordinator.commit(candidate).expect("commit");
     assert_eq!(committed.revision(), snapshot.revision());
     assert_eq!(committed.as_ref(), &snapshot);
@@ -572,7 +699,11 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
         "PDF skill.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    let stale = conversation.coordinator.prepare_candidate().await.expect("prepare");
+    let stale = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     // The active revision advances first.
     let first_commit = conversation.coordinator.commit(stale).expect("commit");
     assert_eq!(first_commit.revision().get(), snapshot.revision().get() + 1);
@@ -583,17 +714,21 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
         "Changed again.",
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
-    let second = conversation.coordinator.prepare_candidate().await.expect("prepare");
+    let second = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     conversation.coordinator.commit(second).expect("commit");
 
     // A candidate prepared from the now-obsolete base revision is stale.
-    let candidate = {
-        // Re-prepare from the CURRENT revision is fine; simulate the stale
-        // base by preparing now and committing after another change.
-        let _ = &conversation;
-        let candidate = conversation.coordinator.prepare_candidate().await.expect("prepare");
-        candidate
-    };
+    // Re-prepare from the current revision, then advance the active
+    // revision further so this candidate becomes stale.
+    let candidate = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare");
     write_skill(
         conversation.workspace.root(),
         "pdf",
@@ -615,7 +750,10 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
                 .expect("prepare"),
         )
         .expect("commit");
-    let error = conversation.coordinator.commit(candidate).expect_err("stale");
+    let error = conversation
+        .coordinator
+        .commit(candidate)
+        .expect_err("stale");
     assert!(matches!(
         error,
         rustx::capabilities::CapabilityCommitError::StaleCandidate { .. }
@@ -648,7 +786,7 @@ async fn failed_preparation_leaves_revision_authoritative() {
 // Background environment retention (section 32)
 // ---------------------------------------------------------------------------
 
-/// A recording executor that captures the effective ToolEnvironment from
+/// A recording executor that captures the effective `ToolEnvironment` from
 /// its execution context and parks until released.
 struct RecordingParkingExecutor {
     environment: Arc<Mutex<Option<ToolEnvironment>>>,
@@ -657,7 +795,11 @@ struct RecordingParkingExecutor {
 }
 
 impl RecordingParkingExecutor {
-    fn new() -> (Self, tokio::sync::watch::Receiver<bool>, Arc<tokio::sync::Notify>) {
+    fn new() -> (
+        Self,
+        tokio::sync::watch::Receiver<bool>,
+        Arc<tokio::sync::Notify>,
+    ) {
         let (seen, seen_rx) = tokio::sync::watch::channel(false);
         let release = Arc::new(tokio::sync::Notify::new());
         (
@@ -713,6 +855,7 @@ fn background_invocation() -> ToolInvocation {
 /// environment N after attempt N terminates, while revision N+1 activates
 /// and new executions use environment N+1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)] // one coherent retention scenario
 async fn background_execution_retains_its_dispatching_environment() {
     let conversation = conversation();
     write_skill(
@@ -749,7 +892,9 @@ async fn background_execution_retains_its_dispatching_environment() {
         .await
         .expect("background execution started under revision N");
     assert_eq!(
-        executor.recorded_environment().expect("captured environment"),
+        executor
+            .recorded_environment()
+            .expect("captured environment"),
         environment_n,
         "the detached execution captured environment N"
     );
@@ -779,7 +924,9 @@ async fn background_execution_retains_its_dispatching_environment() {
 
     // The old background execution still has environment N.
     assert_eq!(
-        executor.recorded_environment().expect("captured environment"),
+        executor
+            .recorded_environment()
+            .expect("captured environment"),
         environment_n,
         "revision N+1 activation never mutates the old background environment"
     );
@@ -806,7 +953,10 @@ async fn background_execution_retains_its_dispatching_environment() {
     let outcome2 = conversation
         .background
         .commit_dispatch(prepared2, &rustx::runtime::CancellationSignal::new());
-    let BackgroundDispatchOutcome::Accepted { execution_id: id2, .. } = outcome2 else {
+    let BackgroundDispatchOutcome::Accepted {
+        execution_id: id2, ..
+    } = outcome2
+    else {
         panic!("accepted");
     };
     started2
@@ -814,7 +964,9 @@ async fn background_execution_retains_its_dispatching_environment() {
         .await
         .expect("second background execution started");
     assert_eq!(
-        executor2.recorded_environment().expect("captured environment"),
+        executor2
+            .recorded_environment()
+            .expect("captured environment"),
         snapshot_n1.effective_environment().clone(),
         "a new background execution uses environment N+1"
     );
@@ -829,7 +981,10 @@ async fn background_execution_retains_its_dispatching_environment() {
 
 async fn wait_for_terminal(conversation: &Conversation, execution_id: &ToolExecutionId) {
     for _ in 0..400 {
-        let snapshot = conversation.background.snapshot(execution_id).expect("snapshot");
+        let snapshot = conversation
+            .background
+            .snapshot(execution_id)
+            .expect("snapshot");
         if snapshot.state.is_terminal() {
             return;
         }
@@ -847,6 +1002,7 @@ async fn wait_for_terminal(conversation: &Conversation, execution_id: &ToolExecu
 /// attachment and effective environment: the attempt runs multiple turns
 /// while its lease is held, and the catalog never changes mid-attempt.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one coherent multi-turn scenario
 async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let conversation = conversation();
     write_skill(
@@ -870,7 +1026,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             workspace: conversation.workspace.clone(),
             tool_registry: tools.clone(),
             base_environment: ToolEnvironment::new(),
-            environment_store_root: conversation._dir.path().join("skill-env-2"),
+            environment_store_root: conversation.dir.path().join("skill-env-2"),
         },
         Arc::new(conversation.backend.clone()),
     )
@@ -895,10 +1051,12 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     for event in common::fake::tool_call_events(0, &call) {
         first.push(common::fake::FakeStep::Emit(event));
     }
-    first.push(common::fake::FakeStep::Emit(rustx::model::ModelEvent::Completed {
-        finish_reason: rustx::model::ModelFinishReason::ToolCalls,
-        usage: None,
-    }));
+    first.push(common::fake::FakeStep::Emit(
+        rustx::model::ModelEvent::Completed {
+            finish_reason: rustx::model::ModelFinishReason::ToolCalls,
+            usage: None,
+        },
+    ));
     let model = common::fake::FakeModel::new(vec![
         first,
         vec![
@@ -964,7 +1122,10 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     assert_eq!(requests.len(), 2, "two model turns");
     for request in &requests {
         assert_eq!(
-            request.skill_catalog.as_ref().expect("catalog on every turn"),
+            request
+                .skill_catalog
+                .as_ref()
+                .expect("catalog on every turn"),
             &catalog,
             "every model turn uses the attempt's immutable Skill catalog"
         );
@@ -983,7 +1144,9 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         result
             .events
             .iter()
-            .all(|event| !serde_json::to_string(event).expect("serialize").contains("## Skills")),
+            .all(|event| !serde_json::to_string(event)
+                .expect("serialize")
+                .contains("## Skills")),
         "the Skill catalog must never appear in committed-message events"
     );
     drop(lease);

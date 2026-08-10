@@ -59,7 +59,7 @@ fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
     }
 }
 
-/// The Anthropic adapter places the catalog in the top-level `system`
+/// The `Anthropic` adapter places the catalog in the top-level `system`
 /// content along with canonical trusted system content.
 #[tokio::test]
 async fn anthropic_places_the_catalog_in_top_level_system_content() {
@@ -70,9 +70,12 @@ async fn anthropic_places_the_catalog_in_top_level_system_content() {
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
         rustx::model::AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
     );
-    let events = common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, true))
-        .await;
-    assert!(matches!(events.last(), Some(rustx::model::ModelEvent::Completed { .. })));
+    let events =
+        common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, true)).await;
+    assert!(matches!(
+        events.last(),
+        Some(rustx::model::ModelEvent::Completed { .. })
+    ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     let system = body
@@ -90,8 +93,8 @@ async fn anthropic_places_the_catalog_in_top_level_system_content() {
         "the catalog follows the canonical trusted system content"
     );
     // The catalog never appears inside a user message.
-    let messages_text = serde_json::to_string(body.get("messages").expect("messages"))
-        .expect("serialize");
+    let messages_text =
+        serde_json::to_string(body.get("messages").expect("messages")).expect("serialize");
     assert!(
         !messages_text.contains(CATALOG),
         "the catalog is never attached to a user message"
@@ -109,12 +112,19 @@ async fn anthropic_omits_the_catalog_when_no_skill_is_active() {
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
         rustx::model::AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
     );
-    let events = common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, false))
-        .await;
-    assert!(matches!(events.last(), Some(rustx::model::ModelEvent::Completed { .. })));
+    let events =
+        common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, false)).await;
+    assert!(matches!(
+        events.last(),
+        Some(rustx::model::ModelEvent::Completed { .. })
+    ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let system = body.get("system").expect("system").as_array().expect("array");
+    let system = body
+        .get("system")
+        .expect("system")
+        .as_array()
+        .expect("array");
     let texts: Vec<&str> = system
         .iter()
         .map(|block| block.get("text").expect("text").as_str().expect("string"))
@@ -122,7 +132,7 @@ async fn anthropic_omits_the_catalog_when_no_skill_is_active() {
     assert_eq!(texts, vec![SYSTEM_TEXT]);
 }
 
-/// The OpenAI Chat Completions adapter translates the catalog through the
+/// The `OpenAI` Chat Completions adapter translates the catalog through the
 /// system-level message mechanism, never attached to a user message.
 #[tokio::test]
 async fn chat_completions_places_the_catalog_in_a_system_message() {
@@ -133,17 +143,32 @@ async fn chat_completions_places_the_catalog_in_a_system_message() {
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
         rustx::model::OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
     );
-    let events =
-        common::collect_events(&adapter, request(ModelProtocol::OpenAiChatCompletions, true))
-            .await;
-    assert!(matches!(events.last(), Some(rustx::model::ModelEvent::Completed { .. })));
+    let events = common::collect_events(
+        &adapter,
+        request(ModelProtocol::OpenAiChatCompletions, true),
+    )
+    .await;
+    assert!(matches!(
+        events.last(),
+        Some(rustx::model::ModelEvent::Completed { .. })
+    ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let messages = body.get("messages").expect("messages").as_array().expect("array");
+    let messages = body
+        .get("messages")
+        .expect("messages")
+        .as_array()
+        .expect("array");
     let system_messages: Vec<&str> = messages
         .iter()
         .filter(|message| message.get("role") == Some(&serde_json::json!("system")))
-        .map(|message| message.get("content").expect("content").as_str().expect("text"))
+        .map(|message| {
+            message
+                .get("content")
+                .expect("content")
+                .as_str()
+                .expect("text")
+        })
         .collect();
     assert_eq!(
         system_messages,
@@ -163,7 +188,7 @@ async fn chat_completions_places_the_catalog_in_a_system_message() {
     );
 }
 
-/// The OpenAI Responses adapter combines the catalog with the canonical
+/// The `OpenAI` Responses adapter combines the catalog with the canonical
 /// system instructions in the trusted `instructions` channel.
 #[tokio::test]
 async fn responses_places_the_catalog_in_the_instructions_channel() {
@@ -178,7 +203,10 @@ async fn responses_places_the_catalog_in_the_instructions_channel() {
     );
     let events =
         common::collect_events(&adapter, request(ModelProtocol::OpenAiResponses, true)).await;
-    assert!(matches!(events.last(), Some(rustx::model::ModelEvent::Completed { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(rustx::model::ModelEvent::Completed { .. })
+    ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     let instructions = body
@@ -208,13 +236,18 @@ async fn responses_continuation_keeps_sending_the_catalog() {
             .with_responses_storage(rustx::model::ResponsesStorageMode::Stored),
     );
     let mut request = request(ModelProtocol::OpenAiResponses, true);
-    request.continuation = Some(rustx::runtime::continuation::ProviderContinuationState::OpenAiResponses(
-        rustx::runtime::continuation::OpenAiResponsesContinuation::Stored {
-            previous_response_id: "resp_1".to_owned(),
-        },
-    ));
+    request.continuation = Some(
+        rustx::runtime::continuation::ProviderContinuationState::OpenAiResponses(
+            rustx::runtime::continuation::OpenAiResponsesContinuation::Stored {
+                previous_response_id: "resp_1".to_owned(),
+            },
+        ),
+    );
     let events = common::collect_events(&adapter, request).await;
-    assert!(matches!(events.last(), Some(rustx::model::ModelEvent::Completed { .. })));
+    assert!(matches!(
+        events.last(),
+        Some(rustx::model::ModelEvent::Completed { .. })
+    ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert_eq!(
@@ -279,7 +312,9 @@ fn large_catalog_contributes_to_cannot_fit() {
         "a large catalog must exceed the soft limit"
     );
     assert!(
-        engine.should_compact(&with_catalog, 512).expect("threshold"),
+        engine
+            .should_compact(&with_catalog, 512)
+            .expect("threshold"),
         "a large catalog must trigger compaction"
     );
     assert!(

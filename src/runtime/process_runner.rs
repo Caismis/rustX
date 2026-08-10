@@ -545,7 +545,6 @@ pub(crate) struct RunnerTestControl {
     pub(crate) channel_eof: Option<RunnerChannelEofHook>,
 }
 
-
 impl RunnerTestControl {
     /// A control bundle without failures.
     #[must_use]
@@ -596,7 +595,6 @@ impl RunnerTestControl {
     }
 }
 
-
 /// The owned supervised-command runner.
 ///
 /// [`SupervisedCommandRunner::spawn`] spawns the supervisor unit and hands
@@ -634,11 +632,18 @@ impl SupervisedCommandRunner {
     /// owned command's streams); the caller owns their capture. The runner
     /// owns the supervisor child.
     #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // one coherent spawn/settle pipeline
     pub(crate) fn spawn(
         spec: &SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
-    ) -> Result<(Self, Option<tokio::process::ChildStdout>, Option<tokio::process::ChildStderr>), RunnerSpawnError>
-    {
+    ) -> Result<
+        (
+            Self,
+            Option<tokio::process::ChildStdout>,
+            Option<tokio::process::ChildStderr>,
+        ),
+        RunnerSpawnError,
+    > {
         #[cfg(not(test))]
         let _ = control;
         #[cfg(test)]
@@ -711,14 +716,14 @@ impl SupervisedCommandRunner {
             nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
         ) {
             let _ = child.start_kill();
-            let _ = child.wait();
+            std::mem::drop(child.wait());
             return Err(RunnerSpawnError::ControlChannelPrepare(error.to_string()));
         }
         let stream = match tokio::net::UnixStream::from_std(stream_a) {
             Ok(stream) => stream,
             Err(error) => {
                 let _ = child.start_kill();
-                let _ = child.wait();
+                std::mem::drop(child.wait());
                 return Err(RunnerSpawnError::ControlChannelOpen(error.to_string()));
             }
         };
@@ -757,6 +762,7 @@ impl SupervisedCommandRunner {
     /// failure: owned work must be contained and terminal before any
     /// outcome — success, failure, cancelled, or timed out — is produced.
     #[cfg(unix)]
+    #[allow(clippy::too_many_lines)] // one coherent spawn/settle pipeline
     pub(crate) async fn settle(&mut self) -> ProcessTermination {
         loop {
             let outcome_intent =
@@ -943,8 +949,12 @@ impl SupervisedCommandRunner {
         // Process terminality was proven by the outer supervisor before this
         // point. Reaping the already-terminal direct child is semantically
         // required; it is never abandoned.
-        if !self.direct_child_reaped && let Err(error) = self.child.wait().await {
-            self.failure = Some(format!("cannot reap the terminal supervisor child: {error}"));
+        if !self.direct_child_reaped
+            && let Err(error) = self.child.wait().await
+        {
+            self.failure = Some(format!(
+                "cannot reap the terminal supervisor child: {error}"
+            ));
         }
 
         let intent = if let Some(failure_message) = self.failure.take() {
@@ -972,14 +982,15 @@ impl SupervisedCommandRunner {
     async fn emergency_containment_after_supervisor_loss(&mut self, pgid: i32) -> bool {
         #[cfg(test)]
         let control = self.control.clone();
-        #[cfg(not(test))]
-        let _control: Option<RunnerTestControl> = None;
         if let Err(error) = self.child.wait().await {
             self.failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
             return false;
         }
         #[cfg(test)]
-        if let Some(hook) = control.as_ref().and_then(|control| control.channel_eof.as_ref()) {
+        if let Some(hook) = control
+            .as_ref()
+            .and_then(|control| control.channel_eof.as_ref())
+        {
             hook.pause_before_emergency().await;
         }
         #[cfg(test)]
@@ -1093,9 +1104,7 @@ fn emergency_contain_group(
                 return Ok(EmergencyContainment::AnchorUnavailable);
             }
             Err(error) => {
-                return Err(format!(
-                    "cannot retain the lost invocation anchor: {error}"
-                ));
+                return Err(format!("cannot retain the lost invocation anchor: {error}"));
             }
         }
     }
@@ -1103,9 +1112,7 @@ fn emergency_contain_group(
     match killpg(anchor, Signal::SIGKILL) {
         Ok(()) | Err(Errno::ESRCH) => {}
         Err(error) => {
-            return Err(format!(
-                "cannot contain the lost invocation group: {error}"
-            ));
+            return Err(format!("cannot contain the lost invocation group: {error}"));
         }
     }
     loop {
@@ -1313,18 +1320,16 @@ where
 {
     let limit = MAX_PROCESS_OUTPUT_BYTES;
     let mut output = Vec::with_capacity(limit.min(64 * 1024));
-    let mut buffer = [0u8; 64 * 1024];
+    let mut buffer = vec![0u8; 64 * 1024];
     let mut total: u64 = 0;
     loop {
-        match pipe.read(&mut buffer).await {
-            Ok(0) => break,
-            Ok(read) => {
-                total += read as u64;
-                let take = (limit + 1).saturating_sub(output.len());
-                output.extend_from_slice(&buffer[..read.min(take)]);
-            }
-            Err(_) => break,
-        }
+        let read = match pipe.read(&mut buffer).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => read,
+        };
+        total += read as u64;
+        let take = (limit + 1).saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..read.min(take)]);
     }
     if total > limit as u64 {
         output.truncate(limit);
@@ -1357,11 +1362,11 @@ pub(crate) fn unix_signal_of(exit: ExitStatus) -> String {
 impl core::fmt::Display for RunnerSpawnError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Subreaper(error) => write!(f, "{error}"),
-            Self::ControlChannel(error) => write!(f, "{error}"),
-            Self::ControlChannelPrepare(error) => write!(f, "{error}"),
-            Self::ControlChannelOpen(error) => write!(f, "{error}"),
-            Self::SupervisorSpawn(error) => write!(f, "{error}"),
+            Self::Subreaper(error)
+            | Self::ControlChannel(error)
+            | Self::ControlChannelPrepare(error)
+            | Self::ControlChannelOpen(error)
+            | Self::SupervisorSpawn(error) => write!(f, "{error}"),
             Self::InjectedSupervisorSpawn => write!(f, "injected supervisor spawn failure"),
         }
     }

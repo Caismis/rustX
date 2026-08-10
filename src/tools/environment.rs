@@ -30,7 +30,8 @@ use std::collections::BTreeMap;
 /// The runtime-owned baseline keys: they are composed by
 /// [`ToolEnvironment::child_environment`] and cannot be supplied as
 /// conflicting authorized entries.
-pub const RUNTIME_OWNED_KEYS: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "NODE_PATH"];
+pub const RUNTIME_OWNED_KEYS: [&str; 6] =
+    ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "NODE_PATH"];
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,10 +84,7 @@ impl ToolEnvironmentOverlay {
     pub fn python(python_root: &std::path::Path) -> Self {
         Self {
             path_prefixes: vec![python_root.join("bin").display().to_string()],
-            entries: vec![(
-                "VIRTUAL_ENV".to_owned(),
-                python_root.display().to_string(),
-            )],
+            entries: vec![("VIRTUAL_ENV".to_owned(), python_root.display().to_string())],
         }
     }
 
@@ -95,11 +93,13 @@ impl ToolEnvironmentOverlay {
     #[must_use]
     pub fn node(node_root: &std::path::Path) -> Self {
         Self {
-            path_prefixes: vec![node_root
-                .join("node_modules")
-                .join(".bin")
-                .display()
-                .to_string()],
+            path_prefixes: vec![
+                node_root
+                    .join("node_modules")
+                    .join(".bin")
+                    .display()
+                    .to_string(),
+            ],
             entries: vec![(
                 "NODE_PATH".to_owned(),
                 node_root.join("node_modules").display().to_string(),
@@ -203,7 +203,10 @@ impl ToolEnvironment {
     #[must_use]
     pub fn with_overlay(&self, overlay: &ToolEnvironmentOverlay) -> Self {
         let mut combined = self.clone();
-        combined.overlay.path_prefixes.extend(overlay.path_prefixes.clone());
+        combined
+            .overlay
+            .path_prefixes
+            .extend(overlay.path_prefixes.clone());
         combined.overlay.entries.extend(overlay.entries.clone());
         combined
     }
@@ -325,7 +328,7 @@ mod tests {
     }
 
     /// The overlay composes deterministically: Python bin first, then Node
-    /// .bin, then the baseline; VIRTUAL_ENV and NODE_PATH are set; no
+    /// .bin, then the baseline; `VIRTUAL_ENV` and `NODE_PATH` are set; no
     /// ecosystem dependencies add no overlay.
     #[test]
     fn overlay_composes_deterministically() {
@@ -369,9 +372,12 @@ mod tests {
     #[test]
     fn equivalent_overlays_construct_identical_child_environments() {
         let base = ToolEnvironment::new();
-        let first = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new("/e/p")));
-        let second =
-            base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new("/e/p")));
+        let first = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
+            "/e/p",
+        )));
+        let second = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
+            "/e/p",
+        )));
         assert_eq!(first, second);
         assert_eq!(
             first.child_environment(std::path::Path::new("/ws")),

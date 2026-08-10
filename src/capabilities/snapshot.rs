@@ -6,7 +6,7 @@ use crate::model::types::SkillCatalogAttachment;
 use crate::protocol::manifest::CapabilitiesManifest;
 use crate::runtime::identity::CapabilityRevision;
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
-use crate::skills::{SkillSnapshot, SkillCatalogEntry};
+use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 
@@ -41,7 +41,7 @@ pub struct CapabilitySnapshot {
 
 /// Two snapshots are equal when their capability content is equal: the
 /// revision, the Skill snapshot, the environment identities, and the
-/// effective environment. The shared immutable ToolRegistry handle is not
+/// effective environment. The shared immutable `ToolRegistry` handle is not
 /// part of the equality (it is the same handle across candidates).
 impl PartialEq for CapabilitySnapshot {
     fn eq(&self, other: &Self) -> bool {
@@ -76,9 +76,9 @@ impl CapabilitySnapshot {
         node_environment: Option<NodeEnvironment>,
         effective_environment: ToolEnvironment,
     ) -> Self {
-        let skill_catalog = skills.render_catalog().map(|rendered| SkillCatalogAttachment {
-            rendered,
-        });
+        let skill_catalog = skills
+            .render_catalog()
+            .map(|rendered| SkillCatalogAttachment { rendered });
         Self {
             revision,
             tool_registry,
@@ -96,7 +96,7 @@ impl CapabilitySnapshot {
         self.revision
     }
 
-    /// The immutable ToolRegistry handle of the attempt's capability set.
+    /// The immutable `ToolRegistry` handle of the attempt's capability set.
     #[must_use]
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
@@ -128,7 +128,7 @@ impl CapabilitySnapshot {
         self.node_environment.as_ref()
     }
 
-    /// The attempt's immutable effective ToolEnvironment: the base
+    /// The attempt's immutable effective `ToolEnvironment`: the base
     /// authorized environment plus the deterministic Skill environment
     /// overlay.
     #[must_use]

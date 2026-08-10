@@ -25,7 +25,7 @@
 //!
 //! The digest never includes the Workspace absolute path, the environment
 //! store path, the staging path, the current time, random values, or
-//! HashMap iteration order. The same logical request under the same
+//! `HashMap` iteration order. The same logical request under the same
 //! environment/runtime inputs produces the same identity; different
 //! environment-relevant inputs never alias to one mutable environment.
 //! `SkillVersionId`, `PythonEnvironmentDigest`, and
@@ -95,8 +95,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -139,9 +139,15 @@ pub struct RuntimeVersions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvironmentPreparationError {
     /// The ecosystem's runtime or package manager is unavailable.
-    RuntimeUnavailable { ecosystem: Ecosystem, detail: String },
+    RuntimeUnavailable {
+        ecosystem: Ecosystem,
+        detail: String,
+    },
     /// The resolved runtime identity does not match the expected shape.
-    InvalidRuntimeIdentity { ecosystem: Ecosystem, detail: String },
+    InvalidRuntimeIdentity {
+        ecosystem: Ecosystem,
+        detail: String,
+    },
     /// A published digest directory exists but its marker/manifest does not
     /// match the expected digest inputs; the published environment is never
     /// mutated and never reused.
@@ -153,7 +159,10 @@ pub enum EnvironmentPreparationError {
     /// The staging directory could not be created.
     StagingFailed { detail: String },
     /// Materialization or validation failed.
-    MaterializationFailed { ecosystem: Ecosystem, detail: String },
+    MaterializationFailed {
+        ecosystem: Ecosystem,
+        detail: String,
+    },
     /// The atomic publication (rename) failed.
     PublicationFailed { detail: String },
 }
@@ -177,7 +186,10 @@ impl core::fmt::Display for EnvironmentPreparationError {
             ),
             Self::StagingFailed { detail } => write!(f, "cannot create staging: {detail}"),
             Self::MaterializationFailed { ecosystem, detail } => {
-                write!(f, "{ecosystem} environment materialization failed: {detail}")
+                write!(
+                    f,
+                    "{ecosystem} environment materialization failed: {detail}"
+                )
             }
             Self::PublicationFailed { detail } => {
                 write!(f, "environment publication failed: {detail}")
@@ -216,14 +228,14 @@ pub struct NodeEnvironment {
 ///
 /// This is a real current boundary: production materialization consumes the
 /// shared supervised process runner, and deterministic tests inject fakes
-/// so no test ever touches PyPI or npm.
+/// so no test ever touches `PyPI` or npm.
 pub trait SkillEnvironmentBackend: Send + Sync {
     /// Resolves the runtime and package-manager version identities of one
     /// ecosystem.
-    fn resolve_runtime_versions<'a>(
-        &'a self,
+    fn resolve_runtime_versions(
+        &self,
         ecosystem: Ecosystem,
-    ) -> BoxFuture<'a, Result<RuntimeVersions, String>>;
+    ) -> BoxFuture<'_, Result<RuntimeVersions, String>>;
 
     /// Materializes the shared Python environment into `staging`:
     /// venv creation, exact-pin installation, and post-install validation.
@@ -261,10 +273,10 @@ impl RunnerBackedSkillEnvironmentBackend {
 }
 
 impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
-    fn resolve_runtime_versions<'a>(
-        &'a self,
+    fn resolve_runtime_versions(
+        &self,
         ecosystem: Ecosystem,
-    ) -> BoxFuture<'a, Result<RuntimeVersions, String>> {
+    ) -> BoxFuture<'_, Result<RuntimeVersions, String>> {
         Box::pin(async move {
             match ecosystem {
                 Ecosystem::Python => {
@@ -339,7 +351,9 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             let venv_python = staging.join("bin").join("python");
             let pins = dependencies
                 .iter()
-                .map(|(name, version)| format!("{}=={}", shell_quote_str(name), shell_quote_str(version)))
+                .map(|(name, version)| {
+                    format!("{}=={}", shell_quote_str(name), shell_quote_str(version))
+                })
                 .collect::<Vec<_>>()
                 .join(" ");
             run_checked(
@@ -428,19 +442,24 @@ impl EnvironmentStore {
     ///
     /// Returns [`EnvironmentPreparationError::StagingFailed`] when the root
     /// cannot be created or canonicalized.
+    #[allow(clippy::needless_pass_by_value)] // the root is consumed into the store
     pub fn new(
         root: PathBuf,
         backend: Arc<dyn SkillEnvironmentBackend>,
     ) -> Result<Self, EnvironmentPreparationError> {
         std::fs::create_dir_all(&root).map_err(|error| {
             EnvironmentPreparationError::StagingFailed {
-                detail: format!("cannot create the environment store root {root:?}: {error}"),
+                detail: format!(
+                    "cannot create the environment store root {}: {error}",
+                    root.display()
+                ),
             }
         })?;
         let root = std::fs::canonicalize(&root).map_err(|error| {
             EnvironmentPreparationError::StagingFailed {
                 detail: format!(
-                    "cannot canonicalize the environment store root {root:?}: {error}"
+                    "cannot canonicalize the environment store root {}: {error}",
+                    root.display()
                 ),
             }
         })?;
@@ -501,10 +520,12 @@ impl EnvironmentStore {
                 &versions.package_manager,
                 dependencies,
             )
-            .map_err(|detail| EnvironmentPreparationError::CorruptPublishedEnvironment {
-                ecosystem: Ecosystem::Python,
-                digest: digest.to_string(),
-                detail,
+            .map_err(|detail| {
+                EnvironmentPreparationError::CorruptPublishedEnvironment {
+                    ecosystem: Ecosystem::Python,
+                    digest: digest.to_string(),
+                    detail,
+                }
             })?;
             return Ok(Some(PythonEnvironment {
                 bin_dir: final_dir.join("bin"),
@@ -587,10 +608,12 @@ impl EnvironmentStore {
                 &versions.package_manager,
                 dependencies,
             )
-            .map_err(|detail| EnvironmentPreparationError::CorruptPublishedEnvironment {
-                ecosystem: Ecosystem::Node,
-                digest: digest.to_string(),
-                detail,
+            .map_err(|detail| {
+                EnvironmentPreparationError::CorruptPublishedEnvironment {
+                    ecosystem: Ecosystem::Node,
+                    digest: digest.to_string(),
+                    detail,
+                }
             })?;
             return Ok(Some(NodeEnvironment {
                 modules_dir: final_dir.join("node_modules"),
@@ -643,14 +666,16 @@ impl EnvironmentStore {
 
 /// Creates the staging directory (and its ecosystem parent).
 fn create_staging(staging: &Path) -> Result<(), EnvironmentPreparationError> {
-    std::fs::create_dir_all(staging).map_err(|error| {
-        EnvironmentPreparationError::StagingFailed {
-            detail: format!("cannot create staging directory {staging:?}: {error}"),
-        }
+    std::fs::create_dir_all(staging).map_err(|error| EnvironmentPreparationError::StagingFailed {
+        detail: format!(
+            "cannot create staging directory {}: {error}",
+            staging.display()
+        ),
     })
 }
 
 /// Publishes the materialized staging directory atomically.
+#[allow(clippy::needless_pass_by_value)] // the staging directory is consumed by the rename
 fn publish(staging: PathBuf, final_dir: &Path) -> Result<(), EnvironmentPreparationError> {
     std::fs::create_dir_all(final_dir.parent().expect("ecosystem parent")).map_err(|error| {
         EnvironmentPreparationError::PublicationFailed {
@@ -662,7 +687,11 @@ fn publish(staging: PathBuf, final_dir: &Path) -> Result<(), EnvironmentPreparat
         Err(error) => {
             let _ = std::fs::remove_dir_all(&staging);
             Err(EnvironmentPreparationError::PublicationFailed {
-                detail: format!("cannot rename {staging:?} into {final_dir:?}: {error}"),
+                detail: format!(
+                    "cannot rename {} into {}: {error}",
+                    staging.display(),
+                    final_dir.display()
+                ),
             })
         }
     }
@@ -683,6 +712,7 @@ struct EnvironmentManifest {
 
 /// Writes the deterministic environment manifest into the staging
 /// directory.
+#[allow(clippy::too_many_arguments)] // one deterministic manifest boundary
 fn write_manifest(
     staging: &Path,
     format: &str,
@@ -712,6 +742,7 @@ fn write_manifest(
 /// digest inputs. A published environment is never modified; a manifest
 /// mismatch means the digest directory is not trustworthy and must not be
 /// reused.
+#[allow(clippy::too_many_arguments)] // one deterministic manifest boundary
 fn validate_published_manifest(
     final_dir: &Path,
     format: &str,
@@ -896,7 +927,7 @@ pub fn node_environment_digest(
 
 /// The shared canonical digest computation over the environment-relevant
 /// inputs. The digest never includes workspace/store/staging paths, time,
-/// random values, or HashMap iteration order.
+/// random values, or `HashMap` iteration order.
 fn environment_digest(
     format: &str,
     os: &str,
@@ -926,7 +957,8 @@ fn environment_digest(
     let mut hex = String::with_capacity(71);
     hex.push_str("sha256:");
     for byte in digest {
-        hex.push_str(&format!("{byte:02x}"));
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
     }
     hex
 }

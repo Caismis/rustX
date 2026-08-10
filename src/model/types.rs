@@ -53,8 +53,8 @@ pub struct AgentStatusAttachment {
 /// never checkpoint history, never returned in
 /// `AgentExecutionResult.messages`, and never emitted as a committed-message
 /// event — and provider adapters place it in **trusted system context**
-/// (`instructions` for OpenAI Responses, the top-level `system` content for
-/// Anthropic Messages, and the system-level message mechanism for OpenAI
+/// (`instructions` for `OpenAI` Responses, the top-level `system` content for
+/// Anthropic Messages, and the system-level message mechanism for `OpenAI`
 /// Chat Completions). It participates in the projection fingerprint, the
 /// full request token estimate, and the hard-fit/compaction calculations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

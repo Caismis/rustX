@@ -44,7 +44,7 @@ pub const NODE_DEPENDENCIES_METADATA_KEY: &str = "rustx.node-dependencies";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ecosystem {
-    /// The Python ecosystem (`pip`/PyPI).
+    /// The Python ecosystem (`pip`/`PyPI`).
     Python,
     /// The Node ecosystem (`npm`).
     Node,
@@ -201,19 +201,18 @@ fn parse_json_object(
     ecosystem: Ecosystem,
     normalize: fn(&str, Ecosystem) -> Result<String, String>,
 ) -> Result<BTreeMap<String, String>, DependencyError> {
-    let object: serde_json::Value = serde_json::from_str(value)
-        .map_err(|_| DependencyError::NotAnObject(value.to_owned()))?;
+    let object: serde_json::Value =
+        serde_json::from_str(value).map_err(|_| DependencyError::NotAnObject(value.to_owned()))?;
     let serde_json::Value::Object(map) = object else {
         return Err(DependencyError::NotAnObject(value.to_owned()));
     };
     let mut normalized = BTreeMap::new();
     for (package, version) in map {
-        let package = normalize(&package, ecosystem).map_err(|_| {
-            DependencyError::InvalidPackageName {
+        let package =
+            normalize(&package, ecosystem).map_err(|_| DependencyError::InvalidPackageName {
                 ecosystem,
                 name: package.clone(),
-            }
-        })?;
+            })?;
         let serde_json::Value::String(version) = version else {
             return Err(DependencyError::InvalidVersion {
                 ecosystem,
@@ -221,13 +220,13 @@ fn parse_json_object(
                 version: version.to_string(),
             });
         };
-        let version = version;
-        validate_exact_version(&version, ecosystem)
-            .map_err(|_| DependencyError::InvalidVersion {
+        validate_exact_version(&version, ecosystem).map_err(|()| {
+            DependencyError::InvalidVersion {
                 ecosystem,
                 package: package.clone(),
                 version: version.clone(),
-            })?;
+            }
+        })?;
         normalized.insert(package, version);
     }
     Ok(normalized)
@@ -237,7 +236,11 @@ fn parse_json_object(
 /// with `-`, `_`, and `.` treated as equivalent separators (collapsing
 /// runs), per PEP 503.
 fn normalize_python_package(name: &str, ecosystem: Ecosystem) -> Result<String, String> {
-    if name.is_empty() || name.chars().any(|character| !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))) {
+    if name.is_empty()
+        || name.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+        })
+    {
         return Err(format!("malformed package name {name:?}"));
     }
     let mut normalized = String::with_capacity(name.len());
@@ -256,9 +259,9 @@ fn normalize_python_package(name: &str, ecosystem: Ecosystem) -> Result<String, 
     if normalized.is_empty()
         || normalized.starts_with('-')
         || normalized.ends_with('-')
-        || !normalized
-            .chars()
-            .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
+        || !normalized.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
     {
         return Err(format!("malformed package name {name:?}"));
     }
@@ -281,9 +284,11 @@ fn validate_node_package(name: &str, _ecosystem: Ecosystem) -> Result<String, St
     };
     let valid_segment = |segment: &str| {
         !segment.is_empty()
-            && segment
-                .chars()
-                .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || matches!(character, '.' | '_' | '-' | '~'))
+            && segment.chars().all(|character| {
+                character.is_ascii_lowercase()
+                    || character.is_ascii_digit()
+                    || matches!(character, '.' | '_' | '-' | '~')
+            })
     };
     if !valid_segment(rest) || scope.is_some_and(|scope| !valid_segment(scope)) {
         return Err(format!("malformed package name {name:?}"));
@@ -325,8 +330,13 @@ fn validate_python_exact_version(version: &str) -> Result<(), ()> {
 fn validate_node_exact_version(version: &str) -> Result<(), ()> {
     if version.chars().any(|character| {
         !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+'))
-    }) || !version.chars().next().is_some_and(|character| character.is_ascii_digit())
-        || version.chars().any(|character| matches!(character, 'x' | 'X' | '*'))
+    }) || !version
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+        || version
+            .chars()
+            .any(|character| matches!(character, 'x' | 'X' | '*'))
     {
         return Err(());
     }
@@ -394,14 +404,9 @@ pub fn merge_dependency_manifests(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DependencyError, Ecosystem, merge_dependency_manifests,
-        normalize_python_package,
-    };
+    use super::{DependencyError, Ecosystem, merge_dependency_manifests, normalize_python_package};
     use crate::runtime::identity::SkillId;
-    use crate::skills::dependencies::{
-        parse_node_dependencies, parse_python_dependencies,
-    };
+    use crate::skills::dependencies::{parse_node_dependencies, parse_python_dependencies};
 
     /// Python distribution names normalize deterministically with
     /// `-`/`_`/`.` equivalence and lowercasing.
@@ -444,10 +449,8 @@ mod tests {
     /// Scoped Node package names parse.
     #[test]
     fn scoped_node_packages_parse() {
-        let map = parse_node_dependencies(
-            r#"{"pdf-lib":"1.17.1","@scope/pkg":"2.0.0"}"#,
-        )
-        .expect("parse");
+        let map =
+            parse_node_dependencies(r#"{"pdf-lib":"1.17.1","@scope/pkg":"2.0.0"}"#).expect("parse");
         assert_eq!(map.get("@scope/pkg").expect("scoped"), "2.0.0");
         assert_eq!(map.get("pdf-lib").expect("plain"), "1.17.1");
     }
@@ -518,8 +521,8 @@ mod tests {
         assert_eq!(merged.node.get("pdf-lib").expect("coalesced"), "1.17.1");
 
         let packages = vec![
-            package("skill-a", r#"{"pypdf":"5.9.0"}"#, r#"{}"#),
-            package("skill-b", r#"{"pypdf":"5.10.0"}"#, r#"{}"#),
+            package("skill-a", r#"{"pypdf":"5.9.0"}"#, r"{}"),
+            package("skill-b", r#"{"pypdf":"5.10.0"}"#, r"{}"),
         ];
         let conflict = merge_dependency_manifests(&packages).expect_err("conflict");
         assert_eq!(conflict.ecosystem, Ecosystem::Python);

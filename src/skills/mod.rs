@@ -6,16 +6,15 @@
 //! The skills plane owns:
 //!
 //! - Skill discovery from the single project-local root
-//!   `<workspace>/.agents/skills/` ([`package::SkillDiscovery`]);
+//!   `<workspace>/.agents/skills/` (`package::SkillDiscovery`);
 //! - Agent Skills `SKILL.md` frontmatter parsing and validation
-//!   ([`package::SkillPackage`]);
-//! - deterministic content-derived package/version hashing
-//!   ([`identity`]);
+//!   (`package::SkillPackage`);
+//! - deterministic content-derived package/version hashing (`identity`);
 //! - rustX dependency declaration parsing, normalization, and
-//!   merge/conflict detection ([`dependencies`]);
+//!   merge/conflict detection (`dependencies`);
 //! - Python/Node environment identity and materialization
-//!   ([`environments`]);
-//! - compact model-visible Skill catalog rendering ([`catalog`]).
+//!   (`environments`);
+//! - compact model-visible Skill catalog rendering (`catalog`).
 //!
 //! Skills remain workflow/instruction packages: they are not tools and not
 //! a parallel execution protocol. Skill execution flows through ordinary
@@ -32,8 +31,8 @@ mod package;
 
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{
-    DependencyConflict, DependencyError, DependencyManifest, Ecosystem,
-    merge_dependency_manifests, parse_node_dependencies, parse_python_dependencies,
+    DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,
+    parse_node_dependencies, parse_python_dependencies,
 };
 pub use environments::{
     ENVIRONMENT_MANIFEST_FILE, EnvironmentPreparationError, EnvironmentStore, NodeEnvironment,

@@ -995,7 +995,11 @@ mod tests {
     ) -> super::PreparedBackgroundDispatch {
         fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), executor, ToolEnvironment::new())
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                executor,
+                ToolEnvironment::new(),
+            )
             .expect("prepare")
     }
 
@@ -1200,7 +1204,11 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
         let prepared = fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), &executor, ToolEnvironment::new())
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
             .expect("prepare");
         let outcome = fixture.registry.commit_dispatch(
             prepared,

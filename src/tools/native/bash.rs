@@ -130,21 +130,21 @@ use futures_util::future::BoxFuture;
 use tokio::io::AsyncReadExt;
 
 use crate::message::content::FileReference;
+#[cfg(test)]
+use crate::runtime::process_runner::RunnerTestControl;
 use crate::runtime::process_runner::{
     ProcessOutcomeIntent, RunnerSpawnError, SupervisedCommandRunner, SupervisedCommandSpec,
     unix_signal_of,
 };
 #[cfg(test)]
-use crate::runtime::process_runner::RunnerTestControl;
+use crate::runtime::process_runner::{
+    RunnerChannelEofHook as ChannelEofHook, RunnerLifecycleHook as BashLifecycleHook,
+    RunnerTerminalHold as TerminalHold,
+};
 use crate::runtime::types::CancellationReason;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
-};
-#[cfg(test)]
-use crate::runtime::process_runner::{
-    RunnerChannelEofHook as ChannelEofHook, RunnerLifecycleHook as BashLifecycleHook,
-    RunnerTerminalHold as TerminalHold,
 };
 use crate::tools::native::support::failed_result;
 use crate::tools::native::{NativeToolPolicy, native_definition};
@@ -639,7 +639,9 @@ async fn run_bash_unix(
     let spec = SupervisedCommandSpec {
         command: command.to_owned(),
         cwd: context.workspace.root().to_path_buf(),
-        environment: context.environment.child_environment(context.workspace.root()),
+        environment: context
+            .environment
+            .child_environment(context.workspace.root()),
         timeout,
         cancellation: context.cancellation.clone(),
     };
@@ -709,22 +711,23 @@ async fn run_bash_unix(
     // the contract into an unbounded wait.
     let mut capture_failure: Option<String> = None;
     let drain_future = await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task);
-    let capture = match tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, drain_future).await {
-        Ok(result) => Box::new(result),
-        Err(_) => {
-            capture_failure = Some(BashProcessControlError::CaptureTimeout.to_string());
-            if let Some(handle) = &stdout_task {
-                handle.abort();
-            }
-            if let Some(handle) = &stderr_task {
-                handle.abort();
-            }
-            combined_task.abort();
-            Box::new(Err(
-                "the bash output capture was force-finalized after the bounded settlement window"
-                    .to_owned(),
-            ))
+    let capture = if let Ok(result) =
+        tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, drain_future).await
+    {
+        Box::new(result)
+    } else {
+        capture_failure = Some(BashProcessControlError::CaptureTimeout.to_string());
+        if let Some(handle) = &stdout_task {
+            handle.abort();
         }
+        if let Some(handle) = &stderr_task {
+            handle.abort();
+        }
+        combined_task.abort();
+        Box::new(Err(
+            "the bash output capture was force-finalized after the bounded settlement window"
+                .to_owned(),
+        ))
     };
 
     let mut process_failure = match &termination.intent {
@@ -857,7 +860,9 @@ fn supervisor_spawn_failure(error: &RunnerSpawnError) -> String {
         RunnerSpawnError::SupervisorSpawn(message) => {
             format!("cannot spawn the bash supervisor: {message}")
         }
-        RunnerSpawnError::InjectedSupervisorSpawn => "injected bash supervisor spawn failure".to_owned(),
+        RunnerSpawnError::InjectedSupervisorSpawn => {
+            "injected bash supervisor spawn failure".to_owned()
+        }
     }
 }
 
@@ -994,7 +999,6 @@ async fn await_handle(handle: &mut Option<StreamHandle>) -> Result<Option<FileRe
         None => Ok(None),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

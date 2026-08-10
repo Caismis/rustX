@@ -653,9 +653,7 @@ fn translate_messages(
     if let Some(catalog) = &request.skill_catalog {
         messages.push(ChatCompletionRequestMessage::System(
             ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(
-                    catalog.rendered.clone(),
-                ),
+                content: ChatCompletionRequestSystemMessageContent::Text(catalog.rendered.clone()),
                 name: None,
             },
         ));

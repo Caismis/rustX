@@ -246,9 +246,15 @@ mod tests {
         let _ = round_trip(&ToolVersionId::new("tool-v2"));
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));
-        let _ = round_trip(&SkillVersionId::new("sha256:0000000000000000000000000000000000000000000000000000000000000000"));
-        let _ = round_trip(&PythonEnvironmentDigest::new("sha256:0000000000000000000000000000000000000000000000000000000000000000"));
-        let _ = round_trip(&NodeEnvironmentDigest::new("sha256:0000000000000000000000000000000000000000000000000000000000000000"));
+        let _ = round_trip(&SkillVersionId::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
+        let _ = round_trip(&PythonEnvironmentDigest::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
+        let _ = round_trip(&NodeEnvironmentDigest::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
         let _ = round_trip(&ArtifactId::new("artifact-1"));
         let _ = round_trip(&CapabilityRevision::new(42));
     }

@@ -753,12 +753,12 @@ impl FakeSkillEnvironmentBackend {
     /// Scripts the Python runtime identity (a runtime-version change
     /// changes the environment digest).
     pub fn set_python_runtime(&self, version: &str) {
-        *self.inner.python_runtime.lock().expect("fake lock") = version.to_owned();
+        version.clone_into(&mut *self.inner.python_runtime.lock().expect("fake lock"));
     }
 
     /// Scripts the Node runtime identity.
     pub fn set_node_runtime(&self, version: &str) {
-        *self.inner.node_runtime.lock().expect("fake lock") = version.to_owned();
+        version.clone_into(&mut *self.inner.node_runtime.lock().expect("fake lock"));
     }
 
     /// Scripts a Python materialization failure (the next Python
@@ -805,7 +805,12 @@ impl FakeSkillEnvironmentBackend {
     }
 
     async fn gate(&self) {
-        let gate = self.inner.materialize_gate.lock().expect("fake lock").clone();
+        let gate = self
+            .inner
+            .materialize_gate
+            .lock()
+            .expect("fake lock")
+            .clone();
         if let Some(gate) = gate {
             let _ = gate.entered_tx.send(true);
             let mut release = gate.release_rx.clone();
@@ -840,10 +845,10 @@ impl Default for FakeSkillEnvironmentBackend {
 }
 
 impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
-    fn resolve_runtime_versions<'a>(
-        &'a self,
+    fn resolve_runtime_versions(
+        &self,
         ecosystem: rustx::skills::Ecosystem,
-    ) -> futures_util::future::BoxFuture<'a, Result<rustx::skills::RuntimeVersions, String>> {
+    ) -> futures_util::future::BoxFuture<'_, Result<rustx::skills::RuntimeVersions, String>> {
         Box::pin(async move {
             self.record(match ecosystem {
                 rustx::skills::Ecosystem::Python => BackendCall::ResolvePython,
@@ -884,11 +889,8 @@ impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
             }
             self.gate().await;
             std::fs::create_dir_all(staging.join("bin")).map_err(|error| error.to_string())?;
-            std::fs::write(
-                staging.join("bin").join("python"),
-                b"#!fake python\n",
-            )
-            .map_err(|error| error.to_string())?;
+            std::fs::write(staging.join("bin").join("python"), b"#!fake python\n")
+                .map_err(|error| error.to_string())?;
             std::fs::create_dir_all(staging.join("lib/python3.12/site-packages"))
                 .map_err(|error| error.to_string())?;
             Ok(())

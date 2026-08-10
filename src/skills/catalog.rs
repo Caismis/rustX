@@ -113,7 +113,8 @@ pub fn render_skill_catalog(entries: &[SkillCatalogEntry]) -> String {
          Available skills:\n",
     );
     for entry in entries {
-        out.push_str(&format!("\n- {}: {}", entry.name, entry.description));
+        use std::fmt::Write as _;
+        let _ = write!(out, "\n- {}: {}", entry.name, entry.description);
     }
     out
 }
