@@ -95,6 +95,51 @@
 //!   any fallback containment signal); it then reports
 //!   `MSG_ALL_CHILDREN_REAPED` and exits.
 //!
+//! # Single-reaper anchor ownership
+//!
+//! The inner supervisor pid is the invocation's **structural ownership
+//! anchor**: while it remains un-reaped, the numeric invocation group id is
+//! provably allocated and fallback containment signals are legal. An
+//! anchor therefore has exactly one reaping owner, and generic reaping
+//! hygiene never consumes it:
+//!
+//! - the outer supervisor's dedicated anchor observation is the only code
+//!   allowed to **observe** the anchor's terminal state (`waitid` with
+//!   `WNOWAIT`: observation only, never consumption);
+//! - the outer supervisor's group-scoped gate is the only code allowed to
+//!   **reap** the anchor (strictly after any fallback containment signal);
+//! - rustX becomes the anchor's reaping owner only when both supervisors
+//!   are lost: the adopted anchor is observed with `WNOWAIT` and reaped
+//!   through rustX's own group-scoped gate (see the Bash tool);
+//! - the outer supervisor therefore has **no generic `waitpid(-1)` loop**:
+//!   every child of the outer is either the anchor or an in-group adopted
+//!   descendant, so the group-scoped gate reaps the outer's whole child
+//!   domain and `waitpid(-1)` could only ever consume the anchor. There is
+//!   nothing left for a generic loop to own.
+//!
+//! An `ECHILD` from the dedicated anchor observation is consequently an
+//! **ownership invariant violation**, never a terminal observation: before
+//! the intentional release no other code may reap the anchor, so
+//! `ECHILD` means the single-owner rule was broken. The outer reports the
+//! violation and fails safely — it never derives owned-group terminality
+//! from an anchor `ECHILD`, never signals a numeric group id without the
+//! retained anchor, and never reports the canonical terminal event.
+//!
+//! # Wait ownership audit
+//!
+//! Every wait call site of the supervisor unit and its exact ownership:
+//!
+//! | Call site | Matches | Observes/consumes | Owner |
+//! |---|---|---|---|
+//! | outer dedicated anchor wait (`waitid(Pid(inner), WNOWAIT \| WEXITED \| WNOHANG)`) | only the inner anchor | observes only (`WNOWAIT`) | outer dedicated path; `ECHILD` = invariant violation, never terminal |
+//! | outer frozen-anchor wait (`waitid(Pid(inner), WUNTRACED \| WNOHANG)`) | only the inner anchor | observes/consumes the stop event | outer dedicated path |
+//! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release) |
+//! | inner reaping hygiene (`waitpid(-1, WNOHANG)`) | every child of the inner (bash and adopted in-group descendants) | consumes | inner supervisor; no child of the inner is ever an anchor, so this never consumes another owner's identity |
+//! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` |
+//!
+//! rustX's own waits (the outer's direct reap and the catastrophic
+//! adoption path) are documented in the Bash tool.
+//!
 //! The fixed-membership invariant is what makes `ECHILD` from these
 //! group-scoped waits a **complete** terminal proof. `waitid(P_PGID)`
 //! alone is only an observation of the waiting process's children: an
@@ -222,6 +267,14 @@ pub const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_FAIL_SIGTERM_HANDLER";
 /// the inner supervisor refuses every group signal.
 pub const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
 
+/// Test-only injection: names a directory where the outer supervisor parks
+/// deterministically after its first dedicated `StillAlive` observation of
+/// the inner anchor and before the next loop phase. The regressions use
+/// the `observed`/`proceed` marker files to construct the
+/// observed-then-exited anchor interleaving without sleeps. Never set in
+/// production.
+pub const OUTER_BARRIER_DIR_ENV: &str = "RUSTX_TEST_OUTER_BARRIER_DIR";
+
 /// The shell's canonical exit status: `{ exit_code: i32 LE, signaled: u8,
 /// signal: i32 LE }`.
 const MSG_SHELL_EXITED: u8 = 0x02;
@@ -290,22 +343,67 @@ pub fn run_inner_supervisor() -> ! {
     std::process::exit(exit);
 }
 
+/// The outer supervisor's ownership state of the inner anchor.
+///
+/// The anchor (`inner_pid`) is the invocation's structural identity: while
+/// it remains un-reaped, the numeric invocation process-group id is
+/// provably allocated and fallback containment signals are legal. It has
+/// exactly one reaping owner (the outer's dedicated anchor path), and the
+/// transition into a terminal state happens only through the dedicated
+/// observation:
+///
+/// ```text
+/// Running
+///     ↓ waitid(Pid(inner), WNOWAIT) terminal observation   (observe only)
+/// TerminalRetained
+///     ↓ waitid(PGid(inner)) group-scoped gate              (reap/release)
+/// Released
+/// ```
+///
+/// An `ECHILD` from the dedicated observation before the intentional
+/// release is an ownership invariant violation — never a terminal
+/// observation — and moves the anchor to [`InnerAnchor::UnexpectedlyLost`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InnerAnchor {
+    /// The anchor is alive (or not yet observed terminal) and retained;
+    /// only the dedicated observation path runs.
+    Running,
+    /// The anchor's terminal state was observed with `WNOWAIT` (identity
+    /// not consumed) and any fallback containment signal was already
+    /// issued while the identity was retained; the group-scoped gate now
+    /// owns the release.
+    TerminalRetained,
+    /// The anchor is not waitable before its intentional release: an
+    /// ownership invariant violation. The outer fails safely: it never
+    /// gates on the numeric group id (the release could be an ABA hazard),
+    /// never signals, and never reports the canonical terminal event.
+    UnexpectedlyLost,
+}
+
 /// The outer supervisor: the final containment and reaping authority. It
 /// survives the invocation group signals (it is outside the group's
 /// session), inherits the inner supervisor's children when the inner dies
 /// with them, and is the only process that reports the canonical terminal
 /// event ([`MSG_ALL_CHILDREN_REAPED`]).
 ///
-/// On abnormal inner termination with possibly-live owned work it becomes
-/// an **active** containment authority: it observes the inner's terminal
-/// state without releasing its identity (`waitid` + `WNOWAIT` keeps the
-/// inner an un-reaped zombie), sends the one fallback containment
-/// `SIGKILL` to the invocation group while the anchor is still provably
-/// allocated, and only then releases the anchor. The canonical terminal
-/// event is the outer's group-scoped wait reaching `ECHILD`: no child of
-/// the outer remains in the invocation process group, which — with
-/// membership immutable for bash descendants — is exactly the empty
-/// invocation group.
+/// The inner supervisor pid is the invocation's structural ownership
+/// anchor and has exactly one reaping owner: this loop. The dedicated
+/// observation (`waitid` with `WNOWAIT`) matches only the anchor and never
+/// consumes its identity, so a fallback containment `SIGKILL` is always
+/// issued while the anchor is still provably allocated. The anchor is
+/// released only by the group-scoped gate, strictly after any fallback
+/// containment signal. There is deliberately **no generic `waitpid(-1)`
+/// reaping loop**: every child of this supervisor is either the anchor or
+/// an in-group adopted descendant, so the gate reaps the entire child
+/// domain, and a generic loop could only ever consume the anchor and lose
+/// the abnormal-exit containment decision.
+///
+/// An unexpected `ECHILD` from the dedicated observation (before the
+/// intentional release) is an ownership invariant violation: it is
+/// reported and the outer fails safely — it never derives owned-group
+/// terminality from an anchor `ECHILD`, never signals a numeric group id
+/// without the retained anchor, and never reports the canonical terminal
+/// event.
 #[allow(clippy::too_many_lines)] // one coherent observe/un-wedge/contain/reap pipeline
 fn run_outer() -> i32 {
     let mut stream = ControlStream;
@@ -339,116 +437,148 @@ fn run_outer() -> i32 {
     // never name a foreign group.
     let inner_pid =
         i32::try_from(inner_pid).expect("the inner supervisor pid always fits in an i32");
-    let mut inner_terminal = false;
+    let mut anchor = InnerAnchor::Running;
     let mut inner_frozen = false;
+    let mut anchor_loss_reported = false;
     loop {
-        if !inner_terminal {
-            // Observe the inner's terminal state without releasing its
-            // identity. `WNOWAIT` leaves the inner an un-reaped zombie, so a
-            // fallback containment signal still has its structural ownership
-            // proof and the anchor is released only by a later reap.
-            match waitid(
-                Id::Pid(Pid::from_raw(inner_pid)),
-                WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
-            ) {
-                Ok(WaitStatus::StillAlive) => {}
-                Ok(WaitStatus::Stopped(..) | WaitStatus::Continued(_)) => {}
-                // WEXITED-only waiting: ptrace stops never match.
-                #[cfg(target_os = "linux")]
-                Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
-                Ok(WaitStatus::Exited(_, code)) => {
-                    inner_terminal = true;
-                    if code != INNER_EXIT_NORMAL {
-                        // Abnormal termination with possibly-live owned work:
-                        // active containment while the anchor is still held.
-                        containment_signal(&mut stream, inner_pid);
-                    }
-                }
-                Ok(WaitStatus::Signaled(..)) => {
-                    inner_terminal = true;
-                    containment_signal(&mut stream, inner_pid);
-                }
-                Err(Errno::EINTR) => {}
-                Err(Errno::ECHILD) => {
-                    // The inner is not a child of this supervisor (it was
-                    // already reaped by us, which cannot normally happen).
-                    inner_terminal = true;
-                }
-                Err(error) => {
-                    let _ = stream
-                        .write_failure(&format!("cannot observe the invocation anchor: {error}"));
-                }
-            }
-            // The inner is never legitimately stopped: an observed `SIGSTOP`
-            // state is an external freeze of the whole containment unit. The
-            // outer un-wedges it with `SIGKILL`, so a frozen anchor can never
-            // strand the owned group behind a dead control chain; the inner's
-            // death then follows the normal abnormal-exit containment path.
-            if !inner_frozen {
+        match anchor {
+            InnerAnchor::Running => {
+                // The dedicated anchor observation: matches only the inner
+                // supervisor and — with `WNOWAIT` — never consumes its
+                // identity. The inner stays an un-reaped zombie, so a
+                // fallback containment signal still has its structural
+                // ownership proof and the anchor is released only by the
+                // later group-scoped gate.
                 match waitid(
                     Id::Pid(Pid::from_raw(inner_pid)),
-                    WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
+                    WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
                 ) {
-                    Ok(WaitStatus::Stopped(..)) => {
-                        inner_frozen = true;
-                        match nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL) {
-                            Ok(()) | Err(Errno::ESRCH) => {}
-                            Err(error) => {
-                                let _ = stream.write_failure(&format!(
-                                    "cannot un-wedge the frozen invocation anchor: {error}"
-                                ));
-                            }
+                    Ok(WaitStatus::StillAlive) => {}
+                    Ok(WaitStatus::Stopped(..) | WaitStatus::Continued(_)) => {}
+                    // WEXITED-only waiting: ptrace stops never match.
+                    #[cfg(target_os = "linux")]
+                    Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
+                    Ok(WaitStatus::Exited(_, code)) => {
+                        anchor = InnerAnchor::TerminalRetained;
+                        if code != INNER_EXIT_NORMAL {
+                            // Abnormal termination with possibly-live owned
+                            // work: active containment while the anchor is
+                            // still held (it is observed but un-reaped).
+                            containment_signal(&mut stream, inner_pid);
                         }
                     }
-                    Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR | Errno::ECHILD) => {}
+                    Ok(WaitStatus::Signaled(..)) => {
+                        anchor = InnerAnchor::TerminalRetained;
+                        containment_signal(&mut stream, inner_pid);
+                    }
+                    Err(Errno::EINTR) => {}
+                    Err(Errno::ECHILD) => {
+                        // The anchor is not a waitable child of this
+                        // supervisor before its intentional release. With
+                        // one reaping owner that is an ownership invariant
+                        // violation — never a terminal observation: the
+                        // owned group may still exist. The outer fails
+                        // safely and never derives terminality from it.
+                        anchor = InnerAnchor::UnexpectedlyLost;
+                        if !anchor_loss_reported {
+                            anchor_loss_reported = true;
+                            let _ = stream.write_failure(
+                                "the invocation anchor became unwaitable before its intentional \
+                                 release; owned-group terminality can no longer be proven from \
+                                 this supervisor",
+                            );
+                        }
+                    }
                     Err(error) => {
                         let _ = stream.write_failure(&format!(
-                            "cannot observe the invocation anchor freeze state: {error}"
+                            "cannot observe the invocation anchor: {error}"
+                        ));
+                    }
+                }
+                // The inner is never legitimately stopped: an observed
+                // `SIGSTOP` state is an external freeze of the whole
+                // containment unit. The outer un-wedges it with `SIGKILL`,
+                // so a frozen anchor can never strand the owned group
+                // behind a dead control chain; the inner's death then
+                // follows the normal abnormal-exit containment path.
+                if !inner_frozen {
+                    match waitid(
+                        Id::Pid(Pid::from_raw(inner_pid)),
+                        WaitPidFlag::WNOHANG | WaitPidFlag::WUNTRACED,
+                    ) {
+                        Ok(WaitStatus::Stopped(..)) => {
+                            inner_frozen = true;
+                            match nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL)
+                            {
+                                Ok(()) | Err(Errno::ESRCH) => {}
+                                Err(error) => {
+                                    let _ = stream.write_failure(&format!(
+                                        "cannot un-wedge the frozen invocation anchor: {error}"
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR | Errno::ECHILD) => {}
+                        Err(error) => {
+                            let _ = stream.write_failure(&format!(
+                                "cannot observe the invocation anchor freeze state: {error}"
+                            ));
+                        }
+                    }
+                }
+            }
+            InnerAnchor::TerminalRetained => {
+                // The owned-group gate: the kernel-mediated terminal
+                // condition of the invocation process group at the outer
+                // level. No child of ours remains in the invocation group
+                // once this returns ECHILD — the inner anchor itself is a
+                // member and is released (reaped) by this group-scoped
+                // wait, which happens strictly after any fallback
+                // containment signal. With membership immutable for bash
+                // descendants, every in-group process is always a matching
+                // child here, so ECHILD is exactly the empty invocation
+                // group.
+                match waitid(
+                    Id::PGid(Pid::from_raw(inner_pid)),
+                    WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
+                ) {
+                    Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
+                    Err(Errno::ECHILD) => {
+                        if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
+                            await_terminal_ack();
+                        }
+                        return 0;
+                    }
+                    Err(error) => {
+                        let _ = stream.write_failure(&format!(
+                            "cannot observe the owned group terminal state: {error}"
                         ));
                     }
                 }
             }
-        }
-        if inner_terminal {
-            // The owned-group gate: the kernel-mediated terminal condition
-            // of the invocation process group at the outer level. No child
-            // of ours remains in the invocation group once this returns
-            // ECHILD — the inner anchor itself is a member and is released
-            // (reaped) by this group-scoped wait, which happens strictly
-            // after any fallback containment signal. With membership
-            // immutable for bash descendants, every in-group process is
-            // always a matching child here, so ECHILD is exactly the empty
-            // invocation group.
-            match waitid(
-                Id::PGid(Pid::from_raw(inner_pid)),
-                WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-            ) {
-                Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
-                Err(Errno::ECHILD) => {
-                    if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
-                        await_terminal_ack();
-                    }
-                    return 0;
-                }
-                Err(error) => {
-                    let _ = stream.write_failure(&format!(
-                        "cannot observe the owned group terminal state: {error}"
-                    ));
-                }
+            InnerAnchor::UnexpectedlyLost => {
+                // Fail-safe: the anchor is gone before its intentional
+                // release. The group-scoped gate is no longer authoritative
+                // (the numeric group id could be an ABA hazard), no signal
+                // may be issued, and the canonical terminal event must
+                // never be reported. The invocation cannot prove terminal
+                // child ownership from this supervisor anymore; the failure
+                // was already reported once above. Stay alive and
+                // non-terminal rather than fabricate a terminal state.
             }
         }
-        // Reaping hygiene: whatever else died in our child domain
-        // (members not yet reaped by the gate) is reaped so no zombie is
-        // settlement gate: live adopted children outside the invocation
-        // group are handed to init when this supervisor exits.
-        loop {
-            match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::StillAlive | _) | Err(Errno::ECHILD) => break,
-                Err(Errno::EINTR) => {}
-                Err(error) => {
-                    let _ = stream
-                        .write_failure(&format!("cannot wait for the owned children: {error}"));
-                    break;
+        // Test-only deterministic barrier: parks this supervisor after it
+        // observed the anchor StillAlive at least once, before the next
+        // loop phase. The regressions use it to prove that a zombie anchor
+        // can never be consumed by any reaping path other than the
+        // dedicated one. Never armed in production (the env var is unset).
+        if let Ok(dir) = std::env::var(OUTER_BARRIER_DIR_ENV) {
+            let observed = std::path::Path::new(&dir).join("observed");
+            if !observed.exists() {
+                let _ = std::fs::write(&observed, inner_pid.to_string());
+                let proceed = std::path::Path::new(&dir).join("proceed");
+                while !proceed.exists() {
+                    std::thread::sleep(POLL_INTERVAL);
                 }
             }
         }
@@ -627,10 +757,15 @@ fn run_inner() -> i32 {
     let mut read_buf: Vec<u8> = Vec::with_capacity(256);
     let mut kill_deadline: Option<std::time::Instant> = None;
     loop {
-        // Reaping hygiene: everything that died in our child domain — the
-        // shell and owned group members — is reaped here so no zombie is
-        // ever left behind. This is deliberately NOT the settlement gate:
-        // the group-scoped wait below decides settlement.
+        // Reaping hygiene of the inner child domain: matches every child
+        // of this process — the shell and owned in-group group members
+        // adopted through subreaper reparenting — and consumes them so no
+        // zombie is ever left behind. This is deliberately NOT the
+        // settlement gate (the group-scoped wait below decides settlement)
+        // and it can never consume another owner's identity: no child of
+        // the inner supervisor is ever an ownership anchor (the
+        // invocation's anchor is this process's own pid, owned by the
+        // outer supervisor's dedicated path).
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::Exited(pid, code)) => {
                 if pid.as_raw() == bash_pid && !shell_reported {
@@ -1248,5 +1383,307 @@ mod seccomp_tests {
         assert_eq!(program[6].k, 0x7FFF_0000);
         assert_eq!(program[7].k, 0x0005_0000 | libc::EPERM as u32);
         assert_eq!(program[8].k, 0x8000_0000);
+    }
+}
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
+))]
+mod anchor_reaping_tests {
+    //! Single-reaper anchor ownership regressions.
+    //!
+    //! These run the real supervisor binary as a subprocess (the same
+    //! binary `run_bash_unix` spawns) and drive the exact interleavings
+    //! through deterministic barriers — never through sleeps:
+    //!
+    //! - the mandatory race regression
+    //!   ([`anchor_observed_alive_is_never_consumed_before_its_terminal_observation`]):
+    //!   the outer observes the anchor `StillAlive`, the anchor then exits
+    //!   abnormally and sits as an un-reaped zombie, and only then does the
+    //!   next loop phase run. Before the single-reaper fix the generic
+    //!   `waitpid(-1)` hygiene consumed the zombie and the fallback
+    //!   containment decision was lost (the outer then waited on a live
+    //!   group member forever and never reported the terminal event). With
+    //!   single-reaper ownership the zombie survives until the dedicated
+    //!   observation, the fallback `SIGKILL` is issued while the anchor is
+    //!   retained, and the group-scoped gate releases the anchor.
+
+    use super::*;
+    use crate::tools::native::bash::supervisor_binary;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    /// The strict deadline for every supervisor observation of a test
+    /// (a deadlock guard, never a synchronization mechanism).
+    const DEADLINE: Duration = Duration::from_secs(15);
+
+    /// Spawns the real outer supervisor with the test-only anchor barrier
+    /// armed and returns the child and the rustX-side control stream.
+    fn spawn_outer(
+        command: &str,
+        barrier_dir: &Path,
+        anchor_pid_file: &Path,
+    ) -> (std::process::Child, UnixStream) {
+        let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let child = std::process::Command::new(supervisor_binary())
+            .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(COMMAND_ENV, command)
+            .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
+            .env(OUTER_BARRIER_DIR_ENV, barrier_dir)
+            // The injected wait failure turns the shell's exit into an
+            // abnormal inner completion (`INNER_EXIT_CONTAINMENT`) with
+            // possibly-live owned work — the exact abnormal-exit topology
+            // the race regression must pin.
+            .env(FAIL_WAIT_ENV, "1")
+            .stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the outer supervisor");
+        (child, stream_a)
+    }
+
+    /// Polls for a file with a strict deadlock guard.
+    fn wait_for_file(path: &Path) {
+        let deadline = Instant::now() + DEADLINE;
+        while !path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "{} never appeared",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Reads the pid out of a fixture pid file (with a deadlock guard).
+    fn read_pid(path: &Path) -> i32 {
+        wait_for_file(path);
+        std::fs::read_to_string(path)
+            .expect("pid file")
+            .trim()
+            .parse()
+            .expect("pid")
+    }
+
+    /// The `/proc/<pid>/stat` state character; test-only fixture
+    /// inspection — `/proc` is never the production ownership authority.
+    fn proc_state(pid: i32) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = stat.rfind(')')?;
+        stat[close + 2..].chars().next()
+    }
+
+    /// Polls until the process is an un-reaped zombie (it exited and
+    /// nobody consumed it yet). This is the exact state the race
+    /// regression must pin before the next reaping phase runs.
+    fn wait_for_unreaped_zombie(pid: i32) {
+        let deadline = Instant::now() + DEADLINE;
+        while proc_state(pid) != Some('Z') {
+            assert!(
+                Instant::now() < deadline,
+                "process {pid} never became an un-reaped zombie"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Polls until the process is fully gone (reaped).
+    fn wait_for_reaped(pid: i32) {
+        let deadline = Instant::now() + DEADLINE;
+        while proc_state(pid).is_some() {
+            assert!(Instant::now() < deadline, "process {pid} was never reaped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Whether any process remains in the numeric process group.
+    fn group_alive(pgid: i32) -> bool {
+        match killpg(Pid::from_raw(pgid), None) {
+            Ok(()) | Err(Errno::EPERM) => true,
+            Err(_) => false,
+        }
+    }
+
+    /// Polls until the numeric process group is provably gone.
+    fn wait_for_group_gone(pgid: i32) {
+        let deadline = Instant::now() + DEADLINE;
+        while group_alive(pgid) {
+            assert!(
+                Instant::now() < deadline,
+                "process group {pgid} never became terminal"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Reads complete length-prefixed control frames with a strict
+    /// deadline: `(kind, payload)`. `None` is a closed channel.
+    fn read_frame(stream: &mut UnixStream, deadline: Instant) -> Option<(u8, Vec<u8>)> {
+        let mut buf = Vec::new();
+        loop {
+            let mut chunk = [0u8; 64];
+            match stream.read(&mut chunk) {
+                Ok(0) => return None,
+                Ok(count) => buf.extend_from_slice(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("control channel read failed: {error}"),
+            }
+            if buf.len() >= 4 {
+                let len = u32::from_le_bytes(buf[..4].try_into().expect("four bytes")) as usize;
+                if buf.len() >= 4 + len {
+                    let kind = buf[4];
+                    let payload = buf[5..4 + len].to_vec();
+                    return Some((kind, payload));
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "deadline waiting for a control frame"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Sends the rustX-side START acknowledgement (authorizes the Bash
+    /// spawn) over the control channel.
+    fn send_start(stream: &mut UnixStream) {
+        stream.write_all(&[1, 0, 0, 0, MSG_START]).expect("START");
+    }
+
+    /// Sends the terminal acknowledgement so the outer supervisor can exit.
+    fn send_terminal_ack(stream: &mut UnixStream) {
+        stream
+            .write_all(&[1, 0, 0, 0, MSG_TERMINAL_ACK])
+            .expect("ack");
+    }
+
+    /// The mandatory race regression:
+    ///
+    /// ```text
+    /// outer dedicated observation: inner == StillAlive   (barrier parks here)
+    /// inner exits abnormally (containment) and sits as an un-reaped zombie
+    /// the next loop phase runs                             (barrier released)
+    /// ```
+    ///
+    /// Single-reaper ownership requires the zombie anchor to survive into
+    /// the dedicated observation, the fallback `SIGKILL` to be issued
+    /// while the anchor is retained, and the group-scoped gate to release
+    /// the anchor afterwards. Before the fix, a generic `waitpid(-1)`
+    /// hygiene loop consumed the zombie in the released phase, the next
+    /// dedicated observation saw `ECHILD`, and the fallback containment
+    /// decision was lost — the outer then waited on the still-live group
+    /// member forever and never reported the terminal event. This test
+    /// therefore fails deterministically on the pre-fix code and passes
+    /// only with the single-reaper design.
+    #[test]
+    fn anchor_observed_alive_is_never_consumed_before_its_terminal_observation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let barrier_dir = dir.path().join("barrier");
+        std::fs::create_dir_all(&barrier_dir).expect("barrier dir");
+        let anchor_pid_file = dir.path().join("anchor.pid");
+        let sleep_pid_file = dir.path().join("sleep.pid");
+        // The fixture owns live work (a background `sleep 30`) when the
+        // inner exits abnormally: the injected wait failure fires on the
+        // shell's exit and escalates containment, exactly like a real
+        // abnormal inner completion with possibly-live owned work.
+        let command = format!(
+            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            sleep_pid_file.display()
+        );
+        let (mut outer, mut stream) = spawn_outer(&command, &barrier_dir, &anchor_pid_file);
+        nix::fcntl::fcntl(
+            &stream,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .expect("nonblocking control stream");
+        let deadline = Instant::now() + DEADLINE;
+
+        // 1. The outer provably observed the anchor StillAlive and parked
+        //    at the barrier: the exact dedicated-observation point.
+        wait_for_file(&barrier_dir.join("observed"));
+        let inner_pid = read_pid(&anchor_pid_file);
+
+        // 2. Authorize the Bash spawn: the inner (which is gated on
+        //    `START` before spawning bash) then starts the fixture and the
+        //    injected wait failure turns the shell's exit into
+        //    `INNER_EXIT_CONTAINMENT` — while the outer stays parked at
+        //    the barrier.
+        send_start(&mut stream);
+        let sleep_pid = read_pid(&sleep_pid_file);
+        wait_for_unreaped_zombie(inner_pid);
+        assert!(
+            group_alive(inner_pid),
+            "the owned group must still be live when the anchor sits as a zombie"
+        );
+        assert!(
+            proc_state(sleep_pid).is_some(),
+            "the owned descendant must still exist when the anchor sits as a zombie"
+        );
+
+        // 3. The next loop phase runs: the anchor may only be observed and
+        //    later released by the dedicated path. The mandatory proof:
+        //    the fallback containment signal is issued while the anchor is
+        //    retained, and the canonical terminal frame still arrives.
+        let _ = std::fs::write(barrier_dir.join("proceed"), "go");
+        let mut saw_containment_signal = false;
+        let mut saw_terminal_frame = false;
+        while !saw_terminal_frame {
+            let (kind, payload) = read_frame(&mut stream, deadline).unwrap_or_else(|| {
+                panic!(
+                    "the outer supervisor never reported the terminal event; \
+                     the anchor (pid {inner_pid}) was consumed before its \
+                     terminal observation and the fallback containment \
+                     decision was lost"
+                )
+            });
+            match kind {
+                MSG_SIGNAL_ATTEMPT => {
+                    assert!(payload.len() >= 9, "malformed signal-attempt frame");
+                    let pgid = i32::from_le_bytes(payload[0..4].try_into().expect("four bytes"));
+                    let signal = i32::from_le_bytes(payload[4..8].try_into().expect("four bytes"));
+                    let emitted = payload[8] != 0;
+                    assert_eq!(
+                        pgid, inner_pid,
+                        "the fallback signal targets the anchor pgid"
+                    );
+                    assert_eq!(signal, libc::SIGKILL);
+                    assert!(emitted, "the fallback containment must reach the kernel");
+                    saw_containment_signal = true;
+                }
+                MSG_PROCESS_CONTROL_FAILURE | MSG_ANCHOR_READY => {
+                    // The inner's injected wait-failure report and its
+                    // pre-start gate report; both buffered before the
+                    // containment sequence and expected.
+                }
+                MSG_ALL_CHILDREN_REAPED => saw_terminal_frame = true,
+                other => panic!("unexpected control frame kind {other:#04x}"),
+            }
+        }
+        assert!(
+            saw_containment_signal,
+            "the abnormal anchor exit must trigger exactly the fallback containment signal"
+        );
+
+        // 4. Acknowledge; the outer exits normally and everything it owned
+        //    was reaped by its gate: the anchor and the descendant are
+        //    provably gone and the numeric group no longer exists.
+        send_terminal_ack(&mut stream);
+        let status = outer.wait().expect("outer supervisor wait");
+        assert!(
+            status.success(),
+            "the outer must exit 0 after the terminal event"
+        );
+        wait_for_reaped(inner_pid);
+        wait_for_reaped(sleep_pid);
+        wait_for_group_gone(inner_pid);
     }
 }
