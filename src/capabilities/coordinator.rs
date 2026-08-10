@@ -53,7 +53,7 @@ struct CoordinatorInner {
     condvar: Condvar,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
-    commit_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
+    commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
 }
 
 /// The capability coordinator of one conversation/capability owner.
@@ -79,12 +79,21 @@ pub struct CapabilityCoordinator {
 ///
 /// The candidate carries the base revision it was prepared from; commit
 /// rejects it as stale when the active revision has advanced.
+#[derive(Debug)]
 pub struct PreparedCapabilityCandidate {
     base_revision: CapabilityRevision,
     skills: Arc<SkillSnapshot>,
     python: Option<crate::skills::environments::PythonEnvironment>,
     node: Option<crate::skills::environments::NodeEnvironment>,
     effective_environment: ToolEnvironment,
+}
+
+impl PreparedCapabilityCandidate {
+    /// The discovered and validated Skill packages of the candidate.
+    #[must_use]
+    pub fn skill_packages(&self) -> &[Arc<crate::skills::SkillPackage>] {
+        self.skills.packages()
+    }
 }
 
 impl CapabilityCoordinator {
@@ -148,7 +157,7 @@ impl CapabilityCoordinator {
                 }),
                 condvar: Condvar::new(),
                 #[cfg(test)]
-                commit_hook: None,
+                commit_hook: Mutex::new(None),
             }),
         })
     }
@@ -243,7 +252,7 @@ impl CapabilityCoordinator {
         // TEST-ONLY commit-boundary hook: the lock is held and the deciding
         // quiescence observation is next.
         #[cfg(test)]
-        if let Some(hook) = &self.inner.commit_hook {
+        if let Some(hook) = self.inner.commit_hook.lock().expect("commit hook lock").clone() {
             hook.enter();
         }
         if candidate.base_revision != state.revision {
@@ -304,6 +313,13 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned")
             .active_attempts
+    }
+
+    /// Installs the test-only synchronization hook at the commit boundary.
+    /// Only available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
+        *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 }
 
@@ -416,5 +432,155 @@ pub(crate) mod test_sync {
             state.proceed = true;
             self.condvar.notify_all();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::test_sync::CommitBoundaryHook;
+    use super::{CapabilityCoordinator, CapabilityCoordinatorConfig};
+    use crate::capabilities::CapabilityCommitError;
+    use crate::runtime::identity::CapabilityRevision;
+    use crate::tools::environment::ToolEnvironment;
+    use crate::tools::executor::ToolRegistry;
+    use crate::tools::workspace::Workspace;
+
+    /// A minimal coordinator with one active Skill candidate so commits
+    /// are real semantic changes (an empty candidate is a no-op).
+    fn coordinator() -> (tempfile::TempDir, CapabilityCoordinator) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let skill_dir = workspace_root.join(".agents/skills/pdf");
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---
+name: pdf
+description: PDF skill.
+---
+body
+",
+        )
+        .expect("SKILL.md");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            workspace,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: dir.path().join("skill-env"),
+        })
+        .expect("coordinator");
+        (dir, coordinator)
+    }
+
+    async fn prepare(coordinator: &CapabilityCoordinator) -> super::PreparedCapabilityCandidate {
+        coordinator.prepare_candidate().await.expect("prepare")
+    }
+
+    /// Attempt acquisition wins first: the commit is parked inside its
+    /// critical section (the deciding quiescence observation is next),
+    /// the attempt lease is held, and the released commit must observe
+    /// busy and cannot activate a new revision. The commit-boundary hook
+    /// proves the linearization without any timing assumption.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn attempt_acquisition_wins_commit_observes_busy() {
+        let (_dir, coordinator) = coordinator();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(hook.clone());
+        let lease = coordinator.acquire_attempt_lease();
+        let revision = lease.revision();
+        let candidate = prepare(&coordinator).await;
+
+        let coordinator_for_task = coordinator.clone();
+        let commit_task = std::thread::spawn(move || {
+            coordinator_for_task.commit(candidate)
+        });
+        hook.wait_entered();
+        // The commit is parked before the deciding quiescence observation;
+        // the attempt lease is still held (the coordinator lock is
+        // unavailable while the commit parks, so the held lease itself is
+        // the proof).
+        hook.proceed();
+        let result = commit_task.join().expect("commit task");
+        assert_eq!(result, Err(CapabilityCommitError::Busy));
+        assert_eq!(
+            coordinator.current_snapshot().revision(),
+            revision,
+            "a busy commit cannot activate a new revision"
+        );
+        drop(lease);
+    }
+
+    /// Commit wins first: the commit is parked inside its critical section
+    /// with no attempt lease active, released, and the next attempt
+    /// acquisition snapshots the new revision. The hook proves the
+    /// ordering.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commit_wins_next_attempt_observes_the_new_revision() {
+        let (_dir, coordinator) = coordinator();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(hook.clone());
+        let candidate = prepare(&coordinator).await;
+
+        let coordinator_for_task = coordinator.clone();
+        let commit_task = std::thread::spawn(move || coordinator_for_task.commit(candidate));
+        hook.wait_entered();
+        // No attempt lease is active at the boundary: the commit was never
+        // observed as busy, which is the linearization proof.
+        hook.proceed();
+        let snapshot = commit_task.join().expect("commit task").expect("commit");
+        assert_eq!(
+            snapshot.revision(),
+            CapabilityRevision::new(1),
+            "the first semantic change activates revision 1"
+        );
+        let lease = coordinator.acquire_attempt_lease();
+        assert_eq!(lease.revision(), snapshot.revision());
+        assert_eq!(lease.snapshot().as_ref(), &*snapshot);
+        drop(lease);
+    }
+
+    /// A second commit while the first is parked at the boundary serializes
+    /// through the same boundary: after the first commit wins, the second
+    /// candidate (prepared from the obsolete base) is stale.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_commits_serialize_at_one_boundary() {
+        let (_dir, coordinator) = coordinator();
+        let hook = Arc::new(CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(hook.clone());
+        let first = prepare(&coordinator).await;
+        let second = prepare(&coordinator).await;
+
+        let coordinator_for_task = coordinator.clone();
+        let first_task = std::thread::spawn(move || coordinator_for_task.commit(first));
+        hook.wait_entered();
+        // The second commit queues on the same mutex; release the first.
+        hook.proceed();
+        first_task.join().expect("first commit").expect("commit");
+        let result = coordinator.commit(second);
+        assert!(matches!(
+            result,
+            Err(CapabilityCommitError::StaleCandidate { .. })
+        ));
+    }
+
+    /// The lease RAII release makes the next commit legal immediately; no
+    /// waiting or sleeping is involved.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lease_release_enables_the_next_commit_immediately() {
+        let (_dir, coordinator) = coordinator();
+        let lease = coordinator.acquire_attempt_lease();
+        let candidate = prepare(&coordinator).await;
+        assert_eq!(coordinator.commit(candidate), Err(CapabilityCommitError::Busy));
+        drop(lease);
+        assert_eq!(coordinator.active_attempts(), 0);
+        let candidate = prepare(&coordinator).await;
+        assert_eq!(
+            coordinator.commit(candidate).expect("commit").revision(),
+            CapabilityRevision::new(1)
+        );
     }
 }

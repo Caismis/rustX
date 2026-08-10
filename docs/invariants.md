@@ -154,21 +154,55 @@ contract, never durable storage and never canonical history:
 ## Capability immutability
 
 An attempt sees one immutable capability revision for its entire lifetime.
+M6 makes this operational: one `AgentExecution` holds one RAII attempt
+capability lease (`src/capabilities`) pinning one immutable
+`CapabilitySnapshot` (revision, immutable ToolRegistry handle, immutable
+Skill snapshot/catalog with `SkillId` + `SkillVersionId` bindings, Python/
+Node environment identity and path when present, and the effective
+ToolEnvironment) for the complete lifetime of the attempt. There is no
+capability-free execution constructor, and no model turn re-discovers
+Skills.
 
-Skill, tool, and MCP capability mutations may occur only while the conversation runtime is quiescent.
+M6 quiescence is exactly: **a capability activation/commit is legal only
+when there are zero active attempt capability leases for that
+conversation.** Conversation-owned detached background executions do not
+hold attempt leases and never block a capability commit.
 
-Quiescent means, at minimum:
+- Attempt lease acquisition and candidate capability commit serialize
+  through the same synchronization boundary: acquisition wins first →
+  commit observes busy and cannot activate; commit wins first → the next
+  attempt snapshots the new revision. There is no unchecked window
+  between the deciding quiescence observation and the active-snapshot
+  swap, and no sleep-based coordination.
+- A candidate may be prepared independently (Skill discovery, dependency
+  merge, environment materialization); only its activation respects the
+  commit boundary. An identical rediscovery/preparation is a no-op that
+  never fabricates a new revision; a candidate prepared from an obsolete
+  base revision is rejected as stale.
+- Failed preparation or commit leaves the current active revision
+  authoritative.
+- `CapabilityRevision`, `SkillVersionId`, `PythonEnvironmentDigest`, and
+  `NodeEnvironmentDigest` remain distinct identities: a description-only
+  Skill change yields a new Skill version and a new capability revision
+  without changing environment identities when dependency inputs are
+  unchanged.
+- Skill, tool, and MCP capability mutations (MCP remains future work) may
+  occur only while the conversation runtime is quiescent in the M6 sense;
+  broader runtime-wide busy semantics (active tool calls, foreground or
+  background processes, event-writer or drain transitions) remain the M9
+  scheduler's concern, not part of the M6 commit guard.
 
-- no active attempt
-- no active tool call
-- no foreground Bash process
-- no background Bash process
-- no active MCP call
-- no environment mutation
-- event writer flushed
-- no drain or cancellation transition in progress
+Capability environments are prepared and validated before an atomic
+revision swap. Published digest environments are immutable: they are
+reused only when their deterministic manifest matches the expected digest
+inputs and are never installed into again.
 
-Capability environments are prepared and validated before an atomic revision swap. Active environments are never mutated in place.
+**Workspace-file limitation.** Capability metadata and environment
+identities are snapshotted, but lazy Skill source files
+(`SKILL.md`, scripts, references, assets) remain ordinary Workspace
+content: M6 does not mount them through an immutable filesystem snapshot,
+and an external rewrite of `.agents/skills/...` after preparation is
+observed only at the next quiescent re-discovery.
 
 ## Tool ordering
 

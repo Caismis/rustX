@@ -31,7 +31,7 @@ pub struct SkillCatalogEntry {
 /// ordered model-visible catalog entries, and the deterministic
 /// `SkillId` + `SkillVersionId` bindings. It is constructed once per
 /// candidate preparation and never mutated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSnapshot {
     packages: Vec<Arc<SkillPackage>>,
     catalog: Vec<SkillCatalogEntry>,

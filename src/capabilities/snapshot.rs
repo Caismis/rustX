@@ -39,6 +39,32 @@ pub struct CapabilitySnapshot {
     skill_catalog: Option<SkillCatalogAttachment>,
 }
 
+/// Two snapshots are equal when their capability content is equal: the
+/// revision, the Skill snapshot, the environment identities, and the
+/// effective environment. The shared immutable ToolRegistry handle is not
+/// part of the equality (it is the same handle across candidates).
+impl PartialEq for CapabilitySnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.skills == other.skills
+            && self.python_environment == other.python_environment
+            && self.node_environment == other.node_environment
+            && self.effective_environment == other.effective_environment
+    }
+}
+
+impl core::fmt::Debug for CapabilitySnapshot {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CapabilitySnapshot")
+            .field("revision", &self.revision)
+            .field("skills", &self.skills)
+            .field("python_environment", &self.python_environment)
+            .field("node_environment", &self.node_environment)
+            .field("effective_environment", &self.effective_environment)
+            .finish_non_exhaustive()
+    }
+}
+
 impl CapabilitySnapshot {
     /// Builds the immutable snapshot from the prepared candidate pieces.
     #[must_use]

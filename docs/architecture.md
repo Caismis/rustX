@@ -413,11 +413,41 @@ Key contracts:
   away; when preserving it makes the projection impossible, planning fails
   with `CannotFit` rather than summarizing the unobserved instruction.
 
+#### M6 implementation (Skill catalog projection)
+
+The Skill catalog follows the Agent Status attachment pattern:
+
+- The cross-layer `SkillCatalogAttachment` is a Layer 0 contract owned by
+  `model/types.rs`: it holds only the rendered catalog text. The capability
+  plane produces it from the attempt's immutable Skill snapshot;
+  `ContextProjection`, `CompiledContext`, `ModelRequest`, fingerprinting,
+  token accounting, and every provider adapter refer to the Layer 0 type.
+- It is projection-only capability context: never canonical history,
+  never checkpoint history, never returned in `AgentExecutionResult.messages`,
+  and never emitted as a committed-message event. The existing
+  `SystemAuthority::Skill` canonical variant does not justify durable
+  Skill-catalog history and is not used for the catalog.
+- It participates in the projection fingerprint, the full request token
+  estimate, the hard-fit calculation, the soft compaction threshold, and
+  the before/after compaction progress comparison (the exact attachment is
+  carried by `CompactionPlan` and reused on both sides); it never counts
+  toward `keep_recent_tokens`. A large catalog can therefore contribute to
+  `CannotFit`.
+- Provider adapters own wire placement: OpenAI Responses combines it
+  deterministically with the canonical system instructions in the trusted
+  `instructions` channel on every request (a continuation never loses it),
+  Anthropic Messages places it in the top-level `system` content, and
+  OpenAI Chat Completions translates it through a system-level message —
+  never a user message. Agent Status remains a separate user-targeted
+  ephemeral attachment with its existing semantics.
+
 The M4 context path is **mandatory**: every `AgentExecution` is constructed
-with a `ContextRuntime` and a `ConversationToolRuntime`
-(`AgentExecution::new(request, adapter, tools, cancellation, context_runtime,
-tool_runtime)`); the no-context compatibility path and
-`with_context_runtime` are gone, and there is no Agent Status disable flag.
+with a `ContextRuntime`, a `ConversationToolRuntime`, and an attempt
+capability lease
+(`AgentExecution::new(request, adapter, capability, cancellation,
+context_runtime, tool_runtime)`); the no-context compatibility path,
+`with_context_runtime`, and any capability-free constructor are gone, and
+there is no Agent Status disable flag.
 See `docs/context-engine.md` for the full boundary description.
 
 #### M5 implementation (native tool plane)
@@ -822,6 +852,74 @@ Skills are filesystem/workflow packages. A skill may include:
 
 All active skills in one conversation share one Python environment and one Node environment. Skills use the same native Bash execution capability as the agent.
 
+#### M6 implementation (skills and shared environments)
+
+The M6 implementation (`src/skills`) freezes the Skill plane boundary:
+
+- **Skill root.** There is exactly one Skill root,
+  `<workspace>/.agents/skills/`, anchored to the canonical Workspace root
+  and never to Bash's mutable working directory. Discovery is one level
+  only; a missing root is an empty Skill set; hidden root entries and
+  unrelated files are ignored; results are deterministically ordered by
+  validated Skill name; any malformed candidate fails the whole discovery
+  transaction; symlinked package roots and package-internal symlinks are
+  rejected (Skill-package validation only — the general Workspace symlink
+  contract for ordinary tools is unchanged).
+- **Format.** `SKILL.md` is standard Agent Skills YAML frontmatter plus
+  Markdown: `name` (validated against the standard naming rules and the
+  parent directory), `description` (non-empty, standard length bound),
+  `metadata` (string-to-string map), and the preserved optional
+  `license`, `compatibility`, and `allowed-tools` fields — no runtime
+  policy is invented for them.
+- **Version identity.** `SkillVersionId` is a deterministic content-derived
+  `sha256:<hex>` digest over the complete accepted package state (sorted
+  workspace-relative paths, lengths, and raw bytes), independent of host
+  paths, mtimes, permissions, enumeration order, and wall-clock time.
+- **Dependency declarations.** The standard `metadata` extension point
+  carries exactly the rustX keys `rustx.python-dependencies` and
+  `rustx.node-dependencies`, each a JSON object of package name to exact
+  version string. Python distribution names normalize deterministically
+  (lowercase, `-`/`_`/`.` equivalence); Node names may be scoped
+  (`@scope/pkg`). Ranges, tags, extras, markers, URLs, VCS, local paths,
+  editable installs, and workspace references are rejected; rustX never
+  builds a semver solver. Merging across active Skills coalesces identical
+  declarations and reports deterministic conflicts (ecosystem, normalized
+  package, every responsible Skill, every declared version) before any
+  package-manager subprocess runs.
+- **Shared environments.** All declared Python dependencies materialize
+  into one shared Python environment and all declared Node dependencies
+  into one shared Node environment per capability set — never one per
+  Skill. An ecosystem with no dependencies needs no runtime and no
+  environment. `PythonEnvironmentDigest` and `NodeEnvironmentDigest` are
+  distinct SHA-256 identities over (format/version domain, OS,
+  architecture, resolved runtime identity, resolved package-manager
+  identity, sorted normalized dependency map), never including
+  workspace/store/staging paths, time, or random values. Environments live
+  in a caller-configured runtime-private store disjoint from the
+  Workspace, are materialized through the shared supervised process runner
+  (staging -> materialize -> validate -> deterministic manifest -> atomic
+  rename -> immutable digest directory), are reused only when the published
+  manifest matches the expected digest inputs, and are never installed into
+  again.
+- **Catalog.** The model-visible catalog is rendered compactly from the
+  attempt's immutable Skill snapshot: the common `.agents/skills/` root
+  once, then `- <name>: <description>` per validated Skill in
+  deterministic order. `SKILL.md` bodies, supporting resources, dependency
+  metadata, and host absolute paths never appear.
+- **Execution.** Skills remain workflow/instruction packages: no
+  `skill_search`/`activate_skill`/`skill_view`/`run_skill`/
+  `run_skill_script` abstractions exist. The model reads
+  `.agents/skills/<name>/SKILL.md` and supporting files through native
+  Read and runs scripts through native Bash against the Workspace.
+
+**Workspace-file limitation.** M6 freezes discovered identities, version
+identities, catalog metadata, dependency declarations, environment
+identities, and the effective ToolEnvironment. Skill source files
+(`SKILL.md`, scripts, references, assets) remain ordinary Workspace files
+accessed through normal Read/Bash semantics: M6 does not snapshot-mount
+them, and an external rewrite of `.agents/skills/...` after preparation is
+observed only at the next quiescent re-discovery.
+
 ### Layer 6: Runtime services
 
 This layer owns execution infrastructure:
@@ -835,6 +933,46 @@ This layer owns execution infrastructure:
 - Process supervision
 - Background shell session management
 - Crash reconciliation
+
+#### M6 implementation (capability coordination)
+
+M6 implements the concrete capability snapshot/mutation semantics required
+for Skills in a narrow coordination layer (`src/capabilities`), not a
+generic runtime supervisor:
+
+- **Immutable attempt capability snapshot.** One `CapabilitySnapshot`
+  holds the monotonic `CapabilityRevision`, the immutable `ToolRegistry`
+  handle, the immutable Skill snapshot/catalog with its
+  `SkillId` + `SkillVersionId` bindings, the Python/Node environment
+  identity and path when present, and the effective `ToolEnvironment`
+  (base authorized environment plus the deterministic Skill environment
+  overlay).
+- **Attempt capability lease.** An `AgentExecution` structurally holds one
+  RAII lease pinning one immutable snapshot for its complete lifetime; no
+  model turn re-discovers Skills or re-queries the conversation capability
+  pointer. There is no capability-free constructor.
+- **Quiescent commit.** Candidate preparation (discovery, dependency
+  merge, environment materialization) runs independently; activation is a
+  quiescent atomic commit legal only when zero attempt leases are active
+  for the conversation. Acquisition and commit serialize through one
+  synchronization boundary; an identical candidate is a no-op that never
+  fabricates a revision; a stale candidate (prepared from an obsolete base
+  revision) is rejected; failed preparation/commit leaves the active
+  revision authoritative. Conversation-owned detached background
+  executions do not hold attempt leases and never block a capability
+  commit.
+- **Background environment capture.** The effective environment is
+  captured at background dispatch prepare time (before the ownership
+  commit) and retained by the detached execution; later revision
+  activations never mutate it.
+
+The shared supervised process runner (`src/runtime/process_runner`) is the
+M5 Bash process-group lifecycle extracted so native Bash and Skill
+environment materialization share one owned supervisor/process-group
+domain: same child-subreaper contract, same cancellation/timeout physical
+settlement, same catastrophic containment, explicit cwd and child
+environment, finite timeout, bounded diagnostics, and no generic
+`waitpid(-1)` reaper.
 
 ### Layer 7: Interfaces and projections
 

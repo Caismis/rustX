@@ -26,18 +26,18 @@
 
 mod catalog;
 mod dependencies;
-pub(crate) mod environments;
+pub mod environments;
 mod identity;
 mod package;
 
 pub use catalog::{SkillCatalogEntry, SkillSnapshot, render_skill_catalog};
 pub use dependencies::{
     DependencyConflict, DependencyError, DependencyManifest, Ecosystem,
-    merge_dependency_manifests,
+    merge_dependency_manifests, parse_node_dependencies, parse_python_dependencies,
 };
 pub use environments::{
-    EnvironmentPreparationError, EnvironmentStore, NodeEnvironment, PythonEnvironment,
-    RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
+    ENVIRONMENT_MANIFEST_FILE, EnvironmentPreparationError, EnvironmentStore, NodeEnvironment,
+    PythonEnvironment, RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
     python_environment_digest,
 };
 pub use package::{SkillDiscovery, SkillPackage, SkillPackageError};

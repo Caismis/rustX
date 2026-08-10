@@ -291,22 +291,41 @@ Exit criteria:
 - Tool batches work through the same agent loop used by mock tools.
 - Foreground Bash cancellation is reliable.
 
-## Milestone 6 — Skills
+## Milestone 6 — Skills (implemented)
 
-Implement:
+Implemented:
 
-- Skill package discovery
-- `SKILL.md` loading
-- Scripts, references, and assets layout
-- Shared skill Python environment
-- Shared skill Node environment
-- Dependency materialization
-- Skill execution through native file/Bash capabilities
+- Skill package discovery from the single project-local root
+  `<workspace>/.agents/skills/` (one level, deterministic ordering,
+  symlink rejection, whole-transaction failure on any malformed candidate)
+- Standard Agent Skills `SKILL.md` frontmatter parsing/validation and the
+  compact model-visible catalog projection
+- Content-derived `SkillVersionId` hashing over the complete package state
+- rustX dependency declarations (`rustx.python-dependencies`,
+  `rustx.node-dependencies`) with deterministic normalization and
+  merge/conflict detection before any package-manager subprocess
+- One shared Python environment and one shared Node environment per
+  capability set, with distinct `PythonEnvironmentDigest` /
+  `NodeEnvironmentDigest` identities, staging + deterministic-manifest +
+  atomic-rename publication in a runtime-private store, and immutable
+  published environments
+- Scripts, references, and assets layout, executed through native
+  Read/Bash against the Workspace (no `skill_search`/`activate_skill`/
+  `skill_view`/`run_skill`/`run_skill_script`)
+- The capability coordination layer (`src/capabilities`): immutable
+  attempt capability snapshot, RAII attempt lease, quiescent atomic
+  commit, `CapabilityRevision` swap, and background environment capture
+- The shared supervised process runner (`src/runtime/process_runner`)
+  reusing the M5 Bash process-group lifecycle for Skill environment
+  materialization
 
 Exit criteria:
 
 - A skill can instruct the model to read its instructions and execute Python, Node, or shell scripts against the local workspace.
 - Multiple skills can coexist in one shared environment with deterministic environment identity.
+- An attempt observes one immutable Skill catalog for its complete lifetime.
+- A capability commit is rejected while an attempt lease is active; failed preparation/commit leaves the current revision authoritative.
+- Detached background executions retain the environment of the revision that dispatched them.
 
 ## Milestone 7 — External tool plane
 
@@ -368,15 +387,31 @@ the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
 cancellable foreground executions (including Bash process-group
 termination), conversation-owned background executions with the
 `background_task` cancel path, and explicit runtime shutdown cancellation of
-active background work. Remaining M9 work:
+active background work.
+
+The M6 skills PR implements the minimal concrete capability
+snapshot/mutation semantics required for Skills: the immutable attempt
+capability snapshot, the attempt capability lease, the quiescent capability
+commit (zero active attempt leases for the conversation), the
+`CapabilityRevision` swap, and background environment capture — all owned
+by `src/capabilities`. Remaining M9 work is the broader runtime-wide
+machinery that M6 deliberately does not implement:
 
 - Hierarchical runtime supervisor tree and generic process supervision
-- Quiescent runtime state machine and graceful draining
-- Capability mutation guard and revision snapshots
+  (beyond the concrete shared supervised command runner and the Bash
+  supervisor units)
+- Quiescent runtime state machine and graceful draining (runtime-wide busy
+  state beyond attempt capability leases: active tool calls, foreground or
+  background processes, event-writer and drain transitions)
+- General scheduler/runtime busy state and generic process supervision
+  beyond the concrete current ownership seam
+- Recovery/lifecycle orchestration
 
 Exit criteria:
 
-- Capability changes are rejected while the conversation runtime is busy.
+- Capability changes are rejected while the conversation runtime is busy
+  (the M6 attempt-lease guard is the concrete first instance; M9 extends
+  the busy definition to the full runtime state machine).
 - Attempt cancellation does not incorrectly terminate conversation-owned background work.
 
 ## Milestone 10 — Local runtime product

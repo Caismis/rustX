@@ -178,7 +178,7 @@ impl std::error::Error for SkillPackageError {}
 /// derived from the complete accepted package content, and its dependency
 /// declarations are already parsed and normalized. The model-visible
 /// catalog uses only `name` and `description`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillPackage {
     id: SkillId,
     version_id: SkillVersionId,
@@ -359,11 +359,15 @@ fn discover_package(root: &Path, directory_name: &str) -> Result<SkillPackage, S
             detail: format!("SKILL.md is not valid UTF-8: {error}"),
         }
     })?;
-    let frontmatter = parse_frontmatter(&markdown_text).map_err(|detail| {
-        SkillPackageError::MalformedFrontmatter {
+    let frontmatter = parse_frontmatter(&markdown_text).map_err(|failure| match failure {
+        FrontmatterFailure::Malformed(detail) => SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
             detail,
-        }
+        },
+        FrontmatterFailure::InvalidMetadata(detail) => SkillPackageError::MalformedMetadata {
+            directory: directory_name.to_owned(),
+            detail,
+        },
     })?;
     if frontmatter.name != directory_name {
         return Err(SkillPackageError::NameDirectoryMismatch {
@@ -514,12 +518,16 @@ struct Frontmatter {
 }
 
 /// The serde target of the standard frontmatter fields.
+///
+/// `metadata` is parsed as a map of YAML values so the standard
+/// string-to-string constraint is enforced explicitly: serde_yaml would
+/// otherwise coerce scalar numbers into strings.
 #[derive(serde::Deserialize)]
 struct FrontmatterSerde {
     name: String,
     description: String,
     #[serde(default)]
-    metadata: BTreeMap<String, String>,
+    metadata: BTreeMap<String, serde_yaml::Value>,
     #[serde(default)]
     license: Option<String>,
     #[serde(default)]
@@ -528,28 +536,62 @@ struct FrontmatterSerde {
     allowed_tools: Option<String>,
 }
 
+/// The frontmatter parse outcome distinguishes a malformed YAML block from
+/// a metadata map that violates the standard string-to-string constraint.
+enum FrontmatterFailure {
+    /// The YAML block is malformed or the standard fields have the wrong
+    /// shape.
+    Malformed(String),
+    /// The `metadata` map contains a non-string value.
+    InvalidMetadata(String),
+}
+
+impl From<FrontmatterFailure> for String {
+    fn from(failure: FrontmatterFailure) -> Self {
+        match failure {
+            FrontmatterFailure::Malformed(detail) => detail,
+            FrontmatterFailure::InvalidMetadata(detail) => detail,
+        }
+    }
+}
+
 /// Splits `SKILL.md` into its YAML frontmatter block and the Markdown body.
 ///
 /// The frontmatter is the first `---`-delimited block at the start of the
 /// file. A missing opening or closing delimiter is malformed.
-fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, String> {
+fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> {
     let body = markdown.strip_prefix("---\n").or_else(|| {
         markdown
             .strip_prefix("---\r\n")
             .or_else(|| markdown.strip_prefix("---\u{FEFF}"))
     });
     let Some(remainder) = body else {
-        return Err("SKILL.md must start with a YAML frontmatter block".to_owned());
+        return Err(FrontmatterFailure::Malformed(
+            "SKILL.md must start with a YAML frontmatter block".to_owned(),
+        ));
     };
     let (yaml_block, _markdown_body) = remainder.split_once("\n---").ok_or_else(|| {
-        "SKILL.md frontmatter is missing its closing delimiter".to_owned()
+        FrontmatterFailure::Malformed(
+            "SKILL.md frontmatter is missing its closing delimiter".to_owned(),
+        )
     })?;
     let frontmatter: FrontmatterSerde = serde_yaml::from_str(yaml_block)
-        .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
+        .map_err(|error| FrontmatterFailure::Malformed(format!("frontmatter is not valid YAML: {error}")))?;
+    // The standard requires metadata to be a string-to-string map; a
+    // non-string value is malformed (never coerced).
+    let mut metadata = BTreeMap::new();
+    for (key, value) in frontmatter.metadata {
+        let serde_yaml::Value::String(string) = value else {
+            return Err(FrontmatterFailure::InvalidMetadata(format!(
+                "metadata entry {key:?} must be a string, got {value:?}"
+            )));
+        };
+        metadata.insert(key, string);
+    }
     Ok(Frontmatter {
         name: frontmatter.name,
         description: frontmatter.description,
-        metadata: frontmatter.metadata,
+        metadata,
         license: frontmatter.license,
         compatibility: frontmatter.compatibility,
         allowed_tools: frontmatter.allowed_tools,

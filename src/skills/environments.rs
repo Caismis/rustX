@@ -246,13 +246,16 @@ pub trait SkillEnvironmentBackend: Send + Sync {
 /// shared supervised command runner.
 #[derive(Clone)]
 pub struct RunnerBackedSkillEnvironmentBackend {
-    runner: Arc<dyn SupervisedProcessRunner>,
+    runner: Arc<dyn crate::runtime::process_runner::SupervisedProcessRunner>,
 }
 
 impl RunnerBackedSkillEnvironmentBackend {
-    /// A runner-backed materialization backend.
+    /// A runner-backed materialization backend (internal construction; the
+    /// capability coordinator wires the shared runner).
     #[must_use]
-    pub fn new(runner: Arc<dyn SupervisedProcessRunner>) -> Self {
+    pub(crate) fn new(
+        runner: Arc<dyn crate::runtime::process_runner::SupervisedProcessRunner>,
+    ) -> Self {
         Self { runner }
     }
 }
