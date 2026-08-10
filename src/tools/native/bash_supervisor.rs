@@ -65,12 +65,12 @@
 //! `EPERM`; the utility usually exits non-zero and nothing leaves the
 //! invocation group.
 //!
-//! The syscall numbers are **detected at runtime** by a side-effect probe
-//! in a throwaway child, never guessed from a table: the Linux x86-64
-//! syscall numbers were renumbered in kernel 7.0 (an asm-generic-style
-//! table), while older kernels and the other supported ABIs keep their own
-//! numbers. The restriction is installed with `PR_SET_NO_NEW_PRIVS` plus a
-//! `seccomp` filter and requires no privileges. A failure to install it is
+//! The syscall numbers come directly from `libc` for the compiled Linux
+//! target ABI. On x86-64, x32 syscall execution is rejected explicitly
+//! because it shares `AUDIT_ARCH_X86_64` while using a distinct syscall-
+//! number namespace. The restriction is installed with
+//! `PR_SET_NO_NEW_PRIVS` plus a `seccomp` filter and requires no privileges.
+//! A failure to install it is
 //! a pre-ownership setup failure: no bash tree is spawned and the
 //! invocation settles as an explicit `Failed`.
 //!
@@ -146,8 +146,8 @@
 //! which keeps a stopped containment chain from stranding the owned group.
 //! The only residual state in which terminality cannot be proven from
 //! rustX is a supervisor unit frozen at the kernel level beyond the outer's
-//! reach; the bounded confirmation window then settles the invocation as
-//! an explicit bounded failure (never an unbounded wait).
+//! reach; the confirmation watchdog then records explicit failure intent,
+//! but canonical settlement still waits for authoritative terminality.
 //!
 //! # IPC
 //!
@@ -821,188 +821,98 @@ fn ignore_group_term() -> Result<(), String> {
     Ok(())
 }
 
-/// The supported Linux ABIs of the fixed-membership restriction. Building
-/// for any other architecture is an explicit compile-time failure: the
-/// contract is never silently weakened on unsupported systems.
-#[cfg(not(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-)))]
-compile_error!(
-    "the fixed Bash process-group membership restriction supports only x86_64, aarch64, and riscv64 Linux"
-);
-
-/// Candidate syscall numbers that may implement `setpgid(2)` on the
-/// supported ABIs: the classic x86-64 table (65), the kernel 7.0+
-/// renumbered x86-64 table (109), and the asm-generic tables used by
-/// aarch64/riscv64 (154). The real number of the running kernel is
-/// **detected by side effect** (see [`probe_membership_syscall`]), never
-/// guessed: a wrong candidate cannot match the verified membership side
-/// effect.
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-))]
-const SETPGID_CANDIDATES: &[i64] = &[65, 109, 154];
-
-/// Candidate syscall numbers that may implement `setsid(2)`: the classic
-/// and renumbered x86-64 tables (112), the legacy 32-bit x86 table (66),
-/// and the asm-generic tables (157, 147). Same runtime side-effect
-/// detection as [`SETPGID_CANDIDATES`].
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-))]
-const SETSID_CANDIDATES: &[i64] = &[112, 66, 157, 147];
-
 /// The `AUDIT_ARCH` constant of the compiled architecture, used by the
 /// seccomp filter to reject syscalls from an unexpected ABI before any
 /// other check.
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const AUDIT_ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const AUDIT_ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
-#[cfg(target_arch = "riscv64")]
+#[cfg(all(target_os = "linux", target_arch = "riscv64"))]
 const AUDIT_ARCH: u32 = 0xC000_00F3; // AUDIT_ARCH_RISCV64
-
-/// One membership syscall kind whose number is detected at runtime.
-#[derive(Clone, Copy)]
-enum MembershipSyscall {
-    Setpgid,
-    Setsid,
-}
-
-/// Detects the running kernel's syscall number for one membership syscall:
-/// each candidate is executed in a throwaway child and the child reports
-/// whether the call produced the real membership side effect. This works
-/// across kernel ABI renumberings (the Linux x86-64 syscall numbers were
-/// renumbered in kernel 7.0) with no version probing.
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-))]
-fn detect_membership_syscall(kind: MembershipSyscall) -> Result<i64, String> {
-    let candidates: &[i64] = match kind {
-        MembershipSyscall::Setpgid => SETPGID_CANDIDATES,
-        MembershipSyscall::Setsid => SETSID_CANDIDATES,
-    };
-    for &candidate in candidates {
-        if probe_membership_syscall(kind, candidate)? {
-            return Ok(candidate);
-        }
-    }
-    Err("cannot identify the kernel's setpgid/setsid syscall number".to_owned())
-}
-
-/// Runs one candidate syscall in a throwaway child and verifies the actual
-/// membership side effect:
-///
-/// - `setpgid(0, 0)` succeeds only when the child's process group becomes
-///   its own pid **while its session is unchanged** (this excludes a real
-///   `setsid` and every unrelated syscall);
-/// - `setsid()` succeeds only when the child becomes its own session
-///   leader (`getsid(0) == pid`).
-///
-/// The child writes one byte (`1` = verified) and exits; the parent reaps
-/// it, so no zombie or orphan is ever left behind. The probe runs before
-/// the invocation group exists, so its transient side effects never touch
-/// owned work.
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
-))]
-#[allow(unsafe_code)]
-fn probe_membership_syscall(kind: MembershipSyscall, number: i64) -> Result<bool, String> {
-    use std::os::fd::AsRawFd;
-
-    use nix::unistd::{getpgrp, getpid, getsid};
-
-    let (read_fd, write_fd) = nix::unistd::pipe()
-        .map_err(|error| format!("cannot create the membership probe pipe: {error}"))?;
-    // SAFETY: fork(2); the child runs exactly one probe syscall and _exit.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return Err(format!(
-            "cannot fork the membership probe child: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    if pid == 0 {
-        let verified = match kind {
-            MembershipSyscall::Setpgid => {
-                let before_pgrp = getpgrp();
-                let before_sid = getsid(None).ok();
-                // SAFETY: one syscall with two scalar pid arguments.
-                let result = unsafe { libc::syscall(number, 0, 0) };
-                let after_pgrp = getpgrp();
-                result == 0
-                    && after_pgrp == getpid()
-                    && after_pgrp != before_pgrp
-                    && getsid(None).ok() == before_sid
-            }
-            MembershipSyscall::Setsid => {
-                // SAFETY: one syscall with no arguments.
-                let result = unsafe { libc::syscall(number) };
-                let self_pid = getpid();
-                result > 0
-                    && result == i64::from(self_pid.as_raw())
-                    && getsid(None).ok() == Some(self_pid)
-            }
-        };
-        let byte = [u8::from(verified)];
-        // SAFETY: write one byte to the pipe end the parent reads.
-        unsafe { libc::write(write_fd.as_raw_fd(), byte.as_ptr().cast(), 1) };
-        // SAFETY: _exit terminates the probe child without touching stdio.
-        unsafe { libc::_exit(0) };
-    }
-    drop(write_fd);
-    let mut byte = [0u8; 1];
-    let read = nix::unistd::read(&read_fd, &mut byte)
-        .map_err(|error| format!("cannot read the membership probe pipe: {error}"))?;
-    drop(read_fd);
-    // Reap the probe child deterministically (it exits immediately);
-    // EINTR just retries the reap.
-    loop {
-        match nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(pid), None) {
-            Ok(_) => break,
-            Err(Errno::EINTR) => {}
-            Err(error) => {
-                return Err(format!("cannot reap the membership probe child: {error}"));
-            }
-        }
-    }
-    Ok(read == 1 && byte[0] == 1)
-}
 
 /// The `sock_filter` BPF program of the fixed-membership restriction:
 ///
 /// ```text
 /// 0: load seccomp_data.arch
-/// 1: if arch == the compiled AUDIT_ARCH -> 2, else -> 7 (kill, fail closed)
+/// 1: if arch == the compiled AUDIT_ARCH -> 2, else -> last (kill, fail closed)
 /// 2: load seccomp_data.nr
-/// 3: if nr == setpgid -> 6 (EPERM), else -> 4
-/// 4: if nr == setsid -> 6 (EPERM), else -> 5
-/// 5: allow
-/// 6: return EPERM
-/// 7: kill (foreign ABI)
+/// 3 (x86-64 only): if the x32 bit is set -> EPERM
+/// next: if nr == setpgid -> EPERM
+/// next: if nr == setsid -> EPERM
+/// next: allow
+/// next: return EPERM
+/// last: kill (foreign audit architecture)
 /// ```
 ///
-/// The `u32 -> u16` instruction-code casts and the `i64 -> u32` syscall
-/// number casts are safe by construction: the BPF opcode constants are
-/// designed to fit `u16`, and the detected syscall numbers always fit
-/// `u32`.
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn membership_restriction_program() -> [libc::sock_filter; 9] {
+    use libc::{BPF_ABS, BPF_JEQ, BPF_JMP, BPF_JSET, BPF_K, BPF_LD, BPF_RET, BPF_W};
+    [
+        libc::sock_filter {
+            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
+            jt: 0,
+            jf: 0,
+            k: 4,
+        },
+        libc::sock_filter {
+            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
+            jt: 0,
+            jf: 6,
+            k: AUDIT_ARCH,
+        },
+        libc::sock_filter {
+            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        libc::sock_filter {
+            code: (BPF_JMP | BPF_JSET | BPF_K) as u16,
+            jt: 3,
+            jf: 0,
+            k: 0x4000_0000, // __X32_SYSCALL_BIT
+        },
+        libc::sock_filter {
+            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
+            jt: 2,
+            jf: 0,
+            k: libc::SYS_setpgid as u32,
+        },
+        libc::sock_filter {
+            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
+            jt: 1,
+            jf: 0,
+            k: libc::SYS_setsid as u32,
+        },
+        libc::sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0x7FFF_0000, // SECCOMP_RET_ALLOW
+        },
+        libc::sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0x0005_0000 | libc::EPERM as u32, // SECCOMP_RET_ERRNO | EPERM
+        },
+        libc::sock_filter {
+            code: (BPF_RET | BPF_K) as u16,
+            jt: 0,
+            jf: 0,
+            k: 0x8000_0000, // SECCOMP_RET_KILL_PROCESS
+        },
+    ]
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "aarch64", target_arch = "riscv64")
 ))]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // BPF opcodes and syscall numbers fit their fields
-fn membership_restriction_program(setpgid: i64, setsid: i64) -> [libc::sock_filter; 8] {
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn membership_restriction_program() -> [libc::sock_filter; 8] {
     use libc::{BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W};
     [
         libc::sock_filter {
@@ -1027,31 +937,31 @@ fn membership_restriction_program(setpgid: i64, setsid: i64) -> [libc::sock_filt
             code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
             jt: 2,
             jf: 0,
-            k: setpgid as u32,
+            k: libc::SYS_setpgid as u32,
         },
         libc::sock_filter {
             code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
             jt: 1,
             jf: 0,
-            k: setsid as u32,
+            k: libc::SYS_setsid as u32,
         },
         libc::sock_filter {
             code: (BPF_RET | BPF_K) as u16,
             jt: 0,
             jf: 0,
-            k: 0x7FFF_0000, // SECCOMP_RET_ALLOW
+            k: 0x7FFF_0000,
         },
         libc::sock_filter {
             code: (BPF_RET | BPF_K) as u16,
             jt: 0,
             jf: 0,
-            k: 0x0005_0000 | libc::EPERM as u32, // SECCOMP_RET_ERRNO | EPERM
+            k: 0x0005_0000 | libc::EPERM as u32,
         },
         libc::sock_filter {
             code: (BPF_RET | BPF_K) as u16,
             jt: 0,
             jf: 0,
-            k: 0x8000_0000, // SECCOMP_RET_KILL_PROCESS
+            k: 0x8000_0000,
         },
     ]
 }
@@ -1064,15 +974,16 @@ fn membership_restriction_program(setpgid: i64, setsid: i64) -> [libc::sock_filt
 /// privilege gain can bypass it. This is the third narrowly scoped `libc`
 /// call site of the crate (besides [`become_child_subreaper`] and
 /// [`ignore_group_term`]).
-#[cfg(any(
-    target_arch = "x86_64",
-    target_arch = "aarch64",
-    target_arch = "riscv64"
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
 ))]
 #[allow(unsafe_code)]
 fn enforce_fixed_group_membership() -> Result<(), String> {
-    let setpgid = detect_membership_syscall(MembershipSyscall::Setpgid)?;
-    let setsid = detect_membership_syscall(MembershipSyscall::Setsid)?;
     // SAFETY: prctl with PR_SET_NO_NEW_PRIVS and a literal 1 is a single
     // scalar syscall with no pointer arguments; it is required to install a
     // seccomp filter without CAP_SYS_ADMIN, is inherited across fork/exec,
@@ -1084,7 +995,7 @@ fn enforce_fixed_group_membership() -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
-    let program = membership_restriction_program(setpgid, setsid);
+    let program = membership_restriction_program();
     let fprog = libc::sock_fprog {
         len: u16::try_from(program.len()).expect("the membership filter fits u16"),
         filter: program.as_ptr().cast_mut(),
@@ -1101,4 +1012,109 @@ fn enforce_fixed_group_membership() -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+#[cfg(not(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
+)))]
+fn enforce_fixed_group_membership() -> Result<(), String> {
+    Err("Bash lifecycle supervision requires Linux on x86_64, aarch64, or riscv64".to_owned())
+}
+
+#[cfg(all(
+    test,
+    target_os = "linux",
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "riscv64"
+    )
+))]
+mod seccomp_tests {
+    use super::*;
+    use nix::sys::wait::{WaitStatus, waitpid};
+    use nix::unistd::{Pid, getpgrp, getsid};
+
+    #[derive(Clone, Copy)]
+    enum Call {
+        Setsid,
+        Setpgid,
+    }
+
+    #[allow(unsafe_code)]
+    fn assert_filtered(call: Call, x32: bool) {
+        // SAFETY: the throwaway child installs the real production filter,
+        // performs one scalar syscall, and exits without returning through
+        // the multi-threaded test process.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+        if pid == 0 {
+            let before_pgrp = getpgrp();
+            let before_sid = getsid(None).ok();
+            let installed = enforce_fixed_group_membership().is_ok();
+            let native = match call {
+                Call::Setsid => libc::SYS_setsid,
+                Call::Setpgid => libc::SYS_setpgid,
+            };
+            let number = if x32 { native | 0x4000_0000 } else { native };
+            // SAFETY: both tested syscalls take only scalar arguments.
+            let result = unsafe {
+                match call {
+                    Call::Setsid => libc::syscall(number),
+                    Call::Setpgid => libc::syscall(number, 0, 0),
+                }
+            };
+            let denied =
+                result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+            let unchanged = getpgrp() == before_pgrp && getsid(None).ok() == before_sid;
+            // SAFETY: terminate the isolated child immediately; the status
+            // encodes installation, deterministic EPERM, and no mutation.
+            unsafe { libc::_exit(i32::from(!(installed && denied && unchanged))) };
+        }
+        let status = waitpid(Pid::from_raw(pid), None).expect("reap seccomp test child");
+        assert_eq!(status, WaitStatus::Exited(Pid::from_raw(pid), 0));
+    }
+
+    #[test]
+    fn native_setsid_is_denied_by_the_installed_filter() {
+        assert_filtered(Call::Setsid, false);
+    }
+
+    #[test]
+    fn native_setpgid_is_denied_by_the_installed_filter() {
+        assert_filtered(Call::Setpgid, false);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn x32_setsid_is_denied_by_the_filter_with_eperm() {
+        assert_filtered(Call::Setsid, true);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn x32_setpgid_is_denied_by_the_filter_with_eperm() {
+        assert_filtered(Call::Setpgid, true);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn x86_64_program_has_fail_closed_x32_and_membership_branches() {
+        let program = membership_restriction_program();
+        assert_eq!(program.len(), 9);
+        assert_eq!(program[0].k, 4);
+        assert_eq!(program[1].k, AUDIT_ARCH);
+        assert_eq!(program[2].k, 0);
+        assert_eq!(program[3].k, 0x4000_0000);
+        assert_eq!(program[4].k, u32::try_from(libc::SYS_setpgid).unwrap());
+        assert_eq!(program[5].k, u32::try_from(libc::SYS_setsid).unwrap());
+        assert_eq!(program[6].k, 0x7FFF_0000);
+        assert_eq!(program[7].k, 0x0005_0000 | libc::EPERM as u32);
+        assert_eq!(program[8].k, 0x8000_0000);
+    }
 }

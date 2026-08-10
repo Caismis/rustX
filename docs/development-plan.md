@@ -225,6 +225,9 @@ Bash requirements:
   an out-of-group ancestor. A `setsid` escape attempt fails deterministically;
   subreaper adoption of such children is a reaping detail, not an ownership
   claim
+- Target-ABI seccomp policy: membership syscall numbers come from the
+  compiled Linux target's libc constants; x86-64 rejects the x32 syscall
+  namespace explicitly because it shares `AUDIT_ARCH_X86_64`
 - Reuse-safe process-group ownership: `TERM`/`KILL` are issued by the
   inner supervisor with `killpg` against its own process group, whose
   numeric id is its own pid — provably allocated while it lives; the final
@@ -245,14 +248,10 @@ Bash requirements:
   explicit failed results; if ownership of a numeric process group can no
   longer be proven, no further signal is issued and the invocation fails
   explicitly
-- Bounded confirmation contract: after a `TERMINATE` request the
-  supervisor unit must report its terminal child set within
-  `BASH_TERMINATION_CONFIRMATION`, and the output capture must settle
-  within the same window of the terminal child set; an expired deadline
-  settles as an explicit bounded process-control failure with the reader
-  tasks force-finalized (aborted) — no wedged unit or capture is ever an
-  unbounded wait. The outer supervisor un-wedges a `SIGSTOP`-frozen inner
-  anchor with `SIGKILL`
+- Process confirmation watchdog: expiry records `QuiescenceTimeout` failure
+  intent but never bypasses process terminality. After terminality, the
+  separate capture deadline may force-finalize wedged readers. The outer
+  supervisor un-wedges a `SIGSTOP`-frozen inner anchor with `SIGKILL`
 - Explicit artifact-capture failures instead of silent success
 - Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment

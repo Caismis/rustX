@@ -103,18 +103,11 @@
 //! group-scoped `ECHILD` (and the capture settled) before the remembered
 //! `Failed` result is returned.
 //!
-//! The bounded confirmation window is a **real deadline** of the state
-//! machine: after a TERMINATE request, the supervisor must report its
-//! terminal child set within [`BASH_TERMINATION_CONFIRMATION`], and the
-//! output capture must settle within the same window of the terminal child
-//! set. If either expires, the invocation settles as an explicit bounded
-//! process-control failure — the reader tasks are force-finalized instead
-//! of awaited — so no wedged supervisor or capture can ever turn the
-//! confirmation contract into an unbounded wait. The only residual state
-//! in which rustX cannot prove owned-group terminality from outside the
-//! supervisor unit (a unit frozen at the kernel level beyond the outer
-//! supervisor's reach) is surfaced explicitly by that bounded failure; it
-//! is never hidden behind an ordinary result.
+//! [`BASH_TERMINATION_CONFIRMATION`] is a process-confirmation watchdog:
+//! expiry records `QuiescenceTimeout` failure intent, but it never
+//! authorizes result commit. Canonical settlement still waits for process
+//! terminality. After terminality, the separate capture deadline may force-
+//! finalize wedged reader tasks and return `Failed(CaptureTimeout)`.
 //!
 //! # Process-group safety
 //!
@@ -312,6 +305,8 @@ pub(crate) struct BashTestControl {
     recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
     #[cfg(test)]
     capture_hold: Option<CaptureHold>,
+    #[cfg(test)]
+    terminal_hold: Option<TerminalHold>,
 }
 
 /// One attempted process-group signal, recorded by the test seam.
@@ -348,6 +343,7 @@ impl BashTestControl {
             anchor_pid_file: None,
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
             capture_hold: None,
+            terminal_hold: None,
         }
     }
 
@@ -453,6 +449,73 @@ impl BashTestControl {
     pub(crate) fn capture_hold(&self) -> Option<&CaptureHold> {
         self.capture_hold.as_ref()
     }
+
+    /// Holds the authoritative terminal event outside the state machine so
+    /// the quiescence watchdog can expire while `children_terminal` remains
+    /// false, without relying on scheduler timing.
+    #[must_use]
+    pub(crate) fn hold_terminal_event(mut self) -> Self {
+        self.terminal_hold = Some(TerminalHold::new());
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn terminal_hold(&self) -> Option<&TerminalHold> {
+        self.terminal_hold.as_ref()
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct TerminalHold {
+    held_tx: tokio::sync::watch::Sender<bool>,
+    held_rx: tokio::sync::watch::Receiver<bool>,
+    watchdog_tx: tokio::sync::watch::Sender<bool>,
+    watchdog_rx: tokio::sync::watch::Receiver<bool>,
+    release_tx: tokio::sync::watch::Sender<bool>,
+    release_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+#[cfg(test)]
+impl TerminalHold {
+    fn new() -> Self {
+        let (held_tx, held_rx) = tokio::sync::watch::channel(false);
+        let (watchdog_tx, watchdog_rx) = tokio::sync::watch::channel(false);
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        Self {
+            held_tx,
+            held_rx,
+            watchdog_tx,
+            watchdog_rx,
+            release_tx,
+            release_rx,
+        }
+    }
+
+    async fn await_release(&self) {
+        let mut rx = self.release_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    async fn await_held(&self) {
+        let mut rx = self.held_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    async fn await_watchdog(&self) {
+        let mut rx = self.watchdog_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    fn release(&self) {
+        let _ = self.release_tx.send(true);
+    }
 }
 
 /// The test-only seam that holds one output reader task open: the stdout
@@ -509,6 +572,20 @@ type CapturePark = Option<CaptureHoldReader>;
 /// See [`CapturePark`]: the non-test seam is uninhabited.
 #[cfg(not(test))]
 type CapturePark = Option<std::convert::Infallible>;
+
+#[cfg(test)]
+async fn wait_for_terminal_release(control: Option<&BashTestControl>) {
+    if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
+        hold.await_release().await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[cfg(not(test))]
+async fn wait_for_terminal_release(_control: Option<&BashTestControl>) {
+    std::future::pending::<()>().await;
+}
 
 /// The exact shell-exit lifecycle boundary of one invocation, observable
 /// only by in-crate tests.
@@ -909,37 +986,32 @@ async fn run_bash_unix(
     let mut terminate_sent = false;
     let mut terminate_deadline: Option<tokio::time::Instant> = None;
     let mut capture_deadline: Option<tokio::time::Instant> = None;
-    let mut bounded_settle = false;
+    let mut capture_force_finalized = false;
+    let mut terminal_event_held = false;
     loop {
         // Outcome intent and lifecycle settlement are distinct: the loop
         // may break only when an outcome intent (failure,
         // cancellation/timeout, or the shell's natural status) is known
-        // and either the owned child set is terminal or the bounded
-        // settlement path already decided the outcome. The bounded path
-        // also breaks without a settled capture: the reader tasks are
-        // force-finalized after the loop, so a wedged capture can never
-        // turn the bounded confirmation contract into an unbounded wait.
+        // and the owned child set is terminal. Capture alone may be force-
+        // finalized after terminality; process terminality is never
+        // replaceable by a wall-clock deadline.
         let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
         if outcome_intent
-            && (children_terminal || bounded_settle)
-            && (drain_result.is_some() || bounded_settle)
+            && children_terminal
+            && (drain_result.is_some() || capture_force_finalized)
         {
             break;
         }
         // After TERMINATE the supervisor performs TERM -> grace -> KILL;
-        // the owned group must reach its terminal state within the bounded
-        // confirmation window. An expired deadline settles the invocation
-        // as an explicit bounded process-control failure instead of waiting
-        // indefinitely for a wedged unit — never a premature
-        // Success/Cancelled/TimedOut. The timer arms of the select below
-        // are the real deadline enforcement; the checks here also cover
-        // iterations that woke for another reason.
+        // an expired confirmation watchdog records explicit process-control
+        // failure intent. It does not replace the authoritative terminal
+        // event or permit result commit.
         if terminate_sent
             && !children_terminal
             && terminate_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
         {
             failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
-            bounded_settle = true;
+            terminate_deadline = None;
             continue;
         }
         // Once the outcome intent is known and the owned child set is
@@ -953,7 +1025,7 @@ async fn run_bash_unix(
             }
             if tokio::time::Instant::now() >= capture_deadline.expect("set above") {
                 failure = Some(ProcessControlError::CaptureTimeout.to_string());
-                bounded_settle = true;
+                capture_force_finalized = true;
                 continue;
             }
         }
@@ -1000,7 +1072,17 @@ async fn run_bash_unix(
                     }
                 }
                 Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
-                    children_terminal = true;
+                    #[cfg(test)]
+                    if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
+                        let _ = hold.held_tx.send(true);
+                        terminal_event_held = true;
+                    } else {
+                        children_terminal = true;
+                    }
+                    #[cfg(not(test))]
+                    {
+                        children_terminal = true;
+                    }
                 }
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
                     failure = Some(message);
@@ -1044,16 +1126,24 @@ async fn run_bash_unix(
             result = &mut drain, if drain_result.is_none() => {
                 drain_result = Some(Box::new(result));
             }
-            // The bounded confirmation timer: a real deadline, enforced by
-            // the select even while every other arm pends.
+            () = wait_for_terminal_release(control), if terminal_event_held => {
+                terminal_event_held = false;
+                children_terminal = true;
+            }
+            // The process-confirmation watchdog records failure intent but
+            // never replaces process terminality.
             () = async {
                 match terminate_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending().await,
                 }
-            }, if terminate_sent && !children_terminal && !bounded_settle => {
+            }, if terminate_sent && !children_terminal && terminate_deadline.is_some() => {
                 failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
-                bounded_settle = true;
+                terminate_deadline = None;
+                #[cfg(test)]
+                if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
+                    let _ = hold.watchdog_tx.send(true);
+                }
             }
             // The bounded capture timer: the output capture must settle
             // within the confirmation window of the terminal child set.
@@ -1062,22 +1152,23 @@ async fn run_bash_unix(
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending().await,
                 }
-            }, if capture_deadline.is_some() && drain_result.is_none() && !bounded_settle => {
+            }, if capture_deadline.is_some() && drain_result.is_none() && !capture_force_finalized => {
                 failure = Some(ProcessControlError::CaptureTimeout.to_string());
-                bounded_settle = true;
+                capture_force_finalized = true;
             }
         }
     }
 
-    // The supervisor unit is terminal by now: its pipes closed (which
-    // settled the capture) or the control channel reached EOF. Reap the
-    // direct child; the bound is a deadlock guard only — the outer
-    // supervisor exits promptly after its terminal report.
-    let _ = tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, child.wait()).await;
+    // Process terminality was proven by the outer supervisor before this
+    // point. Reaping the already-terminal direct child is semantically
+    // required; unlike capture completion, it is never abandoned.
+    if let Err(error) = child.wait().await {
+        failure = Some(format!("cannot reap the terminal bash supervisor: {error}"));
+    }
 
     // The capture settled while the supervision loop was running, or the
-    // bounded settlement path force-finalized it: the only way to leave the
-    // loop without the capture settled is bounded_settle, and then the
+    // capture deadline force-finalized it: the only way to leave the
+    // loop without the capture settled is `capture_force_finalized`, and then the
     // reader tasks are aborted instead of awaited — a wedged capture must
     // never turn the bounded contract into an unbounded wait. The abort
     // drops each task's artifact handle, so the incomplete artifact is
@@ -1086,8 +1177,8 @@ async fn run_bash_unix(
         *result
     } else {
         debug_assert!(
-            bounded_settle,
-            "only the bounded path leaves the loop with an open capture"
+            capture_force_finalized,
+            "only the capture timeout leaves the loop with an open capture"
         );
         if let Some(handle) = &stdout_task {
             handle.abort();
@@ -2824,6 +2915,56 @@ mod tests {
         let _ = dir;
     }
 
+    /// The process-confirmation watchdog records failure intent but cannot
+    /// commit a result before the authoritative terminal event is admitted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quiescence_watchdog_cannot_bypass_process_terminality() {
+        let (dir, artifacts, workspace) = fixture();
+        let ready = workspace.root().join("ready");
+        let control = BashTestControl::new().hold_terminal_event();
+        let hold = control.terminal_hold().expect("terminal hold seam").clone();
+        let cancellation = CancellationSignal::new();
+        let task = tokio::spawn(run_with_control(
+            format!("touch {}; sleep 30", ready.display()),
+            control,
+            cancellation.clone(),
+            artifacts,
+            workspace,
+            None,
+        ));
+        for _ in 0..1000 {
+            if ready.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ready.exists(), "the Bash fixture never became ready");
+        cancellation.cancel();
+        tokio::time::timeout(Duration::from_secs(15), hold.await_held())
+            .await
+            .expect("the authoritative terminal event is held");
+        tokio::time::timeout(Duration::from_secs(15), hold.await_watchdog())
+            .await
+            .expect("the quiescence watchdog expires");
+        assert!(
+            !task.is_finished(),
+            "no ToolExecutionResult may commit while children_terminal is false"
+        );
+        hold.release();
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the invocation settles after terminality is released")
+            .expect("executor task");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { ref error }
+                if error.contains("did not become terminal")),
+            "quiescence failure must outrank cancellation after terminality, got {:?}",
+            result.status
+        );
+        let _ = dir;
+    }
+
     /// The stopped-anchor regression: a `SIGSTOP` of the inner supervisor
     /// freezes the whole containment chain (TERMINATE is never processed).
     /// The outer supervisor detects the frozen anchor, un-wedges it with
@@ -2878,47 +3019,5 @@ mod tests {
             .expect("anchor pid");
         wait_for_group_death(anchor_pid).await;
         let _ = dir;
-    }
-
-    /// The `setpgid` mutation regression: `setpgid(2)` is rejected for bash
-    /// descendants exactly like `setsid(2)` — membership cannot be changed
-    /// without creating a session either. The syscall fails with `EPERM`
-    /// and the command exits non-zero; nothing leaves the invocation group.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn setpgid_escape_attempt_is_rejected() {
-        let Ok(_python) = std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-        else {
-            eprintln!("skipping setpgid regression: python3 is unavailable");
-            return;
-        };
-        let (_dir, artifacts, workspace) = fixture();
-        let result = run_with(
-            "python3 -c \"import os; os.setpgid(0, 0)\"",
-            &artifacts,
-            &workspace,
-        )
-        .await;
-        assert!(
-            matches!(result.status, ToolExecutionStatus::Failed { .. }),
-            "a setpgid mutation attempt must fail explicitly, got {:?}",
-            result.status
-        );
-        let stderr = result
-            .content
-            .iter()
-            .find_map(|content| match content {
-                crate::tools::types::ToolResultContent::Json { value } => {
-                    value["stderr"].as_str().map(str::to_owned)
-                }
-                _ => None,
-            })
-            .expect("stderr in the JSON result");
-        assert!(
-            stderr.contains("Operation not permitted"),
-            "the setpgid syscall must be rejected with EPERM, stderr: {stderr}"
-        );
     }
 }

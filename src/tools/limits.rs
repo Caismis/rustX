@@ -26,9 +26,9 @@ pub const BASH_STREAM_PREVIEW_BYTES: usize = 16 * 1024;
 pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// The bounded window after a Bash TERMINATE request (cancellation or
-/// timeout) in which the invocation supervisor must report its terminal
-/// child set and the output capture must settle. Covers the supervisor's
-/// own TERM grace plus the KILL/reap/drain tail.
+/// timeout) after which missing process terminality becomes failure intent.
+/// It never authorizes settlement without the terminal child-set event. The
+/// same duration separately bounds capture only after process terminality.
 pub const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
 /// The default foreground Bash timeout when the model omits `timeout_ms`.

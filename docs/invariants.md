@@ -323,7 +323,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   process-group/session membership on Linux; seccomp filters are inherited
   across `fork`/`exec` and can only become more restrictive). A command
   such as `setsid sleep 30` therefore fails deterministically and nothing
-  leaves the invocation group. This restriction is what makes the
+  leaves the invocation group. The filter uses syscall numbers defined by
+  the compiled Linux target ABI. On x86-64, x32 syscall execution is
+  rejected because it shares the x86-64 audit architecture while using a
+  distinct syscall-number namespace. This restriction is what makes the
   supervisor's kernel child-wait terminal proof complete: an in-domain
   descendant cannot remain hidden behind an ancestor that left the domain.
   Subreaper adoption is a process-reaping implementation detail and does
@@ -340,18 +343,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   is finalized, and only then is the remembered `Failed` result returned. A
   `Failed` result can therefore never be observed while owned work is still
   alive.
-- **The bounded confirmation window is a real deadline of the state
-  machine**: after a `TERMINATE` request, the supervisor unit must report
-  its terminal child set within `BASH_TERMINATION_CONFIRMATION`, and the
-  output capture must settle within the same window of the terminal child
-  set. If either expires, the invocation settles as an explicit bounded
-  process-control failure — the output reader tasks are force-finalized
-  (aborted) instead of awaited — so no wedged supervisor unit or capture
-  can turn the confirmation contract into an unbounded wait. The only
-  residual state in which rustX cannot prove owned-group terminality from
-  outside the supervisor unit (a unit frozen at the kernel level beyond the
-  outer supervisor's reach) is surfaced explicitly by that bounded failure;
-  it is never hidden behind an ordinary result.
+- **Process confirmation and capture boundedness are distinct**:
+  `BASH_TERMINATION_CONFIRMATION` records `QuiescenceTimeout` failure intent
+  when the supervisor has not confirmed terminality, but cannot settle the
+  invocation. rustX continues waiting for the authoritative terminal event.
+  Only after process terminality may the capture deadline force-finalize
+  reader tasks and return `Failed(CaptureTimeout)`.
 - Each Bash invocation owns one invocation-local supervisor process unit
   (an outer reaper-of-last-resort plus an inner session/group leader that
   spawns `/bin/bash`; both subreapers). Shell descendants that outlive the

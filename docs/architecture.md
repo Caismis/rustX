@@ -544,7 +544,10 @@ narrow inherited seccomp policy between its own `setsid()` setup and the
 (the only syscalls that can change process-group/session membership on
 Linux; seccomp filters are inherited across `fork`/`exec` and can only
 become more restrictive). A command such as `setsid sleep 30` fails
-deterministically and nothing leaves the invocation group. This
+deterministically and nothing leaves the invocation group. The filter uses
+syscall numbers defined by the compiled Linux target ABI. On x86-64 it
+rejects x32 syscall execution because x32 shares the x86-64 audit
+architecture while using a distinct syscall-number namespace. This
 restriction is what makes the supervisor's kernel child-wait terminal
 proof complete: an in-domain descendant cannot remain hidden behind an
 ancestor that left the domain. Subreaper adoption is a reaping
@@ -593,19 +596,16 @@ supervisor becomes the active containment authority (it observes the
 inner's terminal state via `waitid(WNOWAIT)` without releasing the
 structural anchor, sends one fallback `SIGKILL` to the still-proven-owned
 group, and releases the anchor only through the group-scoped wait), the
-capture is finalized, and only then is `Failed` returned. The bounded
-confirmation window is a real deadline of the state machine: after a
-`TERMINATE` request the unit must report its terminal child set within
-`BASH_TERMINATION_CONFIRMATION`, and the output capture must settle within
-the same window of the terminal child set; if either expires, the
-invocation settles as an explicit bounded process-control failure — the
-output reader tasks are force-finalized (aborted) instead of awaited — so
-a wedged supervisor unit or capture never becomes an unbounded wait. The
+capture is finalized, and only then is `Failed` returned.
+`BASH_TERMINATION_CONFIRMATION` is a process-confirmation watchdog: expiry
+records `QuiescenceTimeout` failure intent but does not authorize result
+commit. After process terminality, a separate capture deadline may force-
+finalize wedged readers and return `Failed(CaptureTimeout)`. The
 outer supervisor also un-wedges a `SIGSTOP`-frozen inner anchor with
 `SIGKILL`, so a stopped containment chain cannot strand the owned group;
 the only residual state in which rustX cannot prove owned-group
 terminality from outside the unit (a unit frozen beyond the outer
-supervisor's reach) is surfaced explicitly by the bounded failure.
+supervisor's reach) cannot be truthfully converted into a terminal result.
 Control-channel loss remains fail-safe: dropping the rustX-side execution
 future instructs the supervisor unit to contain its invocation, so an
 abandoned owned group can never escape. The anchor is released only by the

@@ -43,8 +43,7 @@ libc = "0.2"
 # The per-invocation Bash supervisor performs a small bounded set of libc
 # calls, each allowed explicitly in src/tools/native/bash_supervisor.rs:
 # prctl(PR_SET_CHILD_SUBREAPER), the SIGTERM no-op handler installation,
-# and the fixed-membership restriction (runtime syscall-number probes via
-# fork + libc::syscall, prctl(PR_SET_NO_NEW_PRIVS), and
+# and the fixed-membership restriction (prctl(PR_SET_NO_NEW_PRIVS) and
 # seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog);
 # everything else stays unsafe-free.
 unsafe_code = "deny"
