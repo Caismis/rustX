@@ -29,7 +29,7 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::types::AgentStatusAttachment;
+use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::tools::types::ModelToolDefinition;
@@ -145,6 +145,12 @@ pub struct CompactionPlan {
     /// this same snapshot on both sides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AgentStatusAttachment>,
+    /// The exact Skill catalog attachment of the attempt's capability
+    /// snapshot, when one exists. The plan is bound to one catalog
+    /// snapshot: hard-fit estimates and the application progress rule use
+    /// this same snapshot on both sides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_catalog: Option<SkillCatalogAttachment>,
 }
 
 /// The structural constraints one compaction plan must satisfy.
@@ -297,6 +303,7 @@ impl ContextEngine {
         tool_definitions: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
         agent_status: Option<&AgentStatusAttachment>,
+        skill_catalog: Option<&SkillCatalogAttachment>,
     ) -> Result<ContextProjection, ContextError> {
         let index = StructuralIndex::build(history)?;
         let mut items: Vec<ProjectionItem> = history[..index.pinned_end]
@@ -322,6 +329,7 @@ impl ContextEngine {
         let mut projection = ContextProjection {
             items,
             agent_status: agent_status.cloned(),
+            skill_catalog: skill_catalog.cloned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
@@ -445,6 +453,7 @@ impl ContextEngine {
             soft_limit,
             reservation,
             agent_status: current_projection.agent_status.as_ref(),
+            skill_catalog: current_projection.skill_catalog.as_ref(),
         };
 
         let mut whole_candidates: Vec<(usize, u64, u64)> = Vec::new();
@@ -458,10 +467,15 @@ impl ContextEngine {
             let retained = scope.estimator.estimate_conversation_input(&projection_of(
                 &retained_items_of(&scope, count),
                 None,
+                None,
             ));
             let planned = estimate_input_of(
                 &scope,
-                &projection_of(&projection_items_for(&scope, count), scope.agent_status),
+                &projection_of(
+                    &projection_items_for(&scope, count),
+                    scope.agent_status,
+                    scope.skill_catalog,
+                ),
             )
             .saturating_add(reservation);
             whole_candidates.push((count, retained, planned));
@@ -622,6 +636,7 @@ impl ContextEngine {
             tool_definitions,
             None,
             plan.agent_status.as_ref(),
+            plan.skill_catalog.as_ref(),
         )?;
         let estimated_after = projection.estimated_input.input_tokens;
         if estimated_after >= plan.estimated_before_tokens {
@@ -771,10 +786,12 @@ impl ContextEngine {
         items: &[ProjectionItem],
         tools: &[ModelToolDefinition],
         agent_status: Option<&AgentStatusAttachment>,
+        skill_catalog: Option<&SkillCatalogAttachment>,
     ) -> u64 {
         let projection = ContextProjection {
             items: items.to_vec(),
             agent_status: agent_status.cloned(),
+            skill_catalog: skill_catalog.cloned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
@@ -808,6 +825,7 @@ impl ContextEngine {
                 &shape.planned_items,
                 scope.tool_definitions,
                 scope.agent_status,
+                scope.skill_catalog,
             )
             .saturating_add(scope.reservation);
         if planned_estimate_after > self.soft_input_limit(max_output_tokens)? {
@@ -826,11 +844,16 @@ impl ContextEngine {
             // provider-reported measurement with an estimate.
             estimated_before_tokens: estimate_input_of(
                 scope,
-                &projection_of(&current_projection.items, scope.agent_status),
+                &projection_of(
+                    &current_projection.items,
+                    scope.agent_status,
+                    scope.skill_catalog,
+                ),
             ),
             planned_estimate_after,
             summary_reservation: scope.reservation,
             agent_status: scope.agent_status.cloned(),
+            skill_catalog: scope.skill_catalog.cloned(),
         })
     }
 }
@@ -848,6 +871,10 @@ struct PlanScope<'a> {
     /// hard-fit estimates include it so the status itself can change the
     /// compaction decision.
     agent_status: Option<&'a AgentStatusAttachment>,
+    /// The exact Skill catalog attachment of the attempt's capability
+    /// snapshot; hard-fit estimates include it so a large catalog can
+    /// contribute to `CannotFit`.
+    skill_catalog: Option<&'a SkillCatalogAttachment>,
 }
 
 /// The assembled shape of one chosen boundary.
@@ -1047,8 +1074,11 @@ fn best_split(scope: &PlanScope<'_>, min_cut: usize, fresh_cut: usize) -> Option
     let content_len = scope.index.content_len_of(agent_position)?;
     for first in (current_first + 1)..content_len {
         let items = split_projection_items(scope, agent_position, first);
-        let planned = estimate_input_of(scope, &projection_of(&items, scope.agent_status))
-            .saturating_add(scope.reservation);
+        let planned = estimate_input_of(
+            scope,
+            &projection_of(&items, scope.agent_status, scope.skill_catalog),
+        )
+        .saturating_add(scope.reservation);
         if planned <= scope.soft_limit {
             return Some((agent_position, first));
         }
@@ -1077,10 +1107,12 @@ fn last_agent_item(scope: &PlanScope<'_>) -> Option<(usize, usize)> {
 fn projection_of(
     items: &[ProjectionItem],
     agent_status: Option<&AgentStatusAttachment>,
+    skill_catalog: Option<&SkillCatalogAttachment>,
 ) -> ContextProjection {
     ContextProjection {
         items: items.to_vec(),
         agent_status: agent_status.cloned(),
+        skill_catalog: skill_catalog.cloned(),
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,

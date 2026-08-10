@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{AgentContentBlock, MessageBlock};
-use crate::model::types::AgentStatusAttachment;
+use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
 use crate::runtime::identity::MessageId;
 
 /// One ordered model-visible projection item.
@@ -65,9 +65,16 @@ pub struct ContextProjection {
     /// `AgentExecutionResult.messages`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AgentStatusAttachment>,
+    /// The ephemeral Skill catalog attachment of the attempt's immutable
+    /// Skill snapshot, when any Skill is active. The attachment is
+    /// projection-only capability context: it is never canonical history,
+    /// never checkpoint history, and never returned in
+    /// `AgentExecutionResult.messages`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_catalog: Option<SkillCatalogAttachment>,
     /// The deterministic planned input measurement of the full model
     /// request, including non-compacted contributors such as tool
-    /// definitions and the Agent Status attachment.
+    /// definitions, the Agent Status attachment, and the Skill catalog.
     pub estimated_input: TokenMeasurement,
     /// The checkpoint generation that contributed to this projection, if
     /// one did.
@@ -100,6 +107,10 @@ impl ContextProjection {
             )
             .chain(
                 serde_json::to_vec(&self.agent_status).expect("agent status attachment serializes"),
+            )
+            .chain(
+                serde_json::to_vec(&self.skill_catalog)
+                    .expect("skill catalog attachment serializes"),
             );
         let mut hash = 0xcbf2_9ce4_8422_2325_u64;
         for byte in bytes {
@@ -123,6 +134,9 @@ pub struct CompiledContext {
     /// The ephemeral Agent Status attachment, when the projection carries
     /// one.
     pub agent_status: Option<AgentStatusAttachment>,
+    /// The ephemeral Skill catalog attachment, when the projection carries
+    /// one.
+    pub skill_catalog: Option<SkillCatalogAttachment>,
 }
 
 /// Compiles a projection into a [`CompiledContext`].
@@ -147,6 +161,7 @@ pub fn compile_projection(projection: &ContextProjection) -> CompiledContext {
             .map(compile_item)
             .collect::<Vec<_>>(),
         agent_status: projection.agent_status.clone(),
+        skill_catalog: projection.skill_catalog.clone(),
     }
 }
 
@@ -170,7 +185,7 @@ mod tests {
     use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
-    use crate::model::types::AgentStatusAttachment;
+    use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
     use crate::runtime::identity::MessageId;
 
     fn projection() -> ContextProjection {
@@ -187,6 +202,7 @@ mod tests {
                 },
             ))],
             agent_status: None,
+            skill_catalog: None,
             estimated_input: TokenMeasurement {
                 input_tokens: 7,
                 source: TokenMeasurementSource::Estimated,
@@ -205,6 +221,28 @@ mod tests {
         let mut different = projection.clone();
         different.checkpoint_generation = Some(2);
         assert_ne!(projection.fingerprint(), different.fingerprint());
+    }
+
+    /// The exact Skill catalog attachment participates in the fingerprint.
+    #[test]
+    fn skill_catalog_changes_the_fingerprint() {
+        let projection = projection();
+        let mut with_catalog = projection.clone();
+        with_catalog.skill_catalog = Some(SkillCatalogAttachment {
+            rendered: "## Skills\n\n- pdf: ...".to_owned(),
+        });
+        let mut other_catalog = with_catalog.clone();
+        other_catalog
+            .skill_catalog
+            .as_mut()
+            .expect("catalog present")
+            .rendered = "## Skills\n\n- pdf: ...changed...".to_owned();
+        assert_ne!(projection.fingerprint(), with_catalog.fingerprint());
+        assert_ne!(
+            with_catalog.fingerprint(),
+            other_catalog.fingerprint(),
+            "a different catalog snapshot must invalidate the old projection fingerprint"
+        );
     }
 
     /// The exact Agent Status attachment participates in the fingerprint: a
@@ -263,6 +301,9 @@ mod tests {
                 target_message_id: MessageId::new("msg-user"),
                 rendered: "status footer".to_owned(),
             }),
+            skill_catalog: Some(SkillCatalogAttachment {
+                rendered: "## Skills\n".to_owned(),
+            }),
             estimated_input: TokenMeasurement {
                 input_tokens: 4,
                 source: TokenMeasurementSource::Estimated,
@@ -272,6 +313,7 @@ mod tests {
         let CompiledContext {
             messages,
             agent_status,
+            skill_catalog,
         } = compile_projection(&projection);
         assert_eq!(messages.len(), 2);
         let ProjectionItem::Message(first) = &projection.items[0] else {
@@ -285,6 +327,8 @@ mod tests {
         assert_eq!(agent.content.len(), 1);
         let attachment = agent_status.expect("status attachment compiled");
         assert_eq!(attachment.target_message_id, MessageId::new("msg-user"));
+        let catalog = skill_catalog.expect("skill catalog attachment compiled");
+        assert_eq!(catalog.rendered, "## Skills\n");
         assert!(
             messages.iter().all(|message| {
                 !matches!(message, MessageBlock::User(user) if user.content.iter().any(|block| {

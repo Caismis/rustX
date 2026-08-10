@@ -194,9 +194,6 @@ pub(crate) enum ProcessControlError {
     /// The owned process tree did not become terminal within the bounded
     /// confirmation window after termination was requested.
     QuiescenceTimeout,
-    /// The output capture did not settle within the bounded confirmation
-    /// window after the owned process tree reached its terminal state.
-    CaptureTimeout,
 }
 
 impl core::fmt::Display for ProcessControlError {
@@ -209,10 +206,6 @@ impl core::fmt::Display for ProcessControlError {
             Self::QuiescenceTimeout => {
                 write!(f, "the owned bash process tree did not become terminal")
             }
-            Self::CaptureTimeout => write!(
-                f,
-                "the bash output capture did not settle within the bounded confirmation window"
-            ),
         }
     }
 }
@@ -234,6 +227,7 @@ pub(crate) enum RunnerSpawnError {
     /// The supervisor unit spawn failed.
     SupervisorSpawn(String),
     /// The test seam injected a supervisor spawn failure.
+    #[cfg_attr(not(test), allow(dead_code))] // test-only failure injection
     InjectedSupervisorSpawn,
 }
 
@@ -576,6 +570,7 @@ impl RunnerTestControl {
     }
 
     /// A control bundle without failures (non-test build: fieldless shell).
+    #[cfg_attr(not(test), allow(dead_code))] // test-only seams
     #[must_use]
     #[cfg(not(test))]
     pub(crate) fn new() -> Self {

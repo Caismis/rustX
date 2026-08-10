@@ -91,14 +91,15 @@ fn runtime() -> rustx::context::ContextRuntime<'static> {
 
 async fn run(
     model: &FakeModel,
-    tools: &ToolRegistry,
+    tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> AgentExecutionResult {
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request("attempt-1"),
         model,
-        tools,
+        capability.lease(),
         cancellation,
         runtime(),
         &tool_runtime,
@@ -233,7 +234,7 @@ async fn text_execution_completes_with_exact_trace() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let expected = vec![
         RuntimeEvent::AttemptStarted {
@@ -295,7 +296,7 @@ async fn several_deltas_assemble_in_stream_order() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let deltas: Vec<&str> = result
         .events
@@ -330,7 +331,7 @@ async fn model_failure_before_content_fails_attempt() {
     ))]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let error = rustx::model::ModelError {
         kind: rustx::model::ModelErrorKind::Timeout,
@@ -390,7 +391,7 @@ async fn model_failure_after_partial_content_commits_nothing() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert!(
         result
@@ -431,7 +432,7 @@ async fn exactly_one_terminal_event_across_scenarios() {
         let model = FakeModel::new(script);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let result = run(&model, &tools, &cancellation).await;
+        let result = run(&model, tools, &cancellation).await;
         assert_single_terminal(&result.events);
     }
 }
@@ -451,7 +452,7 @@ async fn no_events_after_completed_terminal() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_single_terminal(&result.events);
     assert_eq!(result.events.len(), 8, "exact event count of a text turn");
 }
@@ -504,7 +505,7 @@ async fn tool_calls_execute_in_block_order() {
     FakeTool::new(common::tool("beta", "tool-beta"), success_result("beta ok"))
         .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let executed: Vec<(String, String)> = result
         .events
@@ -563,7 +564,7 @@ async fn continuation_starts_after_tool_completion() {
     let mut tools = ToolRegistry::new();
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let last_completion = result
         .events
@@ -699,7 +700,7 @@ async fn single_tool_call_then_continuation() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_trace(&result.events, &expected_single_tool_trace());
     assert_single_terminal(&result.events);
@@ -746,7 +747,7 @@ async fn tool_receives_exact_canonical_arguments() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let received = calls.borrow_and_update().clone();
     assert_eq!(received.len(), 1, "the tool was called exactly once");
@@ -788,7 +789,7 @@ async fn tool_result_passed_back_verbatim() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let _ = run(&model, &tools, &cancellation).await;
+    let _ = run(&model, tools, &cancellation).await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
@@ -875,7 +876,7 @@ async fn unknown_tool_fails_deterministically() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_trace(&result.events, &expected_unknown_tool_trace());
     assert_single_terminal(&result.events);
@@ -946,7 +947,7 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -1009,7 +1010,7 @@ async fn multiple_ordered_tool_calls_continue_once() {
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("a")).register(&mut tools);
     FakeTool::new(common::tool("beta", "tool-beta"), success_result("b")).register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "one continuation after the batch");
@@ -1046,7 +1047,7 @@ async fn cancellation_before_start_settles_cancelled() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     cancellation.cancel();
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_eq!(
         model.requests().len(),
@@ -1092,7 +1093,7 @@ async fn cancellation_during_generation_after_partial_text() {
             .expect("emitted");
         controller_cancellation.cancel();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     controller.await.expect("controller task");
 
     assert_eq!(
@@ -1175,7 +1176,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
     });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        run(&model, &tools, &cancellation),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run must terminate without the tool returning");
@@ -1295,7 +1296,7 @@ async fn cancellation_interrupts_later_tool_call() {
     });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        run(&model, &tools, &cancellation),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run must terminate without the second tool returning");
@@ -1411,7 +1412,7 @@ async fn cancellation_during_continuation_generation() {
             .expect("continuation deltas");
         controller_cancellation.cancel();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     controller.await.expect("controller task");
 
     assert_eq!(
@@ -1463,7 +1464,7 @@ async fn cancellation_never_results_in_completed() {
                 .expect("emitted");
             controller_cancellation.cancel();
         });
-        let result = run(&model, &tools, &cancellation).await;
+        let result = run(&model, tools, &cancellation).await;
         controller.await.expect("controller task");
         assert_single_terminal(&result.events);
         assert!(
@@ -1517,7 +1518,7 @@ async fn continuation_state_propagates_losslessly() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
@@ -1578,7 +1579,7 @@ async fn opaque_continuation_is_never_inspected() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         model.requests()[1].continuation,
         Some(state),
@@ -1620,7 +1621,7 @@ async fn missing_required_continuation_fails_explicitly() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_eq!(
         model.requests()[1].continuation,
@@ -1671,7 +1672,7 @@ async fn no_reasoning_state_is_fabricated() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_eq!(
         model.requests()[1].continuation,
@@ -1698,7 +1699,7 @@ async fn unsupported_capability_stays_terminal_failure() {
     ))]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -1786,7 +1787,7 @@ async fn usage_folds_updates_and_terminal_usage() {
         let model = FakeModel::new(vec![script]);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let result = run(&model, &tools, &cancellation).await;
+        let result = run(&model, tools, &cancellation).await;
         let reported = result
             .events
             .iter()
@@ -1812,7 +1813,7 @@ async fn refusal_semantics_preserved() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -1848,7 +1849,7 @@ async fn replay_text_execution() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         replay_execution_states(&result.events).expect("valid trace"),
         vec![
@@ -1886,7 +1887,7 @@ async fn replay_tool_execution() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         replay_execution_states(&result.events).expect("valid trace"),
         vec![
@@ -1909,7 +1910,7 @@ async fn replay_failed_execution() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         replay_execution_states(&result.events).expect("valid trace"),
         vec![
@@ -1939,7 +1940,7 @@ async fn replay_cancelled_execution() {
             .expect("emitted");
         controller_cancellation.cancel();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     controller.await.expect("controller task");
     assert_eq!(
         replay_execution_states(&result.events).expect("valid trace"),
@@ -1967,8 +1968,8 @@ async fn identical_inputs_produce_identical_traces() {
     let tools_first = ToolRegistry::new();
     let tools_second = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result_first = run(&first, &tools_first, &cancellation).await;
-    let result_second = run(&second, &tools_second, &cancellation).await;
+    let result_first = run(&first, tools_first, &cancellation).await;
+    let result_second = run(&second, tools_second, &cancellation).await;
     assert_eq!(result_first.events, result_second.events);
     assert_eq!(result_first.messages, result_second.messages);
     assert_eq!(result_first.outcome, result_second.outcome);
@@ -1986,7 +1987,7 @@ async fn successful_settlement_completes_the_machine() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         result.terminal_state,
         ExecutionState::Completed,
@@ -2005,7 +2006,7 @@ async fn model_failure_settles_the_machine_to_failed() {
     ))]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         result.terminal_state,
         ExecutionState::Failed,
@@ -2025,7 +2026,7 @@ async fn contract_failure_settles_the_machine_to_failed() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_eq!(
         result.terminal_state,
         ExecutionState::Failed,
@@ -2060,7 +2061,7 @@ async fn cancellation_from_running_model_settles_the_machine_to_failed() {
             .expect("emitted");
         controller_cancellation.cancel();
     });
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     controller.await.expect("controller task");
     assert_eq!(
         result.terminal_state,
@@ -2099,7 +2100,7 @@ async fn cancellation_from_waiting_for_tool_settles_the_machine_to_failed() {
     });
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        run(&model, &tools, &cancellation),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run must terminate without the tool returning");
@@ -2179,7 +2180,7 @@ async fn replay_settlement_cannot_diverge_from_machine() {
     ];
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     for (model, tools) in scenarios {
-        let result = run(&model, &tools, &cancellation).await;
+        let result = run(&model, tools, &cancellation).await;
         let replay = replay_execution_states(&result.events).expect("valid trace");
         assert_eq!(
             replay.last(),
@@ -2390,7 +2391,7 @@ async fn malformed_streams_are_rejected() {
         let model = FakeModel::new(vec![script]);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let result = run(&model, &tools, &cancellation).await;
+        let result = run(&model, tools, &cancellation).await;
         assert_single_terminal(&result.events);
         assert!(
             matches!(
@@ -2423,7 +2424,7 @@ async fn unfinished_tool_call_at_terminal_is_rejected() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let result = run(&model, &tools, &cancellation).await;
+    let result = run(&model, tools, &cancellation).await;
     assert_single_terminal(&result.events);
     assert!(
         matches!(
@@ -2478,15 +2479,16 @@ fn block_id(block: &MessageBlock) -> String {
 /// conversation mailbox of the tool runtime.
 async fn run_with_mailbox(
     model: &FakeModel,
-    tools: &ToolRegistry,
+    tools: ToolRegistry,
     cancellation: &AgentCancellation,
     mailbox: ConversationInboundMailbox,
 ) -> AgentExecutionResult {
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox);
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request("attempt-1"),
         model,
-        tools,
+        capability.lease(),
         cancellation,
         runtime(),
         &tool_runtime,
@@ -2505,10 +2507,11 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-other");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let error = AgentExecution::new(
         request("attempt-1"),
         &model,
-        &tools,
+        capability.lease(),
         &cancellation,
         runtime(),
         &tool_runtime,
@@ -2550,7 +2553,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
 
     assert_trace(&result.events, &expected_single_tool_trace());
     assert_single_terminal(&result.events);
@@ -2635,7 +2638,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         );
         release.notify_waiters();
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
     assert!(mailbox.drain().is_none(), "the drained batch is consumed");
 
@@ -2736,7 +2739,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
             .expect("enqueue correction B");
         release.notify_waiters();
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -2808,7 +2811,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             .expect("enqueue while turn 1 is in flight");
         release.send(true).expect("release turn 1");
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");
 
     assert_eq!(
@@ -2857,7 +2860,7 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -2920,7 +2923,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
         controller_cancellation.cancel();
         release.send(true).expect("release turn");
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3010,7 +3013,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
             .expect("second tool started");
         controller_cancellation.cancel();
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3070,7 +3073,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
             .expect("enqueue pending message");
         release.send(true).expect("release the failing turn");
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3124,7 +3127,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
             .enqueue(inbound_user("msg-ut-a", "pending", UserSource::Runtime))
             .expect("enqueue while the request is in flight");
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3185,7 +3188,7 @@ async fn continuation_retained_across_inbound_drain() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3272,7 +3275,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
             .expect("enqueue C before boundary 2");
         second_release.notify_waiters();
     });
-    let result = run_with_mailbox(&model, &tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);

@@ -213,6 +213,7 @@ mod tests {
             messages: Vec::new(),
             tools: Vec::new(),
             agent_status: None,
+            skill_catalog: None,
             reasoning: crate::model::types::ReasoningEffort::Medium,
             max_output_tokens: 512,
             continuation: None,

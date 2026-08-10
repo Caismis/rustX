@@ -357,6 +357,18 @@ fn translate_messages(
     }
     flush_tool_results(&mut pending_tool_results, &mut messages);
 
+    // The Skill catalog is trusted system context: it is placed in the
+    // Anthropic top-level system content along with the canonical trusted
+    // system blocks. A continuation that slices canonical history away
+    // never loses the catalog, because system content is rebuilt from the
+    // request attachment on every request.
+    if let Some(catalog) = &request.skill_catalog {
+        system.push(WireTextBlock {
+            r#type: "text",
+            text: catalog.rendered.clone(),
+        });
+    }
+
     if messages.is_empty() {
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,

@@ -251,8 +251,6 @@ pub struct BackgroundResources {
     pub workspace: Workspace,
     /// The conversation artifact store for detached executors.
     pub artifacts: ArtifactStore,
-    /// The explicit authorized tool environment.
-    pub environment: ToolEnvironment,
     /// The runtime clock stamping terminal inbound messages.
     pub clock: Arc<dyn RuntimeClock>,
     /// The narrow non-durable execution-fact sink, when attached.
@@ -393,6 +391,7 @@ impl ConversationBackgroundRegistry {
         &self,
         invocation: &ToolInvocation,
         executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
@@ -406,12 +405,18 @@ impl ConversationBackgroundRegistry {
         let execution_id = ToolExecutionId::new(format!("exec_{next}"));
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
+        // The effective attempt environment is captured here, at prepare
+        // time — strictly before the background ownership commit — and the
+        // detached runner retains exactly this captured environment for its
+        // whole lifetime. It never queries the conversation's current
+        // capability state later.
         let runner = self.spawn_runner(
             execution_id.clone(),
             invocation.clone(),
             executor.clone(),
             cancellation.clone(),
             gate.clone(),
+            environment,
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
@@ -706,6 +711,7 @@ impl ConversationBackgroundRegistry {
         executor: Arc<dyn ToolExecutor>,
         cancellation: CancellationSignal,
         gate: Arc<Notify>,
+        environment: ToolEnvironment,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.clone();
         tokio::spawn(async move {
@@ -723,7 +729,7 @@ impl ConversationBackgroundRegistry {
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
-                environment: &resources.environment,
+                environment: &environment,
             };
             let result = executor.execute(invocation, context).await;
             registry.finish(&execution_id, &result);
@@ -932,7 +938,6 @@ mod tests {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
                 artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
-                environment: ToolEnvironment::new(),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: None,
             },
@@ -990,7 +995,7 @@ mod tests {
     ) -> super::PreparedBackgroundDispatch {
         fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), executor)
+            .prepare_dispatch(&background_invocation("bash"), executor, ToolEnvironment::new())
             .expect("prepare")
     }
 
@@ -1183,7 +1188,6 @@ mod tests {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
                 artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
-                environment: ToolEnvironment::new(),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: Some(sink_dyn),
             },
@@ -1196,7 +1200,7 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
         let prepared = fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), &executor)
+            .prepare_dispatch(&background_invocation("bash"), &executor, ToolEnvironment::new())
             .expect("prepare");
         let outcome = fixture.registry.commit_dispatch(
             prepared,

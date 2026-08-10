@@ -645,6 +645,21 @@ fn translate_messages(
             }
         });
     }
+    // The Skill catalog is trusted system context: it is translated through
+    // the provider's system-level message mechanism together with the
+    // canonical trusted system context, as one deterministic system message
+    // after the canonical system messages. It is never attached to a user
+    // message.
+    if let Some(catalog) = &request.skill_catalog {
+        messages.push(ChatCompletionRequestMessage::System(
+            ChatCompletionRequestSystemMessage {
+                content: ChatCompletionRequestSystemMessageContent::Text(
+                    catalog.rendered.clone(),
+                ),
+                name: None,
+            },
+        ));
+    }
     if messages.is_empty() {
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,

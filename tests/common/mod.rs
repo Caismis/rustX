@@ -306,6 +306,7 @@ pub fn simple_request(
         })],
         tools: Vec::new(),
         agent_status: None,
+        skill_catalog: None,
         reasoning: ReasoningEffort::Medium,
         max_output_tokens: 512,
         continuation: None,
@@ -611,4 +612,58 @@ pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionS
         }
     }
     Ok(phases)
+}
+
+/// The attempt capability fixture of one conversation: a coordinator with
+/// an empty Skill set over the given immutable tool registry, the
+/// conversation's base environment, and a private environment store, with
+/// one pinned attempt lease. The temporary directory is kept alive for the
+/// fixture lifetime.
+pub struct CapabilityFixture {
+    /// The temporary directory kept alive for the fixture lifetime.
+    #[allow(clippy::used_underscore_binding)]
+    _dir: tempfile::TempDir,
+    /// The capability coordinator of the conversation.
+    pub coordinator: rustx::capabilities::CapabilityCoordinator,
+    lease: rustx::capabilities::AttemptCapabilityLease,
+}
+
+impl CapabilityFixture {
+    /// The pinned attempt capability lease.
+    #[must_use]
+    pub fn lease(&self) -> &rustx::capabilities::AttemptCapabilityLease {
+        &self.lease
+    }
+}
+
+/// Builds the attempt capability lease over the given tool registry and
+/// conversation tool runtime: an empty Skill set (no discovery, no
+/// environment materialization), the base authorized environment, and a
+/// private environment store disjoint from the Workspace. The candidate is
+/// prepared and committed so the lease pins the established revision.
+pub async fn capability_lease(
+    tools: rustx::tools::executor::ToolRegistry,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+) -> CapabilityFixture {
+    let dir = tempfile::tempdir().expect("capability temp dir");
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            workspace: tool_runtime.workspace().clone(),
+            tool_registry: std::sync::Arc::new(tools),
+            base_environment: tool_runtime.environment().clone(),
+            environment_store_root: dir.path().join("skill-env"),
+        },
+    )
+    .expect("capability coordinator");
+    let candidate = coordinator
+        .prepare_candidate()
+        .await
+        .expect("candidate preparation");
+    coordinator.commit(candidate).expect("candidate commit");
+    let lease = coordinator.acquire_attempt_lease();
+    CapabilityFixture {
+        _dir: dir,
+        coordinator,
+        lease,
+    }
 }

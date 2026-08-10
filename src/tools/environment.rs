@@ -6,8 +6,31 @@
 //! tool environment configuration are visible to child processes. Parent-
 //! process secrets are absent unless explicitly provided to the tool
 //! environment. This is deliberately not a production secrets manager.
+//!
+//! # Reserved runtime-owned keys
+//!
+//! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`)
+//! and the Skill environment overlay keys (`VIRTUAL_ENV`, `NODE_PATH`).
+//! These cannot be supplied as conflicting ordinary authorized entries:
+//! [`ToolEnvironment::from_authorized`] rejects them with
+//! [`ToolEnvironmentError::RuntimeOwnedKey`]. There is no ambiguous
+//! "silently ignore the authorized override" behavior.
+//!
+//! # Skill environment overlay
+//!
+//! The attempt-level effective environment is the base authorized
+//! environment plus the deterministic runtime-owned Skill environment
+//! layer ([`ToolEnvironmentOverlay`]): Python and Node bin prefixes are
+//! inserted before the baseline `PATH`, and `VIRTUAL_ENV` / `NODE_PATH`
+//! are set when the corresponding environment exists. An ecosystem with no
+//! dependencies adds no overlay.
 
 use std::collections::BTreeMap;
+
+/// The runtime-owned baseline keys: they are composed by
+/// [`ToolEnvironment::child_environment`] and cannot be supplied as
+/// conflicting authorized entries.
+pub const RUNTIME_OWNED_KEYS: [&str; 6] = ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "NODE_PATH"];
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +39,9 @@ pub enum ToolEnvironmentError {
     InvalidKey(String),
     /// The same key was authorized twice with different values.
     DuplicateKey(String),
+    /// A runtime-owned key was supplied as a conflicting ordinary
+    /// authorized entry.
+    RuntimeOwnedKey(String),
 }
 
 impl core::fmt::Display for ToolEnvironmentError {
@@ -27,22 +53,88 @@ impl core::fmt::Display for ToolEnvironmentError {
             Self::DuplicateKey(key) => {
                 write!(f, "tool environment key {key:?} was authorized twice")
             }
+            Self::RuntimeOwnedKey(key) => write!(
+                f,
+                "tool environment key {key:?} is runtime-owned and cannot be authorized as a \
+                 conflicting ordinary entry"
+            ),
         }
     }
 }
 
 impl std::error::Error for ToolEnvironmentError {}
 
+/// The deterministic runtime-owned Skill environment layer.
+///
+/// `path_prefixes` are inserted before the baseline `PATH` in order
+/// (Python bin first, then Node `.bin`); `entries` are appended as
+/// runtime-owned environment entries (`VIRTUAL_ENV`, `NODE_PATH`). An
+/// ecosystem with no dependencies adds nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ToolEnvironmentOverlay {
+    path_prefixes: Vec<String>,
+    entries: Vec<(String, String)>,
+}
+
+impl ToolEnvironmentOverlay {
+    /// The Python environment overlay: `<root>/bin` on `PATH` and
+    /// `VIRTUAL_ENV=<root>`.
+    #[must_use]
+    pub fn python(python_root: &std::path::Path) -> Self {
+        Self {
+            path_prefixes: vec![python_root.join("bin").display().to_string()],
+            entries: vec![(
+                "VIRTUAL_ENV".to_owned(),
+                python_root.display().to_string(),
+            )],
+        }
+    }
+
+    /// The Node environment overlay: `<root>/node_modules/.bin` on `PATH`
+    /// and `NODE_PATH=<root>/node_modules`.
+    #[must_use]
+    pub fn node(node_root: &std::path::Path) -> Self {
+        Self {
+            path_prefixes: vec![node_root
+                .join("node_modules")
+                .join(".bin")
+                .display()
+                .to_string()],
+            entries: vec![(
+                "NODE_PATH".to_owned(),
+                node_root.join("node_modules").display().to_string(),
+            )],
+        }
+    }
+
+    /// Merges two overlays deterministically (Python overlay first when
+    /// both exist).
+    #[must_use]
+    pub fn merge(mut self, other: Self) -> Self {
+        self.path_prefixes.extend(other.path_prefixes);
+        self.entries.extend(other.entries);
+        self
+    }
+
+    /// Whether the overlay contributes anything.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.path_prefixes.is_empty() && self.entries.is_empty()
+    }
+}
+
 /// The explicit tool execution environment of one conversation runtime.
 ///
 /// The environment is deterministic: entries are stored sorted by key, so a
 /// constructed child environment is reproducible. The Bash executor composes
-/// the runtime-approved basics (`PATH`, `HOME`, `LANG`, `LC_ALL`) plus these
-/// explicitly authorized entries; nothing from the parent process
-/// environment is inherited wholesale.
+/// the runtime-approved basics (`PATH`, `HOME`, `LANG`, `LC_ALL`) plus the
+/// runtime-owned Skill environment overlay plus the explicitly authorized
+/// entries; nothing from the parent process environment is inherited
+/// wholesale.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,
+    overlay: ToolEnvironmentOverlay,
 }
 
 impl ToolEnvironment {
@@ -52,6 +144,7 @@ impl ToolEnvironment {
     pub fn new() -> Self {
         Self {
             authorized: Vec::new(),
+            overlay: ToolEnvironmentOverlay::default(),
         }
     }
 
@@ -60,8 +153,10 @@ impl ToolEnvironment {
     /// # Errors
     ///
     /// Returns [`ToolEnvironmentError::InvalidKey`] for an empty or
-    /// malformed key and [`ToolEnvironmentError::DuplicateKey`] for a key
-    /// authorized twice with a different value.
+    /// malformed key, [`ToolEnvironmentError::DuplicateKey`] for a key
+    /// authorized twice with a different value, and
+    /// [`ToolEnvironmentError::RuntimeOwnedKey`] for a runtime-owned key
+    /// supplied as a conflicting ordinary authorized entry.
     ///
     /// # Panics
     ///
@@ -75,6 +170,9 @@ impl ToolEnvironment {
             if key.is_empty() || key.contains('=') || key.contains('\0') {
                 return Err(ToolEnvironmentError::InvalidKey(key));
             }
+            if RUNTIME_OWNED_KEYS.contains(&key.as_str()) {
+                return Err(ToolEnvironmentError::RuntimeOwnedKey(key));
+            }
             if let Some(existing) = sorted.insert(key.clone(), value.clone())
                 && existing != value
             {
@@ -83,6 +181,7 @@ impl ToolEnvironment {
         }
         Ok(Self {
             authorized: sorted.into_iter().collect(),
+            overlay: ToolEnvironmentOverlay::default(),
         })
     }
 
@@ -92,28 +191,57 @@ impl ToolEnvironment {
         &self.authorized
     }
 
+    /// The deterministic runtime-owned Skill environment overlay.
+    #[must_use]
+    pub fn overlay(&self) -> &ToolEnvironmentOverlay {
+        &self.overlay
+    }
+
+    /// Composes the attempt-level effective environment: this base
+    /// environment plus the deterministic runtime-owned Skill environment
+    /// overlay.
+    #[must_use]
+    pub fn with_overlay(&self, overlay: &ToolEnvironmentOverlay) -> Self {
+        let mut combined = self.clone();
+        combined.overlay.path_prefixes.extend(overlay.path_prefixes.clone());
+        combined.overlay.entries.extend(overlay.entries.clone());
+        combined
+    }
+
     /// The complete deterministic child environment for a workspace-rooted
-    /// subprocess: the runtime-approved basics plus the authorized entries.
+    /// subprocess: the runtime-approved basics, the Skill environment
+    /// overlay, and the authorized entries.
     ///
     /// ```text
-    /// PATH=/usr/local/bin:/usr/bin:/bin
+    /// PATH=<python>/bin:<node>/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
     /// HOME=<workspace root>
     /// LANG=C.UTF-8
     /// LC_ALL=C.UTF-8
+    /// VIRTUAL_ENV=<python root>          (when a Python overlay exists)
+    /// NODE_PATH=<node root>/node_modules (when a Node overlay exists)
     /// ```
     ///
     /// plus every explicitly authorized entry.
     #[must_use]
     pub fn child_environment(&self, workspace_root: &std::path::Path) -> Vec<(String, String)> {
+        let mut path = String::new();
+        for prefix in &self.overlay.path_prefixes {
+            if !path.is_empty() {
+                path.push(':');
+            }
+            path.push_str(prefix);
+        }
+        if !path.is_empty() {
+            path.push(':');
+        }
+        path.push_str("/usr/local/bin:/usr/bin:/bin");
         let mut entries = vec![
-            (
-                "PATH".to_owned(),
-                String::from("/usr/local/bin:/usr/bin:/bin"),
-            ),
+            ("PATH".to_owned(), path),
             ("HOME".to_owned(), workspace_root.display().to_string()),
             ("LANG".to_owned(), String::from("C.UTF-8")),
             ("LC_ALL".to_owned(), String::from("C.UTF-8")),
         ];
+        entries.extend(self.overlay.entries.clone());
         for (key, value) in &self.authorized {
             if !entries.iter().any(|(existing, _)| existing == key) {
                 entries.push((key.clone(), value.clone()));
@@ -125,7 +253,7 @@ impl ToolEnvironment {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolEnvironment, ToolEnvironmentError};
+    use super::{ToolEnvironment, ToolEnvironmentError, ToolEnvironmentOverlay};
 
     #[test]
     fn empty_environment_composes_only_approved_basics() {
@@ -179,6 +307,75 @@ mod tests {
                 ("K".to_owned(), "2".to_owned()),
             ]),
             Err(ToolEnvironmentError::DuplicateKey("K".to_owned()))
+        );
+    }
+
+    /// Runtime-owned baseline/overlay keys cannot be supplied as
+    /// conflicting ordinary authorized entries.
+    #[test]
+    fn runtime_owned_keys_are_rejected_as_authorized_entries() {
+        for key in super::RUNTIME_OWNED_KEYS {
+            let result = ToolEnvironment::from_authorized([(key.to_owned(), "value".to_owned())]);
+            assert_eq!(
+                result,
+                Err(ToolEnvironmentError::RuntimeOwnedKey(key.to_owned())),
+                "{key} must be runtime-owned"
+            );
+        }
+    }
+
+    /// The overlay composes deterministically: Python bin first, then Node
+    /// .bin, then the baseline; VIRTUAL_ENV and NODE_PATH are set; no
+    /// ecosystem dependencies add no overlay.
+    #[test]
+    fn overlay_composes_deterministically() {
+        let base = ToolEnvironment::from_authorized([("MY_VAR".to_owned(), "1".to_owned())])
+            .expect("authorized");
+        let python = ToolEnvironmentOverlay::python(std::path::Path::new("/env/python/abc"));
+        let node = ToolEnvironmentOverlay::node(std::path::Path::new("/env/node/def"));
+        let effective = base.with_overlay(&python.merge(node));
+        let entries = effective.child_environment(std::path::Path::new("/ws"));
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "PATH".to_owned(),
+                    "/env/python/abc/bin:/env/node/def/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
+                        .to_owned()
+                ),
+                ("HOME".to_owned(), "/ws".to_owned()),
+                ("LANG".to_owned(), "C.UTF-8".to_owned()),
+                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+                ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
+                ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
+                ("MY_VAR".to_owned(), "1".to_owned()),
+            ]
+        );
+        assert_eq!(
+            base.child_environment(std::path::Path::new("/ws")),
+            vec![
+                ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
+                ("HOME".to_owned(), "/ws".to_owned()),
+                ("LANG".to_owned(), "C.UTF-8".to_owned()),
+                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+                ("MY_VAR".to_owned(), "1".to_owned()),
+            ],
+            "no ecosystem dependencies means no unnecessary overlay"
+        );
+    }
+
+    /// Equivalent capability snapshots construct identical child
+    /// environments.
+    #[test]
+    fn equivalent_overlays_construct_identical_child_environments() {
+        let base = ToolEnvironment::new();
+        let first = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new("/e/p")));
+        let second =
+            base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new("/e/p")));
+        assert_eq!(first, second);
+        assert_eq!(
+            first.child_environment(std::path::Path::new("/ws")),
+            second.child_environment(std::path::Path::new("/ws"))
         );
     }
 }
