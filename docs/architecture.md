@@ -583,6 +583,24 @@ after it). A live group member keeps the group-scoped wait from returning
 and `killpg(..., 0)` probes are never the terminal point (an un-reaped
 leader zombie keeps the numeric group observable).
 
+**The inner supervisor pid is an ownership anchor with exactly one
+reaping owner.** The outer supervisor's dedicated anchor path is the only
+code allowed to observe the anchor's terminal state (`waitid` with
+`WNOWAIT`: observation only, never consumption) and the only code allowed
+to reap it (the group-scoped gate, strictly after any fallback
+containment signal). The outer therefore has **no generic `waitpid(-1)`
+reaping loop**: every child of the outer is either the anchor or an
+in-group adopted descendant, so the gate reaps the whole child domain and
+a generic loop could only ever consume the anchor and lose the
+abnormal-exit fallback-containment decision. An `ECHILD` from the
+dedicated anchor observation is an ownership invariant violation, never a
+terminal observation: the outer reports it and fails safely — it never
+derives owned-group terminality from an anchor `ECHILD`, never signals a
+numeric group id without the retained anchor, and never reports the
+canonical terminal event. The inner supervisor's own reaping hygiene
+consumes only its own children (bash and adopted in-group descendants),
+never an anchor of another owner.
+
 The OS ownership commit is the successful `/bin/bash` spawn after the inner
 has created the invocation session/group and installed seccomp. Protocol
 state makes this explicit: the inner reports `AnchorReady`, rustX retains the
@@ -590,16 +608,33 @@ possible ownership identity and replies `Start`, then the inner reports
 `OwnershipEstablished` after spawning Bash. If communication fails after
 `Start`, rustX conservatively assumes ownership may exist. Pre-gate setup
 failure reports `NoOwnership` and may settle without a Bash domain.
+Catastrophic fallback authority is a pre-ownership prerequisite: the runtime
+child-subreaper primitive is consulted (once per process, idempotently)
+before the supervisor unit spawns, so `START` — which authorizes the Bash
+spawn — is never sent before rustX can own catastrophic containment.
 
 Control-channel EOF is never a post-ownership process-terminal event. Normal
 terminality linearizes at the outer's group-scoped `ECHILD` and its
-`AllChildrenReaped` frame. For catastrophic loss of both supervisors, rustX
-itself is a process-wide subreaper: after reaping its direct outer child it
-retains the adopted inner zombie using `waitid(WNOWAIT)`, issues `SIGKILL` to
-the still-anchored group, and linearizes emergency terminality only at its
-own group-scoped `ECHILD`. Thus EOF changes communication state and failure
-intent, while process lifecycle remains independently `PreOwnership`,
-`OwnershipPossible`/`Owned`, or `Terminal`.
+`AllChildrenReaped` frame. For catastrophic loss of both supervisors, the
+runtime process is itself a subreaper — a **process-level coordination
+primitive** owned by `src/tools/process_supervision.rs` (one-time,
+idempotent, sticky initialization; a failed initialization fails every Bash
+invocation as a pre-ownership setup failure; the mode is never toggled per
+invocation). Once enabled, orphaned descendants of any rustX-owned
+subprocess hierarchy may reparent to the runtime process, and the runtime is
+the reaper-of-last-resort for every adopted child; catastrophic Bash
+containment nevertheless remains invocation-scoped — after reaping its
+direct outer child, rustX retains the adopted inner zombie using
+`waitid(WNOWAIT)`, issues `SIGKILL` to the still-anchored group, and
+linearizes emergency terminality only at its own group-scoped `ECHILD`.
+If the adopted anchor is unavailable (`ECHILD`) without a prior
+authoritative terminal event, emergency containment reports
+`AnchorUnavailable` — never terminal — and no `ToolExecutionResult`
+commits. The anchor is retained, contained, and released only as one
+coherent state machine: identity ownership, reaping ownership, signaling
+authority, and terminal settlement are the same ownership. Thus EOF changes
+communication state and failure intent, while process lifecycle remains
+independently `PreOwnership`, `OwnershipPossible`/`Owned`, or `Terminal`.
 
 Every Bash result status — `Success`, `Failed`, `Cancelled`, and
 `TimedOut` — is terminal with respect to the invocation-owned process

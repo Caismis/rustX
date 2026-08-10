@@ -249,7 +249,24 @@ Bash requirements:
 - Control-channel EOF is never post-ownership terminality. Normal settlement
   uses `AllChildrenReaped`; catastrophic supervisor loss uses rustX's own
   subreaper adoption, retained `WNOWAIT` anchor, anchored group containment,
-  and group-scoped `ECHILD` proof before returning `Failed`.
+  and group-scoped `ECHILD` proof before returning `Failed`. An
+  `AnchorUnavailable` result (adopted anchor `ECHILD` without a prior
+  terminal event) is never a terminal proof and never commits a result.
+- Single-reaper anchor ownership: the inner supervisor pid is an ownership
+  anchor with exactly one reaping owner (the outer's dedicated anchor path
+  in the normal lifecycle; rustX's adopted-anchor path after both
+  supervisors are lost). The outer supervisor has no generic `waitpid(-1)`
+  reaping loop — generic child reaping can never consume the invocation
+  anchor, and an anchor `ECHILD` before the intentional release is an
+  ownership invariant violation, never process terminality.
+- Runtime child-subreaper ownership: rustX's process-wide
+  `PR_SET_CHILD_SUBREAPER` enablement is a runtime-level coordination
+  primitive (one-time, idempotent, sticky initialization; owned by
+  `src/tools/process_supervision.rs`), established before `START` and never
+  toggled per invocation; Bash catastrophic containment remains
+  invocation-scoped (anchor pid and invocation PGID only, never a broad
+  wait), so concurrent invocations and unrelated adopted children are never
+  signaled or reaped cross-group.
 - Process-control failures (supervisor setup, shell spawning,
   waiting/reaping, signaling, IPC, SIGTERM handler installation, fixed-
   membership restriction installation) are

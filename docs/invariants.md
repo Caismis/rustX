@@ -329,9 +329,34 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   distinct syscall-number namespace. This restriction is what makes the
   supervisor's kernel child-wait terminal proof complete: an in-domain
   descendant cannot remain hidden behind an ancestor that left the domain.
+- **The inner supervisor PID is an ownership anchor with exactly one
+  reaping owner; generic child-reaping paths can never consume it.** A
+  process used as a lifecycle identity anchor has one dedicated reaping
+  owner. In the normal lifecycle the outer supervisor's dedicated anchor
+  path is that owner (observe with `WNOWAIT`, issue any fallback
+  containment signal while the identity is retained, release only through
+  the group-scoped gate), and the outer supervisor has **no generic
+  `waitpid(-1)` reaping loop** — every child of the outer is either the
+  anchor or an in-group adopted descendant, so the gate reaps the whole
+  child domain and a generic loop could only ever consume the anchor and
+  lose the abnormal-exit fallback-containment decision. The inner
+  supervisor's own reaping hygiene consumes only its own children (bash
+  and adopted in-group descendants), never an anchor of another owner. In
+  the catastrophic lifecycle rustX becomes the anchor's reaping owner only
+  by adoption (see the catastrophic-containment bullet below).
   Subreaper adoption is a process-reaping implementation detail and does
   not by itself expand semantic ownership beyond the defined
   process-group boundary.
+- **An anchor `ECHILD` is never a terminal process-group proof.** If the
+  dedicated anchor observation (or the catastrophic adoption path) sees
+  `ECHILD`, the anchor identity is unreachable — the owned group may still
+  exist. It is an ownership invariant violation (before the intentional
+  release no other code may reap the anchor) and is handled as such: the
+  violation is reported, no numeric group id is signaled, no canonical
+  terminal event is fabricated, and the invocation remains non-terminal.
+  `waitid(anchor) == ECHILD` implies the owned group is terminal **only**
+  when a separate, already-completed terminal proof exists (the parsed
+  `AllChildrenReaped` event).
 - **Every Bash result status — `Success`, `Failed`, `Cancelled`, and
   `TimedOut` — is terminal with respect to the invocation-owned process
   group**: no invocation-owned Bash process remains capable of executing
@@ -370,7 +395,24 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   If both supervisors are lost, process-wide rustX subreaper ownership adopts
   the invocation descendants; rustX retains the adopted inner anchor with
   `WNOWAIT`, signals the group while that identity is reuse-safe, and reaches
-  its own group-scoped `ECHILD` before committing the failed result.
+  its own group-scoped `ECHILD` before committing the failed result. If the
+  adopted anchor is unavailable (`ECHILD`) without a prior authoritative
+  terminal event, the emergency containment reports `AnchorUnavailable` —
+  never terminal — and no `ToolExecutionResult` commits.
+- **Runtime child-subreaper mode is a process-level coordination
+  primitive, not a Bash-local setting.** rustX's `PR_SET_CHILD_SUBREAPER`
+  enablement is owned by the runtime process-lifecycle primitive
+  (`src/tools/process_supervision.rs`), initialized once per runtime
+  process, idempotently and sticky (a failed initialization fails every
+  later consultation), before any Bash ownership exists — `START` (which
+  authorizes the Bash spawn) is never sent before catastrophic fallback
+  authority exists. Once enabled, orphaned descendants of **any**
+  rustX-owned subprocess hierarchy may reparent to the runtime process;
+  the runtime is the reaper-of-last-resort for every adopted child, while
+  catastrophic Bash containment remains invocation-scoped (anchor pid and
+  invocation process group only — never `waitpid(-1)` or `waitid(P_ALL)`),
+  so concurrent Bash invocations and unrelated adopted children are never
+  signaled or reaped by another invocation's containment.
 - Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
   issued by the inner supervisor with `killpg` against its own process
   group, whose numeric id is its own pid — provably allocated exactly while

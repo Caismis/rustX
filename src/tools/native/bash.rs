@@ -93,6 +93,38 @@
 //! `ECHILD` provide the separate catastrophic terminal proof. Control EOF
 //! alone is never terminal after ownership may have begun.
 //!
+//! # Single-reaper anchor ownership
+//!
+//! The inner supervisor pid is the invocation's structural ownership
+//! anchor and has exactly one reaping owner. In the normal lifecycle the
+//! outer supervisor's dedicated anchor path owns it (observe with
+//! `WNOWAIT`, contain while retained, release through the group-scoped
+//! gate); the outer supervisor has no generic `waitpid(-1)` reaping loop,
+//! so no hygiene path can consume the anchor and lose the abnormal-exit
+//! fallback-containment decision. In the catastrophic lifecycle rustX
+//! becomes the anchor's reaping owner only by adoption: it retains the
+//! adopted anchor with `WNOWAIT`, issues the fallback signal while that
+//! identity is retained, and releases the anchor through its own
+//! group-scoped wait. **An anchor `ECHILD` is never a terminal process-
+//! group proof**: the anchor is not waitable by rustX (or by the outer)
+//! before its intentional release only on an ownership invariant
+//! violation, and `AnchorUnavailable` can never settle the invocation —
+//! normal terminality is proven only by the parsed `AllChildrenReaped`
+//! event or by a complete retained-anchor catastrophic containment.
+//!
+//! # Runtime child-subreaper ownership
+//!
+//! rustX's process-wide `PR_SET_CHILD_SUBREAPER` enablement is a runtime
+//! process-lifecycle coordination primitive, not a Bash-local setting:
+//! it is owned by [`crate::tools::process_supervision`], initialized once,
+//! idempotently, before any Bash ownership exists (before `START`
+//! authorizes the Bash spawn), and it is never toggled per invocation.
+//! Once enabled, orphaned descendants of any rustX-owned subprocess
+//! hierarchy may reparent to the runtime process; the runtime is the
+//! reaper-of-last-resort for every adopted child, while catastrophic Bash
+//! containment remains invocation-scoped (anchor pid and invocation
+//! process group only — never a broad wait).
+//!
 //! # Terminal results
 //!
 //! Every Bash `ToolExecutionResult` — `Success`, `Failed`, `Cancelled`,
@@ -300,7 +332,11 @@ pub(crate) struct BashTestControl {
     #[cfg(test)]
     fail_sigterm_handler: bool,
     #[cfg(test)]
+    fail_subreaper_init: bool,
+    #[cfg(test)]
     force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(test)]
+    force_emergency_anchor_unavailable: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(test)]
     anchor_pid_file: Option<std::path::PathBuf>,
     #[cfg(test)]
@@ -343,7 +379,9 @@ impl BashTestControl {
             fail_signal: false,
             fail_wait: false,
             fail_sigterm_handler: false,
+            fail_subreaper_init: false,
             force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             anchor_pid_file: None,
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
             capture_hold: None,
@@ -375,6 +413,18 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn force_anchor_loss_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
         self.force_anchor_loss.clone()
+    }
+
+    /// A shared handle that makes the catastrophic emergency containment
+    /// observe the invocation anchor as unavailable (not a waitable child
+    /// of rustX) without a prior authoritative terminal event. The
+    /// semantic state is enough: the regression proves that
+    /// `AnchorUnavailable` never settles the invocation as terminal.
+    #[must_use]
+    pub(crate) fn force_emergency_anchor_unavailable_handle(
+        &self,
+    ) -> Arc<std::sync::atomic::AtomicBool> {
+        self.force_emergency_anchor_unavailable.clone()
     }
 
     /// Names a file the supervisor writes the invocation's process-group id
@@ -436,6 +486,15 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn fail_sigterm_handler(mut self) -> Self {
         self.fail_sigterm_handler = true;
+        self
+    }
+
+    /// Makes the runtime child-subreaper initialization fail with an
+    /// injected error (a pre-ownership setup failure: no supervisor unit
+    /// is spawned, so no Bash tree can exist).
+    #[must_use]
+    pub(crate) fn fail_subreaper_init(mut self) -> Self {
+        self.fail_subreaper_init = true;
         self
     }
 
@@ -944,7 +1003,22 @@ async fn run_bash_unix(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
-    if let Err(error) = ensure_runtime_subreaper() {
+    // The runtime child-subreaper authority is a pre-ownership
+    // prerequisite: it is consulted (one-time, idempotently — see
+    // `crate::tools::process_supervision`) before the supervisor unit
+    // spawns, so `START` — which authorizes the Bash spawn — is never sent
+    // before catastrophic fallback containment exists. A failure is a
+    // pre-ownership setup failure: no Bash tree is spawned.
+    #[cfg(test)]
+    if let Some(control) = control {
+        if control.fail_subreaper_init {
+            return failed_result(
+                "cannot establish rustX Bash fallback containment: injected child-subreaper \
+                 initialization failure",
+            );
+        }
+    }
+    if let Err(error) = crate::tools::process_supervision::ensure_child_subreaper() {
         return failed_result(format!(
             "cannot establish rustX Bash fallback containment: {error}"
         ));
@@ -1274,19 +1348,16 @@ async fn run_bash_unix(
                         }
                         ProcessLifecycle::OwnershipPossible { pgid }
                         | ProcessLifecycle::Owned { pgid } => {
-                            if let Err(error) = child.wait().await {
-                                failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
-                            } else {
+                            if emergency_containment_after_supervisor_loss(
+                                control,
+                                &mut child,
+                                pgid,
+                                &mut process_lifecycle,
+                                &mut failure,
+                            )
+                            .await
+                            {
                                 direct_child_reaped = true;
-                                #[cfg(test)]
-                                if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
-                                    hook.pause_before_emergency().await;
-                                }
-                                match tokio::task::spawn_blocking(move || emergency_contain_group(pgid)).await {
-                                    Ok(Ok(())) => process_lifecycle = ProcessLifecycle::Terminal,
-                                    Ok(Err(error)) => failure = Some(error),
-                                    Err(error) => failure = Some(format!("Bash emergency containment task failed: {error}")),
-                                }
                             }
                         }
                         ProcessLifecycle::Terminal => {}
@@ -1310,33 +1381,16 @@ async fn run_bash_unix(
                         }
                         ProcessLifecycle::OwnershipPossible { pgid }
                         | ProcessLifecycle::Owned { pgid } => {
-                            if let Err(error) = child.wait().await {
-                                failure = Some(format!(
-                                    "cannot reap the lost outer supervisor: {error}"
-                                ));
-                            } else {
+                            if emergency_containment_after_supervisor_loss(
+                                control,
+                                &mut child,
+                                pgid,
+                                &mut process_lifecycle,
+                                &mut failure,
+                            )
+                            .await
+                            {
                                 direct_child_reaped = true;
-                                #[cfg(test)]
-                                if let Some(hook) =
-                                    control.and_then(|control| control.channel_eof.as_ref())
-                                {
-                                    hook.pause_before_emergency().await;
-                                }
-                                match tokio::task::spawn_blocking(move || {
-                                    emergency_contain_group(pgid)
-                                })
-                                .await
-                                {
-                                    Ok(Ok(())) => {
-                                        process_lifecycle = ProcessLifecycle::Terminal;
-                                    }
-                                    Ok(Err(error)) => failure = Some(error),
-                                    Err(error) => {
-                                        failure = Some(format!(
-                                            "Bash emergency containment task failed: {error}"
-                                        ));
-                                    }
-                                }
                             }
                         }
                         ProcessLifecycle::Terminal => {}
@@ -1515,19 +1569,34 @@ async fn run_bash_unix(
     }
 }
 
-/// Makes rustX the reaper of last resort for catastrophic loss of both
-/// invocation supervisors. `PR_SET_CHILD_SUBREAPER` is process-wide and
-/// idempotent; group-scoped waits keep concurrent invocations isolated.
-#[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
-fn ensure_runtime_subreaper() -> Result<(), String> {
-    // SAFETY: one scalar prctl call with a literal enable value.
-    let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
+/// The explicit outcome of catastrophic emergency containment.
+///
+/// `Ok(())` alone would be ambiguous (contained-and-terminal vs. no anchor
+/// vs. normal path already completed), so the result distinguishes the
+/// terminal proof from the unavailable-anchor state:
+///
+/// - [`EmergencyContainment::TerminalProven`]: the anchor was retained,
+///   the fallback signal was issued while retained, the group-scoped wait
+///   reached `ECHILD`, and the anchor was released — the owned invocation
+///   group is terminal.
+/// - [`EmergencyContainment::AnchorUnavailable`]: the anchor is not a
+///   waitable child of rustX without a prior authoritative terminal event.
+///   This is **not** a terminal proof — `ECHILD` from the anchor wait
+///   means the anchor identity is unreachable, never that the invocation
+///   group is empty. The invocation must remain non-terminal.
+///
+/// The "normal terminal path already completed" case never reaches this
+/// function: after `AllChildrenReaped` was parsed, the process lifecycle
+/// is already terminal and the caller skips emergency containment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmergencyContainment {
+    /// The anchor was retained, the fallback signal was issued while that
+    /// identity was retained, the group-scoped wait reached `ECHILD`, and
+    /// the anchor was then released.
+    TerminalProven,
+    /// The invocation anchor is unavailable without a prior authoritative
+    /// terminal proof. Never a terminal result.
+    AnchorUnavailable,
 }
 
 /// Catastrophic fallback after the outer supervisor has been reaped.
@@ -1537,15 +1606,35 @@ fn ensure_runtime_subreaper() -> Result<(), String> {
 /// numeric identity is used for `killpg`; this is the same ABA-proof anchor
 /// used by the normal outer path. Only after the group-scoped child wait
 /// reaches `ECHILD` is the anchor identity released and terminality proven.
+///
+/// The anchor is matched only by pid; the invocation group only by its
+/// retained pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists
+/// here, so unrelated adopted children are never consumed.
 #[cfg(target_os = "linux")]
-fn emergency_contain_group(pgid: i32) -> Result<(), String> {
+fn emergency_contain_group(
+    pgid: i32,
+    anchor_unavailable: bool,
+) -> Result<EmergencyContainment, String> {
     use nix::errno::Errno;
     use nix::sys::signal::{Signal, killpg};
     use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
     use nix::unistd::Pid;
+    #[cfg(not(test))]
+    let _ = anchor_unavailable;
 
+    #[cfg(test)]
+    if anchor_unavailable {
+        // The regression seam: the anchor reads as not waitable without a
+        // prior authoritative terminal event. The semantic state is what
+        // matters — never an actual pid reuse.
+        return Ok(EmergencyContainment::AnchorUnavailable);
+    }
     let anchor = Pid::from_raw(pgid);
     loop {
+        // Anchor retention: observe the adopted inner leader's terminal
+        // state without consuming its identity (`WNOWAIT`). The numeric
+        // group id stays provably allocated while this returns Exited or
+        // Signaled.
         match waitid(
             Id::Pid(anchor),
             WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
@@ -1554,10 +1643,11 @@ fn emergency_contain_group(pgid: i32) -> Result<(), String> {
             Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
             Ok(_) | Err(Errno::EINTR) => {}
             Err(Errno::ECHILD) => {
-                // The normal outer path released the anchor only after its
-                // own group-scoped ECHILD. With no retained anchor, never
-                // signal the cached numeric PGID.
-                return Ok(());
+                // The anchor is not a waitable child of rustX: the owned
+                // group may still exist. ECHILD from the anchor wait is
+                // never a terminal process-group proof, and the cached
+                // numeric pgid is never signaled after anchor loss.
+                return Ok(EmergencyContainment::AnchorUnavailable);
             }
             Err(error) => {
                 return Err(format!(
@@ -1576,13 +1666,16 @@ fn emergency_contain_group(pgid: i32) -> Result<(), String> {
         }
     }
     loop {
+        // The group-scoped terminal proof: no adopted child of rustX
+        // remains in the invocation group. The anchor itself is released
+        // (reaped) by this same wait, strictly after the fallback signal.
         match waitid(
             Id::PGid(anchor),
             WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
         ) {
             Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
             Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return Ok(()),
+            Err(Errno::ECHILD) => return Ok(EmergencyContainment::TerminalProven),
             Err(error) => {
                 return Err(format!(
                     "cannot prove the lost Bash invocation group terminal: {error}"
@@ -1593,8 +1686,66 @@ fn emergency_contain_group(pgid: i32) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn ensure_runtime_subreaper() -> Result<(), String> {
+fn emergency_contain_group(
+    _pgid: i32,
+    _anchor_unavailable: bool,
+) -> Result<EmergencyContainment, String> {
     Err("Bash fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
+}
+
+/// The catastrophic emergency path of an owned invocation whose supervisor
+/// unit was lost: reaps the lost outer supervisor and runs the adopted-
+/// anchor containment.
+///
+/// Returns whether the direct outer supervisor was reaped. [`EmergencyContainment::TerminalProven`]
+/// moves the lifecycle to terminal. [`EmergencyContainment::AnchorUnavailable`]
+/// is never a terminal proof: the invocation stays non-terminal with the
+/// already-recorded failure intent (unexpected supervisor exit), so no
+/// `ToolExecutionResult` can commit while the owned group may still exist.
+#[cfg(unix)]
+async fn emergency_containment_after_supervisor_loss(
+    control: Option<&BashTestControl>,
+    child: &mut tokio::process::Child,
+    pgid: i32,
+    process_lifecycle: &mut ProcessLifecycle,
+    failure: &mut Option<String>,
+) -> bool {
+    #[cfg(not(test))]
+    let _ = control;
+    if let Err(error) = child.wait().await {
+        *failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
+        return false;
+    }
+    #[cfg(test)]
+    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
+        hook.pause_before_emergency().await;
+    }
+    #[cfg(test)]
+    let anchor_unavailable = control.is_some_and(|control| {
+        control
+            .force_emergency_anchor_unavailable
+            .load(std::sync::atomic::Ordering::SeqCst)
+    });
+    #[cfg(not(test))]
+    let anchor_unavailable = false;
+    match tokio::task::spawn_blocking(move || emergency_contain_group(pgid, anchor_unavailable))
+        .await
+    {
+        Ok(Ok(EmergencyContainment::TerminalProven)) => {
+            *process_lifecycle = ProcessLifecycle::Terminal;
+        }
+        Ok(Ok(EmergencyContainment::AnchorUnavailable)) => {
+            // Anchor loss is never itself a terminal process-group proof:
+            // the owned group may still exist. The lifecycle remains
+            // non-terminal and the already-recorded failure intent cannot
+            // commit a result.
+        }
+        Ok(Err(error)) => *failure = Some(error),
+        Err(error) => {
+            *failure = Some(format!("Bash emergency containment task failed: {error}"));
+        }
+    }
+    true
 }
 
 /// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
@@ -1602,7 +1753,7 @@ fn ensure_runtime_subreaper() -> Result<(), String> {
 /// current executable (production), otherwise the binary-directory sibling
 /// of a test binary living under `target/debug/deps` (in-crate tests).
 #[cfg(unix)]
-fn supervisor_binary() -> std::path::PathBuf {
+pub(crate) fn supervisor_binary() -> std::path::PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_bash-supervisor") {
         return std::path::PathBuf::from(path);
     }
@@ -3524,6 +3675,341 @@ mod tests {
         ));
         wait_for_process_death(shell_pid).await;
         let _ = dir;
+    }
+
+    /// The runtime child-subreaper initialization is a pre-ownership
+    /// prerequisite: a failure settles `Failed` with no Bash tree spawned —
+    /// catastrophic fallback containment is never assumed after the runtime
+    /// once failed to become a subreaper, and `START` can never be sent
+    /// without it. The injected failure proves the exact gate: the command
+    /// never runs, so its marker file never appears and no process group
+    /// signal is ever attempted.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn subreaper_initialization_failure_is_a_pre_ownership_setup_failure() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let ready = root.join("ready");
+        let control = BashTestControl::new().fail_subreaper_init();
+        let recorded = control.recorded_signals();
+        let result = run_with_control(
+            format!("touch {}", ready.display()),
+            control,
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        )
+        .await;
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { ref error }
+                if error.contains("fallback containment")),
+            "a failed child-subreaper initialization must be an explicit pre-ownership failure, got {:?}",
+            result.status
+        );
+        assert!(
+            !ready.exists(),
+            "no Bash tree may be spawned after a child-subreaper initialization failure"
+        );
+        assert!(
+            recorded.is_empty(),
+            "no process-group signal may be attempted without subreaper authority"
+        );
+        let _ = dir;
+    }
+
+    /// The mandatory emergency-anchor-unavailable regression: catastrophic
+    /// emergency containment starts with `process_lifecycle == Owned`, the
+    /// anchor unavailable, and no prior `AllChildrenReaped`. The emergency
+    /// containment must NOT return `TerminalProven` (anchor `ECHILD` is
+    /// never a terminal process-group proof), so no `ToolExecutionResult`
+    /// may commit while the owned group still executes. The semantic state
+    /// is enough — no actual pid reuse is required.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn emergency_anchor_unavailable_never_settles_an_owned_invocation() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let inner_pid_file = root.join("inner.pid");
+        let outer_pid_file = root.join("outer.pid");
+        let anchor_pid_file = root.join("anchor.pid");
+        let ready_file = root.join("ready");
+        // The fixture kills both supervisors, then becomes a single
+        // long-lived owned process (`exec sleep 30`: the shell replaces
+        // itself, so the group holds exactly one process with a known pid).
+        let command = format!(
+            "inner=$PPID; outer=$(awk '/^PPid:/ {{print $2}}' /proc/$inner/status); \
+             echo $$ > {}; echo $inner > {}; echo $outer > {}; touch {}; \
+             exec >/dev/null 2>&1; kill -KILL $outer; kill -KILL $inner; exec sleep 30",
+            shell_pid_file.display(),
+            inner_pid_file.display(),
+            outer_pid_file.display(),
+            ready_file.display()
+        );
+        let control = BashTestControl::new()
+            .observe_channel_eof()
+            .anchor_pid_file(anchor_pid_file.clone());
+        control
+            .force_emergency_anchor_unavailable_handle()
+            .store(true, Ordering::SeqCst);
+        let eof = control.channel_eof().expect("EOF hook").clone();
+        let mut task = tokio::spawn(run_with_control(
+            command,
+            control.clone(),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        ));
+        for _ in 0..1000 {
+            if ready_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ready_file.exists(), "the fixture never became ready");
+        let read_pid = |path: &std::path::Path| {
+            std::fs::read_to_string(path)
+                .expect("pid file")
+                .trim()
+                .parse::<i32>()
+                .expect("pid")
+        };
+        let shell_pid = read_pid(&shell_pid_file);
+        let inner_pid = read_pid(&inner_pid_file);
+        wait_until_not_executing(inner_pid).await;
+        tokio::time::timeout(Duration::from_secs(8), eof.await_seen())
+            .await
+            .expect("control EOF was not observed");
+        assert!(
+            process_capable_of_executing(shell_pid),
+            "the owned group must still be executing when emergency containment runs"
+        );
+        // Emergency containment runs with the anchor unavailable; the
+        // seam'd semantic state is the deterministic proof.
+        eof.release_emergency_containment();
+        // The invocation must NOT settle: `AnchorUnavailable` is never a
+        // terminal proof and the lifecycle stays non-terminal.
+        let still_pending = tokio::time::timeout(Duration::from_secs(2), &mut task)
+            .await
+            .is_err();
+        assert!(
+            still_pending,
+            "an unavailable emergency anchor must never settle the owned invocation"
+        );
+        assert!(
+            control.recorded_signals().is_empty(),
+            "no process-group signal may be issued when the anchor is unavailable"
+        );
+        // Test-side cleanup (the invocation itself is provably non-terminal
+        // by design in this state): terminate the owned group and reap the
+        // adopted processes so no fixture process survives the test. The
+        // emergency path correctly never consumed them, so the test reaps
+        // them directly.
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(inner_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test terminates the owned group");
+        nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(inner_pid), None)
+            .expect("reap the adopted anchor");
+        nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(shell_pid), None)
+            .expect("reap the adopted shell");
+        task.abort();
+        let _ = dir;
+    }
+
+    /// The normal-terminal-before-EOF regression: the authoritative
+    /// `AllChildrenReaped` frame is parsed first, then EOF follows (the
+    /// outer exits after the terminal acknowledgement). The invocation is
+    /// already terminal: the late EOF and the intentionally released anchor
+    /// behind it never trigger emergency containment and never override the
+    /// natural result with a failure.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_frame_then_eof_never_overrides_terminality() {
+        let (dir, artifacts, workspace) = fixture();
+        let control = BashTestControl::new()
+            .hold_terminal_event()
+            .observe_channel_eof();
+        let hold = control.terminal_hold().expect("terminal hold").clone();
+        let eof = control.channel_eof().expect("EOF hook").clone();
+        let task = tokio::spawn(run_with_control(
+            "echo hello".to_owned(),
+            control.clone(),
+            CancellationSignal::new(),
+            artifacts,
+            workspace,
+            None,
+        ));
+        // 1. The authoritative terminal frame is parsed (its state
+        //    transition is test-held only).
+        tokio::time::timeout(Duration::from_secs(15), hold.await_held())
+            .await
+            .expect("the terminal frame is parsed");
+        // 2. EOF provably arrives while terminality is already admitted;
+        //    the EOF branch must skip emergency containment entirely.
+        tokio::time::timeout(Duration::from_secs(15), eof.await_seen())
+            .await
+            .expect("EOF is observed after the terminal frame");
+        assert!(!task.is_finished());
+        // 3. Release: the invocation settles with the shell's natural
+        //    result — no failure override merely because EOF followed the
+        //    terminal frame.
+        hold.release();
+        let result = tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the invocation settles")
+            .expect("executor task");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Success,
+            "the terminal frame remains authoritative; late EOF must not override it, got {:?}",
+            result.status
+        );
+        assert!(
+            control.recorded_signals().is_empty(),
+            "no containment signal may follow an already-admitted terminal frame"
+        );
+        let _ = dir;
+    }
+
+    /// The concurrent catastrophic isolation regression: two independent
+    /// Bash invocations (A and B) both lose their supervisor units while
+    /// live owned descendants remain. Emergency containment of A must
+    /// signal and reap only group A: B's process group stays alive and
+    /// untouched, and only B's own emergency containment terminates it.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn concurrent_supervisor_loss_containment_is_isolated() {
+        let (dir_a, task_a, eof_a, shell_a, inner_a, _) =
+            start_supervisor_loss_fixture(CancellationSignal::new()).await;
+        let (dir_b, task_b, eof_b, shell_b, inner_b, _) =
+            start_supervisor_loss_fixture(CancellationSignal::new()).await;
+        assert!(process_capable_of_executing(shell_a));
+        assert!(process_capable_of_executing(shell_b));
+        // Contain A: B must remain completely untouched.
+        eof_a.release_emergency_containment();
+        let result_a = tokio::time::timeout(Duration::from_secs(8), task_a)
+            .await
+            .expect("invocation A settles")
+            .expect("executor task A");
+        assert!(matches!(
+            result_a.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+        ));
+        wait_for_process_death(shell_a).await;
+        wait_for_group_death(inner_a).await;
+        assert!(
+            process_capable_of_executing(shell_b),
+            "containing invocation A must never signal or reap invocation B"
+        );
+        // Contain B: only now does B become terminal.
+        eof_b.release_emergency_containment();
+        let result_b = tokio::time::timeout(Duration::from_secs(8), task_b)
+            .await
+            .expect("invocation B settles")
+            .expect("executor task B");
+        assert!(matches!(
+            result_b.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+        ));
+        wait_for_process_death(shell_b).await;
+        wait_for_group_death(inner_b).await;
+        let _ = (dir_a, dir_b);
+    }
+
+    /// The unrelated-adopted-child regression: with the runtime process
+    /// acting as the process-wide subreaper, an unrelated child hierarchy
+    /// U orphans and reparents to the runtime process. Catastrophic Bash
+    /// containment for invocation group G must leave U untouched: it
+    /// signals only G's pgid and reaps only G's adopted children — never
+    /// unrelated adopted processes, never a broad wait.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn bash_emergency_containment_leaves_unrelated_adopted_children_untouched() {
+        crate::tools::process_supervision::ensure_child_subreaper()
+            .expect("the runtime process is a child subreaper");
+        let (dir, _artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let u_pid_file = root.join("u.pid");
+        // U: an unrelated child hierarchy whose parent exits immediately,
+        // so U orphans and reparents to the runtime process (the nearest
+        // subreaper ancestor — the test binary itself).
+        let mut sh = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "sleep 30 >/dev/null 2>&1 & echo $! > {}",
+                u_pid_file.display()
+            ))
+            .spawn()
+            .expect("spawn U's parent");
+        let status = sh.wait().expect("U's parent exits");
+        assert!(status.success());
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        let u_pid: i32 = loop {
+            if let Ok(content) = std::fs::read_to_string(&u_pid_file) {
+                break content.trim().parse().expect("u pid");
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "U's pid file never appeared"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        // U is adopted by the runtime process (test-only /proc fixture
+        // inspection; /proc is never the production ownership authority).
+        let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+        loop {
+            let parent = std::fs::read_to_string(format!("/proc/{u_pid}/stat"))
+                .ok()
+                .and_then(|stat| {
+                    let close = stat.rfind(')')?;
+                    stat[close + 1..].split_whitespace().nth(1)?.parse().ok()
+                });
+            if parent == Some(self_pid) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "U was never adopted by the runtime process (parent: {parent:?})"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(process_alive(u_pid), "U must be alive before containment");
+        // The catastrophic Bash invocation G loses both supervisors with
+        // live owned work.
+        let (dir_g, task, eof, shell_pid, inner_pid, _) =
+            start_supervisor_loss_fixture(CancellationSignal::new()).await;
+        eof.release_emergency_containment();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("invocation G settles")
+            .expect("executor task G");
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+        ));
+        wait_for_process_death(shell_pid).await;
+        wait_for_group_death(inner_pid).await;
+        // U is untouched: still alive and still adopted by the runtime
+        // process.
+        assert!(
+            process_alive(u_pid),
+            "Bash emergency containment must never consume an unrelated adopted child"
+        );
+        // Test-side cleanup of U.
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(u_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test terminates U");
+        nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(u_pid), None).expect("reap U");
+        let _ = (dir, dir_g);
     }
 
     #[cfg(unix)]
