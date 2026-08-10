@@ -17,6 +17,15 @@
 //! output draining, finalize the artifacts, and produce a single canonical
 //! result.
 //!
+//! The process-ownership half of this lifecycle is the shared internal
+//! supervised command runner (`crate::runtime::process_runner`): the same
+//! supervisor unit, control protocol, process-group ownership, cancellation
+//! settlement, and catastrophic containment that native Bash uses is reused
+//! by Skill environment materialization, so package-manager work never
+//! becomes a second independent subprocess hierarchy. This tool owns the
+//! capture half: artifact spooling, bounded previews, and the final
+//! canonical result formatting.
+//!
 //! Shell-parent exit is **not** by itself the Bash settlement boundary:
 //! the shell may exit while a descendant still belongs to the
 //! invocation-owned process group, with the output pipes either still held
@@ -65,53 +74,6 @@
 //! **there is no way to leave the owned execution domain from inside a
 //! Bash command**.
 //!
-//! # Invocation supervisor
-//!
-//! The terminal ownership proof is **never** a `/proc` scan. Each Bash
-//! invocation owns one small per-invocation supervisor process unit
-//! (outer supervisor + inner session/group leader, both subreapers; see
-//! [`bash_supervisor`]) that spawns `/bin/bash`, reaps the shell, receives
-//! shell descendants that outlive the shell through kernel reparenting, and
-//! settles on the kernel's **group-scoped wait** — `waitid` with `Id::PGid`
-//! — which matches children of the waiting process inside the invocation
-//! process group and returns `ECHILD` exactly when no such child remains.
-//!
-//! `waitid(P_PGID)` alone observes only the waiting process's children, not
-//! arbitrary group members; the fixed-membership invariant is what makes
-//! its `ECHILD` a complete whole-group terminal proof. With membership
-//! immutable, every in-group process other than the inner supervisor is a
-//! bash descendant: while the shell lives, the shell itself is a matching
-//! child of the inner supervisor and blocks the gate, and when the shell
-//! (or any in-group ancestor) exits, the kernel reparents its in-group
-//! children directly into the nearest subreaper's child domain — the inner
-//! supervisor while it lives, the outer supervisor after it. There is
-//! therefore no state in which an in-group process is not a matching child
-//! of the supervisor that owns the gate. The **outer** supervisor's
-//! group-scoped `ECHILD` and `AllChildrenReaped` frame are the normal
-//! authoritative terminal event. If both supervisors are killed, rustX's
-//! own subreaper adoption plus a retained `WNOWAIT` anchor and group-scoped
-//! `ECHILD` provide the separate catastrophic terminal proof. Control EOF
-//! alone is never terminal after ownership may have begun.
-//!
-//! # Single-reaper anchor ownership
-//!
-//! The inner supervisor pid is the invocation's structural ownership
-//! anchor and has exactly one reaping owner. In the normal lifecycle the
-//! outer supervisor's dedicated anchor path owns it (observe with
-//! `WNOWAIT`, contain while retained, release through the group-scoped
-//! gate); the outer supervisor has no generic `waitpid(-1)` reaping loop,
-//! so no hygiene path can consume the anchor and lose the abnormal-exit
-//! fallback-containment decision. In the catastrophic lifecycle rustX
-//! becomes the anchor's reaping owner only by adoption: it retains the
-//! adopted anchor with `WNOWAIT`, issues the fallback signal while that
-//! identity is retained, and releases the anchor through its own
-//! group-scoped wait. **An anchor `ECHILD` is never a terminal process-
-//! group proof**: the anchor is not waitable by rustX (or by the outer)
-//! before its intentional release only on an ownership invariant
-//! violation, and `AnchorUnavailable` can never settle the invocation —
-//! normal terminality is proven only by the parsed `AllChildrenReaped`
-//! event or by a complete retained-anchor catastrophic containment.
-//!
 //! # Runtime child-subreaper capability
 //!
 //! rustX's process-wide `PR_SET_CHILD_SUBREAPER` activation is a runtime
@@ -121,11 +83,11 @@
 //! idempotently and sticky, before any Bash ownership exists (before
 //! `START` authorizes the Bash spawn), and never toggled per invocation.
 //! It exists solely so that a lost Bash supervisor unit's orphaned
-//! invocation descendants reparent to the runtime process, where Bash
-//! catastrophic containment can still retain the inner anchor and prove
-//! the invocation group terminal. Kernel reparenting does not expand Bash
-//! semantic ownership beyond the invocation process group, and M5
-//! implements no generic unknown-child reaper: catastrophic Bash
+//! invocation descendants reparent to the runtime process, where the
+//! invocation-scoped catastrophic containment can still retain the inner
+//! anchor and prove the invocation group terminal. Kernel reparenting does
+//! not expand Bash semantic ownership beyond the invocation process group,
+//! and rustX implements no generic unknown-child reaper: catastrophic
 //! containment remains invocation-scoped (anchor pid and invocation
 //! process group only — never a broad wait).
 //!
@@ -140,53 +102,6 @@
 //! contained and the owned group reaped to either the normal outer terminal
 //! event or the reuse-safe catastrophic terminal point (and the capture
 //! settled) before the remembered `Failed` result is returned.
-//!
-//! [`BASH_TERMINATION_CONFIRMATION`] is a process-confirmation watchdog:
-//! expiry records `QuiescenceTimeout` failure intent, but it never
-//! authorizes result commit. Canonical settlement still waits for process
-//! terminality. After terminality, the separate capture deadline may force-
-//! finalize wedged reader tasks and return `Failed(CaptureTimeout)`.
-//!
-//! # Process-group safety
-//!
-//! The invocation's process group lives in its own session created by the
-//! supervisor (`setsid`), so unrelated rustX/sibling processes can never
-//! join it (cross-session `setpgid` fails with `EPERM`). `TERM`/`KILL` are
-//! issued by the supervisor with `killpg` against the invocation group
-//! while the group's numeric id is anchored by the unreaped inner
-//! supervisor's own pid — the id is provably allocated to this invocation
-//! while the anchor is held, and after the anchor is released no further
-//! signal exists. A numeric process-group id that was released can
-//! therefore never receive a foreign signal.
-//!
-//! # Process-control failures
-//!
-//! Supervisor setup, shell spawning, waiting/reaping, signaling, and IPC
-//! failures never swallow their errors: they settle the invocation as an
-//! explicit failed tool result. Failures are separated into two
-//! categories:
-//!
-//! - **Before ownership exists** (no Bash process tree was established:
-//!   control-channel setup failure, supervisor spawn failure, bash spawn
-//!   failure, SIGTERM handler-installation failure): no cleanup work
-//!   exists, so an immediate `Failed` is valid.
-//! - **After ownership exists** (signal failure, wait/reap failure,
-//!   malformed IPC, control-channel read failure, unexpected supervisor
-//!   exit, rustX control-channel abandonment): the failure is remembered,
-//!   the outer supervisor actively contains the invocation (one
-//!   structurally-anchored fallback `SIGKILL` to the owned group), the
-//!   owned group reaches its terminal state, the capture is finalized, and
-//!   only then is the remembered `Failed` result returned.
-//!
-//! If the supervisor can no longer prove that the numeric process group is
-//! invocation-owned, it refuses to signal and reports the refusal
-//! explicitly; the outer supervisor's fallback containment signals only
-//! while its structural anchor (the unreaped inner pid, which is the group
-//! id) is held. Cancellation/timeout intent that cannot be established
-//! through process control is never downgraded to a silent `Success`,
-//! `Cancelled`, or `TimedOut`; the failed result is consistent with the
-//! background registry's rule that an explicit process-control/runtime
-//! failure may override canonical cancellation settlement.
 //!
 //! # Output capture
 //!
@@ -208,27 +123,29 @@
 //! [`bash_supervisor`]: crate::tools::native::bash_supervisor
 
 use std::io::Write;
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-#[cfg(unix)]
-use std::os::unix::process::ExitStatusExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 use crate::message::content::FileReference;
+use crate::runtime::process_runner::{
+    ProcessOutcomeIntent, RunnerSpawnError, SupervisedCommandRunner, SupervisedCommandSpec,
+    unix_signal_of,
+};
+#[cfg(test)]
+use crate::runtime::process_runner::RunnerTestControl;
 use crate::runtime::types::CancellationReason;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
 };
 #[cfg(test)]
-use crate::tools::native::bash_supervisor::{
-    ANCHOR_PID_FILE_ENV, FAIL_BASH_SPAWN_ENV, FAIL_SIGNAL_ENV, FAIL_SIGTERM_HANDLER_ENV,
-    FAIL_WAIT_ENV, FORCE_ANCHOR_LOSS_ENV,
+use crate::runtime::process_runner::{
+    RunnerChannelEofHook as ChannelEofHook, RunnerLifecycleHook as BashLifecycleHook,
+    RunnerTerminalHold as TerminalHold,
 };
-use crate::tools::native::bash_supervisor::{COMMAND_ENV, ROLE_OUTER};
 use crate::tools::native::support::failed_result;
 use crate::tools::native::{NativeToolPolicy, native_definition};
 use crate::tools::types::{
@@ -316,41 +233,19 @@ impl ToolExecutor for BashTool {
 /// observe the exact shell-exit boundary, deterministically inject
 /// supervisor setup / wait / signal / bash-spawn failures, model the
 /// ownership release transition, record every process-group signal attempt,
-/// and locate the invocation's process-group id — without an
-/// operating-system mocking framework.
+/// locate the invocation's process-group id, and park the output capture —
+/// without an operating-system mocking framework.
+///
+/// The process-ownership seams live in the shared supervised command runner
+/// (`crate::runtime::process_runner::RunnerTestControl`); this type wraps
+/// them together with the Bash-local capture seams.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))] // a bounded test-seam bundle
 #[derive(Clone)]
 pub(crate) struct BashTestControl {
     #[cfg(test)]
-    lifecycle: BashLifecycleHook,
-    #[cfg(test)]
-    pause_at_shell_exit: bool,
-    #[cfg(test)]
-    fail_supervisor_spawn: bool,
-    #[cfg(test)]
-    fail_bash_spawn: bool,
-    #[cfg(test)]
-    fail_signal: bool,
-    #[cfg(test)]
-    fail_wait: bool,
-    #[cfg(test)]
-    fail_sigterm_handler: bool,
-    #[cfg(test)]
-    fail_subreaper_init: bool,
-    #[cfg(test)]
-    force_anchor_loss: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(test)]
-    force_emergency_anchor_unavailable: Arc<std::sync::atomic::AtomicBool>,
-    #[cfg(test)]
-    anchor_pid_file: Option<std::path::PathBuf>,
-    #[cfg(test)]
-    recorded_signals: Arc<Mutex<Vec<RecordedSignal>>>,
+    runner: RunnerTestControl,
     #[cfg(test)]
     capture_hold: Option<CaptureHold>,
-    #[cfg(test)]
-    terminal_hold: Option<TerminalHold>,
-    #[cfg(test)]
-    channel_eof: Option<ChannelEofHook>,
 }
 
 /// One attempted process-group signal, recorded by the test seam.
@@ -359,15 +254,7 @@ pub(crate) struct BashTestControl {
 /// (`killpg` was invoked by the supervisor); a refused attempt (ownership
 /// lost, injected failure) is recorded with `emitted == false`.
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RecordedSignal {
-    /// The numeric process-group id the signal targeted.
-    pub pgid: i32,
-    /// The signal name (`SIGTERM`/`SIGKILL`).
-    pub signal: &'static str,
-    /// Whether the signal was actually emitted to the kernel.
-    pub emitted: bool,
-}
+pub(crate) use crate::runtime::process_runner::RecordedSignal;
 
 #[cfg(test)]
 impl BashTestControl {
@@ -376,38 +263,31 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            lifecycle: BashLifecycleHook::new(),
-            pause_at_shell_exit: false,
-            fail_supervisor_spawn: false,
-            fail_bash_spawn: false,
-            fail_signal: false,
-            fail_wait: false,
-            fail_sigterm_handler: false,
-            fail_subreaper_init: false,
-            force_anchor_loss: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            force_emergency_anchor_unavailable: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            anchor_pid_file: None,
-            recorded_signals: Arc::new(Mutex::new(Vec::new())),
+            runner: RunnerTestControl::new(),
             capture_hold: None,
-            terminal_hold: None,
-            channel_eof: None,
         }
     }
 
-    /// Arms the exact shell-exit boundary: the executor parks after the
+    /// The shared supervised-runner control seams.
+    #[must_use]
+    pub(crate) fn runner_control(&self) -> RunnerTestControl {
+        self.runner.clone()
+    }
+
+    /// Arms the exact shell-exit boundary: the runner parks after the
     /// supervisor reported the shell's natural exit until the test releases
     /// it.
     #[must_use]
     pub(crate) fn pause_at_shell_exit(mut self) -> Self {
-        self.pause_at_shell_exit = true;
+        self.runner.pause_at_shell_exit = true;
         self
     }
 
     /// The lifecycle hook; tests subscribe to the exact shell-exit
-    /// boundary and release the parked executor through it.
+    /// boundary and release the parked runner through it.
     #[must_use]
     pub(crate) fn lifecycle(&self) -> &BashLifecycleHook {
-        &self.lifecycle
+        &self.runner.lifecycle
     }
 
     /// A shared handle that makes the ownership anchor read as lost from
@@ -416,7 +296,7 @@ impl BashTestControl {
     /// foreign group, so it refuses to signal it.
     #[must_use]
     pub(crate) fn force_anchor_loss_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
-        self.force_anchor_loss.clone()
+        self.runner.force_anchor_loss.clone()
     }
 
     /// A shared handle that makes the catastrophic emergency containment
@@ -428,37 +308,27 @@ impl BashTestControl {
     pub(crate) fn force_emergency_anchor_unavailable_handle(
         &self,
     ) -> Arc<std::sync::atomic::AtomicBool> {
-        self.force_emergency_anchor_unavailable.clone()
+        self.runner.force_emergency_anchor_unavailable.clone()
     }
 
     /// Names a file the supervisor writes the invocation's process-group id
     /// into (test observability only).
     #[must_use]
     pub(crate) fn anchor_pid_file(mut self, path: std::path::PathBuf) -> Self {
-        self.anchor_pid_file = Some(path);
+        self.runner.anchor_pid_file = Some(path);
         self
     }
 
     /// The recorded process-group signal attempts so far.
     #[must_use]
     pub(crate) fn recorded_signals(&self) -> Vec<RecordedSignal> {
-        self.recorded_signals
-            .lock()
-            .expect("recorded signals lock")
-            .clone()
-    }
-
-    fn record_signal(&self, recorded: RecordedSignal) {
-        self.recorded_signals
-            .lock()
-            .expect("recorded signals lock")
-            .push(recorded);
+        self.runner.recorded_signals()
     }
 
     /// Makes the supervisor spawn fail with an injected error.
     #[must_use]
     pub(crate) fn fail_supervisor_spawn(mut self) -> Self {
-        self.fail_supervisor_spawn = true;
+        self.runner.fail_supervisor_spawn = true;
         self
     }
 
@@ -466,7 +336,7 @@ impl BashTestControl {
     /// error.
     #[must_use]
     pub(crate) fn fail_bash_spawn(mut self) -> Self {
-        self.fail_bash_spawn = true;
+        self.runner.fail_command_spawn = true;
         self
     }
 
@@ -474,14 +344,14 @@ impl BashTestControl {
     /// error.
     #[must_use]
     pub(crate) fn fail_signal(mut self) -> Self {
-        self.fail_signal = true;
+        self.runner.fail_signal = true;
         self
     }
 
     /// Makes the shell wait in the supervisor fail with an injected error.
     #[must_use]
     pub(crate) fn fail_wait(mut self) -> Self {
-        self.fail_wait = true;
+        self.runner.fail_wait = true;
         self
     }
 
@@ -489,7 +359,7 @@ impl BashTestControl {
     /// an injected error (a pre-ownership setup failure).
     #[must_use]
     pub(crate) fn fail_sigterm_handler(mut self) -> Self {
-        self.fail_sigterm_handler = true;
+        self.runner.fail_sigterm_handler = true;
         self
     }
 
@@ -498,7 +368,7 @@ impl BashTestControl {
     /// is spawned, so no Bash tree can exist).
     #[must_use]
     pub(crate) fn fail_subreaper_init(mut self) -> Self {
-        self.fail_subreaper_init = true;
+        self.runner.fail_subreaper_init = true;
         self
     }
 
@@ -523,143 +393,23 @@ impl BashTestControl {
     /// false, without relying on scheduler timing.
     #[must_use]
     pub(crate) fn hold_terminal_event(mut self) -> Self {
-        self.terminal_hold = Some(TerminalHold::new());
+        self.runner.terminal_hold = Some(TerminalHold::new());
         self
     }
 
     #[must_use]
     pub(crate) fn terminal_hold(&self) -> Option<&TerminalHold> {
-        self.terminal_hold.as_ref()
+        self.runner.terminal_hold.as_ref()
     }
 
     #[must_use]
     pub(crate) fn observe_channel_eof(mut self) -> Self {
-        self.channel_eof = Some(ChannelEofHook::new());
+        self.runner.channel_eof = Some(ChannelEofHook::new());
         self
     }
 
     pub(crate) fn channel_eof(&self) -> Option<&ChannelEofHook> {
-        self.channel_eof.as_ref()
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone)]
-pub(crate) struct ChannelEofHook {
-    seen_tx: tokio::sync::watch::Sender<bool>,
-    seen_rx: tokio::sync::watch::Receiver<bool>,
-    proceed_tx: tokio::sync::watch::Sender<bool>,
-    proceed_rx: tokio::sync::watch::Receiver<bool>,
-    timeout_tx: tokio::sync::watch::Sender<bool>,
-    timeout_rx: tokio::sync::watch::Receiver<bool>,
-}
-
-#[cfg(test)]
-impl ChannelEofHook {
-    fn new() -> Self {
-        let (seen_tx, seen_rx) = tokio::sync::watch::channel(false);
-        let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
-        let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(false);
-        Self {
-            seen_tx,
-            seen_rx,
-            proceed_tx,
-            proceed_rx,
-            timeout_tx,
-            timeout_rx,
-        }
-    }
-
-    async fn await_seen(&self) {
-        let mut rx = self.seen_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    fn release_emergency_containment(&self) {
-        let _ = self.proceed_tx.send(true);
-    }
-
-    fn force_timeout(&self) {
-        let _ = self.timeout_tx.send(true);
-    }
-
-    async fn pause_before_emergency(&self) {
-        let mut rx = self.proceed_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-}
-
-#[cfg(test)]
-async fn wait_for_forced_timeout(control: Option<&BashTestControl>) {
-    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
-        let mut rx = hook.timeout_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
-#[cfg(not(test))]
-async fn wait_for_forced_timeout(_control: Option<&BashTestControl>) {
-    std::future::pending::<()>().await;
-}
-
-#[cfg(test)]
-#[derive(Clone)]
-pub(crate) struct TerminalHold {
-    held_tx: tokio::sync::watch::Sender<bool>,
-    held_rx: tokio::sync::watch::Receiver<bool>,
-    watchdog_tx: tokio::sync::watch::Sender<bool>,
-    watchdog_rx: tokio::sync::watch::Receiver<bool>,
-    release_tx: tokio::sync::watch::Sender<bool>,
-    release_rx: tokio::sync::watch::Receiver<bool>,
-}
-
-#[cfg(test)]
-impl TerminalHold {
-    fn new() -> Self {
-        let (held_tx, held_rx) = tokio::sync::watch::channel(false);
-        let (watchdog_tx, watchdog_rx) = tokio::sync::watch::channel(false);
-        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
-        Self {
-            held_tx,
-            held_rx,
-            watchdog_tx,
-            watchdog_rx,
-            release_tx,
-            release_rx,
-        }
-    }
-
-    async fn await_release(&self) {
-        let mut rx = self.release_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    async fn await_held(&self) {
-        let mut rx = self.held_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    async fn await_watchdog(&self) {
-        let mut rx = self.watchdog_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    fn release(&self) {
-        let _ = self.release_tx.send(true);
+        self.runner.channel_eof.as_ref()
     }
 }
 
@@ -718,90 +468,18 @@ type CapturePark = Option<CaptureHoldReader>;
 #[cfg(not(test))]
 type CapturePark = Option<std::convert::Infallible>;
 
-#[cfg(test)]
-async fn wait_for_terminal_release(control: Option<&BashTestControl>) {
-    if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
-        hold.await_release().await;
-    } else {
-        std::future::pending::<()>().await;
-    }
-}
-
-#[cfg(not(test))]
-async fn wait_for_terminal_release(_control: Option<&BashTestControl>) {
-    std::future::pending::<()>().await;
-}
-
-/// The exact shell-exit lifecycle boundary of one invocation, observable
-/// only by in-crate tests.
-///
-/// The executor signals the boundary exactly once — when the supervisor
-/// reported the shell's natural exit — and then parks until the test
-/// releases it. Both sides are `tokio::sync::watch`-based, so the test can
-/// never miss the boundary and the executor can never be released too
-/// early.
-#[cfg_attr(not(test), allow(dead_code))] // empty in non-test builds
-#[derive(Clone)]
-pub(crate) struct BashLifecycleHook {
-    #[cfg(test)]
-    shell_exit_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
-    proceed_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
-    proceed_rx: tokio::sync::watch::Receiver<bool>,
-}
-
-#[cfg(test)]
-impl BashLifecycleHook {
-    fn new() -> Self {
-        let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
-        let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
-        Self {
-            shell_exit_tx,
-            proceed_tx,
-            proceed_rx,
-        }
-    }
-
-    /// Executor side: signals the exact shell-exit boundary and parks until
-    /// the test releases the executor.
-    async fn pause_after_shell_exit(&self) {
-        let _ = self.shell_exit_tx.send(true);
-        let mut proceed = self.proceed_rx.clone();
-        let _ = proceed.changed().await;
-    }
-
-    /// Test side: waits until the executor provably observed the shell's
-    /// natural exit and parked at the boundary.
-    async fn await_shell_exit(&self) {
-        let mut rx = self.shell_exit_tx.subscribe();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    /// Test side: releases the parked executor.
-    fn release(&self) {
-        let _ = self.proceed_tx.send(true);
-    }
-}
-
 /// A process-control failure of the owned Bash invocation.
+///
+/// The ownership-half failure kinds are owned by the shared supervised
+/// command runner (`crate::runtime::process_runner::ProcessControlError`);
+/// the Bash-local half is the bounded capture settlement failure.
 ///
 /// Supervisor setup, signaling, waiting, and IPC failures never silently
 /// fail: a failure that undermines ownership or settlement surfaces as an
 /// explicit failed tool result, never as an ordinary `Success`,
 /// `Cancelled`, or `TimedOut`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ProcessControlError {
-    /// The supervisor exited before reporting terminal child ownership.
-    UnexpectedSupervisorExit,
-    /// The owned process tree did not become terminal within the bounded
-    /// confirmation window after termination was requested. This is the
-    /// bounded settlement escape hatch for a wedged supervisor unit: the
-    /// invocation settles as an explicit bounded failure instead of waiting
-    /// indefinitely.
-    QuiescenceTimeout,
+pub(crate) enum BashProcessControlError {
     /// The output capture did not settle within the bounded confirmation
     /// window after the owned process tree reached its terminal state.
     /// This is the bounded settlement escape hatch for a wedged capture:
@@ -811,16 +489,9 @@ pub(crate) enum ProcessControlError {
     CaptureTimeout,
 }
 
-impl core::fmt::Display for ProcessControlError {
+impl core::fmt::Display for BashProcessControlError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UnexpectedSupervisorExit => write!(
-                f,
-                "the bash supervisor exited before reporting terminal child ownership"
-            ),
-            Self::QuiescenceTimeout => {
-                write!(f, "the owned bash process tree did not become terminal")
-            }
             Self::CaptureTimeout => write!(
                 f,
                 "the bash output capture did not settle within the bounded confirmation window"
@@ -829,64 +500,12 @@ impl core::fmt::Display for ProcessControlError {
     }
 }
 
-impl std::error::Error for ProcessControlError {}
-
 /// The three captured stream references of one invocation.
 type StreamReferences = (
     Option<FileReference>,
     Option<FileReference>,
     Option<FileReference>,
 );
-
-/// The settlement kind when cancellation/timeout owns the invocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Settled {
-    Cancelled,
-    TimedOut,
-}
-
-/// One event reported by the invocation supervisor over the control
-/// channel.
-enum SupervisorEvent {
-    /// The inner completed setup and is gated before spawning Bash.
-    AnchorReady { pgid: i32 },
-    /// Bash was successfully spawned inside the fixed invocation group.
-    OwnershipEstablished,
-    /// Setup ended without ever spawning a Bash-owned execution domain.
-    NoOwnership,
-    /// The shell exited; `status` is its canonical exit status.
-    ShellExited { status: std::process::ExitStatus },
-    /// The supervisor's wait loop observed `ECHILD`: no owned child remains.
-    AllChildrenReaped,
-    /// A process-control failure; the message is human-readable.
-    ProcessControlFailure { message: String },
-    /// One attempted group signal (test observability).
-    SignalAttempt {
-        pgid: i32,
-        signal: i32,
-        emitted: bool,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProcessLifecycle {
-    PreOwnership,
-    OwnershipPossible { pgid: i32 },
-    Owned { pgid: i32 },
-    Terminal,
-}
-
-impl ProcessLifecycle {
-    fn is_terminal(self) -> bool {
-        matches!(self, Self::Terminal)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SupervisorChannel {
-    Connected,
-    Lost,
-}
 
 /// The bounded streaming preview capture of one output stream.
 ///
@@ -995,10 +614,11 @@ async fn run_bash(
     run_bash_unix(command, timeout, context, control).await
 }
 
-/// The Unix-only half of [`run_bash`]: spawns the invocation supervisor,
-/// supervises its lifecycle events, and settles the invocation.
+/// The Unix-only half of [`run_bash`]: spawns the invocation supervisor
+/// through the shared supervised command runner, supervises the capture,
+/// and settles the invocation.
 #[cfg(unix)]
-#[allow(clippy::too_many_lines)] // one coherent spawn/supervise/settle pipeline
+#[allow(clippy::too_many_lines)] // one coherent spawn/capture/settle pipeline
 async fn run_bash_unix(
     command: &str,
     timeout: Option<Duration>,
@@ -1007,113 +627,27 @@ async fn run_bash_unix(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
-    // The runtime child-subreaper capability is a pre-ownership
-    // prerequisite: it is consulted (lazily, one-time, idempotently — see
-    // `crate::runtime::process_supervision`) before the supervisor unit
-    // spawns, so `START` — which authorizes the Bash spawn — is never sent
-    // before catastrophic fallback authority exists. A failure is a
-    // pre-ownership setup failure: no Bash tree is spawned.
+    // The process-ownership half of the invocation (supervisor spawn, the
+    // control protocol, cancellation/timeout settlement, catastrophic
+    // containment, and the direct-child reap) lives in the shared internal
+    // supervised command runner; this tool owns the capture and the
+    // canonical result formatting.
     #[cfg(test)]
-    if let Some(control) = control {
-        if control.fail_subreaper_init {
-            return failed_result(
-                "cannot establish rustX Bash fallback containment: injected child-subreaper \
-                 initialization failure",
-            );
-        }
-    }
-    if let Err(error) = crate::runtime::process_supervision::ensure_child_subreaper() {
-        return failed_result(format!(
-            "cannot establish rustX Bash fallback containment: {error}"
-        ));
-    }
-    // The invocation supervisor's control channel: one UnixStream pair. The
-    // child end becomes the outer supervisor's stdin; the rustX side reads
-    // supervisor lifecycle events and writes the one TERMINATE request.
-    let (stream_a, stream_b) = match std::os::unix::net::UnixStream::pair() {
-        Ok(pair) => pair,
-        Err(error) => {
-            return failed_result(format!(
-                "cannot create the bash supervisor control channel: {error}"
-            ));
-        }
+    let runner_control = control.map(BashTestControl::runner_control);
+    #[cfg(not(test))]
+    let runner_control = None;
+    let spec = SupervisedCommandSpec {
+        command: command.to_owned(),
+        cwd: context.workspace.root().to_path_buf(),
+        environment: context.environment.child_environment(context.workspace.root()),
+        timeout,
+        cancellation: context.cancellation.clone(),
     };
-
-    let mut supervisor = tokio::process::Command::new(supervisor_binary());
-    supervisor.current_dir(context.workspace.root());
-    supervisor.env_clear();
-    for (key, value) in context
-        .environment
-        .child_environment(context.workspace.root())
-    {
-        supervisor.env(key, value);
-    }
-    supervisor.env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER);
-    supervisor.env(COMMAND_ENV, command);
-    #[cfg(test)]
-    if let Some(control) = control {
-        if let Some(path) = &control.anchor_pid_file {
-            supervisor.env(ANCHOR_PID_FILE_ENV, path);
-        }
-        if control.fail_signal {
-            supervisor.env(FAIL_SIGNAL_ENV, "1");
-        }
-        if control.fail_wait {
-            supervisor.env(FAIL_WAIT_ENV, "1");
-        }
-        if control.fail_bash_spawn {
-            supervisor.env(FAIL_BASH_SPAWN_ENV, "1");
-        }
-        if control.fail_sigterm_handler {
-            supervisor.env(FAIL_SIGTERM_HANDLER_ENV, "1");
-        }
-        if control
-            .force_anchor_loss
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            supervisor.env(FORCE_ANCHOR_LOSS_ENV, "1");
-        }
-    }
-    supervisor.stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)));
-    supervisor.stdout(Stdio::piped());
-    supervisor.stderr(Stdio::piped());
-    #[cfg(test)]
-    if let Some(control) = control {
-        if control.fail_supervisor_spawn {
-            return failed_result("injected bash supervisor spawn failure");
-        }
-    }
-    let mut child = match supervisor.spawn() {
-        Ok(child) => child,
-        Err(error) => return failed_result(format!("cannot spawn the bash supervisor: {error}")),
-    };
-    // The reusable Command retains its configured child-side stdio handle.
-    // Drop it after the one spawn so supervisor death is observable as EOF.
-    drop(supervisor);
-    // The supervisor's own stream end must be non-blocking before tokio
-    // adopts it.
-    if let Err(error) = nix::fcntl::fcntl(
-        &stream_a,
-        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
-    ) {
-        let _ = child.start_kill();
-        let _ = child.wait().await;
-        return failed_result(format!(
-            "cannot prepare the bash supervisor control channel: {error}"
-        ));
-    }
-    let mut stream = match tokio::net::UnixStream::from_std(stream_a) {
-        Ok(stream) => stream,
-        Err(error) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            return failed_result(format!(
-                "cannot open the bash supervisor control channel: {error}"
-            ));
-        }
-    };
-    let stdout_pipe = child.stdout.take();
-    let stderr_pipe = child.stderr.take();
+    let (mut runner, stdout_pipe, stderr_pipe) =
+        match SupervisedCommandRunner::spawn(&spec, runner_control) {
+            Ok(parts) => parts,
+            Err(error) => return failed_result(supervisor_spawn_failure(&error)),
+        };
 
     let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
     let stderr_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
@@ -1159,323 +693,45 @@ async fn run_bash_unix(
     }
     drop(combined_tx);
 
-    // The lifecycle supervision loop: the supervisor's events (shell exit,
-    // the outer supervisor's all-children-reaped, process-control
-    // failures, signal attempts) race cancellation and the invocation
-    // timeout (biased: an already observable cancellation or an expired
-    // deadline wins without starting new work). Shell-parent exit is not
-    // settlement, and neither is a detected failure: the invocation
-    // settles only when the capture is settled AND the owned child set is
-    // terminal (the outer supervisor's authoritative AllChildrenReaped)
-    // AND some outcome intent is known. A failure determines the eventual
-    // result status but never settles the invocation lifecycle by itself:
-    // owned work must be contained and terminal before any result —
-    // `Success`, `Failed`, `Cancelled`, or `TimedOut` — is returned.
-    let start = tokio::time::Instant::now();
-    let mut exit_status = None;
-    let mut process_lifecycle = ProcessLifecycle::PreOwnership;
-    let mut supervisor_channel = SupervisorChannel::Connected;
-    let mut direct_child_reaped = false;
-    let mut failure = None;
-    let mut settled = None;
-    let mut drain_result: Option<Box<Result<StreamReferences, String>>> = None;
-    let mut terminate_sent = false;
-    let mut terminate_deadline: Option<tokio::time::Instant> = None;
-    let mut capture_deadline: Option<tokio::time::Instant> = None;
-    let mut capture_force_finalized = false;
-    let mut terminal_event_held = false;
-    // Keep one drain future alive across select iterations. Dropping and
-    // reconstructing a future after it consumed a ready JoinHandle can poll
-    // that completed handle twice when a higher-priority lifecycle branch
-    // wins the same select turn.
-    let mut drain = Box::pin(await_drain(
-        &mut stdout_task,
-        &mut stderr_task,
-        &mut combined_task,
-    ));
-    loop {
-        // Outcome intent and lifecycle settlement are distinct: the loop
-        // may break only when an outcome intent (failure,
-        // cancellation/timeout, or the shell's natural status) is known
-        // and the owned child set is terminal. Capture alone may be force-
-        // finalized after terminality; process terminality is never
-        // replaceable by a wall-clock deadline.
-        let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
-        if outcome_intent
-            && process_lifecycle.is_terminal()
-            && (drain_result.is_some() || capture_force_finalized)
-        {
-            break;
-        }
-        // After TERMINATE the supervisor performs TERM -> grace -> KILL;
-        // an expired confirmation watchdog records explicit process-control
-        // failure intent. It does not replace the authoritative terminal
-        // event or permit result commit.
-        if terminate_sent
-            && !process_lifecycle.is_terminal()
-            && terminate_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
-        {
-            failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
-            terminate_deadline = None;
-            continue;
-        }
-        // Once the outcome intent is known and the owned child set is
-        // terminal, the output capture must settle within the same bounded
-        // window: a capture wedged on reader or artifact I/O must not turn
-        // the contract into an unbounded wait.
-        if outcome_intent && process_lifecycle.is_terminal() && drain_result.is_none() {
-            if capture_deadline.is_none() {
-                capture_deadline =
-                    Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
-            }
-            if tokio::time::Instant::now() >= capture_deadline.expect("set above") {
-                failure = Some(ProcessControlError::CaptureTimeout.to_string());
-                capture_force_finalized = true;
-                continue;
-            }
-        }
-        tokio::select! {
-            biased;
-            () = context.cancellation.cancelled(), if settled.is_none() && !terminate_sent => {
-                settled = Some(Settled::Cancelled);
-                send_terminate(&mut stream).await;
-                terminate_sent = true;
-                terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
-            }
-            () = async {
-                match timeout {
-                    Some(timeout) => tokio::time::sleep_until(start + timeout).await,
-                    None => std::future::pending().await,
-                }
-            }, if settled.is_none() && !terminate_sent => {
-                settled = Some(Settled::TimedOut);
-                send_terminate(&mut stream).await;
-                terminate_sent = true;
-                terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
-            }
-            () = wait_for_forced_timeout(control), if settled.is_none() && !terminate_sent => {
-                settled = Some(Settled::TimedOut);
-                send_terminate(&mut stream).await;
-                terminate_sent = true;
-                terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
-            }
-            event = read_supervisor_event(&mut stream), if supervisor_channel == SupervisorChannel::Connected => match event {
-                Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
-                    if pgid <= 0 || process_lifecycle != ProcessLifecycle::PreOwnership {
-                        failure = Some("invalid Bash ownership anchor transition".to_owned());
-                    } else {
-                        process_lifecycle = ProcessLifecycle::OwnershipPossible { pgid };
-                        if let Err(error) = send_start(&mut stream).await {
-                            failure = Some(error);
-                        }
-                    }
-                }
-                Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
-                    if let ProcessLifecycle::OwnershipPossible { pgid } = process_lifecycle {
-                        process_lifecycle = ProcessLifecycle::Owned { pgid };
-                    } else {
-                        failure = Some("invalid Bash ownership commit transition".to_owned());
-                    }
-                }
-                Ok(Some(SupervisorEvent::NoOwnership)) => {
-                    if matches!(process_lifecycle, ProcessLifecycle::PreOwnership | ProcessLifecycle::OwnershipPossible { .. }) {
-                        process_lifecycle = ProcessLifecycle::Terminal;
-                    } else {
-                        failure = Some("invalid no-ownership terminal transition".to_owned());
-                    }
-                }
-                Ok(Some(SupervisorEvent::ShellExited { status })) => {
-                    exit_status = Some(status);
-                    // The exact shell-exit boundary of a natural exit,
-                    // observed only by in-crate tests: the executor signals
-                    // that the supervisor reported the shell's natural exit
-                    // and parks before any settlement handling begins.
-                    #[cfg(test)]
-                    if let Some(control) = control {
-                        if control.pause_at_shell_exit && settled.is_none() && !terminate_sent {
-                            control.lifecycle.pause_after_shell_exit().await;
-                        }
-                    }
-                }
-                Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
-                    send_terminal_ack(&mut stream).await;
-                    #[cfg(test)]
-                    if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
-                        let _ = hold.held_tx.send(true);
-                        terminal_event_held = true;
-                    } else {
-                        process_lifecycle = ProcessLifecycle::Terminal;
-                    }
-                    #[cfg(not(test))]
-                    {
-                        process_lifecycle = ProcessLifecycle::Terminal;
-                    }
-                }
-                Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
-                    failure = Some(message);
-                }
-                Ok(Some(SupervisorEvent::SignalAttempt { pgid, signal, emitted })) => {
-                    #[cfg(test)]
-                    if let Some(control) = control {
-                        use nix::sys::signal::Signal;
-                        let signal_name = Signal::try_from(signal)
-                            .map_or("unknown", Signal::as_str);
-                        control.record_signal(RecordedSignal {
-                            pgid,
-                            signal: signal_name,
-                            emitted,
-                        });
-                    }
-                    #[cfg(not(test))]
-                    let _ = (pgid, signal, emitted);
-                }
-                Ok(None) => {
-                    #[cfg(test)]
-                    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
-                        let _ = hook.seen_tx.send(true);
-                    }
-                    supervisor_channel = SupervisorChannel::Lost;
-                    if terminal_event_held {
-                        // The authoritative terminal frame was fully parsed;
-                        // only its test-only state transition is paused.
-                        continue;
-                    }
-                    if !process_lifecycle.is_terminal() {
-                        failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
-                    }
-                    match process_lifecycle {
-                        ProcessLifecycle::PreOwnership => {
-                            // START was never sent, so Bash could never have
-                            // been spawned. EOF is terminal only for this
-                            // explicitly pre-ownership state.
-                            process_lifecycle = ProcessLifecycle::Terminal;
-                        }
-                        ProcessLifecycle::OwnershipPossible { pgid }
-                        | ProcessLifecycle::Owned { pgid } => {
-                            if emergency_containment_after_supervisor_loss(
-                                control,
-                                &mut child,
-                                pgid,
-                                &mut process_lifecycle,
-                                &mut failure,
-                            )
-                            .await
-                            {
-                                direct_child_reaped = true;
-                            }
-                        }
-                        ProcessLifecycle::Terminal => {}
-                    }
-                }
-                Err(error) => {
-                    #[cfg(test)]
-                    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
-                        let _ = hook.seen_tx.send(true);
-                    }
-                    failure = Some(error);
-                    supervisor_channel = SupervisorChannel::Lost;
-                    if terminal_event_held {
-                        // See the EOF branch: the terminal proof predates
-                        // this transport shutdown and remains authoritative.
-                        continue;
-                    }
-                    match process_lifecycle {
-                        ProcessLifecycle::PreOwnership => {
-                            process_lifecycle = ProcessLifecycle::Terminal;
-                        }
-                        ProcessLifecycle::OwnershipPossible { pgid }
-                        | ProcessLifecycle::Owned { pgid } => {
-                            if emergency_containment_after_supervisor_loss(
-                                control,
-                                &mut child,
-                                pgid,
-                                &mut process_lifecycle,
-                                &mut failure,
-                            )
-                            .await
-                            {
-                                direct_child_reaped = true;
-                            }
-                        }
-                        ProcessLifecycle::Terminal => {}
-                    }
-                }
-            },
-            result = &mut drain, if drain_result.is_none() => {
-                drain_result = Some(Box::new(result));
-            }
-            () = wait_for_terminal_release(control), if terminal_event_held => {
-                terminal_event_held = false;
-                process_lifecycle = ProcessLifecycle::Terminal;
-            }
-            // The process-confirmation watchdog records failure intent but
-            // never replaces process terminality.
-            () = async {
-                match terminate_deadline {
-                    Some(deadline) => tokio::time::sleep_until(deadline).await,
-                    None => std::future::pending().await,
-                }
-            }, if terminate_sent && !process_lifecycle.is_terminal() && terminate_deadline.is_some() => {
-                failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
-                terminate_deadline = None;
-                #[cfg(test)]
-                if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
-                    let _ = hold.watchdog_tx.send(true);
-                }
-            }
-            // The bounded capture timer: the output capture must settle
-            // within the confirmation window of the terminal child set.
-            () = async {
-                match capture_deadline {
-                    Some(deadline) => tokio::time::sleep_until(deadline).await,
-                    None => std::future::pending().await,
-                }
-            }, if capture_deadline.is_some() && drain_result.is_none() && !capture_force_finalized => {
-                failure = Some(ProcessControlError::CaptureTimeout.to_string());
-                capture_force_finalized = true;
-            }
-        }
-    }
+    // The runner drives the owned process tree to its terminal state. The
+    // outcome intent and lifecycle settlement are distinct: the runner
+    // returns only when an outcome intent (failure, cancellation/timeout,
+    // or the shell's natural status) is known and the owned child set is
+    // terminal. Shell-parent exit is not settlement, and neither is a
+    // detected failure: owned work must be contained and terminal before
+    // any result — `Success`, `Failed`, `Cancelled`, or `TimedOut` — is
+    // returned.
+    let termination = runner.settle().await;
 
-    // Release the persistent drain future's mutable borrows before a forced
-    // capture finalization aborts the underlying reader tasks.
-    drop(drain);
-
-    // Process terminality was proven by the outer supervisor before this
-    // point. Reaping the already-terminal direct child is semantically
-    // required; unlike capture completion, it is never abandoned.
-    if !direct_child_reaped && let Err(error) = child.wait().await {
-        failure = Some(format!("cannot reap the terminal bash supervisor: {error}"));
-    }
-
-    // The capture settled while the supervision loop was running, or the
-    // capture deadline force-finalized it: the only way to leave the
-    // loop without the capture settled is `capture_force_finalized`, and then the
-    // reader tasks are aborted instead of awaited — a wedged capture must
-    // never turn the bounded contract into an unbounded wait. The abort
-    // drops each task's artifact handle, so the incomplete artifact is
-    // finalized and never referenced.
-    let capture = if let Some(result) = drain_result {
-        *result
-    } else {
-        debug_assert!(
-            capture_force_finalized,
-            "only the capture timeout leaves the loop with an open capture"
-        );
-        if let Some(handle) = &stdout_task {
-            handle.abort();
+    // Once the outcome intent is known and the owned child set is
+    // terminal, the output capture must settle within the same bounded
+    // window: a capture wedged on reader or artifact I/O must not turn
+    // the contract into an unbounded wait.
+    let mut capture_failure: Option<String> = None;
+    let drain_future = await_drain(&mut stdout_task, &mut stderr_task, &mut combined_task);
+    let capture = match tokio::time::timeout(BASH_TERMINATION_CONFIRMATION, drain_future).await {
+        Ok(result) => Box::new(result),
+        Err(_) => {
+            capture_failure = Some(BashProcessControlError::CaptureTimeout.to_string());
+            if let Some(handle) = &stdout_task {
+                handle.abort();
+            }
+            if let Some(handle) = &stderr_task {
+                handle.abort();
+            }
+            combined_task.abort();
+            Box::new(Err(
+                "the bash output capture was force-finalized after the bounded settlement window"
+                    .to_owned(),
+            ))
         }
-        if let Some(handle) = &stderr_task {
-            handle.abort();
-        }
-        combined_task.abort();
-        Err(
-            "the bash output capture was force-finalized after the bounded settlement window"
-                .to_owned(),
-        )
     };
 
-    let (stdout_reference, stderr_reference, combined_reference) = match capture {
+    let mut process_failure = match &termination.intent {
+        ProcessOutcomeIntent::ProcessControlFailed(message) => Some(message.clone()),
+        _ => None,
+    };
+    let (stdout_reference, stderr_reference, combined_reference) = match *capture {
         Ok(references) => references,
         Err(error) => {
             // The outcome is already owned (failure or cancellation/
@@ -1484,11 +740,17 @@ async fn run_bash_unix(
             // retention. The root-cause failure is never overwritten by the
             // later capture condition; at most the capture detail is
             // appended to it.
-            if let Some(message) = failure.as_mut() {
+            if let Some(message) = process_failure.as_mut() {
+                message.push_str("; output capture: ");
+                message.push_str(&error);
+            } else if let Some(message) = capture_failure.as_mut() {
                 message.push_str("; output capture: ");
                 message.push_str(&error);
             }
-            if settled.is_some() || failure.is_some() {
+            let outcome_owned = process_failure.is_some()
+                || capture_failure.is_some()
+                || !matches!(termination.intent, ProcessOutcomeIntent::Completed);
+            if outcome_owned {
                 (None, None, None)
             } else {
                 return failed_result(format!("bash output capture failed: {error}"));
@@ -1519,20 +781,23 @@ async fn run_bash_unix(
     // invocation-owned process tree.
     let mut status = ToolExecutionStatus::Success;
     let mut exit_code = None;
-    if let Some(failure_message) = failure {
+    if let Some(failure_message) = process_failure {
         status = ToolExecutionStatus::Failed {
             error: format!("bash process control failed: {failure_message}"),
         };
-    } else if let Some(settled) = settled {
+    } else if let Some(failure_message) = capture_failure {
+        status = ToolExecutionStatus::Failed {
+            error: format!("bash process control failed: {failure_message}"),
+        };
+    } else if matches!(termination.intent, ProcessOutcomeIntent::Cancelled) {
         // Cancellation/timeout owns settlement and wins over any partial
         // natural exit data.
-        status = match settled {
-            Settled::Cancelled => ToolExecutionStatus::Cancelled {
-                reason: CancellationReason::UserRequested,
-            },
-            Settled::TimedOut => ToolExecutionStatus::TimedOut,
+        status = ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::UserRequested,
         };
-    } else if let Some(exit) = exit_status {
+    } else if matches!(termination.intent, ProcessOutcomeIntent::TimedOut) {
+        status = ToolExecutionStatus::TimedOut;
+    } else if let Some(exit) = termination.exit_status {
         if exit.success() {
             status = ToolExecutionStatus::Success;
             exit_code = exit.code();
@@ -1573,334 +838,28 @@ async fn run_bash_unix(
     }
 }
 
-/// The explicit outcome of catastrophic emergency containment.
-///
-/// `Ok(())` alone would be ambiguous (contained-and-terminal vs. no anchor
-/// vs. normal path already completed), so the result distinguishes the
-/// terminal proof from the unavailable-anchor state:
-///
-/// - [`EmergencyContainment::TerminalProven`]: the anchor was retained,
-///   the fallback signal was issued while retained, the group-scoped wait
-///   reached `ECHILD`, and the anchor was released — the owned invocation
-///   group is terminal.
-/// - [`EmergencyContainment::AnchorUnavailable`]: the anchor is not a
-///   waitable child of rustX without a prior authoritative terminal event.
-///   This is **not** a terminal proof — `ECHILD` from the anchor wait
-///   means the anchor identity is unreachable, never that the invocation
-///   group is empty. The invocation must remain non-terminal.
-///
-/// The "normal terminal path already completed" case never reaches this
-/// function: after `AllChildrenReaped` was parsed, the process lifecycle
-/// is already terminal and the caller skips emergency containment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmergencyContainment {
-    /// The anchor was retained, the fallback signal was issued while that
-    /// identity was retained, the group-scoped wait reached `ECHILD`, and
-    /// the anchor was then released.
-    TerminalProven,
-    /// The invocation anchor is unavailable without a prior authoritative
-    /// terminal proof. Never a terminal result.
-    AnchorUnavailable,
-}
-
-/// Catastrophic fallback after the outer supervisor has been reaped.
-///
-/// rustX is a subreaper, so the dead outer's invocation descendants are now
-/// rustX children. The inner leader is retained with `WNOWAIT` before its
-/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
-/// used by the normal outer path. Only after the group-scoped child wait
-/// reaches `ECHILD` is the anchor identity released and terminality proven.
-///
-/// The anchor is matched only by pid; the invocation group only by its
-/// retained pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists
-/// here, so unrelated adopted children are never consumed.
-#[cfg(target_os = "linux")]
-fn emergency_contain_group(
-    pgid: i32,
-    anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    use nix::errno::Errno;
-    use nix::sys::signal::{Signal, killpg};
-    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-    use nix::unistd::Pid;
-    #[cfg(not(test))]
-    let _ = anchor_unavailable;
-
-    #[cfg(test)]
-    if anchor_unavailable {
-        // The regression seam: the anchor reads as not waitable without a
-        // prior authoritative terminal event. The semantic state is what
-        // matters — never an actual pid reuse.
-        return Ok(EmergencyContainment::AnchorUnavailable);
-    }
-    let anchor = Pid::from_raw(pgid);
-    loop {
-        // Anchor retention: observe the adopted inner leader's terminal
-        // state without consuming its identity (`WNOWAIT`). The numeric
-        // group id stays provably allocated while this returns Exited or
-        // Signaled.
-        match waitid(
-            Id::Pid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => {
-                // The anchor is not a waitable child of rustX: the owned
-                // group may still exist. ECHILD from the anchor wait is
-                // never a terminal process-group proof, and the cached
-                // numeric pgid is never signaled after anchor loss.
-                return Ok(EmergencyContainment::AnchorUnavailable);
-            }
-            Err(error) => {
-                return Err(format!(
-                    "cannot retain the lost Bash invocation anchor: {error}"
-                ));
-            }
+/// The canonical failed-result message of one supervised-command spawn
+/// failure, preserving the M5 diagnostic text.
+fn supervisor_spawn_failure(error: &RunnerSpawnError) -> String {
+    match error {
+        RunnerSpawnError::Subreaper(message) => {
+            format!("cannot establish rustX Bash fallback containment: {message}")
         }
-    }
-
-    match killpg(anchor, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => {}
-        Err(error) => {
-            return Err(format!(
-                "cannot contain the lost Bash invocation group: {error}"
-            ));
+        RunnerSpawnError::ControlChannel(message) => {
+            format!("cannot create the bash supervisor control channel: {message}")
         }
-    }
-    loop {
-        // The group-scoped terminal proof: no adopted child of rustX
-        // remains in the invocation group. The anchor itself is released
-        // (reaped) by this same wait, strictly after the fallback signal.
-        match waitid(
-            Id::PGid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return Ok(EmergencyContainment::TerminalProven),
-            Err(error) => {
-                return Err(format!(
-                    "cannot prove the lost Bash invocation group terminal: {error}"
-                ));
-            }
+        RunnerSpawnError::ControlChannelPrepare(message) => {
+            format!("cannot prepare the bash supervisor control channel: {message}")
         }
+        RunnerSpawnError::ControlChannelOpen(message) => {
+            format!("cannot open the bash supervisor control channel: {message}")
+        }
+        RunnerSpawnError::SupervisorSpawn(message) => {
+            format!("cannot spawn the bash supervisor: {message}")
+        }
+        RunnerSpawnError::InjectedSupervisorSpawn => "injected bash supervisor spawn failure".to_owned(),
     }
 }
-
-#[cfg(not(target_os = "linux"))]
-fn emergency_contain_group(
-    _pgid: i32,
-    _anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    Err("Bash fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
-}
-
-/// The catastrophic emergency path of an owned invocation whose supervisor
-/// unit was lost: reaps the lost outer supervisor and runs the adopted-
-/// anchor containment.
-///
-/// Returns whether the direct outer supervisor was reaped. [`EmergencyContainment::TerminalProven`]
-/// moves the lifecycle to terminal. [`EmergencyContainment::AnchorUnavailable`]
-/// is never a terminal proof: the invocation stays non-terminal with the
-/// already-recorded failure intent (unexpected supervisor exit), so no
-/// `ToolExecutionResult` can commit while the owned group may still exist.
-#[cfg(unix)]
-async fn emergency_containment_after_supervisor_loss(
-    control: Option<&BashTestControl>,
-    child: &mut tokio::process::Child,
-    pgid: i32,
-    process_lifecycle: &mut ProcessLifecycle,
-    failure: &mut Option<String>,
-) -> bool {
-    #[cfg(not(test))]
-    let _ = control;
-    if let Err(error) = child.wait().await {
-        *failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
-        return false;
-    }
-    #[cfg(test)]
-    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
-        hook.pause_before_emergency().await;
-    }
-    #[cfg(test)]
-    let anchor_unavailable = control.is_some_and(|control| {
-        control
-            .force_emergency_anchor_unavailable
-            .load(std::sync::atomic::Ordering::SeqCst)
-    });
-    #[cfg(not(test))]
-    let anchor_unavailable = false;
-    match tokio::task::spawn_blocking(move || emergency_contain_group(pgid, anchor_unavailable))
-        .await
-    {
-        Ok(Ok(EmergencyContainment::TerminalProven)) => {
-            *process_lifecycle = ProcessLifecycle::Terminal;
-        }
-        Ok(Ok(EmergencyContainment::AnchorUnavailable)) => {
-            // Anchor loss is never itself a terminal process-group proof:
-            // the owned group may still exist. The lifecycle remains
-            // non-terminal and the already-recorded failure intent cannot
-            // commit a result.
-        }
-        Ok(Err(error)) => *failure = Some(error),
-        Err(error) => {
-            *failure = Some(format!("Bash emergency containment task failed: {error}"));
-        }
-    }
-    true
-}
-
-/// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
-/// (integration tests), otherwise the `bash-supervisor` sibling of the
-/// current executable (production), otherwise the binary-directory sibling
-/// of a test binary living under `target/debug/deps` (in-crate tests).
-#[cfg(unix)]
-pub(crate) fn supervisor_binary() -> std::path::PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_bash-supervisor") {
-        return std::path::PathBuf::from(path);
-    }
-    let exe = std::env::current_exe().expect("current executable");
-    let sibling = exe
-        .parent()
-        .expect("current executable directory")
-        .join("bash-supervisor");
-    if sibling.exists() {
-        return sibling;
-    }
-    exe.parent()
-        .expect("current executable directory")
-        .parent()
-        .expect("binary directory")
-        .join("bash-supervisor")
-}
-
-/// Sends the one termination request to the invocation supervisor.
-///
-/// A write failure means the supervisor is already gone, which implies its
-/// terminal child-set events are already in flight or were received; the
-/// supervision loop's read side remains authoritative.
-#[cfg(unix)]
-async fn send_terminate(stream: &mut tokio::net::UnixStream) {
-    let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
-    let _ = stream.write_all(&frame).await;
-}
-
-#[cfg(unix)]
-async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
-    let frame = [1u8, 0, 0, 0, MSG_START];
-    stream
-        .write_all(&frame)
-        .await
-        .map_err(|error| format!("cannot acknowledge the Bash ownership gate: {error}"))
-}
-
-#[cfg(unix)]
-async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
-    let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
-    let _ = stream.write_all(&frame).await;
-}
-
-/// The `TERMINATE` control-message kind (mirrors
-/// `bash_supervisor::MSG_TERMINATE`).
-#[cfg(unix)]
-const MSG_TERMINATE: u8 = 0x10;
-#[cfg(unix)]
-const MSG_START: u8 = 0x11;
-#[cfg(unix)]
-const MSG_TERMINAL_ACK: u8 = 0x12;
-
-/// Reads exactly one supervisor control frame:
-/// `[u32 LE length][kind][payload]`.
-///
-/// `Ok(None)` means the control channel reached EOF: the supervisor exited.
-#[cfg(unix)]
-async fn read_supervisor_event(
-    stream: &mut tokio::net::UnixStream,
-) -> Result<Option<SupervisorEvent>, String> {
-    let mut header = [0u8; 4];
-    match stream.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "cannot read the bash supervisor control channel: {error}"
-            ));
-        }
-    }
-    let len = u32::from_le_bytes(header) as usize;
-    let mut frame = vec![0u8; len];
-    stream
-        .read_exact(&mut frame)
-        .await
-        .map_err(|error| format!("cannot read the bash supervisor control frame: {error}"))?;
-    let Some((&kind, payload)) = frame.split_first() else {
-        return Err("empty bash supervisor control frame".to_owned());
-    };
-    match kind {
-        MSG_ANCHOR_READY => {
-            if payload.len() != 4 {
-                return Err("malformed bash supervisor anchor-ready frame".to_owned());
-            }
-            Ok(Some(SupervisorEvent::AnchorReady {
-                pgid: i32::from_le_bytes(payload.try_into().expect("four bytes")),
-            }))
-        }
-        MSG_OWNERSHIP_ESTABLISHED => Ok(Some(SupervisorEvent::OwnershipEstablished)),
-        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership)),
-        MSG_SHELL_EXITED => {
-            // { exit_code: i32 LE, signaled: u8, signal: i32 LE }
-            if payload.len() != 9 {
-                return Err("malformed bash supervisor shell-exit frame".to_owned());
-            }
-            let code = i32::from_le_bytes(payload[0..4].try_into().expect("four bytes"));
-            let signaled = payload[4];
-            let signal = i32::from_le_bytes(payload[5..9].try_into().expect("four bytes"));
-            let status = if signaled != 0 {
-                std::process::ExitStatus::from_raw(signal)
-            } else {
-                std::process::ExitStatus::from_raw(code << 8)
-            };
-            Ok(Some(SupervisorEvent::ShellExited { status }))
-        }
-        MSG_ALL_CHILDREN_REAPED => Ok(Some(SupervisorEvent::AllChildrenReaped)),
-        MSG_PROCESS_CONTROL_FAILURE => Ok(Some(SupervisorEvent::ProcessControlFailure {
-            message: String::from_utf8_lossy(payload).into_owned(),
-        })),
-        MSG_SIGNAL_ATTEMPT => {
-            // { pgid: i32 LE, signal: i32 LE, emitted: u8 }
-            if payload.len() != 9 {
-                return Err("malformed bash supervisor signal-attempt frame".to_owned());
-            }
-            let pgid = i32::from_le_bytes(payload[0..4].try_into().expect("four bytes"));
-            let signal = i32::from_le_bytes(payload[4..8].try_into().expect("four bytes"));
-            let emitted = payload[8] != 0;
-            Ok(Some(SupervisorEvent::SignalAttempt {
-                pgid,
-                signal,
-                emitted,
-            }))
-        }
-        other => Err(format!("unknown bash supervisor event kind {other:#04x}")),
-    }
-}
-
-/// The supervisor event kinds (mirror `bash_supervisor`).
-#[cfg(unix)]
-const MSG_SHELL_EXITED: u8 = 0x02;
-#[cfg(unix)]
-const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
-#[cfg(unix)]
-const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
-#[cfg(unix)]
-const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
-#[cfg(unix)]
-const MSG_ANCHOR_READY: u8 = 0x06;
-#[cfg(unix)]
-const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
-#[cfg(unix)]
-const MSG_NO_OWNERSHIP: u8 = 0x08;
 
 /// Streams one child pipe into its preview capture and the combined
 /// multiplex, spooling the full raw bytes into the artifact store.
@@ -2018,14 +977,7 @@ async fn await_drain(
     stdout_task: &mut Option<StreamHandle>,
     stderr_task: &mut Option<StreamHandle>,
     combined_task: &mut StreamHandle,
-) -> Result<
-    (
-        Option<FileReference>,
-        Option<FileReference>,
-        Option<FileReference>,
-    ),
-    String,
-> {
+) -> Result<StreamReferences, String> {
     let stdout = await_handle(stdout_task).await?;
     let stderr = await_handle(stderr_task).await?;
     let combined = combined_task
@@ -2043,29 +995,15 @@ async fn await_handle(handle: &mut Option<StreamHandle>) -> Result<Option<FileRe
     }
 }
 
-/// The signal number of a signal-terminated child, where known.
-fn unix_signal_of(exit: std::process::ExitStatus) -> String {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::ExitStatusExt;
-        exit.signal()
-            .map_or_else(|| "unknown".to_owned(), |signal| signal.to_string())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = exit;
-        "unknown".to_owned()
-    }
-}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BashTestControl, BashTool, MSG_ALL_CHILDREN_REAPED, NAME, SupervisorEvent,
-        read_supervisor_event,
-    };
+    use super::{BashTestControl, BashTool, NAME};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
+    use crate::runtime::process_runner::{
+        MSG_ALL_CHILDREN_REAPED, SupervisorEvent, read_supervisor_event,
+    };
     use crate::tools::artifacts::ArtifactStore;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};

@@ -1415,7 +1415,7 @@ mod anchor_reaping_tests {
     //!   retained, and the group-scoped gate releases the anchor.
 
     use super::*;
-    use crate::tools::native::bash::supervisor_binary;
+    use crate::runtime::process_runner::supervisor_binary;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::path::Path;
