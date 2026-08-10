@@ -5,7 +5,9 @@
 
 mod common;
 
-use common::{collect_events, describe_events, error_fixture, simple_request, sse_fixture, tool};
+use common::{
+    collect_events, describe_events, error_fixture, model_tool, simple_request, sse_fixture,
+};
 use rustx::message::types::{ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
@@ -24,8 +26,8 @@ fn adapter(server: &common::FixtureServer) -> OpenAiChatCompletionsAdapter {
 fn request_with_tools(prompt: &str) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", prompt);
     request.tools = vec![
-        tool("list_directory", "tool-list"),
-        tool("read_file", "tool-read"),
+        model_tool("list_directory", "tool-list"),
+        model_tool("read_file", "tool-read"),
     ];
     request
 }
@@ -261,7 +263,7 @@ async fn text_then_tool_call_orders_by_block() {
     })
     .await;
     let mut request = request_with_tools("Check and list");
-    request.tools.push(tool("bash", "tool-bash"));
+    request.tools.push(model_tool("bash", "tool-bash"));
     let events = collect_events(&adapter(&server), request).await;
     assert_eq!(events[1].block_index(), 0);
     assert_eq!(events[2].block_index(), 1);
@@ -518,7 +520,9 @@ async fn duplicate_tool_names_rejected_before_network() {
     })
     .await;
     let mut request = request_with_tools("hi");
-    request.tools.push(tool("list_directory", "tool-other"));
+    request
+        .tools
+        .push(model_tool("list_directory", "tool-other"));
     let events = collect_events(&adapter(&server), request).await;
     assert_eq!(events.len(), 1);
     assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);

@@ -16,12 +16,14 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 use futures_util::stream::unfold;
 use rustx::model::{
-    ModelAdapter, ModelCancellation, ModelError, ModelErrorKind, ModelEvent, ModelProtocol,
-    ModelRequest,
+    ModelAdapter, ModelError, ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest,
 };
+use rustx::runtime::CancellationSignal;
 use rustx::runtime::identity::ToolCallId;
-use rustx::tools::executor::Tool;
-use rustx::tools::types::{ToolCall, ToolDefinition, ToolExecutionResult};
+use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
+use rustx::tools::types::{
+    ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+};
 use tokio::sync::{Notify, watch};
 
 /// One scripted step of a fake model invocation.
@@ -128,7 +130,7 @@ impl ModelAdapter for FakeModel {
     fn stream(
         &self,
         request: ModelRequest,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     ) -> rustx::model::ModelEventStream {
         self.requests
             .lock()
@@ -181,18 +183,21 @@ impl ModelAdapter for FakeModel {
     }
 }
 
-/// A scripted deterministic tool.
+/// A scripted deterministic tool executor.
 ///
 /// Every call receives the same fixed result (recorded verbatim by the
 /// loop). When constructed as a parking tool, `execute` waits until the
-/// test releases it, simulating a tool whose execution is still running
-/// while the attempt is cancelled.
+/// test releases it or until the invocation's cancellation signal fires —
+/// a parking tool always settles: on cancellation it returns a normalized
+/// cancelled result (the loop normalizes the reason to the attempt's), so
+/// the committed tool-result batch stays structurally complete.
 pub struct FakeTool {
     definition: ToolDefinition,
     result: ToolExecutionResult,
     release: Option<Arc<Notify>>,
-    calls: watch::Sender<Vec<ToolCall>>,
+    calls: watch::Sender<Vec<ToolInvocation>>,
     started: watch::Sender<bool>,
+    completed: watch::Sender<Vec<String>>,
 }
 
 impl FakeTool {
@@ -205,6 +210,7 @@ impl FakeTool {
             release: None,
             calls: watch::Sender::new(Vec::new()),
             started: watch::Sender::new(false),
+            completed: watch::Sender::new(Vec::new()),
         }
     }
 
@@ -219,15 +225,24 @@ impl FakeTool {
                 release: Some(release.clone()),
                 calls: watch::Sender::new(Vec::new()),
                 started: watch::Sender::new(false),
+                completed: watch::Sender::new(Vec::new()),
             },
             release,
         )
     }
 
-    /// The calls this tool received, in order. Subscribe before inserting
-    /// the tool into a registry to observe calls deterministically.
+    /// The canonical definition of this tool, registered together with the
+    /// executor.
     #[must_use]
-    pub fn calls(&self) -> watch::Receiver<Vec<ToolCall>> {
+    pub fn definition(&self) -> &ToolDefinition {
+        &self.definition
+    }
+
+    /// The stripped invocations this tool received, in order. Subscribe
+    /// before inserting the tool into a registry to observe calls
+    /// deterministically.
+    #[must_use]
+    pub fn calls(&self) -> watch::Receiver<Vec<ToolInvocation>> {
         self.calls.subscribe()
     }
 
@@ -236,22 +251,82 @@ impl FakeTool {
     pub fn started(&self) -> watch::Receiver<bool> {
         self.started.subscribe()
     }
-}
 
-impl Tool for FakeTool {
-    fn definition(&self) -> &ToolDefinition {
-        &self.definition
+    /// A receiver observing the physical completion order of this tool's
+    /// executions, recorded when each execution future resolves.
+    #[must_use]
+    pub fn completed(&self) -> watch::Receiver<Vec<String>> {
+        self.completed.subscribe()
     }
 
-    fn execute<'a>(&'a self, call: &'a ToolCall) -> BoxFuture<'a, ToolExecutionResult> {
+    /// Registers the fake tool (definition + executor) with a registry.
+    pub fn register(self, registry: &mut ToolRegistry) {
+        registry
+            .register(self.definition.clone(), Arc::new(self))
+            .expect("fake tool definitions are valid registrations");
+    }
+}
+
+impl ToolExecutor for FakeTool {
+    fn execute<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> BoxFuture<'a, ToolExecutionResult> {
         self.started.send_replace(true);
-        self.calls.send_modify(|calls| calls.push(call.clone()));
+        self.calls
+            .send_modify(|calls| calls.push(invocation.clone()));
+        let release = self.release.clone();
+        let result = self.result.clone();
+        let completed = self.completed.clone();
         Box::pin(async move {
-            if let Some(release) = &self.release {
-                release.notified().await;
-            }
-            self.result.clone()
+            let outcome = if let Some(release) = release {
+                tokio::select! {
+                    biased;
+                    () = context.cancellation.cancelled() => {
+                        ToolExecutionResult {
+                            status: ToolExecutionStatus::Cancelled {
+                                reason: rustx::runtime::types::CancellationReason::UserRequested,
+                            },
+                            content: Vec::new(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                        }
+                    }
+                    () = release.notified() => result,
+                }
+            } else {
+                result
+            };
+            completed.send_modify(|order| order.push(invocation.tool_name.clone()));
+            outcome
         })
+    }
+}
+
+/// A canonical inbound user message fixture.
+#[must_use]
+pub fn inbound_message(
+    id: &str,
+    text: &str,
+    source: rustx::message::types::UserSource,
+) -> rustx::message::types::UserMessageBlock {
+    rustx::message::types::UserMessageBlock {
+        id: rustx::runtime::identity::MessageId::new(id),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: text.to_owned(),
+            },
+        )],
+        source,
+        kind: rustx::message::types::InboundKind::Message,
+        timestamp: Some(
+            chrono::DateTime::parse_from_rfc3339("2026-08-09T12:00:00Z")
+                .expect("fixed timestamp")
+                .with_timezone(&chrono::Utc),
+        ),
     }
 }
 

@@ -210,11 +210,18 @@ struct MailboxState {
 /// multi-threaded runtime. These hooks exist only under `#[cfg(test)]`.
 #[cfg(test)]
 #[derive(Debug)]
-struct MailboxProbe {
-    drain_snapshot: Option<std::sync::mpsc::SyncSender<()>>,
-    drain_release: Option<std::sync::mpsc::Receiver<()>>,
-    enqueue_computed: Option<std::sync::mpsc::SyncSender<()>>,
-    enqueue_resume: Option<std::sync::mpsc::Receiver<()>>,
+pub(crate) struct MailboxProbe {
+    /// Fires while the drain critical section is still held, after the
+    /// watermark was established and the items detached.
+    pub(crate) drain_snapshot: Option<std::sync::mpsc::SyncSender<()>>,
+    /// A receiver whose token unblocks a drain parked inside its critical
+    /// section.
+    pub(crate) drain_release: Option<std::sync::mpsc::Receiver<()>>,
+    /// Fires while the enqueue critical section is still held, after the
+    /// sequence was computed and before the item is published.
+    pub(crate) enqueue_computed: Option<std::sync::mpsc::SyncSender<()>>,
+    /// A receiver whose token unblocks a paused enqueue.
+    pub(crate) enqueue_resume: Option<std::sync::mpsc::Receiver<()>>,
 }
 
 /// The explicit execution-domain identity of one fresh inbound turn.
@@ -436,6 +443,22 @@ impl ConversationInboundMailbox {
                 pending: VecDeque::new(),
                 #[cfg(test)]
                 probe: None,
+            })),
+        }
+    }
+
+    /// Creates an inbound mailbox with test-only synchronization hooks
+    /// installed. Only available under `#[cfg(test)]`; never used by
+    /// production code.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_probe(conversation_id: ConversationId, probe: MailboxProbe) -> Self {
+        Self {
+            conversation_id,
+            state: Arc::new(Mutex::new(MailboxState {
+                last_sequence: 0,
+                pending: VecDeque::new(),
+                probe: Some(probe),
             })),
         }
     }

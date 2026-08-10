@@ -96,6 +96,19 @@ id_type! {
 }
 
 id_type! {
+    /// Identifies one detached runtime execution instance of a background
+    /// tool.
+    ///
+    /// `ToolExecutionId` is distinct from `ToolCallId`: a `ToolCallId`
+    /// identifies the logical model-issued call, while a `ToolExecutionId`
+    /// identifies the runtime execution instance and may outlive the
+    /// attempt that created it. Allocation is conversation-owned and
+    /// monotonic (`exec_1`, `exec_2`, ...); cross-conversation uniqueness is
+    /// not required because the background registry is conversation-scoped.
+    ToolExecutionId
+}
+
+id_type! {
     /// Identifies an immutable version of a custom Python tool.
     ToolVersionId
 }
@@ -159,8 +172,8 @@ impl Default for CapabilityRevision {
 mod tests {
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
-        EventId, McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolId,
-        ToolVersionId, TurnId,
+        EventId, McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId,
+        ToolId, ToolVersionId, TurnId,
     };
 
     /// Strong identifiers serialize as plain strings, not as structs.
@@ -194,6 +207,7 @@ mod tests {
         let _ = round_trip(&EventId::new("evt-1"));
         let _ = round_trip(&ToolId::new("tool-bash"));
         let _ = round_trip(&ToolCallId::new("call_01"));
+        let _ = round_trip(&ToolExecutionId::new("exec_1"));
         let _ = round_trip(&ToolVersionId::new("tool-v2"));
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));

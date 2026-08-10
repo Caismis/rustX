@@ -234,7 +234,7 @@ pub async fn collect_events(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
 ) -> Vec<rustx::model::ModelEvent> {
-    let cancellation = rustx::model::ModelCancellation::new();
+    let cancellation = rustx::runtime::CancellationSignal::new();
     let mut stream = adapter.stream(request, cancellation);
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
@@ -247,7 +247,7 @@ pub async fn collect_events(
 pub async fn collect_events_with_cancellation(
     adapter: &dyn rustx::model::ModelAdapter,
     request: rustx::model::ModelRequest,
-    cancellation: rustx::model::ModelCancellation,
+    cancellation: rustx::runtime::CancellationSignal,
 ) -> Vec<rustx::model::ModelEvent> {
     let mut stream = adapter.stream(request, cancellation);
     let mut events = Vec::new();
@@ -315,17 +315,254 @@ pub fn simple_request(
 /// One canonical tool definition used by adapter tests.
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
-    use rustx::tools::types::{ToolDefinition, ToolExecutionMode, ToolOrigin, ToolReplayPolicy};
+    use rustx::tools::types::{
+        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+    };
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
-        execution_mode: ToolExecutionMode::Parallel,
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        concurrency_policy: ToolConcurrencyPolicy::Sequential,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Mcp {
             server_id: rustx::runtime::identity::McpServerId::new("mcp-test"),
         },
+    }
+}
+
+/// A conversation tool runtime over a unique temporary workspace.
+///
+/// Fake tools never touch the workspace, so M3/M4 tests share one runtime
+/// per conversation id; native-tool tests use isolated temporary workspaces.
+/// The artifact root is a sibling of the workspace root, never nested
+/// inside it.
+#[must_use]
+pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::ConversationToolRuntime {
+    let dir = std::env::temp_dir().join(format!(
+        "rustx-tool-runtime-{conversation_id}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(dir.join("workspace"));
+    rustx::tools::runtime::ConversationToolRuntime::new(
+        rustx::runtime::identity::ConversationId::new(conversation_id),
+        dir.join("workspace"),
+        dir.join("artifacts"),
+    )
+    .expect("tool runtime")
+}
+
+/// A conversation tool runtime bound to an explicitly configured canonical
+/// conversation mailbox.
+#[must_use]
+pub fn tool_runtime_with_mailbox(
+    conversation_id: &str,
+    mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
+) -> rustx::tools::runtime::ConversationToolRuntime {
+    use rustx::tools::runtime::ConversationRuntimeConfig;
+    let dir = std::env::temp_dir().join(format!(
+        "rustx-tool-runtime-{conversation_id}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(dir.join("workspace"));
+    rustx::tools::runtime::ConversationToolRuntime::from_config(
+        rustx::runtime::identity::ConversationId::new(conversation_id),
+        ConversationRuntimeConfig {
+            mailbox: Some(mailbox),
+            ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+        },
+    )
+    .expect("tool runtime")
+}
+
+/// A canonical tool definition with explicit execution/concurrency
+/// policies.
+#[must_use]
+pub fn tool_policies(
+    name: &str,
+    id: &str,
+    execution: rustx::tools::types::ToolExecutionPolicy,
+    concurrency: rustx::tools::types::ToolConcurrencyPolicy,
+) -> rustx::tools::types::ToolDefinition {
+    use rustx::runtime::identity::ToolId;
+    use rustx::tools::types::{ToolDefinition, ToolOrigin, ToolReplayPolicy};
+    ToolDefinition {
+        id: ToolId::new(id),
+        name: name.to_owned(),
+        description: format!("Tool {name}"),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        execution_policy: execution,
+        concurrency_policy: concurrency,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
+    }
+}
+
+/// A conversation tool runtime over a unique temporary workspace with the
+/// native tool registry attached.
+pub struct NativeFixture {
+    /// The temporary directory kept alive for the fixture lifetime.
+    #[allow(clippy::used_underscore_binding)]
+    _dir: tempfile::TempDir,
+    /// The conversation tool runtime.
+    pub runtime: rustx::tools::runtime::ConversationToolRuntime,
+    /// The registry with every native tool registered.
+    pub registry: rustx::tools::executor::ToolRegistry,
+    /// The conversation inbound mailbox shared by the runtime and tests.
+    pub mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
+}
+
+impl NativeFixture {
+    /// The temporary directory backing this fixture.
+    #[must_use]
+    pub fn dir(&self) -> &tempfile::TempDir {
+        &self._dir
+    }
+}
+
+/// A native tool fixture: isolated temporary workspace and artifact root
+/// plus the fully registered native tool plane.
+#[must_use]
+pub fn native_fixture() -> NativeFixture {
+    native_fixture_with_environment(Vec::new())
+}
+
+/// A native tool fixture with an explicit authorized tool environment.
+#[must_use]
+pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> NativeFixture {
+    use rustx::tools::runtime::ConversationRuntimeConfig;
+    let dir = tempfile::tempdir().expect("temporary workspace");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace directory");
+    let artifacts = dir.path().join("artifacts");
+    let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m5");
+    let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::new(conversation_id.clone());
+    let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
+        .expect("authorized environment");
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        conversation_id,
+        ConversationRuntimeConfig {
+            mailbox: Some(mailbox.clone()),
+            environment: Some(environment),
+            ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
+        },
+    )
+    .expect("tool runtime");
+    let mut registry = rustx::tools::executor::ToolRegistry::new();
+    rustx::tools::native::register_native_tools(
+        &mut registry,
+        rustx::tools::native::NativeToolResources {
+            background: runtime.background().clone(),
+        },
+        rustx::tools::native::NativeToolPolicies::default(),
+    )
+    .expect("native tool registration");
+    NativeFixture {
+        _dir: dir,
+        runtime,
+        registry,
+        mailbox,
+    }
+}
+
+/// A no-op progress reporter for direct tool invocations.
+#[derive(Debug)]
+pub struct NoopProgress;
+
+impl rustx::tools::executor::ProgressReporter for NoopProgress {
+    fn report(&self, _progress: rustx::tools::types::ToolProgress) {}
+}
+
+/// Executes one preflighted native tool call against a fixture with a
+/// caller-controlled cancellation signal.
+pub async fn run_tool_with_cancellation(
+    fixture: &NativeFixture,
+    name: &str,
+    arguments: serde_json::Value,
+    cancellation: rustx::runtime::CancellationSignal,
+) -> rustx::tools::types::ToolExecutionResult {
+    use rustx::runtime::identity::ToolCallId;
+    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
+    use rustx::tools::types::ToolCall;
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == name)
+        .expect("tool registered");
+    let call = ToolCall {
+        id: ToolCallId::new("call-m5"),
+        tool_id: definition.id,
+        name: name.to_owned(),
+        arguments,
+    };
+    let outcome = fixture.registry.preflight(&call).expect("preflight");
+    let PreflightOutcome::Ready(prepared) = outcome else {
+        panic!("direct native tool calls preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = NoopProgress;
+    let context = ToolExecutionContext {
+        conversation_id: fixture.runtime.conversation_id(),
+        execution_id: None,
+        cancellation,
+        workspace: fixture.runtime.workspace(),
+        progress: &reporter,
+        artifacts: fixture.runtime.artifacts(),
+        environment: fixture.runtime.environment(),
+    };
+    executor.execute(prepared.invocation, context).await
+}
+
+/// Executes one preflighted native tool call against a fixture.
+pub async fn run_tool(
+    fixture: &NativeFixture,
+    name: &str,
+    arguments: serde_json::Value,
+) -> rustx::tools::types::ToolExecutionResult {
+    use rustx::runtime::identity::ToolCallId;
+    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
+    use rustx::tools::types::ToolCall;
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == name)
+        .expect("tool registered");
+    let call = ToolCall {
+        id: ToolCallId::new("call-m5"),
+        tool_id: definition.id,
+        name: name.to_owned(),
+        arguments,
+    };
+    let outcome = fixture.registry.preflight(&call).expect("preflight");
+    let PreflightOutcome::Ready(prepared) = outcome else {
+        panic!("direct native tool calls preflight as ready");
+    };
+    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
+    let reporter = NoopProgress;
+    let context = ToolExecutionContext {
+        conversation_id: fixture.runtime.conversation_id(),
+        execution_id: None,
+        cancellation: rustx::runtime::CancellationSignal::new(),
+        workspace: fixture.runtime.workspace(),
+        progress: &reporter,
+        artifacts: fixture.runtime.artifacts(),
+        environment: fixture.runtime.environment(),
+    };
+    executor.execute(prepared.invocation, context).await
+}
+
+/// One canonical compiled model-facing tool definition used by adapter
+/// tests.
+pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
+    use rustx::runtime::identity::ToolId;
+    rustx::tools::types::ModelToolDefinition {
+        id: ToolId::new(id),
+        name: name.to_owned(),
+        description: format!("Tool {name}"),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}),
     }
 }
 

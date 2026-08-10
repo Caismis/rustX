@@ -37,11 +37,12 @@
 //! execution model — no no-context/unbounded mode and no Agent Status
 //! disable flag. Agent Status is composed whenever a pending
 //! [`FreshInboundTurn`] exists and is consumed by the first successful model
-//! invocation that observes it. The conversation inbound mailbox is opt-in
-//! via [`AgentExecution::with_inbound_mailbox`], which adds the mailbox
-//! safe-boundary rules. Cancellation is a generic Agent Loop invariant for
-//! every execution: observable cancellation is checked before every model
-//! turn begins.
+//! invocation that observes it. The conversation inbound mailbox is owned by
+//! the conversation tool runtime: the loop drains exactly
+//! `tool_runtime.mailbox()` at every safe boundary, so background terminal
+//! notifications always enter the same mailbox the Agent Loop drains.
+//! Cancellation is a generic Agent Loop invariant for every execution:
+//! observable cancellation is checked before every model turn begins.
 
 use futures_util::StreamExt;
 
@@ -60,13 +61,18 @@ use crate::model::types::{
     AgentStatusAttachment, ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort,
 };
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
-use crate::runtime::inbound::{
-    ConversationInboundMailbox, FreshInboundTurn, InitialTurnTrigger, MailboxError,
-};
+use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
+use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::types::{CancellationReason, RuntimeError};
-use crate::tools::executor::ToolRegistry;
-use crate::tools::types::ToolCall;
+use crate::tools::background::BackgroundDispatchOutcome;
+use crate::tools::executor::{
+    PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
+};
+use crate::tools::runtime::ConversationToolRuntime;
+use crate::tools::types::{
+    ToolCall, ToolConcurrencyPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolProgress,
+};
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
@@ -153,14 +159,16 @@ pub struct AgentExecutionResult {
 ///
 /// The loop borrows the model adapter, the immutable tool registry, the
 /// attempt cancellation signal, and owns the mandatory M4 context runtime,
+/// the conversation tool runtime (whose canonical mailbox the loop drains),
 /// the execution state machine, the committed history, the retained
-/// continuation state, the pending fresh inbound trigger, the conversation
-/// inbound mailbox handle (when attached), and the runtime event trace.
+/// continuation state, the pending fresh inbound trigger, and the runtime
+/// event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
     tools: &'a ToolRegistry,
     cancellation: &'a AgentCancellation,
+    tool_runtime: &'a ConversationToolRuntime,
     state: ExecutionStateMachine,
     history: Vec<MessageBlock>,
     events: Vec<RuntimeEvent>,
@@ -175,11 +183,6 @@ pub struct AgentExecution<'a> {
     context_runtime: ContextRuntime<'a>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
-    /// The conversation inbound mailbox, when attached. The mailbox stays
-    /// external to the execution: the execution object is a consumer that
-    /// performs one finite drain per safe boundary, never the authoritative
-    /// conversation queue store.
-    mailbox: Option<ConversationInboundMailbox>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
@@ -223,27 +226,49 @@ enum Terminal {
 
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, tool registry,
-    /// cancellation signal, and the mandatory M4 context runtime.
+    /// cancellation signal, the mandatory M4 context runtime, and the
+    /// conversation tool runtime.
+    ///
+    /// The conversation tool runtime binds the conversation identity, the
+    /// canonical inbound mailbox, and the background registry together:
+    /// the attempt must belong to the same conversation, otherwise the
+    /// execution is rejected structurally. The loop drains exactly
+    /// `tool_runtime.mailbox()` at every safe boundary, so background
+    /// terminal notifications always enter the mailbox the Agent Loop
+    /// drains.
     ///
     /// The context runtime is required: there is exactly one normal
     /// execution model — canonical history is always projected through the
     /// context engine, and Agent Status is composed whenever a pending fresh
     /// inbound turn exists. There is no no-context mode and no Agent Status
     /// disable flag.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::ConversationMismatch`] when the request's
+    /// conversation differs from the conversation tool runtime's
+    /// conversation (and therefore its canonical mailbox).
     pub fn new(
         request: AgentExecutionRequest,
         adapter: &'a dyn ModelAdapter,
         tools: &'a ToolRegistry,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime<'a>,
-    ) -> Self {
-        Self {
+        tool_runtime: &'a ConversationToolRuntime,
+    ) -> Result<Self, MailboxError> {
+        if tool_runtime.conversation_id() != &request.conversation_id {
+            return Err(MailboxError::ConversationMismatch {
+                expected: request.conversation_id.clone(),
+                actual: tool_runtime.conversation_id().clone(),
+            });
+        }
+        Ok(Self {
             history: request.initial_messages.clone(),
             request,
             adapter,
             tools,
             cancellation,
+            tool_runtime,
             state: ExecutionStateMachine::new(),
             events: Vec::new(),
             pending_continuation: None,
@@ -252,43 +277,11 @@ impl<'a> AgentExecution<'a> {
             context_runtime,
             observed: None,
             last_request_fingerprint: None,
-            mailbox: None,
             #[cfg(test)]
             continuation_pause: None,
             turn: 0,
             terminal_emitted: false,
-        }
-    }
-
-    /// Attaches the conversation inbound mailbox of the attempt's
-    /// conversation.
-    ///
-    /// The mailbox is conversation-owned coordination that stays external to
-    /// the execution: at every safe turn boundary the loop performs exactly
-    /// one finite atomic drain and appends every drained inbound message as
-    /// its own canonical `UserMessageBlock` before the next model request.
-    /// The drained batch becomes one new `FreshInboundTurn`, so the next
-    /// model request carries exactly one Agent Status snapshot targeting the
-    /// final drained message. The mailbox must belong to the same
-    /// conversation as the request; a mismatched conversation is rejected
-    /// explicitly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MailboxError::ConversationMismatch`] when the mailbox
-    /// belongs to a different conversation than the request.
-    pub fn with_inbound_mailbox(
-        mut self,
-        mailbox: ConversationInboundMailbox,
-    ) -> Result<Self, MailboxError> {
-        if mailbox.conversation_id() != &self.request.conversation_id {
-            return Err(MailboxError::ConversationMismatch {
-                expected: self.request.conversation_id.clone(),
-                actual: mailbox.conversation_id().clone(),
-            });
-        }
-        self.mailbox = Some(mailbox);
-        Ok(self)
+        })
     }
 
     /// Runs the attempt to its single terminal outcome.
@@ -516,6 +509,22 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
+        // M5 preflight boundary: every model-issued tool call of the turn
+        // must resolve structurally (registry identity, execution-policy
+        // resolution, runtime metadata extraction, business argument
+        // validation) before the agent message is committed. An impossible
+        // canonical identity mismatch or unregistered tool is a
+        // runtime/model-stream contract failure and the agent message is
+        // never committed. Business JSON Schema validation failures are
+        // normal rejected result slots and do not fail the attempt.
+        let preflight = match self.preflight_tool_calls(&turn_assembly.tool_calls) {
+            Ok(outcomes) => outcomes,
+            Err(error) => {
+                return Some(Terminal::Failed {
+                    failure: AttemptFailure::Runtime { error },
+                });
+            }
+        };
         self.commit_agent_message(&agent_message_id, &turn_assembly.content);
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
@@ -530,9 +539,15 @@ impl<'a> AgentExecution<'a> {
                 Err(terminal) => Some(terminal),
             };
         }
-        if let Some(terminal) = self.execute_tools(&turn_assembly.tool_calls).await {
-            return Some(terminal);
-        }
+        // The entire tool-result batch is structurally settled exactly once
+        // inside `execute_tools` before this point returns: every logical
+        // call of the committed batch receives exactly one canonical
+        // attempt-facing result slot, committed in original model call
+        // order. Attempt cancellation can still settle the attempt as
+        // cancelled after the structurally complete result batch is
+        // committed; no next model turn starts after cancellation.
+        self.execute_tools(&turn_assembly.tool_calls, preflight)
+            .await;
         if self.cancellation.is_cancelled() {
             return Some(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -543,13 +558,45 @@ impl<'a> AgentExecution<'a> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        self.emit(RuntimeEvent::TurnCompleted);
         // Safe boundary after a structurally complete tool turn: every
-        // foreground call of the turn executed in deterministic order and
-        // every ToolMessage was committed before this point. One finite
-        // mailbox drain may attach an inbound batch to the continuation;
-        // the drain never splits the tool-result batch.
+        // foreground call of the turn executed and every ToolMessage was
+        // committed before this point. One finite mailbox drain may attach
+        // an inbound batch to the continuation; the drain never splits the
+        // tool-result batch.
         self.safe_boundary_drain().err()
+    }
+
+    /// Preflights every model-issued tool call of the turn.
+    ///
+    /// An impossible canonical identity mismatch or unregistered tool is a
+    /// runtime/model-stream contract failure; business schema violations are
+    /// normal [`PreflightOutcome::Rejected`] result slots.
+    fn preflight_tool_calls(
+        &self,
+        calls: &[ToolCall],
+    ) -> Result<Vec<PreflightOutcome>, RuntimeError> {
+        let mut outcomes = Vec::with_capacity(calls.len());
+        for call in calls {
+            match self.tools.preflight(call) {
+                Ok(outcome) => outcomes.push(outcome),
+                Err(error) => {
+                    return Err(match error {
+                        crate::tools::executor::ToolPreflightError::UnknownTool { name } => {
+                            RuntimeError::UnknownTool { name }
+                        }
+                        crate::tools::executor::ToolPreflightError::IdentityMismatch {
+                            id,
+                            name,
+                        } => RuntimeError::ContractViolation {
+                            message: format!(
+                                "tool call identity mismatch: id {id} and name {name:?}                                      do not resolve to the same registered tool"
+                            ),
+                        },
+                    });
+                }
+            }
+        }
+        Ok(outcomes)
     }
 
     /// The mailbox-specific safe boundary: exactly one finite inbound
@@ -557,11 +604,13 @@ impl<'a> AgentExecution<'a> {
     ///
     /// This function is mailbox-owned semantics only, separate from the
     /// generic Agent Loop cancellation checkpoint (which lives in `run()`
-    /// before every model turn). With no mailbox attached there is no
-    /// snapshot work: the function returns `Ok(false)` immediately and
-    /// observes no mailbox state. With a mailbox attached, cancellation
-    /// wins before batch selection: when cancellation is already
-    /// observable, no drain happens, all pending items stay in the
+    /// before every model turn). The conversation tool runtime owns the one
+    /// canonical mailbox of the conversation; the loop drains exactly that
+    /// mailbox, so background terminal notifications always enter the same
+    /// mailbox the Agent Loop drains. With no pending items the snapshot
+    /// observes no mailbox state and the function returns `Ok(false)`.
+    /// Cancellation wins before batch selection: when cancellation is
+    /// already observable, no drain happens, all pending items stay in the
     /// mailbox, and the attempt settles cancelled. Otherwise one atomic
     /// drain is performed and, once drained, the complete batch is
     /// appended synchronously as distinct canonical `UserMessageBlock`
@@ -575,13 +624,10 @@ impl<'a> AgentExecution<'a> {
     /// turn.
     ///
     /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
-    /// when no mailbox is attached or the snapshot observed an empty
-    /// mailbox, and the attempt terminal when cancellation was observable
-    /// before the snapshot.
+    /// when the snapshot observed an empty mailbox, and the attempt
+    /// terminal when cancellation was observable before the snapshot.
     fn safe_boundary_drain(&mut self) -> Result<bool, Terminal> {
-        let Some(mailbox) = &self.mailbox else {
-            return Ok(false);
-        };
+        let mailbox = self.tool_runtime.mailbox();
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -698,6 +744,7 @@ impl<'a> AgentExecution<'a> {
         let context = crate::context::status::AgentStatusRenderContext {
             inbound_message_time,
             timezone: self.request.timezone,
+            background: self.tool_runtime.background().active_snapshot(),
         };
         let status = self.context_runtime.status_composer.compose(&context)?;
         Ok(Some(AgentStatusAttachment {
@@ -741,7 +788,7 @@ impl<'a> AgentExecution<'a> {
             .build_projection(
                 &self.history,
                 checkpoint.as_ref(),
-                &self.tools.definitions(),
+                &self.tools.model_definitions(),
                 self.observed.as_ref(),
                 agent_status,
             )
@@ -837,7 +884,7 @@ impl<'a> AgentExecution<'a> {
                 "compaction cancelled before it began",
             ));
         }
-        let tools = self.tools.definitions();
+        let tools = self.tools.model_definitions();
         let checkpoint = self
             .context_runtime
             .checkpoint_store
@@ -1118,75 +1165,280 @@ impl<'a> AgentExecution<'a> {
         Ok(stream_terminal)
     }
 
-    /// Executes the turn's tool calls in deterministic block order.
+    /// Executes the turn's tool calls through deterministic scheduling
+    /// phases and commits the structurally complete result batch.
     ///
-    /// Returns a terminal outcome when the attempt must settle: an unknown
-    /// tool (no result exists, so the attempt fails explicitly) or a
-    /// cancellation observed while waiting for a tool. A failing tool still
-    /// produces a normalized [`ToolExecutionResult`] with a failure status
-    /// and is passed back to the model like any other result.
+    /// Scheduling interprets [`ToolConcurrencyPolicy`] per registered tool:
+    /// a `Sequential` invocation is an exclusive scheduling barrier, and
+    /// adjacent `Parallel` invocations execute concurrently as one group.
+    /// A background call is settled for the originating attempt when its
+    /// background dispatch is accepted, not when the detached work
+    /// terminates, so a sequential background call blocks later scheduling
+    /// only through its dispatch-acceptance point.
     ///
-    /// Tool execution races against attempt cancellation: once cancellation
-    /// is observable, the loop stops awaiting the tool, drops the pending
-    /// tool future, records no completion and no tool message, executes no
-    /// later call, and settles cancelled. Dropping the future does not
-    /// guarantee that external work is physically killed; executor-specific
-    /// cancellation is a later milestone.
-    ///
-    /// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
-    async fn execute_tools(&mut self, calls: &[ToolCall]) -> Option<Terminal> {
-        for call in calls {
+    /// The structural invariant: once the valid agent tool-call message is
+    /// committed, its entire tool-result batch is settled exactly once.
+    /// Every call slot receives exactly one attempt-facing result
+    /// (success/failure/cancellation/timeout/validation rejection/accepted
+    /// background), canonical `ToolMessageBlock`s are committed in original
+    /// model call order, and the batch never splits on cancellation. If
+    /// attempt cancellation wins during the batch: in-flight cancellable
+    /// foreground executions observe the attempt signal and physically
+    /// settle, unstarted calls receive cancelled result slots, committed
+    /// background executions stay conversation-owned, prepared-but-
+    /// uncommitted dispatches roll back, and the complete batch commits in
+    /// call order.
+    #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
+    async fn execute_tools(&mut self, calls: &[ToolCall], preflight: Vec<PreflightOutcome>) {
+        let mut slots: Vec<CallSlot> = calls
+            .iter()
+            .cloned()
+            .zip(preflight)
+            .map(|(call, outcome)| match outcome {
+                PreflightOutcome::Ready(prepared) => CallSlot {
+                    call,
+                    prepared: Some(prepared),
+                    result: None,
+                    started: false,
+                    progress: Vec::new(),
+                },
+                PreflightOutcome::Rejected { error } => {
+                    let mut slot = CallSlot {
+                        call,
+                        prepared: None,
+                        result: None,
+                        started: false,
+                        progress: Vec::new(),
+                    };
+                    slot.result = Some(failed_result(&error));
+                    slot
+                }
+            })
+            .collect();
+        let mut index = 0;
+        while index < slots.len() {
             if self.cancellation.is_cancelled() {
-                return Some(Terminal::Cancelled {
-                    reason: self.cancellation.reason(),
+                break;
+            }
+            match group_at(&slots, index) {
+                Group::Trivial => {
+                    index += 1;
+                }
+                Group::Sequential => {
+                    if slots[index].result.is_none() {
+                        slots[index].started = true;
+                        self.emit(RuntimeEvent::ToolExecutionStarted {
+                            tool_call_id: slots[index].call.id.clone(),
+                            tool_id: slots[index].tool_id(),
+                        });
+                        let invocation = slots[index]
+                            .prepared
+                            .as_ref()
+                            .expect("unsettled slots are preflighted")
+                            .invocation
+                            .clone();
+                        let (_, result, progress) = self.run_single_call(index, invocation).await;
+                        slots[index].result = Some(result);
+                        slots[index].progress = progress;
+                    }
+                    index += 1;
+                }
+                Group::Parallel => {
+                    // Execution-start facts are emitted before any future is
+                    // created, so the loop owns `&mut self` emission and the
+                    // shared `&self` borrows of the spawned futures never
+                    // conflict.
+                    let end = parallel_group_end(&slots, index);
+                    for slot in &mut slots[index..end] {
+                        if slot.result.is_none() {
+                            slot.started = true;
+                            self.emit(RuntimeEvent::ToolExecutionStarted {
+                                tool_call_id: slot.call.id.clone(),
+                                tool_id: slot.tool_id(),
+                            });
+                        }
+                    }
+                    let mut futures = futures_util::stream::FuturesUnordered::new();
+                    for (slot_index, slot) in slots[index..end].iter().enumerate() {
+                        if slot.started {
+                            let invocation = slot
+                                .prepared
+                                .as_ref()
+                                .expect("unsettled slots are preflighted")
+                                .invocation
+                                .clone();
+                            futures.push(Box::pin(
+                                self.run_single_call(index + slot_index, invocation),
+                            ));
+                        }
+                    }
+                    let mut remaining = futures.len();
+                    loop {
+                        if self.cancellation.is_cancelled() {
+                            break;
+                        }
+                        tokio::select! {
+                            biased;
+                            () = self.cancellation.cancelled() => break,
+                            Some((slot_index, result, progress)) = futures.next() => {
+                                slots[slot_index].result = Some(result);
+                                slots[slot_index].progress = progress;
+                                remaining -= 1;
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // After cancellation wins, every in-flight foreground
+                    // execution still settles: executors observe the attempt
+                    // signal in their context and must settle their external
+                    // work. The futures are awaited to completion, never
+                    // dropped with external work abandoned.
+                    while let Some((slot_index, result, progress)) = futures.next().await {
+                        slots[slot_index].result = Some(result);
+                        slots[slot_index].progress = progress;
+                    }
+                    index = end;
+                }
+            }
+        }
+        // Cancellation fill: every not-yet-started foreground call receives
+        // a cancelled result slot, so the committed batch covers every
+        // logical call exactly once.
+        if self.cancellation.is_cancelled() {
+            for slot in &mut slots {
+                if slot.result.is_none() {
+                    slot.result = Some(cancelled_result(self.cancellation.reason()));
+                }
+            }
+        }
+        // Canonical batch commit in original model call order. Progress
+        // facts precede their completion event; the completion events
+        // themselves are committed in canonical order regardless of physical
+        // completion order.
+        for slot in &slots {
+            let result = slot.result.clone().expect("every call slot settles");
+            for event in &slot.progress {
+                self.emit(event.clone());
+            }
+            if slot.started {
+                self.emit(RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: slot.call.id.clone(),
+                    tool_id: slot.tool_id(),
+                    result: result.clone(),
                 });
             }
-            // An unresolved tool has no executable and no result: the
-            // attempt fails with the typed UnknownTool runtime error. No
-            // tool-execution event is emitted because no tool executed.
-            let Some(tool) = self.tools.resolve(call) else {
-                return Some(Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::UnknownTool {
-                            name: call.name.clone(),
-                        },
-                    },
-                });
-            };
-            let tool_id = tool.definition().id.clone();
-            self.emit(RuntimeEvent::ToolExecutionStarted {
-                tool_call_id: call.id.clone(),
-                tool_id: tool_id.clone(),
-            });
-            // The race is biased: when both the cancellation signal and the
-            // tool future are ready, cancellation wins deterministically, so
-            // cancellation always prevents new execution progress once it is
-            // observable.
-            let result = tokio::select! {
-                biased;
-                () = self.cancellation.cancelled() => {
-                    return Some(Terminal::Cancelled {
-                        reason: self.cancellation.reason(),
-                    });
-                }
-                result = tool.execute(call) => result,
-            };
-            self.emit(RuntimeEvent::ToolExecutionCompleted {
-                tool_call_id: call.id.clone(),
-                tool_id: tool_id.clone(),
-                result: result.clone(),
-            });
             self.history.push(MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!(
                     "{}-tool-{}-{}",
-                    self.request.attempt_id, self.turn, call.id
+                    self.request.attempt_id, self.turn, slot.call.id
                 )),
-                tool_call_id: call.id.clone(),
-                tool_id: tool_id.clone(),
+                tool_call_id: slot.call.id.clone(),
+                tool_id: slot.tool_id(),
                 result,
             }));
         }
-        None
+        self.emit(RuntimeEvent::TurnCompleted);
+    }
+
+    /// Runs one logical tool call of the batch.
+    ///
+    /// Foreground invocations race against attempt cancellation (biased):
+    /// when cancellation is already observable, no new execution progress
+    /// begins, and an in-flight execution settles by observing the attempt
+    /// signal in its context. Background invocations are dispatched through
+    /// the conversation background registry's ownership commit. The slot
+    /// index is returned so physical completion order can be recorded while
+    /// canonical results remain model-call ordered.
+    async fn run_single_call(
+        &self,
+        call_index: usize,
+        invocation: ToolInvocation,
+    ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
+        let (result, progress) = match invocation.mode {
+            ToolInvocationMode::Foreground => self.run_foreground(&invocation).await,
+            ToolInvocationMode::Background => (self.dispatch_background(&invocation), Vec::new()),
+        };
+        (call_index, result, progress)
+    }
+
+    /// Runs one foreground invocation against attempt cancellation.
+    ///
+    /// The execution receives the attempt's cancellation signal in its
+    /// context, so observable attempt cancellation physically reaches
+    /// cancellable native foreground work. Cancelled results produced while
+    /// attempt cancellation is observable are normalized to the attempt's
+    /// cancellation reason.
+    async fn run_foreground(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
+        let executor = self.tools.executor(&invocation.tool_id);
+        let buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reporter = BufferProgressReporter {
+            call_id: invocation.call_id.clone(),
+            tool_id: invocation.tool_id.clone(),
+            buffer: buffer.clone(),
+        };
+        let context = ToolExecutionContext {
+            conversation_id: &self.request.conversation_id,
+            execution_id: None,
+            cancellation: self.cancellation.signal(),
+            workspace: self.tool_runtime.workspace(),
+            progress: &reporter,
+            artifacts: self.tool_runtime.artifacts(),
+            environment: self.tool_runtime.environment(),
+        };
+        let future = executor.execute(invocation.clone(), context);
+        tokio::pin!(future);
+        let mut result = tokio::select! {
+            biased;
+            () = self.cancellation.cancelled() => future.as_mut().await,
+            result = future.as_mut() => result,
+        };
+        if self.cancellation.is_cancelled()
+            && matches!(result.status, ToolExecutionStatus::Cancelled { .. })
+        {
+            result.status = ToolExecutionStatus::Cancelled {
+                reason: self.cancellation.reason(),
+            };
+        }
+        let progress_events = std::mem::take(&mut *buffer.lock().expect("progress buffer lock"));
+        (result, progress_events)
+    }
+
+    /// Dispatches one background invocation through the conversation-owned
+    /// background registry.
+    ///
+    /// The dispatch is two-stage: prepare allocates the deterministic
+    /// execution id and parks the runner behind its commit gate; commit
+    /// performs the final attempt-cancellation checkpoint and produces the
+    /// accepted result exactly when conversation ownership commits. A
+    /// rolled-back dispatch produces a cancelled result slot for the
+    /// originating attempt, never a detached execution.
+    fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
+        let executor = self.tools.executor(&invocation.tool_id);
+        match self
+            .tool_runtime
+            .background()
+            .prepare_dispatch(invocation, &executor)
+        {
+            Ok(prepared) => {
+                match self
+                    .tool_runtime
+                    .background()
+                    .commit_dispatch(prepared, &self.cancellation.signal())
+                {
+                    BackgroundDispatchOutcome::Accepted { result, .. } => result,
+                    BackgroundDispatchOutcome::RolledBack => {
+                        cancelled_result(self.cancellation.reason())
+                    }
+                }
+            }
+            Err(error) => failed_result(&error.to_string()),
+        }
     }
 
     /// Builds the canonical request from a compiled context projection.
@@ -1202,7 +1454,7 @@ impl<'a> AgentExecution<'a> {
             model: self.request.model.clone(),
             protocol: self.request.protocol,
             messages: compiled.messages,
-            tools: self.tools.definitions(),
+            tools: self.tools.model_definitions(),
             agent_status: compiled.agent_status,
             reasoning: self.request.reasoning,
             max_output_tokens: self.request.max_output_tokens,
@@ -1311,6 +1563,114 @@ impl<'a> AgentExecution<'a> {
     }
 }
 
+/// One result slot of a committed tool-call batch, preallocated in model
+/// call order so completion timing can never influence message identities or
+/// canonical ordering.
+struct CallSlot {
+    call: ToolCall,
+    prepared: Option<PreparedInvocation>,
+    result: Option<ToolExecutionResult>,
+    started: bool,
+    progress: Vec<RuntimeEvent>,
+}
+
+impl CallSlot {
+    fn tool_id(&self) -> ToolId {
+        match &self.prepared {
+            Some(prepared) => prepared.invocation.tool_id.clone(),
+            None => self.call.tool_id.clone(),
+        }
+    }
+}
+
+/// One deterministic scheduling phase of a tool-call batch.
+enum Group {
+    /// The slot is already settled (validation rejection); no barrier.
+    Trivial,
+    /// An exclusive scheduling barrier.
+    Sequential,
+    /// Adjacent parallel invocations executing concurrently.
+    Parallel,
+}
+
+/// The scheduling phase beginning at `index`: a `Sequential` invocation is
+/// an exclusive barrier; adjacent `Parallel` invocations form one group.
+fn group_at(slots: &[CallSlot], index: usize) -> Group {
+    let Some(prepared) = slots[index].prepared.as_ref() else {
+        return Group::Trivial;
+    };
+    match prepared.concurrency {
+        ToolConcurrencyPolicy::Sequential => Group::Sequential,
+        ToolConcurrencyPolicy::Parallel => Group::Parallel,
+    }
+}
+
+/// The exclusive end of the parallel group beginning at `index`: every
+/// adjacent `Parallel` invocation forms one group.
+fn parallel_group_end(slots: &[CallSlot], index: usize) -> usize {
+    let mut end = index + 1;
+    while end < slots.len()
+        && slots[end]
+            .prepared
+            .as_ref()
+            .is_some_and(|candidate| candidate.concurrency == ToolConcurrencyPolicy::Parallel)
+    {
+        end += 1;
+    }
+    end
+}
+
+/// A failed tool result.
+fn failed_result(error: &str) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Failed {
+            error: error.to_owned(),
+        },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+    }
+}
+
+/// A cancelled tool result carrying the attempt cancellation reason.
+fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Cancelled { reason },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+    }
+}
+
+/// The foreground progress reporter of one execution: progress facts are
+/// normalized through the one shared UTF-8-safe bound
+/// ([`bound_tool_progress`], the same normalization the background registry
+/// uses), buffered per slot, and become canonical `ToolExecutionProgress`
+/// events at batch commit, before their completion event.
+struct BufferProgressReporter {
+    call_id: ToolCallId,
+    tool_id: ToolId,
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>>,
+}
+
+impl ProgressReporter for BufferProgressReporter {
+    fn report(&self, progress: ToolProgress) {
+        let bounded = crate::tools::limits::bound_tool_progress(progress);
+        self.buffer.lock().expect("progress buffer lock").push(
+            RuntimeEvent::ToolExecutionProgress {
+                tool_call_id: self.call_id.clone(),
+                tool_id: self.tool_id.clone(),
+                execution_id: None,
+                progress: bounded,
+            },
+        );
+    }
+}
+
 /// Test-only synchronization for in-crate unit tests.
 ///
 /// [`ContinuationBoundaryPause`] parks the execution at the turn-continuation
@@ -1385,19 +1745,20 @@ mod tests {
         ContentBlockIndex, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::adapter::{ModelAdapter, ModelEventStream};
+    use crate::model::chat_protocol;
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
-    use crate::model::{ModelCancellation, chat_protocol};
+    use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::types::CancellationReason;
-    use crate::tools::executor::{Tool, ToolRegistry};
+    use crate::tools::executor::{ToolExecutor, ToolRegistry};
     use crate::tools::types::{
-        ToolCall, ToolCallStart, ToolDefinition, ToolExecutionMode, ToolExecutionResult,
-        ToolExecutionStatus, ToolOrigin, ToolReplayPolicy,
+        ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
+        ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     };
 
     use super::{AgentExecution, AgentExecutionRequest, test_sync::ContinuationBoundaryPause};
@@ -1435,7 +1796,7 @@ mod tests {
         fn stream(
             &self,
             request: ModelRequest,
-            _cancellation: ModelCancellation,
+            _cancellation: CancellationSignal,
         ) -> ModelEventStream {
             self.requests
                 .lock()
@@ -1451,33 +1812,30 @@ mod tests {
         }
     }
 
-    /// An instant fake tool returning one fixed successful result.
-    struct InstantTool {
-        definition: ToolDefinition,
-    }
+    /// An instant fake executor returning one fixed successful result.
+    struct InstantTool;
 
     impl InstantTool {
-        fn new(id: &str, name: &str) -> Self {
-            Self {
-                definition: ToolDefinition {
-                    id: ToolId::new(id),
-                    name: name.to_owned(),
-                    description: String::new(),
-                    input_schema: serde_json::json!({"type": "object"}),
-                    execution_mode: ToolExecutionMode::Sequential,
-                    replay_policy: ToolReplayPolicy::Never,
-                    origin: ToolOrigin::Builtin,
-                },
+        fn definition(id: &str, name: &str) -> ToolDefinition {
+            ToolDefinition {
+                id: ToolId::new(id),
+                name: name.to_owned(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+                execution_policy: ToolExecutionPolicy::ForegroundOnly,
+                concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                replay_policy: ToolReplayPolicy::Never,
+                origin: ToolOrigin::Builtin,
             }
         }
     }
 
-    impl Tool for InstantTool {
-        fn definition(&self) -> &ToolDefinition {
-            &self.definition
-        }
-
-        fn execute<'a>(&'a self, _call: &'a ToolCall) -> BoxFuture<'a, ToolExecutionResult> {
+    impl ToolExecutor for InstantTool {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
             Box::pin(async {
                 ToolExecutionResult {
                     status: ToolExecutionStatus::Success,
@@ -1508,19 +1866,46 @@ mod tests {
 
     /// A deterministic context runtime with a window far larger than any
     /// scripted request, so no compaction ever triggers in these tests.
+    /// A conversation tool runtime over a temporary workspace.
+    fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
+        tool_runtime_with_mailbox(None)
+    }
+
+    /// A conversation tool runtime over a temporary workspace with an
+    /// optional explicitly configured conversation mailbox.
+    fn tool_runtime_with_mailbox(
+        mailbox: Option<ConversationInboundMailbox>,
+    ) -> crate::tools::runtime::ConversationToolRuntime {
+        use crate::tools::runtime::ConversationRuntimeConfig;
+        let dir = std::env::temp_dir().join(format!(
+            "rustx-agent-crate-tests-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("worker")
+        ));
+        let _ = std::fs::create_dir_all(dir.join("workspace"));
+        crate::tools::runtime::ConversationToolRuntime::from_config(
+            ConversationId::new("conv-1"),
+            ConversationRuntimeConfig {
+                mailbox,
+                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+            },
+        )
+        .expect("tool runtime")
+    }
+
     fn runtime() -> ContextRuntime<'static> {
         use crate::context::checkpoint::InMemoryCheckpointStore;
         use crate::context::summarizer::{ContextSummarizer, SummaryRequest};
         use crate::context::{
             ContextConfig, ContextEngine, ContextError, DefaultTokenEstimator, TokenEstimator,
         };
-        use crate::model::ModelCancellation;
+        use crate::runtime::cancellation::CancellationSignal;
         struct NeverSummarizes;
         impl ContextSummarizer for NeverSummarizes {
             fn summarize(
                 &self,
                 _request: SummaryRequest,
-                _cancellation: ModelCancellation,
+                _cancellation: CancellationSignal,
             ) -> futures_util::future::BoxFuture<'_, Result<String, ContextError>> {
                 unreachable!("no compaction is possible under a huge window")
             }
@@ -1688,13 +2073,26 @@ mod tests {
         };
         let adapter = ScriptedAdapter::new(vec![tool_call_script(&call)]);
         let mut tools = ToolRegistry::new();
-        tools.insert(InstantTool::new("tool-alpha", "alpha"));
+        tools
+            .register(
+                InstantTool::definition("tool-alpha", "alpha"),
+                std::sync::Arc::new(InstantTool),
+            )
+            .expect("register tool");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let mut execution =
-            AgentExecution::new(request(), &adapter, &tools, &cancellation, runtime());
+        let tool_runtime = tool_runtime();
+        let mut execution = AgentExecution::new(
+            request(),
+            &adapter,
+            &tools,
+            &cancellation,
+            runtime(),
+            &tool_runtime,
+        )
+        .expect("conversation identity matches the tool runtime");
         execution.continuation_pause = Some(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
@@ -1757,7 +2155,12 @@ mod tests {
         };
         let adapter = ScriptedAdapter::new(vec![tool_call_script(&call)]);
         let mut tools = ToolRegistry::new();
-        tools.insert(InstantTool::new("tool-alpha", "alpha"));
+        tools
+            .register(
+                InstantTool::definition("tool-alpha", "alpha"),
+                std::sync::Arc::new(InstantTool),
+            )
+            .expect("register tool");
         let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
         mailbox
             .enqueue(inbound_message("msg-a", "A"))
@@ -1766,14 +2169,18 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let mut execution =
-            AgentExecution::new(request(), &adapter, &tools, &cancellation, runtime());
+        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
+        let mut execution = AgentExecution::new(
+            request(),
+            &adapter,
+            &tools,
+            &cancellation,
+            runtime(),
+            &tool_runtime,
+        )
+        .expect("conversation identity matches the tool runtime");
         execution.continuation_pause = Some(pause);
-        let result = execution
-            .with_inbound_mailbox(mailbox.clone())
-            .expect("mailbox belongs to the request conversation")
-            .run()
-            .await;
+        let result = execution.run().await;
         controller.await.expect("controller task");
 
         assert_eq!(
@@ -1807,6 +2214,234 @@ mod tests {
         assert!(
             mailbox.drain().is_none(),
             "the appended batch is consumed from the mailbox and never requeued"
+        );
+    }
+
+    /// A parking background executor: starts, waits for the release notify,
+    /// and then settles with a fixed result.
+    struct ParkingBackgroundTool {
+        definition: ToolDefinition,
+        started: tokio::sync::watch::Sender<bool>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    impl ParkingBackgroundTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            Arc<tokio::sync::Notify>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let release = Arc::new(tokio::sync::Notify::new());
+            (
+                Self {
+                    definition: ToolDefinition {
+                        id: ToolId::new("tool-bg"),
+                        name: "bg".to_owned(),
+                        description: String::new(),
+                        input_schema: serde_json::json!({"type": "object"}),
+                        execution_policy: ToolExecutionPolicy::ModelSelectable,
+                        concurrency_policy: ToolConcurrencyPolicy::Sequential,
+                        replay_policy: ToolReplayPolicy::Never,
+                        origin: ToolOrigin::Builtin,
+                    },
+                    started,
+                    release: release.clone(),
+                },
+                started_rx,
+                release,
+            )
+        }
+    }
+
+    impl ToolExecutor for ParkingBackgroundTool {
+        fn execute<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            _context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> BoxFuture<'a, ToolExecutionResult> {
+            self.started.send_replace(true);
+            let release = self.release.clone();
+            Box::pin(async move {
+                release.notified().await;
+                ToolExecutionResult {
+                    status: ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                }
+            })
+        }
+    }
+
+    /// Exact mailbox-boundary proof for the background terminal inbound:
+    ///
+    /// ```text
+    /// safe-boundary drain takes its finite snapshot (parked, lock held)
+    /// test observes the snapshot linearization happened
+    /// background terminal enqueue occurs (blocked by the parked drain)
+    /// drain releases and returns WITHOUT the terminal
+    /// the next drain receives the terminal
+    /// ```
+    ///
+    /// Every step is gated by the mailbox's in-crate synchronization probe:
+    /// the drain provably snapshots before the terminal enqueue publishes,
+    /// so the terminal can never appear in the first drained batch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
+        use crate::runtime::inbound::MailboxProbe;
+        use std::sync::mpsc::sync_channel;
+        // One snapshot token per non-empty drain (two), two release tokens,
+        // and one computed/resume token pair per enqueue (human + terminal).
+        let (snapshot_tx, snapshot_rx) = sync_channel(2);
+        let (release_tx, release_rx) = sync_channel(2);
+        let (computed_tx, computed_rx) = sync_channel(1);
+        let (resume_tx, resume_rx) = sync_channel(1);
+        let mailbox = crate::runtime::inbound::ConversationInboundMailbox::with_probe(
+            ConversationId::new("conv-1"),
+            MailboxProbe {
+                drain_snapshot: Some(snapshot_tx),
+                drain_release: Some(release_rx),
+                enqueue_computed: Some(computed_tx),
+                enqueue_resume: Some(resume_rx),
+            },
+        );
+        // The human message is enqueued through the probe: sequence 1 is
+        // computed and published only after the test releases the enqueue.
+        let enqueueing = mailbox.clone();
+        let human_task = tokio::task::spawn_blocking(move || {
+            enqueueing
+                .enqueue(inbound_message("msg-human", "hello"))
+                .expect("enqueue human")
+        });
+        computed_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("human enqueue sequence computed");
+        resume_tx.send(()).expect("release the human enqueue");
+        human_task.await.expect("human enqueue task");
+
+        let call = ToolCall {
+            id: ToolCallId::new("call-bg"),
+            tool_id: ToolId::new("tool-bg"),
+            name: "bg".to_owned(),
+            arguments: serde_json::json!({"__rustx_execution": "background"}),
+        };
+        let adapter = ScriptedAdapter::new(vec![
+            tool_call_script(&call),
+            vec![
+                ModelEvent::Started,
+                ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    text: "turn two".to_owned(),
+                },
+                ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ],
+            vec![
+                ModelEvent::Started,
+                ModelEvent::TextDelta {
+                    block_index: ContentBlockIndex::new(0),
+                    text: "turn three".to_owned(),
+                },
+                ModelEvent::Completed {
+                    finish_reason: ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ],
+        ]);
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(tool.definition.clone(), Arc::new(tool))
+            .expect("register bg tool");
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
+        let controller_registry = tool_runtime.background().clone();
+        let controller = tokio::spawn(async move {
+            // 1. The first safe boundary drain took its snapshot ([human])
+            //    and is parked inside its critical section.
+            snapshot_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("first drain snapshot established");
+            // 2. Wait until the detached runner is provably started, then
+            //    settle it: the terminal enqueue can only ever acquire the
+            //    mailbox lock after the parked drain.
+            started
+                .wait_for(|started| *started)
+                .await
+                .expect("bg runner started");
+            release.notify_one();
+            // 3. Release the parked drain: its batch is [human] only.
+            release_tx.send(()).expect("release the first drain");
+            // 4. The terminal enqueue is inside its critical section with
+            //    its sequence computed but the item not yet published.
+            // 4/5. Publish the terminal (the resume token is pre-buffered,
+            //    so the parked enqueue completes immediately); the next
+            //    safe boundary drain will take it. The second release
+            //    token is pre-buffered for that drain.
+            resume_tx.send(()).expect("release the terminal enqueue");
+            release_tx.send(()).expect("release the second drain");
+            let _ = controller_registry;
+        });
+        let _result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            AgentExecution::new(
+                request(),
+                &adapter,
+                &tools,
+                &cancellation,
+                runtime(),
+                &tool_runtime,
+            )
+            .expect("conversation identity matches the tool runtime")
+            .run(),
+        )
+        .await
+        .expect("the attempt terminates");
+        controller.await.expect("controller task");
+
+        let requests = adapter.requests.lock().expect("requests lock").clone();
+        assert_eq!(requests.len(), 3, "human turn, terminal turn, stop turn");
+        let second_request = &requests[1];
+        assert!(
+            second_request.messages.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id == MessageId::new("msg-human"))
+            }),
+            "the human message joins the second request"
+        );
+        assert!(
+            !second_request.messages.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+            }),
+            "the terminal can never appear in the first drained batch"
+        );
+        assert!(
+            requests[2]
+                .messages
+                .iter()
+                .any(|message| matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")),
+            "the terminal inbound waits for the next drained batch"
+        );
+        let terminal_occurrences = requests
+            .iter()
+            .flat_map(|request| &request.messages)
+            .filter(|message| {
+                matches!(message, MessageBlock::User(user) if user.id.as_str() == "background-exec_1-terminal")
+            })
+            .count();
+        assert_eq!(
+            terminal_occurrences, 1,
+            "the terminal inbound is drained and committed exactly once"
+        );
+        assert!(mailbox.drain().is_none(), "the mailbox is drained");
+        assert!(
+            computed_rx.try_recv().is_ok(),
+            "the terminal enqueue provably occurred (its sequence was computed and published)"
         );
     }
 }

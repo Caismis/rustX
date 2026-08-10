@@ -41,16 +41,36 @@ adapter modules. The loop never branches on a provider protocol.
 
 ## 3. What tools own
 
-A tool (`src/tools/executor.rs`) owns its immutable definition (name and
-input schema contract) and the execution of one call into a normalized
-`ToolExecutionResult`. The loop records the returned result verbatim and
-feeds it back to the model inside a `ToolMessageBlock`; it never
-fabricates, modifies, or reinterprets a result. An unknown tool has no
-result, so the attempt fails explicitly with `RuntimeError::UnknownTool`
-and without emitting any tool-execution event.
+The M5 tool plane replaces the provisional M3 `Tool` trait with the
+canonical boundary in `src/tools/executor.rs`:
+
+- The validating [`ToolRegistry`] pairs one canonical `ToolDefinition` with
+  one `Arc<dyn ToolExecutor>`; an executor object does not own its
+  definition, so one implementation may serve many registrations.
+- A `ToolExecutor` executes an already-resolved, already-validated
+  `ToolInvocation` (call id, tool id, model-facing name, resolved
+  foreground/background mode, and the stripped business arguments) inside a
+  `ToolExecutionContext` that carries conversation identity, the runtime
+  `CancellationSignal`, the workspace boundary, the progress reporter, the
+  artifact store, and the explicit authorized environment.
+- The loop preflights every model-issued call **before** the agent
+  tool-call message is committed: registry identity resolution,
+  execution-policy resolution, reserved-metadata extraction, and business
+  argument validation against the canonical JSON Schema. An impossible
+  identity mismatch or an unregistered tool is a runtime/model-stream
+  contract failure and the agent message is never committed; a business
+  schema violation is a normal failed result slot and the executor never
+  runs.
+- The loop records the returned result verbatim and feeds it back to the
+  model inside a `ToolMessageBlock`; it never fabricates, modifies, or
+  reinterprets a result.
 
 A failing tool is a normal outcome: the failed `ToolExecutionResult` is
-passed back to the model, which decides the next action.
+passed back to the model, which decides the next action. Cancellable
+native foreground work observes the attempt's `CancellationSignal` in its
+context and physically settles (for example Bash terminates its owned
+process group); the loop never drops a pending tool future and leaves
+external work running.
 
 ## 4. Continuation
 
@@ -145,18 +165,47 @@ event, between tool calls, and before every model turn begins — the first
 turn and every continuation) and races every tool execution: the loop
 `select`s between the tool future and the attempt cancellation signal
 (biased toward cancellation, so cancellation wins deterministically once
-observable). When cancellation wins while a tool is pending, the loop
-stops awaiting the tool, drops the pending tool future, records no
-completion and no tool message, executes no later call, and settles
-cancelled — `AgentExecution::run()` terminates without waiting for the
-tool to return. Every model invocation observes a child signal of the
-attempt signal through the existing adapter cancellation mechanism, so an
+observable). Every model invocation observes a child signal of the
+attempt signal through the shared runtime `CancellationSignal`, so an
 in-flight generation terminates with `Failed(Cancelled)` and is converted
 into `AttemptCancelled`. Cancellation is always terminal failure — never
-completion. Dropping a pending tool future does not guarantee that
-external work is physically killed; the tool interface exposes no
-cancellation handle in M3, and executor-specific cancellation is a later
-milestone.
+completion.
+
+M5 strengthens the cancellation settlement of a committed tool-call batch
+(see section 7.1): the loop never drops a pending tool future while
+external work keeps running. In-flight cancellable foreground executions
+observe the attempt signal in their execution context and physically
+settle; unstarted calls receive cancelled result slots; and the complete
+result batch commits in original model call order before the attempt
+settles cancelled exactly once.
+
+### 7.1 Tool-call batch scheduling and structural settlement
+
+Every valid committed agent tool-call message is preflighted before commit
+(see section 3). Once committed, its entire tool-result batch is settled
+structurally exactly once:
+
+- Result slots are preallocated in model call order, so completion timing
+  can never influence message identities or canonical ordering.
+- Scheduling interprets `ToolConcurrencyPolicy` per registered tool: a
+  `Sequential` invocation is an exclusive barrier; adjacent `Parallel`
+  invocations execute concurrently as one group (`P P S` becomes a
+  parallel group followed by a sequential barrier).
+- A background call is settled for the originating attempt when its
+  background dispatch is accepted (`exec_N` + `state: starting`), never
+  when the detached work terminates; a sequential background call blocks
+  later scheduling only through its dispatch-acceptance point.
+- Foreground executions receive the attempt's `CancellationSignal` in
+  their context. When attempt cancellation wins during a batch:
+  in-flight cancellable foreground work physically settles, unstarted
+  calls receive cancelled result slots, committed background executions
+  stay conversation-owned, prepared-but-uncommitted dispatches roll back,
+  the complete batch commits in call order, and no next model turn starts.
+- Physical completion order may differ from canonical order; canonical
+  `ToolMessageBlock` values and the next model request always observe
+  model call order.
+- After the structurally complete batch commits, the attempt settles
+  cancelled exactly once with one terminal event last.
 
 ### Generic Agent Loop cancellation
 
@@ -199,11 +248,15 @@ state.
 
 The conversation inbound mailbox (`src/runtime/inbound.rs`) is a narrow
 runtime-owned coordination contract: a per-conversation in-memory queue for
-asynchronous user-role messages arriving while an attempt is running. It is
-attached to an execution through `AgentExecution::with_inbound_mailbox`
-(which rejects a mailbox of a different conversation) and adds the mailbox
-safe-boundary rules below; generic cancellation timing is unchanged by
-attachment.
+asynchronous user-role messages arriving while an attempt is running. One
+conversation owns one canonical mailbox, held by the conversation tool
+runtime (`ConversationToolRuntime`); the loop drains exactly
+`tool_runtime.mailbox()` at every safe boundary, so background terminal
+notifications always enter the same mailbox the Agent Loop drains, and no
+second mailbox injection API can split the ordering domain. An
+`AgentExecution` whose request conversation differs from the tool runtime's
+conversation is rejected structurally at construction. The mailbox adds the
+safe-boundary rules below; generic cancellation timing is unchanged.
 
 Ownership model:
 

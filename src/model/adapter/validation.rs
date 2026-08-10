@@ -204,7 +204,7 @@ mod tests {
         AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
     };
     use crate::runtime::identity::ToolId;
-    use crate::tools::types::{ToolDefinition, ToolExecutionMode, ToolOrigin, ToolReplayPolicy};
+    use crate::tools::types::ModelToolDefinition;
 
     fn request() -> ModelRequest {
         ModelRequest {
@@ -219,15 +219,12 @@ mod tests {
         }
     }
 
-    fn tool(name: &str, id: &str) -> ToolDefinition {
-        ToolDefinition {
+    fn tool(name: &str, id: &str) -> ModelToolDefinition {
+        ModelToolDefinition {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: "d".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
-            execution_mode: ToolExecutionMode::Sequential,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
         }
     }
 

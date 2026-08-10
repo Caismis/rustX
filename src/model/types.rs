@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::message::types::MessageBlock;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::MessageId;
-use crate::tools::types::ToolDefinition;
+use crate::tools::types::ModelToolDefinition;
 
 /// The ephemeral Agent Status attachment of one model request.
 ///
@@ -89,9 +89,10 @@ pub struct ModelRequest {
     pub protocol: ModelProtocol,
     /// Canonical context/messages to send.
     pub messages: Vec<MessageBlock>,
-    /// Tool definitions the model may call.
+    /// Compiled model-facing tool definitions the model may call. Runtime
+    /// execution, replay, and origin policy never reach provider adapters.
     #[serde(default)]
-    pub tools: Vec<ToolDefinition>,
+    pub tools: Vec<ModelToolDefinition>,
     /// The ephemeral Agent Status attachment of the pending fresh inbound
     /// turn, when one exists. Projection-only: never canonical history.
     #[serde(default, skip_serializing_if = "Option::is_none")]

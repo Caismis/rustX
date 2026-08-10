@@ -19,7 +19,6 @@ use futures_util::StreamExt;
 use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AgentContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::{OpenAiAdapterConfig, ResponsesStorageMode};
 use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
@@ -31,6 +30,7 @@ use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
@@ -66,7 +66,7 @@ impl ModelAdapter for OpenAiResponsesAdapter {
         ModelProtocol::OpenAiResponses
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
@@ -190,7 +190,7 @@ async fn responses_phase_next(phase: ResponsesPhase) -> Option<(ModelEvent, Resp
 async fn responses_pull(
     stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
     normalizer: &mut ResponsesNormalizer,
-    cancellation: &ModelCancellation,
+    cancellation: &CancellationSignal,
     pending: &mut VecDeque<ModelEvent>,
 ) {
     while pending.is_empty() {
@@ -258,18 +258,18 @@ enum ResponsesPhase {
         client: Client<OpenAIConfig>,
         request: serde_json::Value,
         normalizer: ResponsesNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Opening {
         client: Client<OpenAIConfig>,
         request: serde_json::Value,
         normalizer: ResponsesNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Streaming {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
         normalizer: ResponsesNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
         pending: VecDeque<ModelEvent>,
     },
     Finished,
@@ -1026,7 +1026,7 @@ fn translate_tool_result(
 }
 
 /// Only model-facing tool fields are sent; runtime semantics stay behind.
-fn translate_tools(tools: &[crate::tools::types::ToolDefinition]) -> Vec<serde_json::Value> {
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<serde_json::Value> {
     tools
         .iter()
         .map(|tool| {

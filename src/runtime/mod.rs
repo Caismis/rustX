@@ -10,23 +10,36 @@
 //! producers can depend on without the tool plane depending upward on
 //! `src/agent`. The mailbox is coordination only — it is not canonical
 //! history, not the Event Journal, not a scheduler, supervisor, or
-//! persistent service layer. Runtime supervision, cancellation propagation,
-//! capability guards, recovery, and process ownership are later milestones
-//! and are not implemented here.
+//! persistent service layer. General runtime supervision, persistent
+//! process management, recovery services, and broader capability
+//! coordination remain future work. M5 implements only the narrow
+//! internal process-supervision capability required for Bash catastrophic
+//! supervisor-loss recovery (`crate::runtime::process_supervision`:
+//! one-time activation of Linux child-subreaper mode). That is
+//! coordination infrastructure, not a generic process manager and not a
+//! public runtime API.
 
+pub mod cancellation;
 pub mod continuation;
 pub mod identity;
 pub mod inbound;
+/// The runtime-level Linux process-supervision capability: the one-time
+/// activation of the process-wide child-subreaper primitive used by Bash
+/// catastrophic fallback. Internal coordination only — it is not part of
+/// the public runtime API.
+pub(crate) mod process_supervision;
 pub mod types;
 
+pub use cancellation::CancellationSignal;
 pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
-    McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolId, ToolVersionId, TurnId,
+    McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId,
+    ToolVersionId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
-pub use types::{CancellationReason, RuntimeError};
+pub use types::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};

@@ -33,7 +33,6 @@ use serde::Deserialize;
 use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AgentContentBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
-use crate::model::adapter::cancellation::ModelCancellation;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
@@ -46,6 +45,7 @@ use crate::model::adapter::validation::{ValidatedTools, validate_request};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
 
@@ -77,7 +77,7 @@ impl ModelAdapter for OpenAiChatCompletionsAdapter {
         ModelProtocol::OpenAiChatCompletions
     }
 
-    fn stream(&self, request: ModelRequest, cancellation: ModelCancellation) -> ModelEventStream {
+    fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelEventStream {
         let validated = match validate_request(&request, self.protocol()) {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
@@ -185,7 +185,7 @@ async fn chat_phase_next(phase: ChatPhase) -> Option<(ModelEvent, ChatPhase)> {
 async fn chat_pull(
     stream: &mut async_openai::types::stream::StreamResponse<serde_json::Value>,
     normalizer: &mut ChatStreamNormalizer,
-    cancellation: &ModelCancellation,
+    cancellation: &CancellationSignal,
     pending: &mut VecDeque<ModelEvent>,
 ) {
     while pending.is_empty() {
@@ -260,18 +260,18 @@ enum ChatPhase {
         client: Client<OpenAIConfig>,
         request: CreateChatCompletionRequest,
         normalizer: ChatStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Opening {
         client: Client<OpenAIConfig>,
         request: CreateChatCompletionRequest,
         normalizer: ChatStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
     },
     Streaming {
         stream: async_openai::types::stream::StreamResponse<serde_json::Value>,
         normalizer: ChatStreamNormalizer,
-        cancellation: ModelCancellation,
+        cancellation: CancellationSignal,
         pending: VecDeque<ModelEvent>,
     },
     Finished,
@@ -756,9 +756,10 @@ fn translate_tool_message(
 }
 
 /// Only model-facing tool fields are sent: name, description, and the input
-/// schema. Execution mode, replay policy, origin, and `ToolId` are runtime
-/// semantics and never reach the provider.
-fn translate_tools(tools: &[crate::tools::types::ToolDefinition]) -> Vec<ChatCompletionTools> {
+/// schema. Execution policy, replay policy, origin, and runtime semantics
+/// never reach the provider; the compiled model-facing definition is
+/// translated verbatim.
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<ChatCompletionTools> {
     tools
         .iter()
         .map(|tool| {

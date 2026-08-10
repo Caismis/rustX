@@ -1,33 +1,53 @@
 //! Canonical tool contracts.
 //!
 //! These types describe what the runtime knows about tools: their
-//! definitions, the calls the current agent issues, and the normalized
-//! execution results. Execution is declarative metadata only in M1; tool
-//! scheduling, executors, MCP, and Python tool execution are later
-//! milestones. No external SDK type appears here.
+//! definitions, the calls the current agent issues, the normalized
+//! execution results, and the runtime-owned invocation data delivered to
+//! executors. The canonical [`ToolDefinition`] is tool-owned and carries the
+//! two independent execution policy axes; the provider-neutral compiled
+//! [`ModelToolDefinition`] is what actually reaches a model request.
+//! Execution scheduling and executors are runtime-owned (M3+); MCP and
+//! Python executors reuse the same contract in later milestones. No external
+//! SDK type appears here.
 
 use serde::{Deserialize, Serialize};
 
 use crate::runtime::identity::{McpServerId, ToolCallId, ToolId, ToolVersionId};
 use crate::runtime::types::CancellationReason;
 
-/// A runtime-owned tool definition.
+/// The canonical runtime/tool contract of one registered tool.
 ///
-/// The `input_schema` is an arbitrary JSON Schema document that the runtime
-/// passes through to model adapters; the runtime does not interpret it in M1.
+/// The definition is owned by the tool plane's registry, which pairs it with
+/// an executor. The two policy axes are independent:
+///
+/// - [`ToolExecutionPolicy`] decides who owns the execution: foreground work
+///   is attempt-owned and settles before the attempt continues, background
+///   work is conversation-owned and detached after accepted dispatch.
+/// - [`ToolConcurrencyPolicy`] decides how calls of one batch are scheduled
+///   relative to each other.
+///
+/// The `input_schema` is the original canonical JSON Schema document owned by
+/// the tool. The runtime validates it at registration and never mutates it:
+/// model-selectable invocation metadata is added only to the compiled
+/// model-facing definition.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     /// Identity of the tool within the capability set.
     pub id: ToolId,
-    /// Stable tool name used when emitting tool calls.
+    /// Stable model-facing tool name used when emitting tool calls.
     pub name: String,
     /// Human-readable description shown to the model.
     pub description: String,
-    /// JSON Schema document describing the accepted `ToolCall` arguments.
+    /// The original canonical JSON Schema document describing the accepted
+    /// tool-call arguments. Tool-owned and never mutated by the runtime.
     pub input_schema: serde_json::Value,
-    /// Declarative execution mode; scheduling is not implemented in M1.
-    /// Required: a missing mode is never silently interpreted as parallel.
-    pub execution_mode: ToolExecutionMode,
+    /// Who owns an invocation of this tool: the attempt (foreground) or the
+    /// conversation (background). Required: a missing policy is never
+    /// silently interpreted.
+    pub execution_policy: ToolExecutionPolicy,
+    /// How calls of this tool within one batch are scheduled relative to
+    /// each other.
+    pub concurrency_policy: ToolConcurrencyPolicy,
     /// Replay policy; `Never` is the safe default.
     #[serde(default)]
     pub replay_policy: ToolReplayPolicy,
@@ -35,19 +55,63 @@ pub struct ToolDefinition {
     pub origin: ToolOrigin,
 }
 
-/// Whether a batch of tool calls may run in parallel.
+/// Who owns one execution of a tool.
 ///
-/// This is declarative metadata only in M1; no scheduling is implemented.
-/// The explicit `Default` is `Sequential`: when a mode is not stated, the
-/// runtime must not assume parallel execution.
+/// This axis decides ownership and settlement, never scheduling:
+///
+/// - `ForegroundOnly` — every invocation settles before the current agent
+///   attempt may continue past that tool result. The execution is
+///   attempt-owned and observable attempt cancellation physically reaches
+///   it.
+/// - `BackgroundOnly` — every invocation is detached from the current
+///   attempt after successful background dispatch; the conversation owns the
+///   execution.
+/// - `ModelSelectable` — the model must explicitly choose foreground or
+///   background execution for each invocation through the reserved
+///   `__rustx_execution` invocation field.
+///
+/// Foreground/background is orthogonal to sequential/parallel scheduling
+/// ([`ToolConcurrencyPolicy`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionPolicy {
+    /// Every invocation settles before the attempt continues; attempt-owned.
+    ForegroundOnly,
+    /// Every invocation is detached after accepted dispatch; conversation-owned.
+    BackgroundOnly,
+    /// The model selects foreground or background per invocation.
+    ModelSelectable,
+}
+
+/// How calls of one tool within one batch are scheduled.
+///
+/// A `Sequential` invocation is an exclusive scheduling barrier; adjacent
+/// `Parallel` invocations may execute concurrently as one group. This axis
+/// describes concurrency only, never foreground/background ownership
+/// ([`ToolExecutionPolicy`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolExecutionMode {
+pub enum ToolConcurrencyPolicy {
     /// Calls execute one at a time in the order issued.
     #[default]
     Sequential,
-    /// Multiple calls may execute concurrently.
+    /// Multiple adjacent calls may execute concurrently.
     Parallel,
+}
+
+/// The resolved execution ownership of one canonical invocation.
+///
+/// The runtime resolves the effective mode from the tool's declared
+/// [`ToolExecutionPolicy`] and (for `ModelSelectable`) the reserved
+/// `__rustx_execution` invocation field, and delivers it to the executor as
+/// canonical invocation data. No policy resolution happens inside executors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolInvocationMode {
+    /// Attempt-owned execution: settles before the attempt continues.
+    Foreground,
+    /// Conversation-owned execution: detached after accepted dispatch.
+    Background,
 }
 
 /// Whether the runtime may automatically re-execute a tool after a crash.
@@ -56,8 +120,8 @@ pub enum ToolExecutionMode {
 /// replay a tool whose external completion state is unknown: it records an
 /// interrupted/unknown result and lets the model decide the next action.
 /// Automatic replay is allowed only for tools that explicitly declare
-/// themselves idempotent. M1 defines the contract; recovery is a later
-/// milestone.
+/// themselves idempotent. `Idempotent` is metadata for future recovery
+/// policy (M8), not permission to invent replay behavior in this milestone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolReplayPolicy {
@@ -115,6 +179,30 @@ pub struct ToolCallStart {
     pub tool_id: ToolId,
     /// Name of the tool at call time.
     pub name: String,
+}
+
+/// The canonical runtime-owned invocation delivered to a [`ToolExecutor`].
+///
+/// An invocation contains only runtime-owned execution data: the logical
+/// call identity, the tool identity, the model-facing tool name, the
+/// resolved execution mode, and the stripped, already-validated business
+/// arguments. No provider types and no executor-specific fields (Bash
+/// commands, MCP SDK types, Python runtime objects) ever appear here.
+///
+/// [`ToolExecutor`]: crate::tools::executor::ToolExecutor
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolInvocation {
+    /// The logical model-issued tool call identity.
+    pub call_id: ToolCallId,
+    /// The canonical tool identity.
+    pub tool_id: ToolId,
+    /// The model-facing tool name at call time.
+    pub tool_name: String,
+    /// The runtime-resolved execution ownership of this invocation.
+    pub mode: ToolInvocationMode,
+    /// The stripped business arguments, validated against the canonical
+    /// schema. The reserved `__rustx_*` invocation metadata is never present.
+    pub arguments: serde_json::Value,
 }
 
 /// The normalized outcome of one tool execution.
@@ -179,6 +267,26 @@ pub struct TruncationState {
     pub original_bytes: Option<u64>,
 }
 
+/// A bounded structured progress notification of one tool execution.
+///
+/// Progress is an execution fact, never canonical message history. All
+/// fields are optional; an empty `ToolProgress` is a bare tick. The progress
+/// message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
+///
+/// [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ToolProgress {
+    /// A short human-readable progress message, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// Completed units, when a total is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
+    /// Total units, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+}
+
 /// A content block inside a tool result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -196,10 +304,31 @@ pub enum ToolResultContent {
     Image(crate::message::content::ImageReference),
 }
 
+/// The provider-neutral compiled model-facing tool definition.
+///
+/// One model request receives these compiled definitions, never the
+/// canonical [`ToolDefinition`]: runtime execution, replay, and origin
+/// policy never reach provider adapters. For a `ModelSelectable` tool the
+/// compiled `input_schema` is the canonical schema decorated with the
+/// reserved runtime-owned `__rustx_execution` invocation field; the stored
+/// canonical schema remains untouched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelToolDefinition {
+    /// Identity of the tool within the capability set.
+    pub id: ToolId,
+    /// Stable model-facing tool name.
+    pub name: String,
+    /// Human-readable description shown to the model.
+    pub description: String,
+    /// The compiled model-facing JSON Schema, including the reserved
+    /// runtime invocation metadata for `ModelSelectable` tools.
+    pub input_schema: serde_json::Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolCall, ToolCallStart, ToolDefinition, ToolExecutionMode, ToolExecutionResult,
+        ToolCall, ToolCallStart, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
         ToolExecutionStatus, ToolReplayPolicy, TruncationState,
     };
     use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
@@ -211,15 +340,19 @@ mod tests {
         assert_eq!(ToolReplayPolicy::default(), ToolReplayPolicy::Never);
     }
 
-    /// The conservative execution-mode default is sequential, never parallel.
+    /// The conservative concurrency default is sequential, never parallel.
     #[test]
-    fn execution_mode_default_is_sequential() {
-        assert_eq!(ToolExecutionMode::default(), ToolExecutionMode::Sequential);
+    fn concurrency_default_is_sequential() {
+        use super::ToolConcurrencyPolicy;
+        assert_eq!(
+            ToolConcurrencyPolicy::default(),
+            ToolConcurrencyPolicy::Sequential
+        );
     }
 
-    /// A missing execution mode must not silently deserialize as parallel.
+    /// A missing execution policy must not silently deserialize.
     #[test]
-    fn tool_definition_requires_explicit_execution_mode() {
+    fn tool_definition_requires_explicit_execution_policy() {
         let json = r#"{
             "id": "tool-bash",
             "name": "bash",
@@ -231,19 +364,21 @@ mod tests {
         let result = serde_json::from_str::<ToolDefinition>(json);
         assert!(
             result.is_err(),
-            "missing execution_mode must fail deserialization"
+            "missing execution_policy must fail deserialization"
         );
     }
 
-    /// An explicitly declared execution mode round-trips.
+    /// A definition with explicit policies round-trips.
     #[test]
-    fn tool_definition_with_explicit_execution_mode_round_trips() {
+    fn tool_definition_with_explicit_policies_round_trips() {
+        use super::{ToolConcurrencyPolicy, ToolInvocationMode};
         let definition = ToolDefinition {
             id: ToolId::new("tool-bash"),
             name: "bash".to_owned(),
             description: "Run a shell command".to_owned(),
             input_schema: json!({"type": "object"}),
-            execution_mode: ToolExecutionMode::Parallel,
+            execution_policy: ToolExecutionPolicy::ModelSelectable,
+            concurrency_policy: ToolConcurrencyPolicy::Parallel,
             replay_policy: ToolReplayPolicy::Never,
             origin: crate::tools::types::ToolOrigin::Mcp {
                 server_id: McpServerId::new("mcp-fs"),
@@ -252,6 +387,9 @@ mod tests {
         let json = serde_json::to_string(&definition).expect("serialize definition");
         let decoded: ToolDefinition = serde_json::from_str(&json).expect("deserialize definition");
         assert_eq!(decoded, definition);
+        let invocation_mode =
+            serde_json::from_str::<ToolInvocationMode>("\"foreground\"").expect("mode");
+        assert_eq!(invocation_mode, ToolInvocationMode::Foreground);
     }
 
     /// Tool call starts carry only the data known before arguments stream.

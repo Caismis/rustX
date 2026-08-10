@@ -24,6 +24,11 @@
 //!     → provider wire compiler
 //! ```
 //!
+//! The conversation background registry is authoritative; the executing
+//! attempt samples a read-only active snapshot into the render context, and
+//! the composer builds the runtime-owned background section. `ContextRuntime`
+//! and the composer never own or mutate the background registry.
+//!
 //! A provider adapter never receives raw runtime state and never invents the
 //! status text itself.
 //!
@@ -36,7 +41,7 @@
 //!
 //! ```text
 //! 1. mandatory temporal section
-//! 2. future mandatory built-in sections
+//! 2. background_execution when active entries exist
 //! 3. extension providers in explicit registration order
 //! ```
 //!
@@ -54,8 +59,11 @@
 //! future built-in variant. The composer and built-in composition code are
 //! the only places built-in section variants are constructed.
 //!
-//! The `background_execution` section id is reserved for the known M5
-//! background-runtime integration and has no fake M4 implementation.
+//! The `background_execution` section is a runtime-owned built-in, not an
+//! ordinary extension: the composer constructs it from the read-only active
+//! background snapshot passed through the render context, and an extension
+//! provider can never register under that reserved id or construct the
+//! built-in section variant.
 
 use std::sync::Arc;
 
@@ -64,6 +72,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::context::error::{ContextError, ContextErrorKind};
+use crate::tools::background::BackgroundExecutionSnapshot;
 
 /// The stable identity of one Agent Status section.
 ///
@@ -76,7 +85,8 @@ pub struct AgentStatusSectionId(String);
 impl AgentStatusSectionId {
     /// The reserved id of the mandatory temporal section.
     pub const TEMPORAL: &'static str = "temporal";
-    /// The reserved id of the future M5 background-execution section.
+    /// The reserved id of the runtime-owned background-execution built-in
+    /// section.
     pub const BACKGROUND_EXECUTION: &'static str = "background_execution";
 
     /// Creates a section id.
@@ -126,6 +136,13 @@ pub enum AgentStatusSectionData {
         /// `FreshInboundTurn`.
         inbound_message_time: DateTime<Utc>,
     },
+    /// The runtime-owned background-execution section, constructed by the
+    /// composer from the read-only active background snapshot. Extensions
+    /// are structurally unable to construct this variant.
+    BackgroundExecution {
+        /// The active background executions in execution-allocation order.
+        executions: Vec<BackgroundExecutionSnapshot>,
+    },
     /// An extension section's ordered structured runtime facts.
     ///
     /// The composer converts a provider's extension facts into this variant;
@@ -173,13 +190,18 @@ pub struct AgentStatus {
 /// Providers must never mutate runtime state while rendering; this context is
 /// the only execution information the composition flow hands them besides
 /// their own authoritative state.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AgentStatusRenderContext {
     /// The persisted timestamp of the final message of the pending
     /// `FreshInboundTurn`.
     pub inbound_message_time: DateTime<Utc>,
     /// The per-execution/conversation IANA timezone, when known.
     pub timezone: Option<Tz>,
+    /// The read-only active background-execution snapshot sampled from the
+    /// authoritative conversation background registry by the executing
+    /// attempt. Empty when no background executions are active; never
+    /// mutated by the composer.
+    pub background: Vec<BackgroundExecutionSnapshot>,
 }
 
 /// The narrow extension seam for Agent Status sections.
@@ -386,6 +408,14 @@ impl AgentStatusComposer {
     /// fails to produce its section.
     pub fn compose(&self, context: &AgentStatusRenderContext) -> Result<AgentStatus, ContextError> {
         let mut sections = vec![temporal_section(self.clock.now(), context)];
+        if !context.background.is_empty() {
+            sections.push(AgentStatusSection {
+                id: AgentStatusSectionId::new(AgentStatusSectionId::BACKGROUND_EXECUTION),
+                data: AgentStatusSectionData::BackgroundExecution {
+                    executions: context.background.clone(),
+                },
+            });
+        }
         for registered in &self.providers {
             match registered.provider.section(context) {
                 Ok(Some(facts)) => sections.push(AgentStatusSection {
@@ -460,6 +490,29 @@ pub fn render_agent_status(status: &AgentStatus) -> String {
                     "Inbound message time: {}",
                     render_instant(*inbound_message_time, *timezone)
                 ));
+            }
+            AgentStatusSectionData::BackgroundExecution { executions } => {
+                if !executions.is_empty() {
+                    if !lines.is_empty() {
+                        lines.push(String::new());
+                    }
+                    lines.push("Background executions:".to_owned());
+                    for execution in executions {
+                        let mut line = format!(
+                            "- {} | {} | {}",
+                            execution.execution_id.as_str(),
+                            execution.tool_name,
+                            execution.state.name()
+                        );
+                        if let Some(progress) = &execution.progress {
+                            if let Some(message) = &progress.message {
+                                line.push_str(" | ");
+                                line.push_str(message);
+                            }
+                        }
+                        lines.push(line);
+                    }
+                }
             }
             AgentStatusSectionData::Facts { facts } => {
                 if !facts.is_empty() {

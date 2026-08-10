@@ -32,7 +32,7 @@ use crate::message::types::{
 use crate::model::types::AgentStatusAttachment;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::FreshInboundTurn;
-use crate::tools::types::ToolDefinition;
+use crate::tools::types::ModelToolDefinition;
 
 /// The runtime-owned context configuration.
 ///
@@ -294,7 +294,7 @@ impl ContextEngine {
         &self,
         history: &[MessageBlock],
         checkpoint: Option<&ContextCheckpoint>,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
         agent_status: Option<&AgentStatusAttachment>,
     ) -> Result<ContextProjection, ContextError> {
@@ -423,7 +423,7 @@ impl ContextEngine {
         history: &[MessageBlock],
         checkpoint: Option<&ContextCheckpoint>,
         current_projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
         max_output_tokens: u32,
         constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
@@ -583,7 +583,7 @@ impl ContextEngine {
         previous: Option<&ContextCheckpoint>,
         plan: &CompactionPlan,
         summary_text: &str,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> Result<(ContextCheckpoint, ContextProjection), ContextError> {
         if !self
             .summary_request(history, previous, plan)?
@@ -769,7 +769,7 @@ impl ContextEngine {
     fn estimate_items(
         &self,
         items: &[ProjectionItem],
-        tools: &[ToolDefinition],
+        tools: &[ModelToolDefinition],
         agent_status: Option<&AgentStatusAttachment>,
     ) -> u64 {
         let projection = ContextProjection {
@@ -840,7 +840,7 @@ struct PlanScope<'a> {
     history: &'a [MessageBlock],
     suffix: &'a [SuffixItem],
     index: &'a StructuralIndex,
-    tool_definitions: &'a [ToolDefinition],
+    tool_definitions: &'a [ModelToolDefinition],
     estimator: &'a dyn TokenEstimator,
     soft_limit: u64,
     reservation: u64,

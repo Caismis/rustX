@@ -16,22 +16,43 @@ path = "src/lib.rs"
 name = "rustx"
 path = "src/main.rs"
 
+[[bin]]
+name = "bash-supervisor"
+path = "src/bin/bash_supervisor.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"
 tower = { version = "0.5", features = ["util"] }
+jsonschema = "0.26"
+regex = "1.13.1"
+globset = "0.4.19"
+walkdir = "2.5.0"
+nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
+libc = "0.2"
 
 [lints.rust]
-unsafe_code = "forbid"
+# The runtime process-supervision capability and the per-invocation Bash
+# supervisor perform a small bounded set of explicitly allowed OS shims:
+# the runtime layer's one-time prctl(PR_SET_CHILD_SUBREAPER) activation,
+# the supervisor's PR_SET_CHILD_SUBREAPER, the SIGTERM no-op handler
+# installation, prctl(PR_SET_NO_NEW_PRIVS), and
+# seccomp(SECCOMP_SET_MODE_FILTER) with a stack-local sock_fprog. Raw syscall
+# execution otherwise exists only in test-local seccomp regressions.
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+nix = { version = "0.31.3", features = ["signal", "process", "fs"] }

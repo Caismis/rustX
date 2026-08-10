@@ -16,10 +16,8 @@
 
 pub mod anthropic;
 pub mod block_index;
-pub mod cancellation;
 pub mod openai;
 pub mod traits;
 pub mod validation;
 
-pub use cancellation::ModelCancellation;
 pub use traits::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};

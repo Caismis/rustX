@@ -84,6 +84,12 @@ Exit criteria:
 - A deterministic fixture can execute a complete multi-turn tool-using agent without network access.
 - A live local session can hold a normal multi-turn conversation.
 
+M3's sequential/parallel tool-batch scheduling and deterministic
+tool-result ordering are implemented by the M5 tool plane PR: a
+`Sequential` invocation is an exclusive scheduling barrier, adjacent
+`Parallel` invocations execute concurrently as one group, and canonical
+results are committed in model call order.
+
 ## Milestone 4 — Context engine and compaction
 
 Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
@@ -128,11 +134,10 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
-Remaining under Issue #7 (not implemented by PR #21, the Issue #22
-batching PR, or the Agent Status PR):
-
-- M5-backed background-execution Agent Status integration
-- Live acceptance criteria that remain unverified without credentials
+Issue #7 (M4: context engine and Agent Status) is **completed**; Issue #27
+owns the deferred live multi-compaction/TUI verification, and Issue #8 (M5)
+owns the background-execution Agent Status integration, which is implemented
+by the M5 tool plane PR as a runtime-owned built-in section.
 
 Issue #22 (inbound batching) is implemented in the Issue #22 PR: the
 conversation inbound mailbox foundation (`src/runtime/inbound.rs`),
@@ -142,7 +147,7 @@ drain, safe-boundary agent-loop integration, and the deterministic
 mailbox/race/agent-loop/M4/provider test coverage. The remaining
 cross-issue acceptance work — Agent Status integration with the drained
 batch — is implemented by the Agent Status PR (issue-7/agent-status).
-Background runtime producers remain Issue #8, and mailbox
+Background runtime producers are implemented by Issue #8 (M5), and mailbox
 persistence/recovery remains later milestone work.
 
 Exit criteria:
@@ -156,32 +161,129 @@ Exit criteria:
 
 Deferred to later milestones: durable checkpoint/event storage (M8),
 conversation summarization in the CLI (M10), and any provider fallback or
-routing. M3's explicitly deferred parallel tool scheduling remains
-deferred and is not claimed as implemented; the turn-boundary mailbox
-drain is implemented in the Issue #22 PR as a safe-boundary contract.
+routing. Parallel tool scheduling is implemented by the M5 tool plane PR;
+the turn-boundary mailbox drain is implemented in the Issue #22 PR as a
+safe-boundary contract.
 
 ## Milestone 5 — Native tool plane
 
-Implement the canonical tool registry and executor contract.
+Implemented in the M5 tool plane PR (Issue #8):
 
-Initial native tools:
-
-- Read
-- Write
-- Edit
-- Glob
-- Grep
-- Bash
+- The canonical `ToolExecutor` contract and validating `ToolRegistry`
+  (definition/executor ownership, registration validation, deterministic
+  model-facing ordering, preflight boundary with JSON Schema validation)
+- Two independent policy axes: `ToolExecutionPolicy`
+  (foreground/background ownership) and `ToolConcurrencyPolicy`
+  (sequential/parallel batch scheduling)
+- The compiled `ModelToolDefinition` with the reserved `__rustx_`
+  invocation namespace (`__rustx_execution` for model-selectable tools)
+- `ToolExecutionId` and the conversation-owned
+  `ConversationBackgroundRegistry` with the dispatch ownership commit,
+  lifecycle state machine, cancel-vs-complete linearization, and
+  exactly-once terminal inbound publication
+- The `background_task` runtime intrinsic (status and idempotent cancel)
+- The runtime-owned Agent Status `background_execution` built-in section
+- Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
+  boundary, artifact store, and explicit tool environment
+- The concrete bounded `NativeToolPolicies` configuration: each ordinary
+  native tool independently selects its `NativeToolPolicy` (execution +
+  concurrency axes; foreground-only sequential by default), with
+  `background_task` fixed foreground-only sequential outside the
+  configurable set
+- One canonical conversation mailbox owned by the conversation tool
+  runtime, drained by the Agent Loop at every safe boundary; a configured
+  mailbox must belong to the runtime's own conversation (construction-time
+  identity check)
+- Artifact storage structurally disjoint from the model workspace
+- Deterministic foreground/background scheduling through the agent loop
+  with structural batch settlement
 
 Bash requirements:
 
 - Full `/bin/bash`
 - Foreground and background execution
-- Separate process groups
-- stdout/stderr capture
+- One per-invocation supervisor process unit (outer reaper-of-last-resort
+  plus inner session/group leader; both subreapers)
+- stdout/stderr/combined capture
 - Timeouts
-- TERM -> grace period -> KILL
-- Large-output truncation with durable full output
+- `TERM -> grace period -> KILL` driven by the invocation supervisor
+- Complete lifecycle ownership: shell-parent exit is not the Bash
+  settlement boundary. The invocation settles naturally only when the
+  shell's terminal status is known, the invocation-owned process group
+  reached its kernel-mediated terminal state, and the capture is settled;
+  a live in-group descendant (pipes held or redirected away) keeps the
+  invocation active under the same deadline and cancellation until the
+  owned group is terminal or cancellation/timeout/process-control failure
+  settles it
+- **Fixed process-group-scoped ownership**: the invocation's ownership
+  boundary is its dedicated process group, and membership is immutable for
+  Bash descendants. The inner supervisor installs a narrow inherited
+  seccomp policy (after its own `setsid()` setup, before the `/bin/bash`
+  spawn) that rejects `setsid`/`setpgid` with `EPERM` — the only syscalls
+  that can change process-group/session membership on Linux — so a
+  descendant can never leave the group or hide an in-group process behind
+  an out-of-group ancestor. A `setsid` escape attempt fails deterministically;
+  subreaper adoption of such children is a reaping detail, not an ownership
+  claim
+- Target-ABI seccomp policy: membership syscall numbers come from the
+  compiled Linux target's libc constants; x86-64 rejects the x32 syscall
+  namespace explicitly because it shares `AUDIT_ARCH_X86_64`
+- Reuse-safe process-group ownership: `TERM`/`KILL` are issued by the
+  inner supervisor with `killpg` against its own process group, whose
+  numeric id is its own pid — provably allocated while it lives; the final
+  signal is the last `killpg`, after which the anchor is released by the
+  reap and no further signal exists
+- Kernel-mediated group terminality: shell descendants that outlive the
+  shell are reparented into the invocation supervisor's child domain
+  (`PR_SET_CHILD_SUBREAPER`), and the terminal point is the group-scoped
+  wait (`waitid` with `Id::PGid`) returning `ECHILD` at the outer
+  supervisor — a complete whole-group proof only because membership is
+  immutable (an in-group process is always a matching child of the
+  supervisor that owns the gate) — never a `/proc` membership scan and
+  never a `killpg(..., 0)` probe (an un-reaped leader zombie keeps the
+  numeric group observable)
+- Explicit ownership protocol: `AnchorReady -> Start ->
+  OwnershipEstablished`; the successful Bash spawn is the OS commit point,
+  and post-start channel loss is conservatively treated as possible
+  ownership. `NoOwnership` covers pre-spawn setup failure.
+- Control-channel EOF is never post-ownership terminality. Normal settlement
+  uses `AllChildrenReaped`; catastrophic supervisor loss uses rustX's own
+  subreaper adoption, retained `WNOWAIT` anchor, anchored group containment,
+  and group-scoped `ECHILD` proof before returning `Failed`. An
+  `AnchorUnavailable` result (adopted anchor `ECHILD` without a prior
+  terminal event) is never a terminal proof and never commits a result.
+- Single-reaper anchor ownership: the inner supervisor pid is an ownership
+  anchor with exactly one reaping owner (the outer's dedicated anchor path
+  in the normal lifecycle; rustX's adopted-anchor path after both
+  supervisors are lost). The outer supervisor has no generic `waitpid(-1)`
+  reaping loop — generic child reaping can never consume the invocation
+  anchor, and an anchor `ECHILD` before the intentional release is an
+  ownership invariant violation, never process terminality.
+- Runtime child-subreaper capability: rustX's process-wide
+  `PR_SET_CHILD_SUBREAPER` activation is a runtime-level kernel
+  coordination primitive (lazy one-time, idempotent, sticky activation;
+  owned by `src/runtime/process_supervision.rs`), established before
+  `START` and never toggled per invocation. It is the catastrophic
+  fallback authority for Bash supervisor units only — in M5, Bash is the
+  only production subprocess hierarchy relying on orphan adoption, no
+  generic unknown-child reaper exists, and catastrophic Bash containment
+  remains invocation-scoped (anchor pid and invocation PGID only, never a
+  broad wait), so concurrent invocations and unrelated adopted children
+  are never signaled or reaped cross-group. Any future production
+  subprocess hierarchy must define its process-supervision/reaping
+  ownership before introduction.
+- Process-control failures (supervisor setup, shell spawning,
+  waiting/reaping, signaling, IPC, SIGTERM handler installation, fixed-
+  membership restriction installation) are
+  explicit failed results; if ownership of a numeric process group can no
+  longer be proven, no further signal is issued and the invocation fails
+  explicitly
+- Process confirmation watchdog: expiry records `QuiescenceTimeout` failure
+  intent but never bypasses process terminality. After terminality, the
+  separate capture deadline may force-finalize wedged readers. The outer
+  supervisor un-wedges a `SIGSTOP`-frozen inner anchor with `SIGKILL`
+- Explicit artifact-capture failures instead of silent success
+- Large-output truncation with durable full output artifacts
 - Explicit execution environment instead of inherited process environment
 
 Exit criteria:
@@ -261,15 +363,16 @@ Exit criteria:
 
 ## Milestone 9 — Cancellation and runtime supervision
 
-Implement:
+The M5 tool plane PR implements the concrete ownership seams required by
+the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
+cancellable foreground executions (including Bash process-group
+termination), conversation-owned background executions with the
+`background_task` cancel path, and explicit runtime shutdown cancellation of
+active background work. Remaining M9 work:
 
-- Hierarchical cancellation tokens
-- Attempt-owned foreground processes
-- Conversation-owned background processes
-- Graceful draining
-- Runtime idle state
-- Capability mutation guard
-- Capability revision snapshots
+- Hierarchical runtime supervisor tree and generic process supervision
+- Quiescent runtime state machine and graceful draining
+- Capability mutation guard and revision snapshots
 
 Exit criteria:
 

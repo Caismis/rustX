@@ -18,9 +18,7 @@ pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
 pub use adapter::openai::{
     OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ResponsesStorageMode,
 };
-pub use adapter::{
-    ModelAdapter, ModelCancellation, ModelEventStream, model_event_stream_of_failure,
-};
+pub use adapter::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};
 pub use error::{ModelError, ModelErrorKind};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;

@@ -85,14 +85,16 @@ stream and exactly one terminal `RuntimeEvent`:
 - Cancellation is observed at deterministic check points (before each
   model event, between tool calls) and races every tool execution (biased
   toward cancellation). Once cancellation is observable while a tool is
-  pending, the loop stops awaiting the tool, drops the pending tool
-  future, records no completion and no tool message, executes no later
-  call, and settles cancelled — the loop never waits for the tool to
-  return. Dropping the future does not guarantee that external work is
-  physically killed; executor-specific cancellation is a later milestone.
-  Every model invocation observes a child signal of the attempt signal.
-  Cancellation is always a terminal cancellation outcome, never
-  completion, and no continuation starts after cancellation is observed.
+  pending, the loop starts no new execution work and every in-flight
+  cancellable foreground execution settles by observing the attempt
+  signal in its execution context (M5); the committed tool-result batch is
+  then settled structurally exactly once — every logical call receives one
+  result slot (including cancelled slots for unstarted work) in model call
+  order — and the attempt settles cancelled. The loop never drops a
+  pending tool future while external work keeps running. Every model
+  invocation observes a child signal of the attempt signal. Cancellation
+  is always a terminal cancellation outcome, never completion, and no
+  continuation starts after cancellation is observed.
 
 - `ModelRequestCompleted.usage` reports the canonical final usage: the
   terminal `Completed.usage` when present, otherwise the latest
@@ -171,6 +173,319 @@ Capability environments are prepared and validated before an atomic revision swa
 ## Tool ordering
 
 Tool execution may be parallel. Runtime completion events may reflect actual completion order. Canonical tool-result messages are committed in the original tool-call order unless a future protocol explicitly defines otherwise.
+
+## Tool plane (M5)
+
+- Foreground/background execution policy and sequential/parallel scheduling
+  are two independent axes: ownership/settlement is decided by
+  `ToolExecutionPolicy`, concurrency within a batch by
+  `ToolConcurrencyPolicy`. The two are never combined into one axis.
+- The canonical tool input schema is tool-owned and never mutated. Reserved
+  runtime invocation metadata (`__rustx_execution` under the `__rustx_`
+  namespace) exists only in the compiled model-facing schema, is required
+  for `ModelSelectable` tools, is extracted and stripped by the runtime, and
+  is never forwarded to any executor. Registration rejects canonical schemas
+  claiming `__rustx_*` properties.
+- The registry is a validity boundary: duplicate ids, duplicate model-facing
+  names, empty identities, invalid or non-root JSON Schema, reserved
+  property collisions, invalid policy combinations, and background-capable
+  `background_task` registrations are rejected. A canonical call whose id
+  and name disagree is a contract violation, never an id-first fallback.
+- The native executor implementation and its execution-ownership policy are
+  independent: each ordinary native tool (Read/Write/Edit/Glob/Grep/Bash)
+  independently selects its execution and concurrency policy through the
+  concrete bounded `NativeToolPolicies` configuration and may use any legal
+  execution policy (`ForegroundOnly`, `BackgroundOnly`, `ModelSelectable`);
+  the default is foreground-only sequential for every ordinary tool. Only
+  the runtime intrinsic `background_task` is intentionally fixed
+  (foreground-only, sequential) and is outside the configurable set.
+- Invocation order is frozen: resolve tool, extract/resolve invocation
+  metadata, strip metadata, validate business arguments against the
+  canonical schema, dispatch executor. A business validation failure is a
+  normal failed result slot; the executor never runs.
+- Every valid committed tool-call batch settles structurally exactly once:
+  each logical call receives exactly one attempt-facing result slot
+  (success, failure, cancellation, timeout, validation rejection, or
+  accepted background dispatch with its `ToolExecutionId`), committed in
+  model call order.
+- Foreground work is attempt-owned: observable attempt cancellation reaches
+  cancellable native foreground work through the shared runtime
+  `CancellationSignal` and physically settles it. Background ownership
+  transfers exactly once at the dispatch commit linearization point: before
+  it the attempt can roll the prepared dispatch back, after it only the
+  conversation owns the execution.
+
+## Background executions (M5)
+
+- One conversation owns one authoritative `ConversationBackgroundRegistry`;
+  registry state is authoritative — never messages, never Agent Status
+  text, never Event Journal text. Cross-conversation access is structurally
+  impossible (no global lookup table).
+- The conversation tool runtime binds every background-runtime dependency
+  (mailbox, clock, event sink, environment, workspace, artifact store)
+  exactly once at construction; the background-registry identity and its
+  execution records can never be replaced or reset by a configuration
+  change.
+- `ToolExecutionId` values are conversation-owned, deterministic, and
+  monotonic (`exec_1`, `exec_2`, ...) with checked exhaustion; they are
+  allocated under the same synchronization boundary that owns background
+  records.
+- The public lifecycle is `Starting -> Running -> Cancelling -> terminal`,
+  with terminal states absorbing; exactly one terminal transition settles
+  an execution.
+- The dispatch ownership commit is the background linearization point: the
+  registry synchronization boundary is acquired first, the deciding
+  attempt-cancellation observation happens at that same protected boundary,
+  and the prepared→owned transition follows. Cancellation observable at the
+  boundary rolls the prepared dispatch back completely (no published
+  record, no accepted result, runner never begins); ownership wins commits
+  exactly once and later attempt cancellation can never reclaim the
+  execution.
+- The cancellation-vs-completion race is linearized: the first registry
+  transition that commits either terminal completion or cancellation intent
+  wins. Completion-first makes later cancels idempotent no-ops returning the
+  terminal snapshot; cancellation-intent-first owns settlement
+  (`Cancelling -> Cancelled`) and canonicalizes the stored terminal result
+  to `Cancelled` with the retained reason, so a normal executor return
+  (`Success`, `TimedOut`, `Interrupted`, executor-level `Cancelled`) can
+  never contradict the registry winner. Only an explicit
+  runtime/process-control failure after cancellation intent settles as
+  `Failed`.
+- Every successfully dispatched execution reaches exactly one terminal
+  registry state and claims at most one terminal inbound publication
+  (a timestamped `UserMessageBlock` with `UserSource::Runtime` through the
+  conversation mailbox, `background-<exec>-terminal`); publication failure
+  retains the terminal registry state without rolling the execution back.
+- A background dispatch returns an accepted result (`execution_id`, state,
+  tool) without blocking the originating attempt on detached settlement;
+  background completion never reopens or mutates a settled attempt.
+- One conversation has one canonical inbound mailbox ordering domain: the
+  conversation tool runtime owns the mailbox, background terminal
+  notifications publish into exactly it, and the Agent Loop drains exactly
+  it at every safe boundary. An attempt over a tool runtime of a different
+  conversation is rejected structurally.
+- A `ConversationToolRuntime` may only contain resources belonging to its
+  own `ConversationId`: a configured mailbox must belong to the same
+  conversation as the runtime, and the mismatch is rejected at construction
+  (before the background registry is built) with a typed
+  `MailboxConversationMismatch` error. An omitted mailbox constructs the
+  canonical mailbox of the runtime's own conversation, so
+  `request.conversation_id == tool_runtime.conversation_id ==
+  tool_runtime.mailbox().conversation_id == background_registry.conversation_id`
+  holds structurally.
+- The artifact store and the model workspace are disjoint filesystem
+  regions: construction rejects an artifact root that equals the workspace
+  root, nests inside it, or contains it — including symlink-resolved
+  overlap — so Glob/Grep/Bash cannot surface runtime-private output files.
+- All progress entering runtime state and events passes through one shared
+  UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
+  background registry produce the same normalized value, and an oversized
+  multibyte message can never panic or strand an execution.
+- Agent Status is a read-only projection: the executing attempt samples the
+  active registry snapshot and the runtime-owned `background_execution`
+  built-in section shows only `Starting`/`Running`/`Cancelling` entries in
+  allocation order; extension providers can never register under the
+  reserved id or construct the built-in variant.
+
+## Native tools and Bash (M5)
+
+- Native filesystem tools and Bash operate only inside the canonical
+  workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
+  escape, and symlinks resolving only to targets inside the canonical root.
+- Model-facing output is bounded by named limits; full Bash output is
+  spooled to the conversation artifact store (opaque monotonic
+  `artifact_N` ids outside the model workspace) while bounded head/tail
+  previews are retained, with explicit `TruncationState`.
+- Bash owns a distinct process group per invocation inside a dedicated
+  invocation session created by a small per-invocation supervisor;
+  cancellation/timeout signals the owned group (`TERM`, then a bounded
+  grace period, then `KILL` when the group is still alive) and never signals
+  unrelated runtime processes. The child environment is explicit
+  (`env_clear()` plus runtime-approved basics and authorized entries);
+  parent-process secrets are absent unless explicitly authorized.
+- Shell-parent exit is not by itself the Bash settlement boundary: the
+  invocation settles naturally only when the shell's terminal status is
+  known, the invocation-owned process group reached its kernel-mediated
+  terminal state, AND the runtime-owned output capture is settled. A
+  descendant that remains in the owned group after the shell exits — with
+  the pipes either still held or already redirected away — keeps the
+  invocation active under the same deadline and cancellation until the
+  owned group is terminal or cancellation/timeout/process-control failure
+  settles it.
+- **The Bash invocation ownership boundary is its dedicated process
+  group, and membership is immutable for Bash descendants.** A Bash
+  invocation executes inside one fixed rustX-owned process group.
+  Process-group/session mutation from Bash descendants is rejected so the
+  ownership boundary cannot be escaped or partially hidden: the inner
+  supervisor installs a narrow inherited seccomp policy between its own
+  `setsid()` setup and the `/bin/bash` spawn that rejects `setsid(2)` and
+  `setpgid(2)` with `EPERM` (the only syscalls that can change
+  process-group/session membership on Linux; seccomp filters are inherited
+  across `fork`/`exec` and can only become more restrictive). A command
+  such as `setsid sleep 30` therefore fails deterministically and nothing
+  leaves the invocation group. The filter uses syscall numbers defined by
+  the compiled Linux target ABI. On x86-64, x32 syscall execution is
+  rejected because it shares the x86-64 audit architecture while using a
+  distinct syscall-number namespace. This restriction is what makes the
+  supervisor's kernel child-wait terminal proof complete: an in-domain
+  descendant cannot remain hidden behind an ancestor that left the domain.
+- **The inner supervisor PID is an ownership anchor with exactly one
+  reaping owner; generic child-reaping paths can never consume it.** A
+  process used as a lifecycle identity anchor has one dedicated reaping
+  owner. In the normal lifecycle the outer supervisor's dedicated anchor
+  path is that owner (observe with `WNOWAIT`, issue any fallback
+  containment signal while the identity is retained, release only through
+  the group-scoped gate), and the outer supervisor has **no generic
+  `waitpid(-1)` reaping loop** — every child of the outer is either the
+  anchor or an in-group adopted descendant, so the gate reaps the whole
+  child domain and a generic loop could only ever consume the anchor and
+  lose the abnormal-exit fallback-containment decision. The inner
+  supervisor's own reaping hygiene consumes only its own children (bash
+  and adopted in-group descendants), never an anchor of another owner. In
+  the catastrophic lifecycle rustX becomes the anchor's reaping owner only
+  by adoption (see the catastrophic-containment bullet below).
+  Subreaper adoption is a process-reaping implementation detail and does
+  not by itself expand semantic ownership beyond the defined
+  process-group boundary.
+- **An anchor `ECHILD` is never a terminal process-group proof.** If the
+  dedicated anchor observation (or the catastrophic adoption path) sees
+  `ECHILD`, the anchor identity is unreachable — the owned group may still
+  exist. It is an ownership invariant violation (before the intentional
+  release no other code may reap the anchor) and is handled as such: the
+  violation is reported, no numeric group id is signaled, no canonical
+  terminal event is fabricated, and the invocation remains non-terminal.
+  `waitid(anchor) == ECHILD` implies the owned group is terminal **only**
+  when a separate, already-completed terminal proof exists (the parsed
+  `AllChildrenReaped` event).
+- **Every Bash result status — `Success`, `Failed`, `Cancelled`, and
+  `TimedOut` — is terminal with respect to the invocation-owned process
+  group**: no invocation-owned Bash process remains capable of executing
+  work before any result is returned. In particular, a detected
+  process-control/runtime failure determines the eventual result status but
+  does not itself settle the invocation lifecycle: after a failure is
+  observed, the invocation's owned group is contained, the outer
+  supervisor's group-scoped wait reaches its terminal `ECHILD`, the capture
+  is finalized, and only then is the remembered `Failed` result returned. A
+  `Failed` result can therefore never be observed while owned work is still
+  alive.
+- **Process confirmation and capture boundedness are distinct**:
+  `BASH_TERMINATION_CONFIRMATION` records `QuiescenceTimeout` failure intent
+  when the supervisor has not confirmed terminality, but cannot settle the
+  invocation. rustX continues waiting for the authoritative terminal event.
+  Only after process terminality may the capture deadline force-finalize
+  reader tasks and return `Failed(CaptureTimeout)`.
+- Each Bash invocation owns one invocation-local supervisor process unit
+  (an outer reaper-of-last-resort plus an inner session/group leader that
+  spawns `/bin/bash`; both subreapers). Shell descendants that outlive the
+  shell are reparented into the invocation supervisor's child domain by the
+  kernel (`PR_SET_CHILD_SUBREAPER`) rather than rediscovered from `/proc`.
+  `/proc` enumeration is never the source of truth for process ownership or
+  quiescence.
+- Bash ownership commits at the successful `/bin/bash` spawn, after the
+  inner has created the invocation session/group and installed the fixed-
+  membership filter. The inner first reports its retained anchor and waits
+  for rustX's start acknowledgement; a successful spawn then reports the
+  explicit ownership commit. Before that gate, setup failure may settle
+  without an owned Bash domain. Once the gate is acknowledged, rustX
+  conservatively treats ownership as possible even if the commit frame is
+  lost.
+- **Control-channel EOF is never a post-ownership process-terminal event.**
+  It records `UnexpectedSupervisorExit` and channel loss, but cannot move an
+  owned lifecycle to terminal. Normally only `AllChildrenReaped` does so.
+  If both supervisors are lost, the runtime process's child-subreaper
+  capability adopts the invocation descendants; rustX retains the adopted
+  inner anchor with
+  `WNOWAIT`, signals the group while that identity is reuse-safe, and reaches
+  its own group-scoped `ECHILD` before committing the failed result. If the
+  adopted anchor is unavailable (`ECHILD`) without a prior authoritative
+  terminal event, the emergency containment reports `AnchorUnavailable` —
+  never terminal — and no `ToolExecutionResult` commits.
+- **Runtime child-subreaper capability is a process-level kernel
+  coordination primitive, not a Bash-local setting and not a generic
+  reaper.** rustX activates `PR_SET_CHILD_SUBREAPER` as a runtime-level
+  prerequisite for catastrophic Bash supervisor-loss recovery: the
+  capability is owned by the runtime coordination layer
+  (`src/runtime/process_supervision.rs`), activated lazily once per
+  process, idempotently and sticky (a failed activation fails every later
+  consultation), before any Bash ownership exists — `START` (which
+  authorizes the Bash spawn) is never sent before catastrophic fallback
+  authority exists. Kernel adoption does **not** by itself assign
+  arbitrary adopted children to Bash lifecycle ownership: in M5, Bash
+  supervisor units are the only production subprocess hierarchy relying
+  on orphan adoption, Bash containment remains invocation-scoped (anchor
+  pid and invocation process group only — never `waitpid(-1)` or
+  `waitid(P_ALL)`), and M5 implements no generic unknown-child reaper.
+  Introducing another production subprocess hierarchy is an architecture
+  change: its direct-child waiting, orphan adoption, and reaping
+  ownership must be reconciled with runtime process supervision before it
+  is merged.
+- Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
+  issued by the inner supervisor with `killpg` against its own process
+  group, whose numeric id is its own pid — provably allocated exactly while
+  it lives. The final signal is the last `killpg`; afterwards the anchor is
+  released by the reap and no further signal exists. A numeric process-group
+  id that was released can therefore never receive a foreign signal — there
+  is no probabilistic "reuse window". Unrelated rustX/sibling processes live
+  in different sessions and can never join the invocation's process group.
+  When the inner supervisor fails and containment escalates to the outer
+  supervisor, the outer signals the invocation group only while its
+  structural anchor — the un-reaped inner pid, which is the group id — is
+  provably held (`waitid` with `WNOWAIT` observes the inner's terminal state
+  without releasing its identity), and the anchor is released only by the
+  final reap after that last signal. A numeric group id whose allocation has
+  ended is never signaled.
+- The kernel-mediated terminal condition of the invocation-owned process
+  group is the **group-scoped wait**, with one authoritative reporter:
+  `waitid` with `Id::PGid` matches children of the waiting process inside
+  the invocation group. `P_PGID` alone observes only the waiting process's
+  children — not arbitrary group members — so its `ECHILD` is a complete
+  whole-group terminal proof only because membership is immutable: every
+  in-group process other than the inner supervisor is a bash descendant
+  that can never leave the group, and when the shell (or any in-group
+  ancestor) exits, the kernel reparents its in-group children directly into
+  the nearest subreaper's child domain (the inner supervisor while it
+  lives, the outer supervisor after it). The inner supervisor's group-
+  scoped wait returning `ECHILD` therefore means every in-group child of
+  the inner is reaped (inner child-domain completion, reported only by its
+  exit status), while the outer supervisor's group-scoped wait returning
+  `ECHILD` — no child of the outer remains in the invocation group, the
+  inner anchor itself released by that same wait strictly after any
+  fallback containment signal — is the canonical terminal process-tree
+  event of the whole supervisor unit, reported as `AllChildrenReaped`. A
+  live group member keeps the group-scoped wait from returning `ECHILD` in
+  every reachable topology; there is no hidden-grandchild state. This is
+  the exact lifecycle linearization point; rustX combines the outer
+  `AllChildrenReaped` with output-capture settlement to produce the tool
+  result. `killpg(..., 0)` probes are never the terminal point: an
+  un-reaped group-leader zombie keeps the numeric group observable, so
+  probes cannot distinguish live members from the anchored zombie.
+- Process-control failures are never silent: supervisor setup, shell
+  spawning, waiting/reaping, signaling, and control-channel failures surface
+  as an explicit failed tool result — never as an ordinary `Success`,
+  `Cancelled`, or `TimedOut`. Failures are distinguished by ownership:
+  failures before any Bash process tree was established (control-channel
+  setup, supervisor spawn, bash spawn, SIGTERM handler-installation failure)
+  may return `Failed` immediately because no owned work exists; failures
+  after ownership exists (signal failure, wait/reap failure, IPC failure,
+  control-channel read failure, unexpected supervisor exit, rustX
+  control-channel abandonment) follow the containment lifecycle — the
+  failure is remembered, the owned group is contained and reaches its
+  terminal state, the capture is finalized, and only then is `Failed`
+  returned. If ownership of a numeric process group can no longer be
+  proven, no further signal is issued and the invocation fails explicitly.
+  Control-channel loss is never treated as permission for owned work to
+  continue: dropping the rustX-side execution future triggers the
+  supervisor unit's fail-safe containment, so an abandoned owned group can
+  never escape. Cancellation/timeout intent that cannot be established
+  through process control is consistent with the background registry's rule
+  that an explicit process-control failure may override canonical
+  cancellation settlement.
+- Bash result semantics are typed: zero exit is success, non-zero exit is a
+  failed result with the exit code preserved, signal death, timeout, and
+  cancellation map to their canonical statuses and are never misreported as
+  a successful non-zero execution. Descendant status never replaces the
+  shell's business result; descendants affect when settlement is legal, not
+  the shell's exit code.
 
 ## Tool replay
 

@@ -28,9 +28,14 @@ The canonical contracts defined in M1 live in the `src` module tree as follows:
 ```text
 runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            AgentVersionId, AttemptId, TurnId, EventId, ToolId,
-                           ToolCallId, ToolVersionId, McpServerId, SkillId,
-                           SkillVersionId, ArtifactId) and CapabilityRevision
-runtime/types.rs           CancellationReason, RuntimeError
+                           ToolCallId, ToolExecutionId, ToolVersionId,
+                           McpServerId, SkillId, SkillVersionId, ArtifactId)
+                           and CapabilityRevision
+runtime/cancellation.rs   CancellationSignal: the one runtime-owned
+                           cancellation primitive shared by model adapters,
+                           compaction, foreground tool execution, and
+                           background work
+runtime/types.rs           CancellationReason, RuntimeError, RuntimeClock
 runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            in-memory coordination contract): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
@@ -42,10 +47,37 @@ message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
-tools/types.rs             ToolDefinition, ToolCall, ToolCallStart,
-                           ToolExecutionResult, ToolExecutionStatus,
-                           ToolExecutionMode, ToolReplayPolicy, ToolOrigin,
-                           TruncationState
+tools/types.rs             ToolDefinition (id, name, description, canonical
+                           input schema, ToolExecutionPolicy, ToolConcurrencyPolicy,
+                           ToolReplayPolicy, ToolOrigin), ModelToolDefinition
+                           (the compiled model-facing definition), ToolCall,
+                           ToolCallStart, ToolInvocation (stripped/validated
+                           canonical invocation), ToolExecutionResult,
+                           ToolExecutionStatus, ToolProgress, TruncationState
+tools/executor.rs          ToolExecutor boundary, ToolExecutionContext,
+                           ProgressReporter, ToolRegistry (validating
+                           definition/executor registry), PreflightOutcome
+tools/schema.rs            JSON Schema validation, the reserved __rustx_
+                           namespace, the model-facing schema compiler, and
+                           reserved invocation metadata extraction
+tools/workspace.rs         Workspace: the canonical runtime-owned workspace
+                           boundary (canonicalized root, relative paths only,
+                           no escape, symlink containment)
+tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
+                           artifact ids with streaming spooling
+tools/environment.rs       ToolEnvironment: the explicit authorized child
+                           environment (no wholesale parent inheritance)
+tools/background.rs        ConversationBackgroundRegistry: conversation-owned
+                           background executions (lifecycle state machine,
+                           dispatch ownership commit, cancel-vs-complete
+                           linearization, terminal inbound publication,
+                           bounded progress snapshots)
+tools/runtime.rs           ConversationToolRuntime: the per-conversation
+                           bundle of workspace, artifacts, environment, and
+                           background registry handed to AgentExecution
+tools/native/             the native tool plane: read, write, edit, glob,
+                           grep, bash executors and the background_task
+                           runtime intrinsic
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
                            ReasoningEffort, AgentStatusAttachment (the
                            cross-layer model-request attachment contract of
@@ -60,7 +92,8 @@ events/types.rs            RuntimeEventEnvelope, RuntimeEvent, AttemptOutcome,
                            AttemptFailure
 protocol/manifest.rs       RuntimeManifest and capability/context/limit sections
 model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelEventStream
-model/adapter/cancellation.rs  ModelCancellation (rustX-owned cancellation)
+(cancellation lives in runtime/cancellation.rs; model adapters receive
+                           the shared CancellationSignal)
 model/adapter/validation.rs    deterministic local capability validation
 model/adapter/block_index.rs   provider-key to ContentBlockIndex allocator
 model/adapter/openai/     OpenAI Chat Completions and Responses adapters
@@ -77,7 +110,7 @@ protocol → model, runtime
 events   → message, model, tools, runtime
 model    → message, tools, runtime
 message  → tools, runtime
-tools    → runtime
+tools    → runtime (and the tool plane reuses runtime-owned coordination)
 ```
 
 Serialization conventions for persistence-facing types:
@@ -208,7 +241,8 @@ and it is not a scheduler, supervisor, or persistent service layer.
 #### M3 implementation (agent loop)
 
 The M3 implementation freezes the agent-loop boundary in `src/agent` and
-the tool execution contract in `src/tools/executor.rs`:
+the tool execution contract in `src/tools/executor.rs` (the provisional M3
+`Tool` trait was replaced by the canonical M5 [`ToolExecutor`] boundary):
 
 ```text
 canonical input state
@@ -219,17 +253,19 @@ ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel ->
         |
 ModelEventAssembler: stream validation + ordered AgentMessageBlock assembly
         |
-ToolRegistry: deterministic call resolution and Tool::execute
+ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
+        |
+deterministic scheduling phases (sequential barriers, parallel groups)
         |
 RuntimeEvent trace, ending in exactly one terminal event
 ```
 
 The loop owns execution semantics, message assembly, tool execution,
 continuation state, cancellation observation, and the runtime event
-trace. Adapters own provider protocol translation only, and tools own
-their definitions and single-call execution. Tool calls of one turn
-execute in deterministic block order with no hidden concurrency or retry,
-continuation state propagates losslessly without fabrication, cancellation
+trace. Adapters own provider protocol translation only; the validating
+[`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
+[`ToolExecutor`] implementations and never falls back id-first.
+Continuation state propagates losslessly without fabrication, cancellation
 always settles as a terminal cancellation, and every attempt emits exactly
 one terminal `RuntimeEvent`. See `docs/agent-loop.md` for the full
 boundary description.
@@ -239,15 +275,18 @@ The M3 test suite drives the loop with scripted fixture models and tools
 `RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
 execution phases from traces (`tests/common/mod.rs`).
 
-The Issue #22 inbound batching integration is additive:
-`AgentExecution::with_inbound_mailbox` attaches the conversation mailbox
-(rejecting a mismatched conversation), and at every safe turn boundary the
-loop performs exactly one finite watermark-bounded drain and appends every
+The Issue #22 inbound batching integration is canonical:
+`ConversationToolRuntime` owns the one conversation inbound mailbox, and at
+every safe turn boundary the loop performs exactly one finite
+watermark-bounded drain of `tool_runtime.mailbox()` and appends every
 drained message as its own canonical `UserMessageBlock` before the next
-model request. Mailbox attachment adds the safe-boundary
-cancellation-before-selection rule; observable cancellation before every
-model turn is a generic Agent Loop invariant for all executions. See
-`docs/agent-loop.md` section 9 for the full boundary description.
+model request. The loop and the background runtime provably share one
+mailbox: an `AgentExecution` over a tool runtime of a different
+conversation is rejected structurally at construction. Mailbox draining
+adds the safe-boundary cancellation-before-selection rule; observable
+cancellation before every model turn is a generic Agent Loop invariant for
+all executions. See `docs/agent-loop.md` section 9 for the full boundary
+description.
 
 ### Layer 2: Context engine
 
@@ -375,10 +414,259 @@ Key contracts:
   with `CannotFit` rather than summarizing the unobserved instruction.
 
 The M4 context path is **mandatory**: every `AgentExecution` is constructed
-with a `ContextRuntime` (`AgentExecution::new(request, adapter, tools,
-cancellation, context_runtime)`); the no-context compatibility path and
+with a `ContextRuntime` and a `ConversationToolRuntime`
+(`AgentExecution::new(request, adapter, tools, cancellation, context_runtime,
+tool_runtime)`); the no-context compatibility path and
 `with_context_runtime` are gone, and there is no Agent Status disable flag.
 See `docs/context-engine.md` for the full boundary description.
+
+#### M5 implementation (native tool plane)
+
+The M5 implementation freezes the canonical tool plane boundary in
+`src/tools` and replaces the provisional M3 `Tool` trait:
+
+```text
+canonical ToolDefinition (tool-owned schema + two policy axes)
+        |
+validating ToolRegistry (definition + Arc<dyn ToolExecutor>)
+        |
+preflight: resolve -> extract reserved metadata -> strip -> JSON Schema validate
+        |
+ToolInvocation (stripped/validated business arguments + resolved mode)
+        |
+ToolExecutor::execute(ToolInvocation, ToolExecutionContext)
+        |
+ToolExecutionResult
+```
+
+The two policy axes are independent:
+
+- [`ToolExecutionPolicy`] (`ForegroundOnly` / `BackgroundOnly` /
+  `ModelSelectable`) decides ownership and settlement: foreground work is
+  attempt-owned and physically cancellable, background work is
+  conversation-owned and detached after accepted dispatch.
+- [`ToolConcurrencyPolicy`] (`Sequential` / `Parallel`) decides scheduling
+  within one tool-call batch: a `Sequential` invocation is an exclusive
+  barrier, adjacent `Parallel` invocations run as one group.
+
+The canonical input schema is tool-owned and never mutated. For
+`ModelSelectable` tools the model-facing compiler decorates a clone with the
+required reserved `__rustx_execution` field
+(`{"type": "string", "enum": ["foreground", "background"]}`) inside the
+reserved `__rustx_` top-level property namespace. The runtime extracts the
+field, resolves the canonical mode, strips it, and validates the remaining
+business arguments against the original schema before dispatch; reserved
+fields are never forwarded to executors. `ModelRequest.tools` carries the
+compiled [`ModelToolDefinition`] values only — provider adapters translate
+them verbatim and never decide execution semantics.
+
+The registry is a correctness boundary: duplicate `ToolId`s, duplicate
+model-facing names, empty identities, invalid or non-root JSON Schema,
+reserved `__rustx_*` collisions, invalid policy combinations, and
+background-capable `background_task` registrations are rejected; a
+canonical call whose id and name disagree is a contract violation. Tool
+definitions reach the model in deterministic registration order, and the
+context engine accounts the exact compiled definitions.
+
+One conversation owns one `ConversationToolRuntime`, constructed exactly
+once from a bounded `ConversationRuntimeConfig` that binds the mailbox,
+the clock, the event sink, the environment, the workspace, and the
+artifact store; after construction the conversation background registry
+identity and its execution records are stable and can never be replaced
+or reset by a configuration change. The runtime owns the canonical
+`Workspace` boundary (canonicalized root; relative paths only; no `..`
+escape; symlinks contained) and the `ArtifactStore` (opaque monotonic
+`artifact_N` ids, streaming spooling). The artifact root and the
+workspace root must be disjoint filesystem regions: equal roots, nested
+roots, and symlink-resolved overlap are rejected at construction, so
+runtime-private output files are never observable through Glob/Grep/Bash.
+The explicit `ToolEnvironment` and the authoritative
+`ConversationBackgroundRegistry` complete the bundle. Background
+executions own a deterministic `exec_N` `ToolExecutionId`, a lifecycle
+state machine (`Starting -> Running -> Cancelling -> terminal`), a
+two-stage dispatch with an explicit ownership commit linearization
+point, a cancel-vs-completion linearization rule, bounded latest progress
+snapshots, and exactly-once terminal inbound mailbox publication
+(`background-exec_N-terminal`). The `background_task` intrinsic
+(foreground-only, sequential) provides `status` and idempotent `cancel`.
+
+The dispatch ownership commit is the background linearization point: the
+registry synchronization boundary is acquired first and the final
+attempt-cancellation observation happens at that same protected boundary.
+Cancellation observable there rolls the prepared dispatch back completely
+(no published record, no accepted result, the runner never begins);
+ownership wins commits exactly once and a later attempt cancellation can
+never reclaim the detached execution. Cancellation intent that commits
+first retains its reason and canonicalizes the final terminal result, so
+the registry winner and the stored result always agree (only an explicit
+process-control failure after cancellation intent settles as `Failed`).
+All progress entering runtime state and events passes through one shared
+UTF-8-safe bound (`bound_tool_progress`) used by both foreground and
+background paths.
+
+Agent Status owns the runtime `background_execution` built-in section: the
+executing attempt samples a read-only active snapshot from the background
+registry, the composer builds the section (never an extension provider),
+and the renderer shows active executions only in allocation order.
+
+The native tool plane implements Read, Write, Edit, Glob, Grep, and Bash as
+ordinary registrations under the concrete bounded `NativeToolPolicies`
+configuration: each ordinary native tool independently selects its
+execution and concurrency policy (foreground-only sequential by default,
+with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
+The only intentionally fixed policy remains the runtime intrinsic
+`background_task`. Bash treats one invocation as one complete lifecycle:
+spawn one per-invocation supervisor, capture stdout/stderr/combined, let
+the supervisor own the invocation's process group to its kernel-mediated
+terminal state, and settle only when the shell's terminal status is
+known, the owned group's terminal report arrived, AND the output capture
+is settled — shell-parent exit is not by itself the Bash settlement
+boundary, so a descendant that remains in the owned group after the shell
+exits (holding the pipes or having redirected them away) can never escape
+the timeout/cancellation contract. The child runs with an explicit
+`env_clear()`-based environment, bounded head/tail previews per stream
+with full raw output spooled to artifacts, `TERM -> BASH_TERM_GRACE ->
+KILL` cancellation driven by the supervisor, typed result semantics (zero
+exit success, non-zero exit failed with the code preserved, timeout as
+`TimedOut`, cancellation as `Cancelled`), explicit artifact-capture
+failures, and explicit process-control failures (supervisor setup, shell
+spawning, waiting/reaping, signaling, and IPC failures settle as `Failed`,
+never as a silent `Success`, `Cancelled`, or `TimedOut`) — never a silent
+success that lost the retained output.
+
+**The Bash invocation ownership boundary is its dedicated process group,
+and membership is immutable for Bash descendants.** A Bash invocation
+executes inside one fixed rustX-owned process group. Process-group/session
+mutation from Bash descendants is rejected so the ownership boundary
+cannot be escaped or partially hidden: the inner supervisor installs a
+narrow inherited seccomp policy between its own `setsid()` setup and the
+`/bin/bash` spawn that rejects `setsid(2)` and `setpgid(2)` with `EPERM`
+(the only syscalls that can change process-group/session membership on
+Linux; seccomp filters are inherited across `fork`/`exec` and can only
+become more restrictive). A command such as `setsid sleep 30` fails
+deterministically and nothing leaves the invocation group. The filter uses
+syscall numbers defined by the compiled Linux target ABI. On x86-64 it
+rejects x32 syscall execution because x32 shares the x86-64 audit
+architecture while using a distinct syscall-number namespace. This
+restriction is what makes the supervisor's kernel child-wait terminal
+proof complete: an in-domain descendant cannot remain hidden behind an
+ancestor that left the domain. Subreaper adoption is a reaping
+implementation detail, not an ownership claim.
+
+Bash process ownership is kernel-mediated and reuse-safe by construction:
+each invocation owns a small supervisor process unit — an outer
+supervisor (rustX child, subreaper, final containment and reaping
+authority) plus an inner supervisor (session and group leader via
+`setsid`, subreaper, `/bin/bash` parent) — and the shell's in-group
+descendants live in exactly the invocation's own session/process group.
+`TERM`/`KILL` are issued by the inner supervisor with `killpg` against its
+own group, whose numeric id is its own pid — provably allocated while it
+lives, so the numeric group id can never name a foreign process group
+while signals remain legal. Shell descendants that outlive the shell are
+reparented into the supervisor's child domain (`PR_SET_CHILD_SUBREAPER`)
+rather than rediscovered from `/proc`; the terminal ownership point is the
+kernel's **group-scoped wait** with one authoritative reporter — the outer
+supervisor's `waitid(Id::PGid)` returning `ECHILD` (no child of the outer
+remains in the invocation group, the inner anchor itself released by that
+same wait strictly after any fallback containment signal), reported to
+rustX as the canonical `AllChildrenReaped` over a `UnixStream` control
+channel. `P_PGID` alone observes only the waiting process's children, not
+arbitrary group members; its `ECHILD` is a complete whole-group terminal
+proof only because membership is immutable — every in-group process other
+than the inner supervisor is a bash descendant that can never leave the
+group, and when the shell (or any in-group ancestor) exits, the kernel
+reparents its in-group children directly into the nearest subreaper's
+child domain (the inner supervisor while it lives, the outer supervisor
+after it). A live group member keeps the group-scoped wait from returning
+`ECHILD` in every reachable topology; there is no hidden-grandchild state.
+`/proc` is never the source of truth for process ownership or quiescence,
+and `killpg(..., 0)` probes are never the terminal point (an un-reaped
+leader zombie keeps the numeric group observable).
+
+**The inner supervisor pid is an ownership anchor with exactly one
+reaping owner.** The outer supervisor's dedicated anchor path is the only
+code allowed to observe the anchor's terminal state (`waitid` with
+`WNOWAIT`: observation only, never consumption) and the only code allowed
+to reap it (the group-scoped gate, strictly after any fallback
+containment signal). The outer therefore has **no generic `waitpid(-1)`
+reaping loop**: every child of the outer is either the anchor or an
+in-group adopted descendant, so the gate reaps the whole child domain and
+a generic loop could only ever consume the anchor and lose the
+abnormal-exit fallback-containment decision. An `ECHILD` from the
+dedicated anchor observation is an ownership invariant violation, never a
+terminal observation: the outer reports it and fails safely — it never
+derives owned-group terminality from an anchor `ECHILD`, never signals a
+numeric group id without the retained anchor, and never reports the
+canonical terminal event. The inner supervisor's own reaping hygiene
+consumes only its own children (bash and adopted in-group descendants),
+never an anchor of another owner.
+
+The OS ownership commit is the successful `/bin/bash` spawn after the inner
+has created the invocation session/group and installed seccomp. Protocol
+state makes this explicit: the inner reports `AnchorReady`, rustX retains the
+possible ownership identity and replies `Start`, then the inner reports
+`OwnershipEstablished` after spawning Bash. If communication fails after
+`Start`, rustX conservatively assumes ownership may exist. Pre-gate setup
+failure reports `NoOwnership` and may settle without a Bash domain.
+Catastrophic fallback authority is a pre-ownership prerequisite: the runtime
+child-subreaper primitive is consulted (once per process, idempotently)
+before the supervisor unit spawns, so `START` — which authorizes the Bash
+spawn — is never sent before rustX can own catastrophic containment.
+
+Control-channel EOF is never a post-ownership process-terminal event. Normal
+terminality linearizes at the outer's group-scoped `ECHILD` and its
+`AllChildrenReaped` frame. For catastrophic loss of both supervisors, the
+runtime process activates its child-subreaper capability — a
+**process-level kernel coordination primitive** owned by the runtime
+coordination layer (`src/runtime/process_supervision.rs`; lazy one-time,
+idempotent, sticky activation; a failed activation fails every Bash
+invocation as a pre-ownership setup failure; never toggled per
+invocation). Enabling it changes process-wide orphan reparenting, but
+kernel adoption does not by itself assign arbitrary adopted children to
+Bash lifecycle ownership: in M5, Bash supervisor units are the only
+production subprocess hierarchy relying on orphan adoption, and rustX
+implements no generic unknown-child reaper. Catastrophic Bash
+containment remains invocation-scoped — after reaping its
+direct outer child, rustX retains the adopted inner zombie using
+`waitid(WNOWAIT)`, issues `SIGKILL` to the still-anchored group, and
+linearizes emergency terminality only at its own group-scoped `ECHILD`.
+If the adopted anchor is unavailable (`ECHILD`) without a prior
+authoritative terminal event, emergency containment reports
+`AnchorUnavailable` — never terminal — and no `ToolExecutionResult`
+commits. The anchor is retained, contained, and released only as one
+coherent state machine: identity ownership, reaping ownership, signaling
+authority, and terminal settlement are the same ownership. Thus EOF changes
+communication state and failure intent, while process lifecycle remains
+independently `PreOwnership`, `OwnershipPossible`/`Owned`, or `Terminal`.
+
+Every Bash result status — `Success`, `Failed`, `Cancelled`, and
+`TimedOut` — is terminal with respect to the invocation-owned process
+group: no invocation-owned Bash process remains capable of executing work
+before any result is returned. A detected process-control/runtime failure
+determines the eventual result status but does not itself settle the
+invocation lifecycle: failures before any Bash tree was established may
+return `Failed` immediately, while failures after ownership exists (signal
+failure, wait/reap failure, IPC failure, control-channel abandonment)
+follow the containment lifecycle — the failure is remembered, the outer
+supervisor becomes the active containment authority (it observes the
+inner's terminal state via `waitid(WNOWAIT)` without releasing the
+structural anchor, sends one fallback `SIGKILL` to the still-proven-owned
+group, and releases the anchor only through the group-scoped wait), the
+capture is finalized, and only then is `Failed` returned.
+`BASH_TERMINATION_CONFIRMATION` is a process-confirmation watchdog: expiry
+records `QuiescenceTimeout` failure intent but does not authorize result
+commit. After process terminality, a separate capture deadline may force-
+finalize wedged readers and return `Failed(CaptureTimeout)`. The
+outer supervisor also un-wedges a `SIGSTOP`-frozen inner anchor with
+`SIGKILL`, so a stopped containment chain cannot strand the owned group;
+the only residual state in which rustX cannot prove owned-group
+terminality from outside the unit (a unit frozen beyond the outer
+supervisor's reach) cannot be truthfully converted into a terminal result.
+Control-channel abandonment remains fail-safe through the normal supervisor
+unit. If the unit itself is lost, the rustX-held subreaper authority above is
+the independent fallback. The anchor is released only by the final reap
+after the last signal, so a numeric group id whose allocation has ended is
+never signaled.
 
 ### Layer 3: Model plane
 
@@ -499,7 +787,7 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
   `output_tokens_details.thinking_tokens` maps to
   `UsageDetails::reasoning_tokens`, and `cache_read_input_tokens` maps to
   `UsageDetails::cached_input_tokens` without double counting.
-- Cancellation is a rustX-owned signal (`ModelCancellation`) flowing through
+- Cancellation is the runtime-owned `CancellationSignal` flowing through
   the common interface; the network-opening await itself is
   cancellation-aware (a cancellation while waiting for response headers
   aborts the in-flight request), an in-flight invocation stops consuming the

@@ -324,7 +324,7 @@ The summary service is provider-neutral and fakeable:
 
 ```rust
 pub trait ContextSummarizer: Send + Sync {
-    fn summarize(&self, request: SummaryRequest, cancellation: ModelCancellation)
+    fn summarize(&self, request: SummaryRequest, cancellation: CancellationSignal)
         -> BoxFuture<'_, Result<String, ContextError>>;
 }
 ```
@@ -594,29 +594,33 @@ runtime facts
   provider listing all use the stored identity, so a stateful provider can
   never shadow a reserved id or mutate into a duplicate identity after
   registration (regression-tested with mutating fake providers).
-- Deterministic order: mandatory temporal section, future built-in
-  sections, then extensions in explicit registration order. `HashMap`
-  iteration is never used for rendering order.
+- Deterministic order: mandatory temporal section, the runtime-owned
+  `background_execution` built-in section when active executions exist,
+  then extensions in explicit registration order. `HashMap` iteration is
+  never used for rendering order.
 - Extension providers return **structured runtime facts only**, never
   pre-rendered footer lines and never the internal composed section
   representation: the provider contract's result type is an ordered list of
   `AgentStatusFact` (`label` + `value`) pairs, so a provider is
   **structurally incapable** of constructing the runtime-owned `Temporal`
-  variant or any future built-in variant. Built-in section variants are
-  runtime-owned and can only be constructed by the composer/built-in
-  composition code, which converts extension facts into the internal
-  `Facts` section form. The canonical renderer is the only place status
-  text is produced — it owns labels, separators, and layout. The structured
-  seam is what a future M5 background runtime populates; no schema
-  framework, templating language, or plugin ecosystem exists.
+  variant or the `BackgroundExecution` built-in variant. Built-in section
+  variants are runtime-owned and can only be constructed by the
+  composer/built-in composition code, which converts extension facts into
+  the internal `Facts` section form. The canonical renderer is the only
+  place status text is produced — it owns labels, separators, and layout.
+  No schema framework, templating language, or plugin ecosystem exists.
 - An optional provider returning `None` is intentional absence; a provider
   failure is a context-preparation failure (`StatusFailed` →
   `RuntimeError::ContextPreparationFailed`), never a silent absence and
   never mislabeled as a compaction failure.
-- The provider seam is narrow and read-only; it exists so a future M5
-  background runtime can project its registry. No plugin ecosystem or DI
-  framework exists. The `background_execution` section is reserved for M5
-  and has no M4 implementation.
+- The provider seam is narrow and read-only; the M5 background runtime is
+  **not** an ordinary provider. The executing attempt samples the
+  authoritative `ConversationBackgroundRegistry` into a read-only active
+  snapshot carried by the render context, and the composer builds the
+  runtime-owned `BackgroundExecution` section itself (active entries only,
+  in execution-allocation order). `ContextRuntime`/the composer never own
+  or mutate the background registry. No plugin ecosystem or DI framework
+  exists.
 
 ### Temporal section
 
@@ -739,6 +743,8 @@ emits no event of its own: it is projection-only.
   summary failure is a compaction failure.
 - Only `ContextWindowExceeded` is retried, exactly once, after a compaction
   that made measurable progress.
-- The `background_execution` Agent Status section is reserved for the M5
-  tool plane and has no M4 implementation; Agent Status is otherwise
-  complete (temporal section, provider seam, deterministic rendering).
+- The `background_execution` Agent Status section is implemented by the M5
+  tool plane as a runtime-owned built-in (read-only active registry
+  snapshot, active entries only, deterministic allocation order); Agent
+  Status is otherwise complete (temporal section, provider seam,
+  deterministic rendering).

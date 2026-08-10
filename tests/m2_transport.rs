@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use common::{error_fixture, simple_request, sse_fixture};
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCancellation,
-    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
-    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ResponsesStorageMode,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
+    ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
+    OpenAiResponsesAdapter, ResponsesStorageMode,
 };
+use rustx::runtime::CancellationSignal;
 
 fn openai_chat(server: &common::FixtureServer) -> OpenAiChatCompletionsAdapter {
     OpenAiChatCompletionsAdapter::new(
@@ -186,7 +187,7 @@ async fn cancellation_before_network_creates_no_request() {
         ),
     ];
     for (name, adapter, request, server) in cases {
-        let cancellation = ModelCancellation::new();
+        let cancellation = CancellationSignal::new();
         cancellation.cancel();
         let mut stream = adapter.stream(request, cancellation);
         let events: Vec<ModelEvent> = {
@@ -233,7 +234,7 @@ async fn cancellation_in_flight_openai_chat() {
         )
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = openai_chat(&server).stream(chat_request(), cancellation.clone());
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -279,7 +280,7 @@ async fn cancellation_in_flight_anthropic() {
         )
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = anthropic(&server).stream(anthropic_request(), cancellation.clone());
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -323,7 +324,7 @@ async fn cancellation_in_flight_openai_responses() {
         )
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = openai_responses(&server).stream(responses_request(), cancellation.clone());
     let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -358,7 +359,7 @@ async fn cancellation_while_headers_delayed_anthropic() {
         sse_fixture("anthropic", "text.sse").with_header_delay(60_000)
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = anthropic(&server).stream(anthropic_request(), cancellation.clone());
     assert_eq!(stream.next().await, Some(ModelEvent::Started));
     // Drive the stream in the background so the connection attempt happens.
@@ -413,7 +414,7 @@ async fn cancellation_while_headers_delayed_openai_chat() {
         sse_fixture("openai_chat", "plain_text.sse").with_header_delay(60_000)
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = openai_chat(&server).stream(chat_request(), cancellation.clone());
     assert_eq!(stream.next().await, Some(ModelEvent::Started));
     let collector = tokio::spawn(async move {
@@ -465,7 +466,7 @@ async fn cancellation_while_headers_delayed_openai_responses() {
         sse_fixture("openai_responses", "plain_text.sse").with_header_delay(60_000)
     })
     .await;
-    let cancellation = ModelCancellation::new();
+    let cancellation = CancellationSignal::new();
     let mut stream = openai_responses(&server).stream(responses_request(), cancellation.clone());
     assert_eq!(stream.next().await, Some(ModelEvent::Started));
     let collector = tokio::spawn(async move {

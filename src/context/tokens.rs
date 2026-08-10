@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::context::projection::ContextProjection;
-use crate::tools::types::ToolDefinition;
+use crate::tools::types::ModelToolDefinition;
 
 /// A token measurement of a model input, with explicit provenance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ pub trait TokenEstimator: Send + Sync {
     fn estimate_input(
         &self,
         projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
     /// The deterministic estimated input tokens of one projection's
@@ -81,7 +81,8 @@ pub trait TokenEstimator: Send + Sync {
 }
 
 /// The deterministic function behind a [`ClosureTokenEstimator`].
-pub type EstimatorFunction = dyn Fn(&ContextProjection, &[ToolDefinition]) -> u64 + Send + Sync;
+pub type EstimatorFunction =
+    dyn Fn(&ContextProjection, &[ModelToolDefinition]) -> u64 + Send + Sync;
 
 /// The default provider-neutral fallback estimator.
 ///
@@ -114,7 +115,7 @@ impl DefaultTokenEstimator {
     #[must_use]
     pub fn serialized_bytes(
         projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         let items = serde_json::to_vec(&projection.items)
             .expect("canonical projection items serialize")
@@ -149,7 +150,7 @@ impl TokenEstimator for DefaultTokenEstimator {
     fn estimate_input(
         &self,
         projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         bytes_to_tokens(Self::serialized_bytes(projection, tool_definitions))
     }
@@ -172,7 +173,7 @@ impl ClosureTokenEstimator {
     /// Creates a scripted estimator from a deterministic function.
     #[must_use]
     pub fn new(
-        function: impl Fn(&ContextProjection, &[ToolDefinition]) -> u64 + Send + Sync + 'static,
+        function: impl Fn(&ContextProjection, &[ModelToolDefinition]) -> u64 + Send + Sync + 'static,
     ) -> Self {
         Self {
             function: Box::new(function),
@@ -184,7 +185,7 @@ impl TokenEstimator for ClosureTokenEstimator {
     fn estimate_input(
         &self,
         projection: &ContextProjection,
-        tool_definitions: &[ToolDefinition],
+        tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         (self.function)(projection, tool_definitions)
     }
@@ -236,14 +237,11 @@ mod tests {
         assert_eq!(estimator.estimate_input(&projection, &[]), without_tools);
         let with_tools = estimator.estimate_input(
             &projection,
-            &[crate::tools::types::ToolDefinition {
+            &[crate::tools::types::ModelToolDefinition {
                 id: crate::runtime::identity::ToolId::new("tool-bash"),
                 name: "bash".to_owned(),
                 description: "Run a shell command".to_owned(),
                 input_schema: serde_json::json!({"type": "object"}),
-                execution_mode: crate::tools::types::ToolExecutionMode::Sequential,
-                replay_policy: crate::tools::types::ToolReplayPolicy::Never,
-                origin: crate::tools::types::ToolOrigin::Builtin,
             }],
         );
         assert!(
