@@ -10,9 +10,14 @@
 //! producers can depend on without the tool plane depending upward on
 //! `src/agent`. The mailbox is coordination only — it is not canonical
 //! history, not the Event Journal, not a scheduler, supervisor, or
-//! persistent service layer. Runtime supervision, cancellation propagation,
-//! capability guards, recovery, and process ownership are later milestones
-//! and are not implemented here.
+//! persistent service layer. General runtime supervision, persistent
+//! process management, recovery services, and broader capability
+//! coordination remain future work. M5 implements only the narrow
+//! internal process-supervision capability required for Bash catastrophic
+//! supervisor-loss recovery (`crate::runtime::process_supervision`:
+//! one-time activation of Linux child-subreaper mode). That is
+//! coordination infrastructure, not a generic process manager and not a
+//! public runtime API.
 
 pub mod cancellation;
 pub mod continuation;
