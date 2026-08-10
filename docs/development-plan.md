@@ -242,6 +242,14 @@ Bash requirements:
   supervisor that owns the gate) — never a `/proc` membership scan and
   never a `killpg(..., 0)` probe (an un-reaped leader zombie keeps the
   numeric group observable)
+- Explicit ownership protocol: `AnchorReady -> Start ->
+  OwnershipEstablished`; the successful Bash spawn is the OS commit point,
+  and post-start channel loss is conservatively treated as possible
+  ownership. `NoOwnership` covers pre-spawn setup failure.
+- Control-channel EOF is never post-ownership terminality. Normal settlement
+  uses `AllChildrenReaped`; catastrophic supervisor loss uses rustX's own
+  subreaper adoption, retained `WNOWAIT` anchor, anchored group containment,
+  and group-scoped `ECHILD` proof before returning `Failed`.
 - Process-control failures (supervisor setup, shell spawning,
   waiting/reaping, signaling, IPC, SIGTERM handler installation, fixed-
   membership restriction installation) are

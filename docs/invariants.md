@@ -356,6 +356,21 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   kernel (`PR_SET_CHILD_SUBREAPER`) rather than rediscovered from `/proc`.
   `/proc` enumeration is never the source of truth for process ownership or
   quiescence.
+- Bash ownership commits at the successful `/bin/bash` spawn, after the
+  inner has created the invocation session/group and installed the fixed-
+  membership filter. The inner first reports its retained anchor and waits
+  for rustX's start acknowledgement; a successful spawn then reports the
+  explicit ownership commit. Before that gate, setup failure may settle
+  without an owned Bash domain. Once the gate is acknowledged, rustX
+  conservatively treats ownership as possible even if the commit frame is
+  lost.
+- **Control-channel EOF is never a post-ownership process-terminal event.**
+  It records `UnexpectedSupervisorExit` and channel loss, but cannot move an
+  owned lifecycle to terminal. Normally only `AllChildrenReaped` does so.
+  If both supervisors are lost, process-wide rustX subreaper ownership adopts
+  the invocation descendants; rustX retains the adopted inner anchor with
+  `WNOWAIT`, signals the group while that identity is reuse-safe, and reaches
+  its own group-scoped `ECHILD` before committing the failed result.
 - Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
   issued by the inner supervisor with `killpg` against its own process
   group, whose numeric id is its own pid — provably allocated exactly while

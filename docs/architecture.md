@@ -583,6 +583,24 @@ after it). A live group member keeps the group-scoped wait from returning
 and `killpg(..., 0)` probes are never the terminal point (an un-reaped
 leader zombie keeps the numeric group observable).
 
+The OS ownership commit is the successful `/bin/bash` spawn after the inner
+has created the invocation session/group and installed seccomp. Protocol
+state makes this explicit: the inner reports `AnchorReady`, rustX retains the
+possible ownership identity and replies `Start`, then the inner reports
+`OwnershipEstablished` after spawning Bash. If communication fails after
+`Start`, rustX conservatively assumes ownership may exist. Pre-gate setup
+failure reports `NoOwnership` and may settle without a Bash domain.
+
+Control-channel EOF is never a post-ownership process-terminal event. Normal
+terminality linearizes at the outer's group-scoped `ECHILD` and its
+`AllChildrenReaped` frame. For catastrophic loss of both supervisors, rustX
+itself is a process-wide subreaper: after reaping its direct outer child it
+retains the adopted inner zombie using `waitid(WNOWAIT)`, issues `SIGKILL` to
+the still-anchored group, and linearizes emergency terminality only at its
+own group-scoped `ECHILD`. Thus EOF changes communication state and failure
+intent, while process lifecycle remains independently `PreOwnership`,
+`OwnershipPossible`/`Owned`, or `Terminal`.
+
 Every Bash result status — `Success`, `Failed`, `Cancelled`, and
 `TimedOut` — is terminal with respect to the invocation-owned process
 group: no invocation-owned Bash process remains capable of executing work
@@ -606,11 +624,11 @@ outer supervisor also un-wedges a `SIGSTOP`-frozen inner anchor with
 the only residual state in which rustX cannot prove owned-group
 terminality from outside the unit (a unit frozen beyond the outer
 supervisor's reach) cannot be truthfully converted into a terminal result.
-Control-channel loss remains fail-safe: dropping the rustX-side execution
-future instructs the supervisor unit to contain its invocation, so an
-abandoned owned group can never escape. The anchor is released only by the
-final reap after the last signal, so a numeric group id whose allocation
-has ended is never signaled.
+Control-channel abandonment remains fail-safe through the normal supervisor
+unit. If the unit itself is lost, the rustX-held subreaper authority above is
+the independent fallback. The anchor is released only by the final reap
+after the last signal, so a numeric group id whose allocation has ended is
+never signaled.
 
 ### Layer 3: Model plane
 
