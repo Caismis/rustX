@@ -616,14 +616,17 @@ spawn — is never sent before rustX can own catastrophic containment.
 Control-channel EOF is never a post-ownership process-terminal event. Normal
 terminality linearizes at the outer's group-scoped `ECHILD` and its
 `AllChildrenReaped` frame. For catastrophic loss of both supervisors, the
-runtime process is itself a subreaper — a **process-level coordination
-primitive** owned by `src/tools/process_supervision.rs` (one-time,
-idempotent, sticky initialization; a failed initialization fails every Bash
-invocation as a pre-ownership setup failure; the mode is never toggled per
-invocation). Once enabled, orphaned descendants of any rustX-owned
-subprocess hierarchy may reparent to the runtime process, and the runtime is
-the reaper-of-last-resort for every adopted child; catastrophic Bash
-containment nevertheless remains invocation-scoped — after reaping its
+runtime process activates its child-subreaper capability — a
+**process-level kernel coordination primitive** owned by the runtime
+coordination layer (`src/runtime/process_supervision.rs`; lazy one-time,
+idempotent, sticky activation; a failed activation fails every Bash
+invocation as a pre-ownership setup failure; never toggled per
+invocation). Enabling it changes process-wide orphan reparenting, but
+kernel adoption does not by itself assign arbitrary adopted children to
+Bash lifecycle ownership: in M5, Bash supervisor units are the only
+production subprocess hierarchy relying on orphan adoption, and rustX
+implements no generic unknown-child reaper. Catastrophic Bash
+containment remains invocation-scoped — after reaping its
 direct outer child, rustX retains the adopted inner zombie using
 `waitid(WNOWAIT)`, issues `SIGKILL` to the still-anchored group, and
 linearizes emergency terminality only at its own group-scoped `ECHILD`.

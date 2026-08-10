@@ -112,16 +112,20 @@
 //! normal terminality is proven only by the parsed `AllChildrenReaped`
 //! event or by a complete retained-anchor catastrophic containment.
 //!
-//! # Runtime child-subreaper ownership
+//! # Runtime child-subreaper capability
 //!
-//! rustX's process-wide `PR_SET_CHILD_SUBREAPER` enablement is a runtime
-//! process-lifecycle coordination primitive, not a Bash-local setting:
-//! it is owned by [`crate::tools::process_supervision`], initialized once,
-//! idempotently, before any Bash ownership exists (before `START`
-//! authorizes the Bash spawn), and it is never toggled per invocation.
-//! Once enabled, orphaned descendants of any rustX-owned subprocess
-//! hierarchy may reparent to the runtime process; the runtime is the
-//! reaper-of-last-resort for every adopted child, while catastrophic Bash
+//! rustX's process-wide `PR_SET_CHILD_SUBREAPER` activation is a runtime
+//! coordination-layer capability, not a Bash-local setting and not a
+//! generic reaper: it is owned by
+//! [`crate::runtime::process_supervision`], activated lazily once,
+//! idempotently and sticky, before any Bash ownership exists (before
+//! `START` authorizes the Bash spawn), and never toggled per invocation.
+//! It exists solely so that a lost Bash supervisor unit's orphaned
+//! invocation descendants reparent to the runtime process, where Bash
+//! catastrophic containment can still retain the inner anchor and prove
+//! the invocation group terminal. Kernel reparenting does not expand Bash
+//! semantic ownership beyond the invocation process group, and M5
+//! implements no generic unknown-child reaper: catastrophic Bash
 //! containment remains invocation-scoped (anchor pid and invocation
 //! process group only — never a broad wait).
 //!
@@ -1003,11 +1007,11 @@ async fn run_bash_unix(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
-    // The runtime child-subreaper authority is a pre-ownership
-    // prerequisite: it is consulted (one-time, idempotently — see
-    // `crate::tools::process_supervision`) before the supervisor unit
+    // The runtime child-subreaper capability is a pre-ownership
+    // prerequisite: it is consulted (lazily, one-time, idempotently — see
+    // `crate::runtime::process_supervision`) before the supervisor unit
     // spawns, so `START` — which authorizes the Bash spawn — is never sent
-    // before catastrophic fallback containment exists. A failure is a
+    // before catastrophic fallback authority exists. A failure is a
     // pre-ownership setup failure: no Bash tree is spawned.
     #[cfg(test)]
     if let Some(control) = control {
@@ -1018,7 +1022,7 @@ async fn run_bash_unix(
             );
         }
     }
-    if let Err(error) = crate::tools::process_supervision::ensure_child_subreaper() {
+    if let Err(error) = crate::runtime::process_supervision::ensure_child_subreaper() {
         return failed_result(format!(
             "cannot establish rustX Bash fallback containment: {error}"
         ));
@@ -3922,23 +3926,27 @@ mod tests {
         let _ = (dir_a, dir_b);
     }
 
-    /// The unrelated-adopted-child regression: with the runtime process
-    /// acting as the process-wide subreaper, an unrelated child hierarchy
-    /// U orphans and reparents to the runtime process. Catastrophic Bash
-    /// containment for invocation group G must leave U untouched: it
-    /// signals only G's pgid and reaps only G's adopted children — never
-    /// unrelated adopted processes, never a broad wait.
+    /// The foreign-adopted-child negative isolation regression. U is a
+    /// **test-created foreign/unregistered hierarchy**: kernel subreaper
+    /// adoption makes the runtime process its OS parent, but U is outside
+    /// Bash semantic ownership and is not a supported production
+    /// rustX-owned execution in M5. The regression proves that catastrophic
+    /// Bash containment for invocation group G never touches U — it
+    /// signals only G's pgid and reaps only G's adopted children, never a
+    /// broad wait. U's cleanup is intentionally owned by the test (rustX
+    /// does not claim to generically reap unknown adopted children), and
+    /// the test reaps U before returning.
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn bash_emergency_containment_leaves_unrelated_adopted_children_untouched() {
-        crate::tools::process_supervision::ensure_child_subreaper()
+    async fn bash_catastrophic_containment_does_not_touch_foreign_adopted_child() {
+        crate::runtime::process_supervision::ensure_child_subreaper()
             .expect("the runtime process is a child subreaper");
         let (dir, _artifacts, workspace) = fixture();
         let root = workspace.root().to_path_buf();
         let u_pid_file = root.join("u.pid");
-        // U: an unrelated child hierarchy whose parent exits immediately,
-        // so U orphans and reparents to the runtime process (the nearest
-        // subreaper ancestor — the test binary itself).
+        // U: a test-created foreign hierarchy whose parent exits
+        // immediately, so U orphans and reparents to the runtime process
+        // (the nearest subreaper ancestor — the test binary itself).
         let mut sh = std::process::Command::new("sh")
             .arg("-c")
             .arg(format!(
@@ -3997,12 +4005,15 @@ mod tests {
         wait_for_process_death(shell_pid).await;
         wait_for_group_death(inner_pid).await;
         // U is untouched: still alive and still adopted by the runtime
-        // process.
+        // process. Bash containment is scoped; M5 deliberately does not
+        // reap foreign adopted children.
         assert!(
             process_alive(u_pid),
-            "Bash emergency containment must never consume an unrelated adopted child"
+            "Bash catastrophic containment must never signal or reap a foreign adopted child"
         );
-        // Test-side cleanup of U.
+        // Test-side cleanup of U: the test is U's cleanup owner. This is
+        // not missing production behavior — rustX does not generically
+        // reap unknown adopted children in M5.
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(u_pid),
             nix::sys::signal::Signal::SIGKILL,

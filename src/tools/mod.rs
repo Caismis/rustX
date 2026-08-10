@@ -14,7 +14,6 @@ pub mod environment;
 pub mod executor;
 pub mod limits;
 pub mod native;
-pub mod process_supervision;
 pub mod runtime;
 pub mod schema;
 pub mod types;

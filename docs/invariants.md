@@ -392,27 +392,33 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - **Control-channel EOF is never a post-ownership process-terminal event.**
   It records `UnexpectedSupervisorExit` and channel loss, but cannot move an
   owned lifecycle to terminal. Normally only `AllChildrenReaped` does so.
-  If both supervisors are lost, process-wide rustX subreaper ownership adopts
-  the invocation descendants; rustX retains the adopted inner anchor with
+  If both supervisors are lost, the runtime process's child-subreaper
+  capability adopts the invocation descendants; rustX retains the adopted
+  inner anchor with
   `WNOWAIT`, signals the group while that identity is reuse-safe, and reaches
   its own group-scoped `ECHILD` before committing the failed result. If the
   adopted anchor is unavailable (`ECHILD`) without a prior authoritative
   terminal event, the emergency containment reports `AnchorUnavailable` —
   never terminal — and no `ToolExecutionResult` commits.
-- **Runtime child-subreaper mode is a process-level coordination
-  primitive, not a Bash-local setting.** rustX's `PR_SET_CHILD_SUBREAPER`
-  enablement is owned by the runtime process-lifecycle primitive
-  (`src/tools/process_supervision.rs`), initialized once per runtime
-  process, idempotently and sticky (a failed initialization fails every
-  later consultation), before any Bash ownership exists — `START` (which
+- **Runtime child-subreaper capability is a process-level kernel
+  coordination primitive, not a Bash-local setting and not a generic
+  reaper.** rustX activates `PR_SET_CHILD_SUBREAPER` as a runtime-level
+  prerequisite for catastrophic Bash supervisor-loss recovery: the
+  capability is owned by the runtime coordination layer
+  (`src/runtime/process_supervision.rs`), activated lazily once per
+  process, idempotently and sticky (a failed activation fails every later
+  consultation), before any Bash ownership exists — `START` (which
   authorizes the Bash spawn) is never sent before catastrophic fallback
-  authority exists. Once enabled, orphaned descendants of **any**
-  rustX-owned subprocess hierarchy may reparent to the runtime process;
-  the runtime is the reaper-of-last-resort for every adopted child, while
-  catastrophic Bash containment remains invocation-scoped (anchor pid and
-  invocation process group only — never `waitpid(-1)` or `waitid(P_ALL)`),
-  so concurrent Bash invocations and unrelated adopted children are never
-  signaled or reaped by another invocation's containment.
+  authority exists. Kernel adoption does **not** by itself assign
+  arbitrary adopted children to Bash lifecycle ownership: in M5, Bash
+  supervisor units are the only production subprocess hierarchy relying
+  on orphan adoption, Bash containment remains invocation-scoped (anchor
+  pid and invocation process group only — never `waitpid(-1)` or
+  `waitid(P_ALL)`), and M5 implements no generic unknown-child reaper.
+  Introducing another production subprocess hierarchy is an architecture
+  change: its direct-child waiting, orphan adoption, and reaping
+  ownership must be reconciled with runtime process supervision before it
+  is merged.
 - Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
   issued by the inner supervisor with `killpg` against its own process
   group, whose numeric id is its own pid — provably allocated exactly while

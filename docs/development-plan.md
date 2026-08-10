@@ -259,14 +259,19 @@ Bash requirements:
   reaping loop — generic child reaping can never consume the invocation
   anchor, and an anchor `ECHILD` before the intentional release is an
   ownership invariant violation, never process terminality.
-- Runtime child-subreaper ownership: rustX's process-wide
-  `PR_SET_CHILD_SUBREAPER` enablement is a runtime-level coordination
-  primitive (one-time, idempotent, sticky initialization; owned by
-  `src/tools/process_supervision.rs`), established before `START` and never
-  toggled per invocation; Bash catastrophic containment remains
-  invocation-scoped (anchor pid and invocation PGID only, never a broad
-  wait), so concurrent invocations and unrelated adopted children are never
-  signaled or reaped cross-group.
+- Runtime child-subreaper capability: rustX's process-wide
+  `PR_SET_CHILD_SUBREAPER` activation is a runtime-level kernel
+  coordination primitive (lazy one-time, idempotent, sticky activation;
+  owned by `src/runtime/process_supervision.rs`), established before
+  `START` and never toggled per invocation. It is the catastrophic
+  fallback authority for Bash supervisor units only — in M5, Bash is the
+  only production subprocess hierarchy relying on orphan adoption, no
+  generic unknown-child reaper exists, and catastrophic Bash containment
+  remains invocation-scoped (anchor pid and invocation PGID only, never a
+  broad wait), so concurrent invocations and unrelated adopted children
+  are never signaled or reaped cross-group. Any future production
+  subprocess hierarchy must define its process-supervision/reaping
+  ownership before introduction.
 - Process-control failures (supervisor setup, shell spawning,
   waiting/reaping, signaling, IPC, SIGTERM handler installation, fixed-
   membership restriction installation) are

@@ -18,6 +18,11 @@ pub mod cancellation;
 pub mod continuation;
 pub mod identity;
 pub mod inbound;
+/// The runtime-level Linux process-supervision capability: the one-time
+/// activation of the process-wide child-subreaper primitive used by Bash
+/// catastrophic fallback. Internal coordination only — it is not part of
+/// the public runtime API.
+pub(crate) mod process_supervision;
 pub mod types;
 
 pub use cancellation::CancellationSignal;
