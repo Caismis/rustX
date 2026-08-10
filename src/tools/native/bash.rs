@@ -87,9 +87,11 @@
 //! supervisor while it lives, the outer supervisor after it. There is
 //! therefore no state in which an in-group process is not a matching child
 //! of the supervisor that owns the gate. The **outer** supervisor's
-//! group-scoped `ECHILD` is the single authoritative terminal process-tree
-//! event of the whole supervisor unit; rustX combines it with
-//! output-capture settlement to produce the tool result.
+//! group-scoped `ECHILD` and `AllChildrenReaped` frame are the normal
+//! authoritative terminal event. If both supervisors are killed, rustX's
+//! own subreaper adoption plus a retained `WNOWAIT` anchor and group-scoped
+//! `ECHILD` provide the separate catastrophic terminal proof. Control EOF
+//! alone is never terminal after ownership may have begun.
 //!
 //! # Terminal results
 //!
@@ -99,9 +101,9 @@
 //! executing work before any result is returned. A detected
 //! process-control/runtime failure determines the eventual result status
 //! but does not itself settle the invocation lifecycle: owned work is
-//! contained and the owned group reaped to the outer supervisor's terminal
-//! group-scoped `ECHILD` (and the capture settled) before the remembered
-//! `Failed` result is returned.
+//! contained and the owned group reaped to either the normal outer terminal
+//! event or the reuse-safe catastrophic terminal point (and the capture
+//! settled) before the remembered `Failed` result is returned.
 //!
 //! [`BASH_TERMINATION_CONFIRMATION`] is a process-confirmation watchdog:
 //! expiry records `QuiescenceTimeout` failure intent, but it never
@@ -307,6 +309,8 @@ pub(crate) struct BashTestControl {
     capture_hold: Option<CaptureHold>,
     #[cfg(test)]
     terminal_hold: Option<TerminalHold>,
+    #[cfg(test)]
+    channel_eof: Option<ChannelEofHook>,
 }
 
 /// One attempted process-group signal, recorded by the test seam.
@@ -344,6 +348,7 @@ impl BashTestControl {
             recorded_signals: Arc::new(Mutex::new(Vec::new())),
             capture_hold: None,
             terminal_hold: None,
+            channel_eof: None,
         }
     }
 
@@ -463,6 +468,83 @@ impl BashTestControl {
     pub(crate) fn terminal_hold(&self) -> Option<&TerminalHold> {
         self.terminal_hold.as_ref()
     }
+
+    #[must_use]
+    pub(crate) fn observe_channel_eof(mut self) -> Self {
+        self.channel_eof = Some(ChannelEofHook::new());
+        self
+    }
+
+    pub(crate) fn channel_eof(&self) -> Option<&ChannelEofHook> {
+        self.channel_eof.as_ref()
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct ChannelEofHook {
+    seen_tx: tokio::sync::watch::Sender<bool>,
+    seen_rx: tokio::sync::watch::Receiver<bool>,
+    proceed_tx: tokio::sync::watch::Sender<bool>,
+    proceed_rx: tokio::sync::watch::Receiver<bool>,
+    timeout_tx: tokio::sync::watch::Sender<bool>,
+    timeout_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+#[cfg(test)]
+impl ChannelEofHook {
+    fn new() -> Self {
+        let (seen_tx, seen_rx) = tokio::sync::watch::channel(false);
+        let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
+        let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(false);
+        Self {
+            seen_tx,
+            seen_rx,
+            proceed_tx,
+            proceed_rx,
+            timeout_tx,
+            timeout_rx,
+        }
+    }
+
+    async fn await_seen(&self) {
+        let mut rx = self.seen_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    fn release_emergency_containment(&self) {
+        let _ = self.proceed_tx.send(true);
+    }
+
+    fn force_timeout(&self) {
+        let _ = self.timeout_tx.send(true);
+    }
+
+    async fn pause_before_emergency(&self) {
+        let mut rx = self.proceed_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+}
+
+#[cfg(test)]
+async fn wait_for_forced_timeout(control: Option<&BashTestControl>) {
+    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
+        let mut rx = hook.timeout_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+#[cfg(not(test))]
+async fn wait_for_forced_timeout(_control: Option<&BashTestControl>) {
+    std::future::pending::<()>().await;
 }
 
 #[cfg(test)]
@@ -703,6 +785,12 @@ enum Settled {
 /// One event reported by the invocation supervisor over the control
 /// channel.
 enum SupervisorEvent {
+    /// The inner completed setup and is gated before spawning Bash.
+    AnchorReady { pgid: i32 },
+    /// Bash was successfully spawned inside the fixed invocation group.
+    OwnershipEstablished,
+    /// Setup ended without ever spawning a Bash-owned execution domain.
+    NoOwnership,
     /// The shell exited; `status` is its canonical exit status.
     ShellExited { status: std::process::ExitStatus },
     /// The supervisor's wait loop observed `ECHILD`: no owned child remains.
@@ -715,6 +803,26 @@ enum SupervisorEvent {
         signal: i32,
         emitted: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcessLifecycle {
+    PreOwnership,
+    OwnershipPossible { pgid: i32 },
+    Owned { pgid: i32 },
+    Terminal,
+}
+
+impl ProcessLifecycle {
+    fn is_terminal(self) -> bool {
+        matches!(self, Self::Terminal)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SupervisorChannel {
+    Connected,
+    Lost,
 }
 
 /// The bounded streaming preview capture of one output stream.
@@ -836,6 +944,11 @@ async fn run_bash_unix(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
+    if let Err(error) = ensure_runtime_subreaper() {
+        return failed_result(format!(
+            "cannot establish rustX Bash fallback containment: {error}"
+        ));
+    }
     // The invocation supervisor's control channel: one UnixStream pair. The
     // child end becomes the outer supervisor's stdin; the rustX side reads
     // supervisor lifecycle events and writes the one TERMINATE request.
@@ -896,6 +1009,9 @@ async fn run_bash_unix(
         Ok(child) => child,
         Err(error) => return failed_result(format!("cannot spawn the bash supervisor: {error}")),
     };
+    // The reusable Command retains its configured child-side stdio handle.
+    // Drop it after the one spawn so supervisor death is observable as EOF.
+    drop(supervisor);
     // The supervisor's own stream end must be non-blocking before tokio
     // adopts it.
     if let Err(error) = nix::fcntl::fcntl(
@@ -979,7 +1095,9 @@ async fn run_bash_unix(
     // `Success`, `Failed`, `Cancelled`, or `TimedOut` — is returned.
     let start = tokio::time::Instant::now();
     let mut exit_status = None;
-    let mut children_terminal = false;
+    let mut process_lifecycle = ProcessLifecycle::PreOwnership;
+    let mut supervisor_channel = SupervisorChannel::Connected;
+    let mut direct_child_reaped = false;
     let mut failure = None;
     let mut settled = None;
     let mut drain_result: Option<Box<Result<StreamReferences, String>>> = None;
@@ -988,6 +1106,15 @@ async fn run_bash_unix(
     let mut capture_deadline: Option<tokio::time::Instant> = None;
     let mut capture_force_finalized = false;
     let mut terminal_event_held = false;
+    // Keep one drain future alive across select iterations. Dropping and
+    // reconstructing a future after it consumed a ready JoinHandle can poll
+    // that completed handle twice when a higher-priority lifecycle branch
+    // wins the same select turn.
+    let mut drain = Box::pin(await_drain(
+        &mut stdout_task,
+        &mut stderr_task,
+        &mut combined_task,
+    ));
     loop {
         // Outcome intent and lifecycle settlement are distinct: the loop
         // may break only when an outcome intent (failure,
@@ -997,7 +1124,7 @@ async fn run_bash_unix(
         // replaceable by a wall-clock deadline.
         let outcome_intent = failure.is_some() || settled.is_some() || exit_status.is_some();
         if outcome_intent
-            && children_terminal
+            && process_lifecycle.is_terminal()
             && (drain_result.is_some() || capture_force_finalized)
         {
             break;
@@ -1007,7 +1134,7 @@ async fn run_bash_unix(
         // failure intent. It does not replace the authoritative terminal
         // event or permit result commit.
         if terminate_sent
-            && !children_terminal
+            && !process_lifecycle.is_terminal()
             && terminate_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
         {
             failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
@@ -1018,7 +1145,7 @@ async fn run_bash_unix(
         // terminal, the output capture must settle within the same bounded
         // window: a capture wedged on reader or artifact I/O must not turn
         // the contract into an unbounded wait.
-        if outcome_intent && children_terminal && drain_result.is_none() {
+        if outcome_intent && process_lifecycle.is_terminal() && drain_result.is_none() {
             if capture_deadline.is_none() {
                 capture_deadline =
                     Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
@@ -1029,15 +1156,6 @@ async fn run_bash_unix(
                 continue;
             }
         }
-        // The drain future polls the output reader tasks; a completed
-        // JoinHandle must never be polled again, so the drain arm is
-        // disabled once the capture settled (the future is still
-        // constructed for the borrows but never polled).
-        let mut drain = Box::pin(await_drain(
-            &mut stdout_task,
-            &mut stderr_task,
-            &mut combined_task,
-        ));
         tokio::select! {
             biased;
             () = context.cancellation.cancelled(), if settled.is_none() && !terminate_sent => {
@@ -1057,7 +1175,37 @@ async fn run_bash_unix(
                 terminate_sent = true;
                 terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
             }
-            event = read_supervisor_event(&mut stream) => match event {
+            () = wait_for_forced_timeout(control), if settled.is_none() && !terminate_sent => {
+                settled = Some(Settled::TimedOut);
+                send_terminate(&mut stream).await;
+                terminate_sent = true;
+                terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
+            }
+            event = read_supervisor_event(&mut stream), if supervisor_channel == SupervisorChannel::Connected => match event {
+                Ok(Some(SupervisorEvent::AnchorReady { pgid })) => {
+                    if pgid <= 0 || process_lifecycle != ProcessLifecycle::PreOwnership {
+                        failure = Some("invalid Bash ownership anchor transition".to_owned());
+                    } else {
+                        process_lifecycle = ProcessLifecycle::OwnershipPossible { pgid };
+                        if let Err(error) = send_start(&mut stream).await {
+                            failure = Some(error);
+                        }
+                    }
+                }
+                Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
+                    if let ProcessLifecycle::OwnershipPossible { pgid } = process_lifecycle {
+                        process_lifecycle = ProcessLifecycle::Owned { pgid };
+                    } else {
+                        failure = Some("invalid Bash ownership commit transition".to_owned());
+                    }
+                }
+                Ok(Some(SupervisorEvent::NoOwnership)) => {
+                    if matches!(process_lifecycle, ProcessLifecycle::PreOwnership | ProcessLifecycle::OwnershipPossible { .. }) {
+                        process_lifecycle = ProcessLifecycle::Terminal;
+                    } else {
+                        failure = Some("invalid no-ownership terminal transition".to_owned());
+                    }
+                }
                 Ok(Some(SupervisorEvent::ShellExited { status })) => {
                     exit_status = Some(status);
                     // The exact shell-exit boundary of a natural exit,
@@ -1072,16 +1220,17 @@ async fn run_bash_unix(
                     }
                 }
                 Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
+                    send_terminal_ack(&mut stream).await;
                     #[cfg(test)]
                     if let Some(hold) = control.and_then(|control| control.terminal_hold.as_ref()) {
                         let _ = hold.held_tx.send(true);
                         terminal_event_held = true;
                     } else {
-                        children_terminal = true;
+                        process_lifecycle = ProcessLifecycle::Terminal;
                     }
                     #[cfg(not(test))]
                     {
-                        children_terminal = true;
+                        process_lifecycle = ProcessLifecycle::Terminal;
                     }
                 }
                 Ok(Some(SupervisorEvent::ProcessControlFailure { message })) => {
@@ -1103,24 +1252,95 @@ async fn run_bash_unix(
                     let _ = (pgid, signal, emitted);
                 }
                 Ok(None) => {
-                    // The supervisor unit exited (control channel EOF). The
-                    // outer supervisor is the sole terminal-report
-                    // authority: it exits only after its own ECHILD (having
-                    // reported AllChildrenReaped) or before any owned
-                    // process tree existed. A missing terminal report here
-                    // therefore proves no invocation-owned process remains
-                    // in the unit's child domain; the unit is terminal
-                    // either way.
-                    if !children_terminal {
-                        failure =
-                            Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
-                        children_terminal = true;
-                    } else if !outcome_intent {
+                    #[cfg(test)]
+                    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
+                        let _ = hook.seen_tx.send(true);
+                    }
+                    supervisor_channel = SupervisorChannel::Lost;
+                    if terminal_event_held {
+                        // The authoritative terminal frame was fully parsed;
+                        // only its test-only state transition is paused.
+                        continue;
+                    }
+                    if !process_lifecycle.is_terminal() {
                         failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
+                    }
+                    match process_lifecycle {
+                        ProcessLifecycle::PreOwnership => {
+                            // START was never sent, so Bash could never have
+                            // been spawned. EOF is terminal only for this
+                            // explicitly pre-ownership state.
+                            process_lifecycle = ProcessLifecycle::Terminal;
+                        }
+                        ProcessLifecycle::OwnershipPossible { pgid }
+                        | ProcessLifecycle::Owned { pgid } => {
+                            if let Err(error) = child.wait().await {
+                                failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
+                            } else {
+                                direct_child_reaped = true;
+                                #[cfg(test)]
+                                if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
+                                    hook.pause_before_emergency().await;
+                                }
+                                match tokio::task::spawn_blocking(move || emergency_contain_group(pgid)).await {
+                                    Ok(Ok(())) => process_lifecycle = ProcessLifecycle::Terminal,
+                                    Ok(Err(error)) => failure = Some(error),
+                                    Err(error) => failure = Some(format!("Bash emergency containment task failed: {error}")),
+                                }
+                            }
+                        }
+                        ProcessLifecycle::Terminal => {}
                     }
                 }
                 Err(error) => {
+                    #[cfg(test)]
+                    if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
+                        let _ = hook.seen_tx.send(true);
+                    }
                     failure = Some(error);
+                    supervisor_channel = SupervisorChannel::Lost;
+                    if terminal_event_held {
+                        // See the EOF branch: the terminal proof predates
+                        // this transport shutdown and remains authoritative.
+                        continue;
+                    }
+                    match process_lifecycle {
+                        ProcessLifecycle::PreOwnership => {
+                            process_lifecycle = ProcessLifecycle::Terminal;
+                        }
+                        ProcessLifecycle::OwnershipPossible { pgid }
+                        | ProcessLifecycle::Owned { pgid } => {
+                            if let Err(error) = child.wait().await {
+                                failure = Some(format!(
+                                    "cannot reap the lost outer supervisor: {error}"
+                                ));
+                            } else {
+                                direct_child_reaped = true;
+                                #[cfg(test)]
+                                if let Some(hook) =
+                                    control.and_then(|control| control.channel_eof.as_ref())
+                                {
+                                    hook.pause_before_emergency().await;
+                                }
+                                match tokio::task::spawn_blocking(move || {
+                                    emergency_contain_group(pgid)
+                                })
+                                .await
+                                {
+                                    Ok(Ok(())) => {
+                                        process_lifecycle = ProcessLifecycle::Terminal;
+                                    }
+                                    Ok(Err(error)) => failure = Some(error),
+                                    Err(error) => {
+                                        failure = Some(format!(
+                                            "Bash emergency containment task failed: {error}"
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        ProcessLifecycle::Terminal => {}
+                    }
                 }
             },
             result = &mut drain, if drain_result.is_none() => {
@@ -1128,7 +1348,7 @@ async fn run_bash_unix(
             }
             () = wait_for_terminal_release(control), if terminal_event_held => {
                 terminal_event_held = false;
-                children_terminal = true;
+                process_lifecycle = ProcessLifecycle::Terminal;
             }
             // The process-confirmation watchdog records failure intent but
             // never replaces process terminality.
@@ -1137,7 +1357,7 @@ async fn run_bash_unix(
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending().await,
                 }
-            }, if terminate_sent && !children_terminal && terminate_deadline.is_some() => {
+            }, if terminate_sent && !process_lifecycle.is_terminal() && terminate_deadline.is_some() => {
                 failure = Some(ProcessControlError::QuiescenceTimeout.to_string());
                 terminate_deadline = None;
                 #[cfg(test)]
@@ -1159,10 +1379,14 @@ async fn run_bash_unix(
         }
     }
 
+    // Release the persistent drain future's mutable borrows before a forced
+    // capture finalization aborts the underlying reader tasks.
+    drop(drain);
+
     // Process terminality was proven by the outer supervisor before this
     // point. Reaping the already-terminal direct child is semantically
     // required; unlike capture completion, it is never abandoned.
-    if let Err(error) = child.wait().await {
+    if !direct_child_reaped && let Err(error) = child.wait().await {
         failure = Some(format!("cannot reap the terminal bash supervisor: {error}"));
     }
 
@@ -1291,6 +1515,88 @@ async fn run_bash_unix(
     }
 }
 
+/// Makes rustX the reaper of last resort for catastrophic loss of both
+/// invocation supervisors. `PR_SET_CHILD_SUBREAPER` is process-wide and
+/// idempotent; group-scoped waits keep concurrent invocations isolated.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn ensure_runtime_subreaper() -> Result<(), String> {
+    // SAFETY: one scalar prctl call with a literal enable value.
+    let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error().to_string())
+    }
+}
+
+/// Catastrophic fallback after the outer supervisor has been reaped.
+///
+/// rustX is a subreaper, so the dead outer's invocation descendants are now
+/// rustX children. The inner leader is retained with `WNOWAIT` before its
+/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
+/// used by the normal outer path. Only after the group-scoped child wait
+/// reaches `ECHILD` is the anchor identity released and terminality proven.
+#[cfg(target_os = "linux")]
+fn emergency_contain_group(pgid: i32) -> Result<(), String> {
+    use nix::errno::Errno;
+    use nix::sys::signal::{Signal, killpg};
+    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    use nix::unistd::Pid;
+
+    let anchor = Pid::from_raw(pgid);
+    loop {
+        match waitid(
+            Id::Pid(anchor),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
+        ) {
+            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
+            Ok(_) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => {
+                // The normal outer path released the anchor only after its
+                // own group-scoped ECHILD. With no retained anchor, never
+                // signal the cached numeric PGID.
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot retain the lost Bash invocation anchor: {error}"
+                ));
+            }
+        }
+    }
+
+    match killpg(anchor, Signal::SIGKILL) {
+        Ok(()) | Err(Errno::ESRCH) => {}
+        Err(error) => {
+            return Err(format!(
+                "cannot contain the lost Bash invocation group: {error}"
+            ));
+        }
+    }
+    loop {
+        match waitid(
+            Id::PGid(anchor),
+            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
+        ) {
+            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(_) | Err(Errno::EINTR) => {}
+            Err(Errno::ECHILD) => return Ok(()),
+            Err(error) => {
+                return Err(format!(
+                    "cannot prove the lost Bash invocation group terminal: {error}"
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_runtime_subreaper() -> Result<(), String> {
+    Err("Bash fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
+}
+
 /// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
 /// (integration tests), otherwise the `bash-supervisor` sibling of the
 /// current executable (production), otherwise the binary-directory sibling
@@ -1326,10 +1632,29 @@ async fn send_terminate(stream: &mut tokio::net::UnixStream) {
     let _ = stream.write_all(&frame).await;
 }
 
+#[cfg(unix)]
+async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
+    let frame = [1u8, 0, 0, 0, MSG_START];
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| format!("cannot acknowledge the Bash ownership gate: {error}"))
+}
+
+#[cfg(unix)]
+async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
+    let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
+    let _ = stream.write_all(&frame).await;
+}
+
 /// The `TERMINATE` control-message kind (mirrors
 /// `bash_supervisor::MSG_TERMINATE`).
 #[cfg(unix)]
 const MSG_TERMINATE: u8 = 0x10;
+#[cfg(unix)]
+const MSG_START: u8 = 0x11;
+#[cfg(unix)]
+const MSG_TERMINAL_ACK: u8 = 0x12;
 
 /// Reads exactly one supervisor control frame:
 /// `[u32 LE length][kind][payload]`.
@@ -1359,6 +1684,16 @@ async fn read_supervisor_event(
         return Err("empty bash supervisor control frame".to_owned());
     };
     match kind {
+        MSG_ANCHOR_READY => {
+            if payload.len() != 4 {
+                return Err("malformed bash supervisor anchor-ready frame".to_owned());
+            }
+            Ok(Some(SupervisorEvent::AnchorReady {
+                pgid: i32::from_le_bytes(payload.try_into().expect("four bytes")),
+            }))
+        }
+        MSG_OWNERSHIP_ESTABLISHED => Ok(Some(SupervisorEvent::OwnershipEstablished)),
+        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership)),
         MSG_SHELL_EXITED => {
             // { exit_code: i32 LE, signaled: u8, signal: i32 LE }
             if payload.len() != 9 {
@@ -1405,6 +1740,12 @@ const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
 const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
 #[cfg(unix)]
 const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
+#[cfg(unix)]
+const MSG_ANCHOR_READY: u8 = 0x06;
+#[cfg(unix)]
+const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
+#[cfg(unix)]
+const MSG_NO_OWNERSHIP: u8 = 0x08;
 
 /// Streams one child pipe into its preview capture and the combined
 /// multiplex, spooling the full raw bytes into the artifact store.
@@ -1564,7 +1905,10 @@ fn unix_signal_of(exit: std::process::ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BashTestControl, BashTool, NAME};
+    use super::{
+        BashTestControl, BashTool, MSG_ALL_CHILDREN_REAPED, NAME, SupervisorEvent,
+        read_supervisor_event,
+    };
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use crate::tools::artifacts::ArtifactStore;
@@ -1576,6 +1920,7 @@ mod tests {
     use crate::tools::workspace::Workspace;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     struct NoopProgress;
 
@@ -1678,6 +2023,91 @@ mod tests {
         let close = stat.rfind(')')?;
         let fields: Vec<&str> = stat[close + 1..].split_whitespace().collect();
         fields.get(2)?.parse().ok()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_capable_of_executing(pid: i32) -> bool {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return false;
+        };
+        let Some(close) = stat.rfind(')') else {
+            return false;
+        };
+        !matches!(stat[close + 1..].split_whitespace().next(), Some("Z" | "X"))
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_until_not_executing(pid: i32) {
+        for _ in 0..1000 {
+            if !process_capable_of_executing(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process {pid} remains capable of executing");
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn start_supervisor_loss_fixture(
+        cancellation: CancellationSignal,
+    ) -> (
+        tempfile::TempDir,
+        tokio::task::JoinHandle<ToolExecutionResult>,
+        super::ChannelEofHook,
+        i32,
+        i32,
+        i32,
+    ) {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let shell_pid_file = root.join("shell.pid");
+        let inner_pid_file = root.join("inner.pid");
+        let outer_pid_file = root.join("outer.pid");
+        let ready_file = root.join("ready");
+        let command = format!(
+            "inner=$PPID; outer=$(awk '/^PPid:/ {{print $2}}' /proc/$inner/status); \
+             echo $$ > {}; echo $inner > {}; echo $outer > {}; touch {}; \
+             exec >/dev/null 2>&1; kill -KILL $outer; kill -KILL $inner; sleep 30",
+            shell_pid_file.display(),
+            inner_pid_file.display(),
+            outer_pid_file.display(),
+            ready_file.display()
+        );
+        let control = BashTestControl::new().observe_channel_eof();
+        let eof = control.channel_eof().expect("EOF hook").clone();
+        let task = tokio::spawn(run_with_control(
+            command,
+            control,
+            cancellation,
+            artifacts,
+            workspace,
+            None,
+        ));
+        for _ in 0..1000 {
+            if ready_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ready_file.exists(), "supervisor-loss fixture not ready");
+        let read_pid = |path: &std::path::Path| {
+            std::fs::read_to_string(path)
+                .expect("pid file")
+                .trim()
+                .parse::<i32>()
+                .expect("pid")
+        };
+        let shell_pid = read_pid(&shell_pid_file);
+        let inner_pid = read_pid(&inner_pid_file);
+        let outer_pid = read_pid(&outer_pid_file);
+        wait_until_not_executing(inner_pid).await;
+        wait_until_not_executing(outer_pid).await;
+        tokio::time::timeout(Duration::from_secs(8), eof.await_seen())
+            .await
+            .expect("control EOF was not observed");
+        assert!(process_alive(shell_pid));
+        assert_eq!(pgrp_of(shell_pid), Some(inner_pid));
+        (dir, task, eof, shell_pid, inner_pid, outer_pid)
     }
 
     /// Polls a process until it is provably gone (ESRCH), with a strict
@@ -3019,5 +3449,96 @@ mod tests {
             .expect("anchor pid");
         wait_for_group_death(anchor_pid).await;
         let _ = dir;
+    }
+
+    /// Catastrophic supervisor-loss reproducer. The shell kills both
+    /// supervisors after recording the fixed-group topology, redirects its
+    /// pipes, and remains alive. EOF must not settle the invocation.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn supervisor_chain_loss_does_not_make_an_owned_process_terminal() {
+        let (dir, task, eof, shell_pid, _, _) =
+            start_supervisor_loss_fixture(CancellationSignal::new()).await;
+        assert!(
+            !task.is_finished(),
+            "control EOF fabricated process terminality while owned work was alive"
+        );
+        eof.release_emergency_containment();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("emergency containment did not settle")
+            .expect("Bash task panicked");
+        assert!(
+            matches!(
+            result.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+            ),
+            "unexpected result: {:?}",
+            result.status
+        );
+        wait_for_process_death(shell_pid).await;
+        let _ = dir;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancellation_during_supervisor_loss_settles_failed_after_containment() {
+        let cancellation = CancellationSignal::new();
+        let (dir, task, eof, shell_pid, _, _) =
+            start_supervisor_loss_fixture(cancellation.clone()).await;
+        cancellation.cancel();
+        assert!(!task.is_finished());
+        assert!(process_capable_of_executing(shell_pid));
+        eof.release_emergency_containment();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("containment settles")
+            .expect("executor task");
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+        ));
+        wait_for_process_death(shell_pid).await;
+        let _ = dir;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn timeout_during_supervisor_loss_settles_failed_after_containment() {
+        let (dir, task, eof, shell_pid, _, _) =
+            start_supervisor_loss_fixture(CancellationSignal::new()).await;
+        eof.force_timeout();
+        assert!(!task.is_finished());
+        assert!(process_capable_of_executing(shell_pid));
+        eof.release_emergency_containment();
+        let result = tokio::time::timeout(Duration::from_secs(8), task)
+            .await
+            .expect("containment settles")
+            .expect("executor task");
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Failed { ref error }
+                if error.contains("exited before reporting terminal child ownership")
+        ));
+        wait_for_process_death(shell_pid).await;
+        let _ = dir;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_frame_is_parsed_before_buffered_eof() {
+        let (mut writer, mut reader) = tokio::net::UnixStream::pair().expect("socket pair");
+        writer
+            .write_all(&[1, 0, 0, 0, MSG_ALL_CHILDREN_REAPED])
+            .await
+            .expect("terminal frame");
+        drop(writer);
+        assert!(matches!(
+            read_supervisor_event(&mut reader).await,
+            Ok(Some(SupervisorEvent::AllChildrenReaped))
+        ));
+        assert!(matches!(read_supervisor_event(&mut reader).await, Ok(None)));
     }
 }

@@ -52,7 +52,7 @@
 //!
 //! **Membership is immutable for Bash descendants.** The inner supervisor
 //! installs a narrow inherited seccomp policy (see
-//! [`enforce_fixed_group_membership`]) between its own `setsid()` setup and
+//! `enforce_fixed_group_membership` between its own `setsid()` setup and
 //! the `/bin/bash` spawn: `setsid(2)` and `setpgid(2)` are rejected with
 //! `EPERM` for the inner supervisor, for bash, and for every descendant —
 //! `setpgid(2)` and `setsid(2)` are the only syscalls that can change
@@ -88,12 +88,12 @@
 //!
 //! - the inner supervisor's group-scoped wait returning `ECHILD` — every
 //!   child of the inner that is in the invocation group is reaped; it then
-//!   exits with [`INNER_EXIT_NORMAL`];
+//!   exits with `INNER_EXIT_NORMAL`;
 //! - the outer supervisor's group-scoped wait returning `ECHILD` — no
 //!   child of the outer remains in the invocation group (the inner anchor
 //!   itself is a member and is released by this same wait, strictly after
 //!   any fallback containment signal); it then reports
-//!   [`MSG_ALL_CHILDREN_REAPED`] and exits.
+//!   `MSG_ALL_CHILDREN_REAPED` and exits.
 //!
 //! The fixed-membership invariant is what makes `ECHILD` from these
 //! group-scoped waits a **complete** terminal proof. `waitid(P_PGID)`
@@ -130,7 +130,7 @@
 //! When the inner supervisor terminates abnormally while owned work may
 //! still be alive (signal failure, wait/reap failure, IPC failure, control-
 //! channel abandonment), it does **not** simply walk away: it exits with
-//! the dedicated [`INNER_EXIT_CONTAINMENT`] status. The outer supervisor —
+//! the dedicated `INNER_EXIT_CONTAINMENT` status. The outer supervisor —
 //! the final containment and reaping authority — observes that status
 //! without releasing the inner's identity (`waitid` with `WNOWAIT` keeps
 //! the inner an un-reaped zombie), so the inner pid — the invocation's
@@ -157,13 +157,17 @@
 //! reads, so the inner's lifecycle events can never be consumed by it).
 //! bash gets a null stdin so it never sees the control channel. Messages
 //! are length-prefixed frames: `[u32 LE length][u8 kind][payload]`. The
-//! inner supervisor writes [`MSG_SHELL_EXITED`], [`MSG_PROCESS_CONTROL_FAILURE`],
-//! and [`MSG_SIGNAL_ATTEMPT`] (test observability); the outer supervisor
-//! writes [`MSG_ALL_CHILDREN_REAPED`] — the single authoritative terminal
-//! report — plus [`MSG_PROCESS_CONTROL_FAILURE`] and [`MSG_SIGNAL_ATTEMPT`]
-//! for its fallback containment; rustX writes [`MSG_TERMINATE`] to request
-//! the `TERM` -> grace -> `KILL` sequence. There is no generic IPC
-//! framework.
+//! inner supervisor writes the pre-spawn `MSG_ANCHOR_READY` gate,
+//! `MSG_OWNERSHIP_ESTABLISHED`, `MSG_SHELL_EXITED`,
+//! `MSG_PROCESS_CONTROL_FAILURE`, and `MSG_SIGNAL_ATTEMPT` (test
+//! observability); the outer supervisor
+//! writes `MSG_ALL_CHILDREN_REAPED` — the single authoritative terminal
+//! report — plus `MSG_PROCESS_CONTROL_FAILURE` and `MSG_SIGNAL_ATTEMPT`
+//! for its fallback containment; rustX writes `MSG_START`,
+//! `MSG_TERMINATE`, and the terminal acknowledgement. A successful Bash
+//! spawn is the OS ownership commit. After rustX sends `START`, loss of the
+//! commit frame is conservatively treated as possible ownership. There is
+//! no generic IPC framework.
 //!
 //! # Platform assumption
 //!
@@ -232,8 +236,25 @@ const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
 /// `{ pgid: i32 LE, signal: i32 LE, emitted: u8 }`.
 const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
 
+/// Inner -> rustX: setup is complete and Bash has not yet been spawned;
+/// payload is the invocation PGID (`i32 LE`).
+const MSG_ANCHOR_READY: u8 = 0x06;
+
+/// Inner -> rustX: Bash was successfully spawned in the fixed group.
+const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
+
+/// Supervisor -> rustX: setup ended before any Bash process was spawned.
+const MSG_NO_OWNERSHIP: u8 = 0x08;
+
 /// rustX -> supervisor: run the `TERM` -> grace -> `KILL` sequence.
 const MSG_TERMINATE: u8 = 0x10;
+
+/// rustX -> inner: the runtime retained the anchor identity and authorizes
+/// the Bash spawn.
+const MSG_START: u8 = 0x11;
+
+/// rustX -> outer: the authoritative terminal frame was parsed.
+const MSG_TERMINAL_ACK: u8 = 0x12;
 
 /// The inner supervisor's exit status for a normal completion: it reached
 /// the kernel `ECHILD` terminal child state (or no owned process tree was
@@ -251,6 +272,7 @@ const INNER_EXIT_CONTAINMENT: i32 = 42;
 /// detail of the grace period and the wait loops — never a test
 /// synchronization mechanism).
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+const TERMINAL_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The `TERM` -> `KILL` grace period, kept in sync with
 /// `crate::tools::limits::BASH_TERM_GRACE`.
@@ -288,7 +310,15 @@ pub fn run_inner_supervisor() -> ! {
 fn run_outer() -> i32 {
     let mut stream = ControlStream;
     if let Err(error) = become_child_subreaper() {
-        let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
+        let _ = stream.write_preownership_failure(&format!(
+            "cannot become the invocation subreaper: {error}"
+        ));
+        return 0;
+    }
+    if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
+        let _ = stream.write_preownership_failure(&format!(
+            "cannot make the outer control channel non-blocking: {error}"
+        ));
         return 0;
     }
     let inner_pid = match Command::new(supervisor_binary())
@@ -297,7 +327,7 @@ fn run_outer() -> i32 {
     {
         Ok(child) => child.id(),
         Err(error) => {
-            let _ = stream.write_failure(&format!(
+            let _ = stream.write_preownership_failure(&format!(
                 "cannot spawn the invocation anchor supervisor: {error}"
             ));
             return 0;
@@ -395,7 +425,9 @@ fn run_outer() -> i32 {
             ) {
                 Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
                 Err(Errno::ECHILD) => {
-                    let _ = stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]);
+                    if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
+                        await_terminal_ack();
+                    }
                     return 0;
                 }
                 Err(error) => {
@@ -421,6 +453,42 @@ fn run_outer() -> i32 {
             }
         }
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Keeps the outer alive until rustX acknowledges parsing the authoritative
+/// terminal frame. This prevents unread control input from turning close
+/// into `ECONNRESET` and obscuring that frame. The deadline is only process
+/// cleanup if rustX disappeared; terminality was already proven by ECHILD.
+fn await_terminal_ack() {
+    let deadline = std::time::Instant::now() + TERMINAL_ACK_TIMEOUT;
+    let mut buffered = Vec::with_capacity(64);
+    loop {
+        let mut chunk = [0u8; 64];
+        match read(std::io::stdin(), &mut chunk) {
+            Ok(0) => return,
+            Ok(count) => buffered.extend_from_slice(&chunk[..count]),
+            Err(Errno::EAGAIN) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(error) => {
+                if error == Errno::EINTR {
+                    continue;
+                }
+                return;
+            }
+        }
+        while buffered.len() >= 4 {
+            let len = u32::from_le_bytes(buffered[..4].try_into().expect("four bytes")) as usize;
+            if buffered.len() < 4 + len {
+                break;
+            }
+            let kind = buffered[4];
+            buffered.drain(..4 + len);
+            if kind == MSG_TERMINAL_ACK {
+                return;
+            }
+        }
     }
 }
 
@@ -458,17 +526,21 @@ fn run_inner() -> i32 {
     let command = match std::env::var(COMMAND_ENV) {
         Ok(command) if !command.is_empty() => command,
         _ => {
-            let _ =
-                stream.write_failure("the bash command is missing from the supervisor environment");
+            let _ = stream.write_preownership_failure(
+                "the bash command is missing from the supervisor environment",
+            );
             return INNER_EXIT_NORMAL;
         }
     };
     if let Err(error) = nix::unistd::setsid() {
-        let _ = stream.write_failure(&format!("cannot create the invocation session: {error}"));
+        let _ = stream
+            .write_preownership_failure(&format!("cannot create the invocation session: {error}"));
         return INNER_EXIT_NORMAL;
     }
     if let Err(error) = become_child_subreaper() {
-        let _ = stream.write_failure(&format!("cannot become the invocation subreaper: {error}"));
+        let _ = stream.write_preownership_failure(&format!(
+            "cannot become the invocation subreaper: {error}"
+        ));
         return INNER_EXIT_NORMAL;
     }
     // The invocation group TERM targets this process too; it must survive
@@ -477,11 +549,11 @@ fn run_inner() -> i32 {
     // bash tree exists yet, so an immediate normal exit (with the explicit
     // failure report) is the correct settlement.
     if std::env::var(FAIL_SIGTERM_HANDLER_ENV).is_ok() {
-        let _ = stream.write_failure("injected SIGTERM handler installation failure");
+        let _ = stream.write_preownership_failure("injected SIGTERM handler installation failure");
         return INNER_EXIT_NORMAL;
     }
     if let Err(error) = ignore_group_term() {
-        let _ = stream.write_failure(&format!(
+        let _ = stream.write_preownership_failure(&format!(
             "cannot install the invocation SIGTERM handler: {error}"
         ));
         return INNER_EXIT_NORMAL;
@@ -489,7 +561,7 @@ fn run_inner() -> i32 {
     // The control channel is non-blocking so the loop can poll for the
     // TERMINATE request without blocking the reap loop.
     if let Err(error) = fcntl(std::io::stdin(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
-        let _ = stream.write_failure(&format!(
+        let _ = stream.write_preownership_failure(&format!(
             "cannot make the control channel non-blocking: {error}"
         ));
         return INNER_EXIT_NORMAL;
@@ -500,7 +572,7 @@ fn run_inner() -> i32 {
     // is what makes the group-scoped terminal wait complete. An install
     // failure is a pre-ownership setup failure: no bash tree exists yet.
     if let Err(error) = enforce_fixed_group_membership() {
-        let _ = stream.write_failure(&format!(
+        let _ = stream.write_preownership_failure(&format!(
             "cannot install the fixed process-group membership restriction: {error}"
         ));
         return INNER_EXIT_NORMAL;
@@ -508,8 +580,26 @@ fn run_inner() -> i32 {
     if let Ok(path) = std::env::var(ANCHOR_PID_FILE_ENV) {
         let _ = std::fs::write(&path, std::process::id().to_string());
     }
+    let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
+    if stream
+        .write_frame(MSG_ANCHOR_READY, &self_pid.to_le_bytes())
+        .is_err()
+    {
+        return INNER_EXIT_NORMAL;
+    }
+    match await_start() {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = stream.write_frame(MSG_NO_OWNERSHIP, &[]);
+            return INNER_EXIT_NORMAL;
+        }
+        Err(error) => {
+            let _ = stream.write_preownership_failure(&error);
+            return INNER_EXIT_NORMAL;
+        }
+    }
     if std::env::var(FAIL_BASH_SPAWN_ENV).is_ok() {
-        let _ = stream.write_failure("injected bash spawn failure");
+        let _ = stream.write_preownership_failure("injected bash spawn failure");
         return INNER_EXIT_NORMAL;
     }
     let fail_wait = std::env::var(FAIL_WAIT_ENV).is_ok();
@@ -523,14 +613,16 @@ fn run_inner() -> i32 {
     {
         Ok(child) => child,
         Err(error) => {
-            let _ = stream.write_failure(&format!("cannot spawn /bin/bash: {error}"));
+            let _ = stream.write_preownership_failure(&format!("cannot spawn /bin/bash: {error}"));
             return INNER_EXIT_NORMAL;
         }
     };
+    if stream.write_frame(MSG_OWNERSHIP_ESTABLISHED, &[]).is_err() {
+        return INNER_EXIT_CONTAINMENT;
+    }
     // SAFETY-free pid capture: the pid is a positive `u32` from the kernel;
     // it is only compared against `waitpid` pids of the same conversion.
     let bash_pid = i32::try_from(bash.id()).unwrap_or(0);
-    let self_pid = i32::try_from(std::process::id()).unwrap_or(0);
     let mut shell_reported = false;
     let mut read_buf: Vec<u8> = Vec::with_capacity(256);
     let mut kill_deadline: Option<std::time::Instant> = None;
@@ -729,6 +821,41 @@ fn handle_frames(
     }
 }
 
+/// Waits at the pre-ownership gate for rustX to acknowledge that it has
+/// retained the invocation anchor. Bash cannot exist before `MSG_START`.
+fn await_start() -> Result<bool, String> {
+    let mut buf = Vec::with_capacity(32);
+    loop {
+        let mut chunk = [0u8; 32];
+        match read(std::io::stdin(), &mut chunk) {
+            Ok(0) => return Ok(false),
+            Ok(count) => buf.extend_from_slice(&chunk[..count]),
+            Err(Errno::EAGAIN) => {
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+            Err(Errno::EINTR) => continue,
+            Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
+        }
+        if buf.len() >= 4 {
+            let len = u32::from_le_bytes(buf[..4].try_into().expect("four bytes")) as usize;
+            if buf.len() >= 4 + len {
+                let kind = buf[4];
+                buf.drain(..4 + len);
+                match kind {
+                    MSG_START => return Ok(true),
+                    MSG_TERMINATE => return Ok(false),
+                    other => {
+                        return Err(format!(
+                            "unexpected pre-ownership control message {other:#04x}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The supervisor's control stream: fd 0 (stdin), the inherited socket end.
 struct ControlStream;
 
@@ -751,6 +878,11 @@ impl ControlStream {
     fn write_failure(&mut self, message: &str) -> Result<(), String> {
         self.write_frame(MSG_PROCESS_CONTROL_FAILURE, message.as_bytes())
     }
+
+    fn write_preownership_failure(&mut self, message: &str) -> Result<(), String> {
+        self.write_failure(message)?;
+        self.write_frame(MSG_NO_OWNERSHIP, &[])
+    }
 }
 
 /// The `SIGNAL_ATTEMPT` payload for one attempted group signal.
@@ -771,9 +903,9 @@ fn supervisor_binary() -> std::path::PathBuf {
 /// into this process's child domain instead of being rediscovered from
 /// `/proc`.
 ///
-/// This is one of the two narrowly scoped `libc` calls of the crate (the
-/// other is the SIGTERM handler installation); everything else stays
-/// unsafe-free. Linux-only: the lifecycle contract is claimed only where
+/// This is one of the narrowly scoped production OS shims: subreaper setup,
+/// SIGTERM handler installation, `PR_SET_NO_NEW_PRIVS`, and seccomp filter
+/// installation. Linux-only: the lifecycle contract is claimed only where
 /// the kernel provides the subreaper mechanism.
 #[allow(unsafe_code)]
 fn become_child_subreaper() -> Result<(), String> {
