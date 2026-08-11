@@ -187,6 +187,176 @@ pub(crate) trait SupervisedProcessRunner: Send + Sync {
     ) -> BoxFuture<'_, Result<CapturedProcessResult, String>>;
 }
 
+/// The explicit command description of one long-lived interactive server.
+/// Unlike [`SupervisedCommandSpec`], the business stdin/stdout pair belongs
+/// to the child protocol; supervisor control uses a private Unix socket.
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+pub(crate) struct InteractiveProcessSpec {
+    /// The executable to run inside the owned process group.
+    pub program: PathBuf,
+    /// Explicit program arguments.
+    pub args: Vec<String>,
+    /// Explicit working directory.
+    pub cwd: PathBuf,
+    /// Explicit environment, never inherited.
+    pub environment: Vec<(String, String)>,
+}
+
+/// A rustX-owned interactive process handle.
+///
+/// The returned protocol streams are business-facing handles. The detached
+/// driver owns the supervisor child and the control connection, so dropping
+/// the streams cannot abandon the process hierarchy. `Drop` requests orderly
+/// shutdown; the driver waits for the supervisor's terminal event and then
+/// reaps its direct child.
+#[cfg(unix)]
+pub(crate) struct SupervisedInteractiveProcess {
+    pub stdin: Option<tokio::process::ChildStdin>,
+    pub stdout: Option<tokio::process::ChildStdout>,
+    pub(crate) _stderr: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    settled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    settled_notify: std::sync::Arc<tokio::sync::Notify>,
+    shutdown: Option<tokio::sync::mpsc::Sender<()>>,
+}
+
+#[cfg(unix)]
+impl SupervisedInteractiveProcess {
+    /// Starts one interactive process under the dedicated long-lived owner.
+    pub(crate) async fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
+
+        let socket_path = std::env::temp_dir().join(format!(
+            "rustx-interactive-{}-{}.sock",
+            std::process::id(),
+            NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
+        ));
+        let listener = tokio::net::UnixListener::bind(&socket_path)
+            .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
+        let mut supervisor = tokio::process::Command::new(interactive_supervisor_binary());
+        supervisor
+            .arg("outer")
+            .arg(&spec.program)
+            .args(&spec.args)
+            .current_dir(&spec.cwd)
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in &spec.environment {
+            supervisor.env(key, value);
+        }
+        supervisor.env("RUSTX_INTERACTIVE_CONTROL", &socket_path);
+        let mut child = supervisor
+            .spawn()
+            .map_err(|error| format!("cannot spawn interactive supervisor: {error}"))?;
+        drop(supervisor);
+        let (control, _) = listener
+            .accept()
+            .await
+            .map_err(|error| format!("cannot accept interactive control socket: {error}"))?;
+        let _ = std::fs::remove_file(&socket_path);
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let stderr_capture = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        if let Some(mut stderr_pipe) = stderr {
+            let capture = stderr_capture.clone();
+            tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                let mut buffer = [0u8; 8192];
+                loop {
+                    match stderr_pipe.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(count) => {
+                            let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
+                            bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                        }
+                    }
+                    if bytes.len() >= MAX_PROCESS_OUTPUT_BYTES {
+                        break;
+                    }
+                }
+                *capture.lock().expect("interactive stderr lock") = bytes;
+            });
+        }
+        let (control_read, mut control_write) = control.into_split();
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
+        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let settled_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let settled_for_driver = settled.clone();
+        let settled_notify_for_driver = settled_notify.clone();
+        tokio::spawn(async move {
+            let mut control_read = control_read;
+            let mut requested = false;
+            loop {
+                tokio::select! {
+                    command = shutdown_rx.recv(), if !requested => {
+                        if command.is_some() {
+                            let _ = control_write.write_all(&[0x10]).await;
+                        }
+                        requested = true;
+                    }
+                    event = control_read.read_u8() => {
+                        match event {
+                            Ok(0x20) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                    }
+                }
+            }
+            // The supervisor's terminal event is authoritative for group
+            // settlement. The direct supervisor child is still reaped here.
+            let _ = child.wait().await;
+            settled_for_driver.store(true, std::sync::atomic::Ordering::Release);
+            settled_notify_for_driver.notify_waiters();
+        });
+        Ok(Self {
+            stdin,
+            stdout,
+            _stderr: stderr_capture,
+            settled,
+            settled_notify,
+            shutdown: Some(shutdown_tx),
+        })
+    }
+
+    /// Requests orderly server retirement without using the business stdin.
+    pub(crate) fn request_shutdown(&self) {
+        if let Some(shutdown) = &self.shutdown {
+            let _ = shutdown.try_send(());
+        }
+    }
+
+    /// Waits until the detached supervisor driver has observed its terminal
+    /// event and reaped the direct supervisor child.
+    pub(crate) async fn wait_for_settlement(&self) {
+        if self.settled.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        loop {
+            let notified = self.settled_notify.notified();
+            if self.settled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+            if self.settled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SupervisedInteractiveProcess {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.try_send(());
+        }
+    }
+}
+
 /// The production supervised process runner backed by the shared runner.
 #[derive(Clone, Default)]
 pub(crate) struct RunnerBackedProcessRunner {
@@ -753,12 +923,12 @@ impl SupervisedCommandRunner {
         #[cfg(not(test))]
         let _ = control;
         #[cfg(test)]
-        if let Some(control) = &control {
-            if control.fail_subreaper_init {
-                return Err(RunnerSpawnError::Subreaper(
-                    "injected child-subreaper initialization failure".to_owned(),
-                ));
-            }
+        if let Some(control) = &control
+            && control.fail_subreaper_init
+        {
+            return Err(RunnerSpawnError::Subreaper(
+                "injected child-subreaper initialization failure".to_owned(),
+            ));
         }
         if let Err(error) = crate::runtime::process_supervision::ensure_child_subreaper() {
             return Err(RunnerSpawnError::Subreaper(error));
@@ -813,10 +983,10 @@ impl SupervisedCommandRunner {
         supervisor.stdout(Stdio::piped());
         supervisor.stderr(Stdio::piped());
         #[cfg(test)]
-        if let Some(control) = &control {
-            if control.fail_supervisor_spawn {
-                return Err(RunnerSpawnError::InjectedSupervisorSpawn);
-            }
+        if let Some(control) = &control
+            && control.fail_supervisor_spawn
+        {
+            return Err(RunnerSpawnError::InjectedSupervisorSpawn);
         }
         let mut child = match supervisor.spawn() {
             Ok(child) => child,
@@ -938,10 +1108,12 @@ impl SupervisedCommandRunner {
                     Ok(Some(SupervisorEvent::ShellExited { status })) => {
                         self.exit_status = Some(status);
                         #[cfg(test)]
-                        if let Some(control) = self.control.as_ref() {
-                            if control.pause_at_shell_exit && self.settled.is_none() && !self.terminate_sent {
-                                control.lifecycle.pause_after_shell_exit().await;
-                            }
+                        if let Some(control) = self.control.as_ref()
+                            && control.pause_at_shell_exit
+                            && self.settled.is_none()
+                            && !self.terminate_sent
+                        {
+                            control.lifecycle.pause_after_shell_exit().await;
                         }
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
@@ -1287,6 +1459,27 @@ pub(crate) fn supervisor_binary() -> PathBuf {
         .parent()
         .expect("binary directory")
         .join("bash-supervisor")
+}
+
+/// Locates the long-lived interactive supervisor beside the current binary.
+#[cfg(unix)]
+pub(crate) fn interactive_supervisor_binary() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_interactive-supervisor") {
+        return PathBuf::from(path);
+    }
+    let exe = std::env::current_exe().expect("current executable");
+    let sibling = exe
+        .parent()
+        .expect("current executable directory")
+        .join("interactive-supervisor");
+    if sibling.exists() {
+        return sibling;
+    }
+    exe.parent()
+        .expect("current executable directory")
+        .parent()
+        .expect("binary directory")
+        .join("interactive-supervisor")
 }
 
 /// Sends the one termination request to the invocation supervisor.
