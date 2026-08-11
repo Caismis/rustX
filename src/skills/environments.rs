@@ -48,16 +48,16 @@
 //! ```
 //!
 //! Environment-store paths are never model-visible in the Skill catalog.
-//! Publication is atomic rename from a same-filesystem private staging
+//! Node publication is atomic rename from a same-filesystem private staging
 //! directory:
 //!
 //! ```text
 //! resolve candidate
-//!     → create private staging directory
+//!     → create private staging directory (Node)
 //!     → materialize
 //!     → validate
 //!     → write deterministic environment manifest/marker
-//!     → atomic rename/publication
+//!     → atomic rename/publication (Node), or ready-marker commit (Python)
 //!     → immutable digest directory
 //! ```
 //!
@@ -82,25 +82,22 @@
 //! production uses the runner-backed backend; deterministic tests inject
 //! fakes and never touch a public package registry.
 //!
-//! # Known limitation — venv path pinning
-//!
-//! `python3 -m venv` pins absolute paths into its `bin/` wrapper scripts
-//! and `activate`. Because M6 materializes into a staging directory and
-//! atomically renames it into the digest directory, those wrapper scripts
-//! (e.g. `bin/pip`) reference the pre-publication staging path after the
-//! rename. `bin/python` is a symlink to the base interpreter and remains
-//! fully functional, and `VIRTUAL_ENV` is set by the runtime, so the
-//! sanctioned Python entry point is `<env>/bin/python -m pip`. Node
-//! environments are rename-safe: `node_modules` uses relative paths only.
+//! Python environments are built directly at their final digest path because
+//! venv-generated console scripts contain absolute interpreter paths. Python
+//! contents remain uncommitted until the complete deterministic manifest is
+//! atomically installed as the ready marker. A digest directory without that
+//! marker is incomplete and is never reused.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use sha2::{Digest, Sha256};
+use tokio::sync::Notify;
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{NodeEnvironmentDigest, PythonEnvironmentDigest};
@@ -237,11 +234,12 @@ pub trait SkillEnvironmentBackend: Send + Sync {
         ecosystem: Ecosystem,
     ) -> BoxFuture<'_, Result<RuntimeVersions, String>>;
 
-    /// Materializes the shared Python environment into `staging`:
+    /// Materializes the shared Python environment directly into its final
+    /// digest directory:
     /// venv creation, exact-pin installation, and post-install validation.
     fn materialize_python<'a>(
         &'a self,
-        staging: &'a Path,
+        environment_dir: &'a Path,
         dependencies: &'a BTreeMap<String, String>,
     ) -> BoxFuture<'a, Result<(), String>>;
 
@@ -334,21 +332,21 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
 
     fn materialize_python<'a>(
         &'a self,
-        staging: &'a Path,
+        environment_dir: &'a Path,
         dependencies: &'a BTreeMap<String, String>,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            // 1. Create the virtual environment in the staging directory.
+            // 1. Create the virtual environment at its final digest path.
             run_checked(
                 &self.runner,
-                format!("python3 -m venv {}", shell_quote(staging)),
-                staging,
+                format!("python3 -m venv {}", shell_quote(environment_dir)),
+                environment_dir,
                 ENVIRONMENT_COMMAND_TIMEOUT,
             )
             .await?;
-            // 2. Install the exact direct pins with the staging venv's own
+            // 2. Install the exact direct pins with the final venv's own
             //    python (never a published environment).
-            let venv_python = staging.join("bin").join("python");
+            let venv_python = environment_dir.join("bin").join("python");
             let pins = dependencies
                 .iter()
                 .map(|(name, version)| {
@@ -362,7 +360,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
                     "{} -m pip install --disable-pip-version-check --no-input {pins}",
                     shell_quote(&venv_python)
                 ),
-                staging,
+                environment_dir,
                 ENVIRONMENT_COMMAND_TIMEOUT,
             )
             .await?;
@@ -370,7 +368,7 @@ impl SkillEnvironmentBackend for RunnerBackedSkillEnvironmentBackend {
             run_checked(
                 &self.runner,
                 format!("{} -m pip check", shell_quote(&venv_python)),
-                staging,
+                environment_dir,
                 ENVIRONMENT_COMMAND_TIMEOUT,
             )
             .await?;
@@ -429,6 +427,60 @@ pub struct EnvironmentStore {
     root: PathBuf,
     backend: Arc<dyn SkillEnvironmentBackend>,
     next_staging: Arc<AtomicU64>,
+    in_flight: Arc<Mutex<HashMap<BuildKey, Arc<BuildState>>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BuildKey {
+    ecosystem: Ecosystem,
+    digest: String,
+}
+
+struct BuildState {
+    result: Mutex<Option<Result<PathBuf, EnvironmentPreparationError>>>,
+    notify: Notify,
+}
+
+/// Completes a process-local build entry even if its owning preparation is
+/// cancelled while the backend is running. Waiters must never remain
+/// attached to an in-flight build with no owner capable of publishing a
+/// result.
+struct BuildOwnerGuard {
+    in_flight: Arc<Mutex<HashMap<BuildKey, Arc<BuildState>>>>,
+    key: BuildKey,
+    state: Arc<BuildState>,
+    completed: bool,
+}
+
+impl BuildOwnerGuard {
+    fn finish(&mut self, result: Result<PathBuf, EnvironmentPreparationError>) {
+        *self
+            .state
+            .result
+            .lock()
+            .expect("environment build result lock") = Some(result);
+        self.state.notify.notify_waiters();
+        let mut in_flight = self.in_flight.lock().expect("environment build lock");
+        if in_flight
+            .get(&self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        {
+            in_flight.remove(&self.key);
+        }
+        self.completed = true;
+    }
+}
+
+impl Drop for BuildOwnerGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.finish(Err(EnvironmentPreparationError::MaterializationFailed {
+            ecosystem: self.key.ecosystem,
+            detail: "the environment build owner was cancelled".to_owned(),
+        }));
+    }
 }
 
 impl EnvironmentStore {
@@ -467,6 +519,7 @@ impl EnvironmentStore {
             root,
             backend,
             next_staging: Arc::new(AtomicU64::new(0)),
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -474,6 +527,68 @@ impl EnvironmentStore {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Coalesces same-process builds of one immutable environment digest.
+    /// Exactly one caller owns materialization; equivalent callers await its
+    /// result and receive the same final environment path. A failed owner
+    /// publishes no reusable state, and a later call can acquire ownership
+    /// for a retry.
+    async fn coordinate_build<F>(
+        &self,
+        key: BuildKey,
+        build: F,
+    ) -> Result<PathBuf, EnvironmentPreparationError>
+    where
+        F: Future<Output = Result<PathBuf, EnvironmentPreparationError>>,
+    {
+        let (state, owner) = {
+            let mut in_flight = self.in_flight.lock().expect("environment build lock");
+            if let Some(state) = in_flight.get(&key) {
+                (state.clone(), false)
+            } else {
+                let state = Arc::new(BuildState {
+                    result: Mutex::new(None),
+                    notify: Notify::new(),
+                });
+                in_flight.insert(key.clone(), state.clone());
+                (state, true)
+            }
+        };
+        if !owner {
+            let mut notified = Box::pin(state.notify.notified());
+            loop {
+                if let Some(result) = state
+                    .result
+                    .lock()
+                    .expect("environment build result lock")
+                    .clone()
+                {
+                    return result;
+                }
+                notified.as_mut().enable();
+                if state
+                    .result
+                    .lock()
+                    .expect("environment build result lock")
+                    .is_some()
+                {
+                    continue;
+                }
+                notified.await;
+                notified = Box::pin(state.notify.notified());
+            }
+        }
+
+        let mut owner_guard = BuildOwnerGuard {
+            in_flight: self.in_flight.clone(),
+            key,
+            state,
+            completed: false,
+        };
+        let result = build.await;
+        owner_guard.finish(result.clone());
+        result
     }
 
     /// Ensures the shared Python environment of the merged dependency set.
@@ -509,45 +624,23 @@ impl EnvironmentStore {
             dependencies,
         );
         let final_dir = self.root.join("python").join(digest.as_str());
-        if final_dir.exists() {
-            validate_published_manifest(
-                &final_dir,
-                PYTHON_ENVIRONMENT_FORMAT,
-                digest.as_str(),
-                std::env::consts::OS,
-                std::env::consts::ARCH,
-                &versions.runtime,
-                &versions.package_manager,
-                dependencies,
-            )
-            .map_err(|detail| {
-                EnvironmentPreparationError::CorruptPublishedEnvironment {
-                    ecosystem: Ecosystem::Python,
-                    digest: digest.to_string(),
-                    detail,
-                }
-            })?;
-            return Ok(Some(PythonEnvironment {
-                bin_dir: final_dir.join("bin"),
-                root: final_dir,
-                digest,
-            }));
-        }
-        let staging = self.staging_dir("python");
-        create_staging(&staging)?;
-        if let Err(detail) = self
-            .backend
-            .materialize_python(&staging, dependencies)
-            .await
-        {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(EnvironmentPreparationError::MaterializationFailed {
-                ecosystem: Ecosystem::Python,
-                detail,
-            });
-        }
-        if let Err(detail) = write_manifest(
-            &staging,
+        let build_key = BuildKey {
+            ecosystem: Ecosystem::Python,
+            digest: digest.to_string(),
+        };
+        let published = self
+            .coordinate_build(build_key, async {
+                self.build_python_environment(
+                    final_dir.clone(),
+                    digest.as_str(),
+                    &versions,
+                    dependencies,
+                )
+                .await
+            })
+            .await?;
+        validate_published_manifest(
+            &published,
             PYTHON_ENVIRONMENT_FORMAT,
             digest.as_str(),
             std::env::consts::OS,
@@ -555,14 +648,17 @@ impl EnvironmentStore {
             &versions.runtime,
             &versions.package_manager,
             dependencies,
-        ) {
-            let _ = std::fs::remove_dir_all(&staging);
-            return Err(EnvironmentPreparationError::PublicationFailed { detail });
-        }
-        publish(staging, &final_dir)?;
+        )
+        .map_err(
+            |detail| EnvironmentPreparationError::CorruptPublishedEnvironment {
+                ecosystem: Ecosystem::Python,
+                digest: digest.to_string(),
+                detail,
+            },
+        )?;
         Ok(Some(PythonEnvironment {
-            bin_dir: final_dir.join("bin"),
-            root: final_dir,
+            bin_dir: published.join("bin"),
+            root: published,
             digest,
         }))
     }
@@ -597,11 +693,121 @@ impl EnvironmentStore {
             dependencies,
         );
         let final_dir = self.root.join("node").join(digest.as_str());
-        if final_dir.exists() {
+        let build_key = BuildKey {
+            ecosystem: Ecosystem::Node,
+            digest: digest.to_string(),
+        };
+        let published = self
+            .coordinate_build(build_key, async {
+                self.build_node_environment(
+                    final_dir.clone(),
+                    digest.as_str(),
+                    &versions,
+                    dependencies,
+                )
+                .await
+            })
+            .await?;
+        validate_published_manifest(
+            &published,
+            NODE_ENVIRONMENT_FORMAT,
+            digest.as_str(),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            &versions.runtime,
+            &versions.package_manager,
+            dependencies,
+        )
+        .map_err(
+            |detail| EnvironmentPreparationError::CorruptPublishedEnvironment {
+                ecosystem: Ecosystem::Node,
+                digest: digest.to_string(),
+                detail,
+            },
+        )?;
+        Ok(Some(NodeEnvironment {
+            modules_dir: published.join("node_modules"),
+            bin_dir: published.join("node_modules").join(".bin"),
+            root: published,
+            digest,
+        }))
+    }
+
+    async fn build_python_environment(
+        &self,
+        final_dir: PathBuf,
+        digest: &str,
+        versions: &RuntimeVersions,
+        dependencies: &BTreeMap<String, String>,
+    ) -> Result<PathBuf, EnvironmentPreparationError> {
+        if final_dir.join(ENVIRONMENT_MANIFEST_FILE).exists() {
+            validate_published_manifest(
+                &final_dir,
+                PYTHON_ENVIRONMENT_FORMAT,
+                digest,
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                &versions.runtime,
+                &versions.package_manager,
+                dependencies,
+            )
+            .map_err(|detail| {
+                EnvironmentPreparationError::CorruptPublishedEnvironment {
+                    ecosystem: Ecosystem::Python,
+                    digest: digest.to_owned(),
+                    detail,
+                }
+            })?;
+            return Ok(final_dir);
+        }
+        remove_incomplete_environment(&final_dir)?;
+        create_staging(&final_dir)?;
+        if let Err(detail) = self
+            .backend
+            .materialize_python(&final_dir, dependencies)
+            .await
+        {
+            let _ = std::fs::remove_dir_all(&final_dir);
+            return Err(EnvironmentPreparationError::MaterializationFailed {
+                ecosystem: Ecosystem::Python,
+                detail,
+            });
+        }
+        validate_python_materialization(&final_dir).map_err(|detail| {
+            let _ = std::fs::remove_dir_all(&final_dir);
+            EnvironmentPreparationError::MaterializationFailed {
+                ecosystem: Ecosystem::Python,
+                detail,
+            }
+        })?;
+        if let Err(detail) = write_manifest_atomic(
+            &final_dir,
+            PYTHON_ENVIRONMENT_FORMAT,
+            digest,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            &versions.runtime,
+            &versions.package_manager,
+            dependencies,
+        ) {
+            let _ = std::fs::remove_dir_all(&final_dir);
+            return Err(EnvironmentPreparationError::PublicationFailed { detail });
+        }
+        Ok(final_dir)
+    }
+
+    async fn build_node_environment(
+        &self,
+        final_dir: PathBuf,
+        digest: &str,
+        versions: &RuntimeVersions,
+        dependencies: &BTreeMap<String, String>,
+    ) -> Result<PathBuf, EnvironmentPreparationError> {
+        if final_dir.join(ENVIRONMENT_MANIFEST_FILE).exists() {
             validate_published_manifest(
                 &final_dir,
                 NODE_ENVIRONMENT_FORMAT,
-                digest.as_str(),
+                digest,
                 std::env::consts::OS,
                 std::env::consts::ARCH,
                 &versions.runtime,
@@ -611,17 +817,13 @@ impl EnvironmentStore {
             .map_err(|detail| {
                 EnvironmentPreparationError::CorruptPublishedEnvironment {
                     ecosystem: Ecosystem::Node,
-                    digest: digest.to_string(),
+                    digest: digest.to_owned(),
                     detail,
                 }
             })?;
-            return Ok(Some(NodeEnvironment {
-                modules_dir: final_dir.join("node_modules"),
-                bin_dir: final_dir.join("node_modules").join(".bin"),
-                root: final_dir,
-                digest,
-            }));
+            return Ok(final_dir);
         }
+        remove_incomplete_environment(&final_dir)?;
         let staging = self.staging_dir("node");
         create_staging(&staging)?;
         if let Err(detail) = self.backend.materialize_node(&staging, dependencies).await {
@@ -634,7 +836,7 @@ impl EnvironmentStore {
         if let Err(detail) = write_manifest(
             &staging,
             NODE_ENVIRONMENT_FORMAT,
-            digest.as_str(),
+            digest,
             std::env::consts::OS,
             std::env::consts::ARCH,
             &versions.runtime,
@@ -645,12 +847,7 @@ impl EnvironmentStore {
             return Err(EnvironmentPreparationError::PublicationFailed { detail });
         }
         publish(staging, &final_dir)?;
-        Ok(Some(NodeEnvironment {
-            modules_dir: final_dir.join("node_modules"),
-            bin_dir: final_dir.join("node_modules").join(".bin"),
-            root: final_dir,
-            digest,
-        }))
+        Ok(final_dir)
     }
 
     /// The deterministic private staging directory of one ecosystem:
@@ -672,6 +869,38 @@ fn create_staging(staging: &Path) -> Result<(), EnvironmentPreparationError> {
             staging.display()
         ),
     })
+}
+
+/// Removes an uncommitted digest directory. A directory with a manifest is
+/// intentionally left untouched so a corrupt committed environment is
+/// reported rather than silently replaced.
+fn remove_incomplete_environment(path: &Path) -> Result<(), EnvironmentPreparationError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.join(ENVIRONMENT_MANIFEST_FILE).exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(path).map_err(|error| EnvironmentPreparationError::StagingFailed {
+        detail: format!(
+            "cannot remove incomplete environment {}: {error}",
+            path.display()
+        ),
+    })
+}
+
+/// Validates the minimum Python publication shape before the ready marker is
+/// committed. The backend performs ecosystem-specific package validation;
+/// this boundary ensures the PATH advertised by the capability has a real
+/// final-path `bin` directory.
+fn validate_python_materialization(path: &Path) -> Result<(), String> {
+    if !path.join("bin").is_dir() {
+        return Err(format!(
+            "Python materialization did not create its final bin directory: {}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Publishes the materialized staging directory atomically.
@@ -738,6 +967,40 @@ fn write_manifest(
         .map_err(|error| format!("cannot write the environment manifest: {error}"))
 }
 
+/// Atomically commits the Python manifest as the ready marker. The digest
+/// directory may contain incomplete contents before this rename, but it is
+/// not reusable until this boundary succeeds.
+#[allow(clippy::too_many_arguments)]
+fn write_manifest_atomic(
+    directory: &Path,
+    format: &str,
+    digest: &str,
+    os: &str,
+    arch: &str,
+    runtime_version: &str,
+    package_manager_version: &str,
+    dependencies: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let manifest = EnvironmentManifest {
+        format: format.to_owned(),
+        digest: digest.to_owned(),
+        os: os.to_owned(),
+        arch: arch.to_owned(),
+        runtime_version: runtime_version.to_owned(),
+        package_manager_version: package_manager_version.to_owned(),
+        dependencies: dependencies.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| format!("cannot serialize the environment manifest: {error}"))?;
+    let temporary = directory.join(format!("{ENVIRONMENT_MANIFEST_FILE}.tmp"));
+    std::fs::write(&temporary, bytes)
+        .map_err(|error| format!("cannot write the environment ready marker: {error}"))?;
+    std::fs::rename(&temporary, directory.join(ENVIRONMENT_MANIFEST_FILE)).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        format!("cannot commit the environment ready marker: {error}")
+    })
+}
+
 /// Validates a published environment's manifest against the expected
 /// digest inputs. A published environment is never modified; a manifest
 /// mismatch means the digest directory is not trustworthy and must not be
@@ -797,6 +1060,9 @@ async fn probe(
         .map_err(|error| format!("cannot run {command}: {error}"))?;
     match result.intent {
         ProcessOutcomeIntent::Completed => {
+            if result.exit_code != Some(0) {
+                return Err(format!("{command} exited with code {:?}", result.exit_code));
+            }
             let mut output = result.stdout;
             output.extend_from_slice(&result.stderr);
             Ok(String::from_utf8_lossy(&output).into_owned())
@@ -972,5 +1238,53 @@ impl From<String> for PythonEnvironmentDigest {
 impl From<String> for NodeEnvironmentDigest {
     fn from(value: String) -> Self {
         Self::new(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    use crate::runtime::process_runner::{CapturedProcessResult, ProcessOutcomeIntent};
+
+    struct ScriptedRunner {
+        results: Mutex<VecDeque<Result<CapturedProcessResult, String>>>,
+    }
+
+    impl SupervisedProcessRunner for ScriptedRunner {
+        fn run(
+            &self,
+            _spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let result = self
+                .results
+                .lock()
+                .expect("scripted probe result lock")
+                .pop_front()
+                .expect("scripted probe result");
+            Box::pin(async move { result })
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_probe_rejects_completed_nonzero_process() {
+        let runner: Arc<dyn SupervisedProcessRunner> = Arc::new(ScriptedRunner {
+            results: Mutex::new(VecDeque::from([Ok(CapturedProcessResult {
+                exit_code: Some(1),
+                intent: ProcessOutcomeIntent::Completed,
+                stdout: b"Python 3.12.0\n".to_vec(),
+                stderr: Vec::new(),
+            })])),
+        });
+        let backend = RunnerBackedSkillEnvironmentBackend::new(runner);
+
+        let error = backend
+            .resolve_runtime_versions(Ecosystem::Python)
+            .await
+            .expect_err("a non-zero probe cannot publish a runtime identity");
+
+        assert!(error.contains("python3 --version exited with code Some(1)"));
     }
 }

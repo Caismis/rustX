@@ -313,6 +313,7 @@ pub struct ConversationBackgroundRegistry {
     conversation_id: ConversationId,
     inner: Arc<Mutex<BackgroundRegistryState>>,
     resources: BackgroundResources,
+    state_version: tokio::sync::watch::Sender<u64>,
 }
 
 impl Clone for ConversationBackgroundRegistry {
@@ -321,6 +322,7 @@ impl Clone for ConversationBackgroundRegistry {
             conversation_id: self.conversation_id.clone(),
             inner: self.inner.clone(),
             resources: self.resources.clone(),
+            state_version: self.state_version.clone(),
         }
     }
 }
@@ -337,6 +339,7 @@ impl ConversationBackgroundRegistry {
     /// Creates the background registry of one conversation.
     #[must_use]
     pub fn new(conversation_id: ConversationId, resources: BackgroundResources) -> Self {
+        let (state_version, _) = tokio::sync::watch::channel(0);
         Self {
             conversation_id,
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
@@ -348,7 +351,14 @@ impl ConversationBackgroundRegistry {
                 commit_hook: None,
             })),
             resources,
+            state_version,
         }
+    }
+
+    fn notify_state_change(&self) {
+        self.state_version.send_modify(|version| {
+            *version = version.saturating_add(1);
+        });
     }
 
     /// Installs the test-only synchronization hook at the dispatch
@@ -435,6 +445,8 @@ impl ConversationBackgroundRegistry {
             runner,
         };
         state.prepared.insert(execution_id.clone(), prepared);
+        drop(state);
+        self.notify_state_change();
         Ok(PreparedBackgroundDispatch {
             registry: self.clone(),
             execution_id,
@@ -490,6 +502,7 @@ impl ConversationBackgroundRegistry {
         state.index.insert(execution_id.clone(), next_index);
         state.records.push(prepared_record.record);
         drop(state);
+        self.notify_state_change();
         prepared.committed = true;
         prepared_record.gate.notify_one();
         BackgroundDispatchOutcome::Accepted {
@@ -526,6 +539,8 @@ impl ConversationBackgroundRegistry {
             | BackgroundLifecycle::Cancelled => {}
         }
         let snapshot = snapshot_of(record);
+        drop(state);
+        self.notify_state_change();
         Some(snapshot)
     }
 
@@ -634,6 +649,8 @@ impl ConversationBackgroundRegistry {
                 record.notification = NotificationState::Failed;
             }
         }
+        drop(state);
+        self.notify_state_change();
     }
 
     /// Updates the latest bounded progress snapshot of one execution and
@@ -666,6 +683,7 @@ impl ConversationBackgroundRegistry {
         if let Some(sink) = &self.resources.event_sink {
             sink.emit(event);
         }
+        self.notify_state_change();
     }
 
     /// The synchronized registry state.
@@ -691,6 +709,25 @@ impl ConversationBackgroundRegistry {
         let record = &mut state.records[index];
         if record.lifecycle == BackgroundLifecycle::Starting {
             record.lifecycle = BackgroundLifecycle::Running;
+            drop(state);
+            self.notify_state_change();
+        }
+    }
+
+    /// Waits for one execution to reach an absorbing terminal state using the
+    /// registry's exact state-change notification, not scheduler polling.
+    pub async fn wait_until_terminal(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        let mut version = self.state_version.subscribe();
+        loop {
+            if let Some(snapshot) = self.snapshot(execution_id)
+                && snapshot.state.is_terminal()
+            {
+                return Some(snapshot);
+            }
+            version.changed().await.ok()?;
         }
     }
 
@@ -1249,16 +1286,11 @@ mod tests {
         fixture: &TestRegistry,
         execution_id: &ToolExecutionId,
     ) -> super::BackgroundExecutionSnapshot {
-        // Polls the authoritative registry state itself (the very state
-        // under test) with a strict deadlock guard.
-        for _ in 0..400 {
-            let snapshot = fixture.registry.snapshot(execution_id).expect("snapshot");
-            if snapshot.state.is_terminal() {
-                return snapshot;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("execution never reached a terminal state");
+        fixture
+            .registry
+            .wait_until_terminal(execution_id)
+            .await
+            .expect("execution record")
     }
 
     /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the

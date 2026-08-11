@@ -79,7 +79,7 @@ fn conversation() -> Conversation {
     let artifacts = ArtifactStore::new(conversation_id.clone(), dir.path().join("artifacts"))
         .expect("artifacts");
     let background = ConversationBackgroundRegistry::new(
-        conversation_id,
+        conversation_id.clone(),
         BackgroundResources {
             mailbox,
             workspace: workspace.clone(),
@@ -91,6 +91,7 @@ fn conversation() -> Conversation {
     let backend = common::FakeSkillEnvironmentBackend::new();
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            conversation_id: conversation_id.clone(),
             workspace: workspace.clone(),
             tool_registry: Arc::new(ToolRegistry::new()),
             base_environment: ToolEnvironment::new(),
@@ -231,6 +232,12 @@ async fn published_identical_digest_is_reused_and_never_modified() {
     );
     let first = prepare_and_commit(&conversation.coordinator).await;
     let python = first.python_environment().expect("python env");
+    let wrapper = std::fs::read_to_string(python.root.join("bin/fake-tool")).expect("wrapper");
+    assert_eq!(
+        wrapper.lines().next(),
+        Some(format!("#!{}", python.root.join("bin/python").display()).as_str()),
+        "console-script shebang points at the final immutable environment path"
+    );
     let marker_before =
         std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)).expect("marker");
     let modified_before = std::fs::metadata(python.root.join("bin/python"))
@@ -288,7 +295,7 @@ async fn absolute_store_path_does_not_change_the_digest() {
         let conversation_id = ConversationId::new("conv-m6-two");
         let mailbox = ConversationInboundMailbox::new(conversation_id.clone());
         let background = ConversationBackgroundRegistry::new(
-            conversation_id,
+            conversation_id.clone(),
             BackgroundResources {
                 mailbox,
                 workspace: workspace.clone(),
@@ -305,6 +312,7 @@ async fn absolute_store_path_does_not_change_the_digest() {
         let backend = common::FakeSkillEnvironmentBackend::new();
         let coordinator = CapabilityCoordinator::with_backend(
             CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
                 workspace: workspace.clone(),
                 tool_registry: Arc::new(ToolRegistry::new()),
                 base_environment: ToolEnvironment::new(),
@@ -432,9 +440,9 @@ async fn materialization_failure_leaves_the_active_capability_unchanged() {
     }
 }
 
-/// Atomic publication is the only point at which a materialized
-/// environment becomes reusable: while materialization is gated, no digest
-/// directory exists; after publication it does.
+/// The ready-marker commit is the only point at which a Python environment
+/// becomes reusable: while materialization is gated, the final digest
+/// directory is incomplete; after publication its marker exists.
 #[tokio::test]
 async fn atomic_publication_is_the_only_reusable_point() {
     let conversation = conversation();
@@ -462,9 +470,16 @@ async fn atomic_publication_is_the_only_reusable_point() {
                 .into_owned()
         })
         .collect();
+    let digest_name = entries
+        .iter()
+        .find(|name| name.starts_with("sha256:"))
+        .expect("final digest directory is created before Python materialization completes");
     assert!(
-        !entries.iter().any(|name| !name.starts_with(".staging-")),
-        "no published environment exists before publication, got {entries:?}"
+        !store_root
+            .join(digest_name)
+            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
+            .exists(),
+        "an incomplete final-path environment has no reusable ready marker"
     );
     gate.release();
     prepare_task.await.expect("prepare task").expect("prepare");
@@ -478,11 +493,290 @@ async fn atomic_publication_is_the_only_reusable_point() {
                 .into_owned()
         })
         .collect();
+    let digest_name = entries
+        .iter()
+        .find(|name| name.starts_with("sha256:"))
+        .expect("published digest directory");
+    assert!(
+        store_root
+            .join(digest_name)
+            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
+            .is_file(),
+        "the ready marker is the Python publication boundary"
+    );
+}
+
+/// Node retains its independent staging-to-rename publication contract:
+/// materialization has a private staging directory and no final digest
+/// directory exists until the manifest and rename complete.
+#[tokio::test]
+async fn node_staging_is_published_by_atomic_rename() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "node-skill",
+        "Node skill.",
+        &[node_deps(r#"{"pdf-lib":"1.17.1"}"#)],
+    );
+    let gate = conversation.backend.install_materialize_gate();
+    let node_root = conversation.dir.path().join("skill-env").join("node");
+    let prepare = {
+        let coordinator = conversation.coordinator.clone();
+        tokio::spawn(async move { coordinator.prepare_candidate().await })
+    };
+    gate.await_entered().await;
+
+    let entries = std::fs::read_dir(&node_root)
+        .expect("node store")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect::<Vec<_>>();
     assert!(
         entries
             .iter()
-            .any(|name| name.starts_with("sha256:") && !name.starts_with(".staging-")),
-        "the environment becomes reusable only after atomic publication, got {entries:?}"
+            .any(|name| name.to_string_lossy().starts_with(".staging-")),
+        "Node materialization uses a private staging directory"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|name| name.to_string_lossy().starts_with("sha256:")),
+        "Node final digest is not visible before rename"
+    );
+
+    gate.release();
+    let candidate = prepare.await.expect("prepare task").expect("prepare");
+    let node = candidate.node_environment().expect("Node environment");
+    assert!(node.root.is_dir());
+    assert!(
+        node.root
+            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
+            .is_file()
+    );
+    assert!(
+        std::fs::read_dir(&node_root)
+            .expect("node store")
+            .all(|entry| {
+                !entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".staging-")
+            }),
+        "published Node staging is consumed by rename"
+    );
+}
+
+/// Same-digest preparations share one in-process build owner. The barrier
+/// proves the two preparations overlap while only one Python materialization
+/// is active; both callers then receive the same immutable identities.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_digest_preparations_coalesce_for_python_and_node() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[
+            python_deps(r#"{"pypdf":"5.9.0"}"#),
+            node_deps(r#"{"pdf-lib":"1.17.1"}"#),
+        ],
+    );
+    let gate = conversation.backend.install_materialize_gate();
+    let first_coordinator = conversation.coordinator.clone();
+    let second_coordinator = conversation.coordinator.clone();
+    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
+    let second = tokio::spawn(async move { second_coordinator.prepare_candidate().await });
+    gate.await_entered().await;
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1,
+        "one caller owns the overlapping Python build"
+    );
+    gate.release();
+    let first = first.await.expect("first task").expect("first prepare");
+    let second = second.await.expect("second task").expect("second prepare");
+    assert_eq!(
+        first
+            .python_environment()
+            .expect("Python environment")
+            .digest,
+        second
+            .python_environment()
+            .expect("Python environment")
+            .digest
+    );
+    assert_eq!(
+        first.node_environment().expect("Node environment").digest,
+        second.node_environment().expect("Node environment").digest
+    );
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1
+    );
+    assert_eq!(
+        conversation.backend.materialization_count(Ecosystem::Node),
+        1,
+        "the same generic build coordination covers Node"
+    );
+}
+
+/// An owning same-digest build failure is shared by overlapping waiters, and
+/// a later retry can acquire ownership and publish normally.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn same_digest_build_failure_propagates_and_retry_recovers() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    conversation
+        .backend
+        .fail_python_materialization("injected same-digest failure");
+    let gate = conversation.backend.install_materialize_gate();
+    let first_coordinator = conversation.coordinator.clone();
+    let second_coordinator = conversation.coordinator.clone();
+    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
+    let second = tokio::spawn(async move { second_coordinator.prepare_candidate().await });
+    gate.await_entered().await;
+    gate.release();
+    assert!(first.await.expect("first task").is_err());
+    assert!(second.await.expect("second task").is_err());
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1
+    );
+    let retry = conversation
+        .coordinator
+        .prepare_candidate()
+        .await
+        .expect("retry can build after the failed owner");
+    assert!(!retry.skill_packages().is_empty());
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        2
+    );
+}
+
+#[test]
+fn environment_store_inside_workspace_is_rejected_before_creation() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let workspace = Workspace::new(&workspace_root).expect("workspace");
+    let store = workspace.root().join("private-env");
+    let Err(error) = CapabilityCoordinator::with_backend(
+        CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-isolation"),
+            workspace,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: store.clone(),
+        },
+        Arc::new(common::FakeSkillEnvironmentBackend::new()),
+    ) else {
+        panic!("nested store must be rejected")
+    };
+    assert!(matches!(
+        error,
+        CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace { .. }
+    ));
+    assert!(!store.exists(), "rejected creation must leave no store");
+}
+
+#[test]
+fn workspace_inside_environment_store_is_rejected() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store = dir.path().join("private-env");
+    let workspace_root = store.join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let workspace = Workspace::new(&workspace_root).expect("workspace");
+    let Err(error) = CapabilityCoordinator::with_backend(
+        CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-isolation"),
+            workspace,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: store,
+        },
+        Arc::new(common::FakeSkillEnvironmentBackend::new()),
+    ) else {
+        panic!("workspace containing the store must be rejected")
+    };
+    assert!(matches!(
+        error,
+        CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace { .. }
+    ));
+}
+
+#[test]
+fn external_environment_store_is_accepted() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    let workspace = Workspace::new(&workspace_root).expect("workspace");
+    let store = dir.path().join("external").join("private-env");
+    let coordinator = CapabilityCoordinator::with_backend(
+        CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-isolation"),
+            workspace,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: store.clone(),
+        },
+        Arc::new(common::FakeSkillEnvironmentBackend::new()),
+    )
+    .expect("external store");
+    assert!(
+        coordinator
+            .current_snapshot()
+            .workspace_root()
+            .is_absolute()
+    );
+    assert!(store.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_prefix_environment_store_is_rejected_before_creation() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let workspace_root = dir.path().join("workspace");
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&workspace_root).expect("workspace");
+    std::fs::create_dir_all(&outside).expect("outside");
+    symlink(&workspace_root, outside.join("link")).expect("link");
+    let workspace = Workspace::new(&workspace_root).expect("workspace");
+    let configured = outside.join("link/private-env");
+    let Err(error) = CapabilityCoordinator::with_backend(
+        CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-isolation"),
+            workspace,
+            tool_registry: Arc::new(ToolRegistry::new()),
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: configured,
+        },
+        Arc::new(common::FakeSkillEnvironmentBackend::new()),
+    ) else {
+        panic!("symlink-prefix escape must be rejected")
+    };
+    assert!(matches!(
+        error,
+        CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace { .. }
+    ));
+    assert!(
+        !workspace_root.join("private-env").exists(),
+        "rejected symlink-prefix configuration must not create inside Workspace"
     );
 }
 
@@ -980,17 +1274,11 @@ async fn background_execution_retains_its_dispatching_environment() {
 }
 
 async fn wait_for_terminal(conversation: &Conversation, execution_id: &ToolExecutionId) {
-    for _ in 0..400 {
-        let snapshot = conversation
-            .background
-            .snapshot(execution_id)
-            .expect("snapshot");
-        if snapshot.state.is_terminal() {
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-    panic!("background execution never reached a terminal state");
+    conversation
+        .background
+        .wait_until_terminal(execution_id)
+        .await
+        .expect("background execution must remain registered");
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1311,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let tools = Arc::new(tools);
     let coordinator = CapabilityCoordinator::with_backend(
         CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("conv-m6"),
             workspace: conversation.workspace.clone(),
             tool_registry: tools.clone(),
             base_environment: ToolEnvironment::new(),
@@ -1071,10 +1360,17 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             }),
         ],
     ]);
-    let tool_runtime = common::tool_runtime_with_mailbox(
-        "conv-m6",
-        conversation.background.resources().mailbox.clone(),
-    );
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        ConversationId::new("conv-m6"),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            mailbox: Some(conversation.background.resources().mailbox.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                conversation.workspace.root(),
+                conversation.dir.path().join("agent-artifacts"),
+            )
+        },
+    )
+    .expect("tool runtime");
     let cancellation = rustx::agent::AgentCancellation::new(
         rustx::runtime::types::CancellationReason::UserRequested,
     );

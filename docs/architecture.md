@@ -895,12 +895,15 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   architecture, resolved runtime identity, resolved package-manager
   identity, sorted normalized dependency map), never including
   workspace/store/staging paths, time, or random values. Environments live
-  in a caller-configured runtime-private store disjoint from the
-  Workspace, are materialized through the shared supervised process runner
-  (staging -> materialize -> validate -> deterministic manifest -> atomic
-  rename -> immutable digest directory), are reused only when the published
-  manifest matches the expected digest inputs, and are never installed into
-  again.
+  in a caller-configured runtime-private store disjoint from the Workspace
+  using canonical, symlink-safe prospective-path validation before creation.
+  Python is built directly at its final digest directory and becomes
+  reusable only when its exact deterministic manifest is atomically committed
+  as the ready marker; Node uses private staging followed by atomic rename.
+  Both are reused only when the committed manifest matches the expected
+  digest inputs, and neither is installed into again. Same-process
+  preparations of one ecosystem/digest coalesce behind one in-flight build
+  owner.
 - **Catalog.** The model-visible catalog is rendered compactly from the
   attempt's immutable Skill snapshot: the common `.agents/skills/` root
   once, then `- <name>: <description>` per validated Skill in
@@ -947,6 +950,11 @@ generic runtime supervisor:
   identity and path when present, and the effective `ToolEnvironment`
   (base authorized environment plus the deterministic Skill environment
   overlay).
+- **Capability owner identity.** A `CapabilityCoordinator` is explicitly
+  conversation-owned and records the canonical Workspace root with its
+  `ConversationId`. An attempt lease can only be passed to a
+  `ConversationToolRuntime` with the same conversation/workspace ownership
+  domain; construction rejects a mismatch before model or tool execution.
 - **Attempt capability lease.** An `AgentExecution` structurally holds one
   RAII lease pinning one immutable snapshot for its complete lifetime; no
   model turn re-discovers Skills or re-queries the conversation capability

@@ -193,9 +193,15 @@ hold attempt leases and never block a capability commit.
   scheduler's concern, not part of the M6 commit guard.
 
 Capability environments are prepared and validated before an atomic
-revision swap. Published digest environments are immutable: they are
-reused only when their deterministic manifest matches the expected digest
-inputs and are never installed into again.
+revision swap. The prospective canonical environment-store path is checked
+against the canonical Workspace before any directory is created, including
+through symlinked existing ancestors. Python environments are built at their
+final digest path and become reusable only after an exact deterministic ready
+manifest is atomically committed; Node environments use private staging and
+atomic rename. Same-process preparations of one ecosystem/digest coalesce,
+and published digest environments are immutable: they are reused only when
+their committed manifest matches the expected digest inputs and are never
+installed into again.
 
 **Workspace-file limitation.** Capability metadata and environment
 identities are snapshotted, but lazy Skill source files

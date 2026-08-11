@@ -306,9 +306,12 @@ Implemented:
   merge/conflict detection before any package-manager subprocess
 - One shared Python environment and one shared Node environment per
   capability set, with distinct `PythonEnvironmentDigest` /
-  `NodeEnvironmentDigest` identities, staging + deterministic-manifest +
-  atomic-rename publication in a runtime-private store, and immutable
-  published environments
+  `NodeEnvironmentDigest` identities. Python is built directly at its final
+  digest path and becomes reusable only after an exact deterministic ready
+  manifest is atomically committed; Node uses private staging followed by
+  atomic rename. Both are immutable after publication in a canonical,
+  symlink-safe runtime-private store, and same-process preparations of one
+  ecosystem/digest coalesce behind one in-flight build owner.
 - Scripts, references, and assets layout, executed through native
   Read/Bash against the Workspace (no `skill_search`/`activate_skill`/
   `skill_view`/`run_skill`/`run_skill_script`)

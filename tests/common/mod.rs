@@ -648,6 +648,7 @@ pub async fn capability_lease(
     let dir = tempfile::tempdir().expect("capability temp dir");
     let coordinator = rustx::capabilities::CapabilityCoordinator::new(
         rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             tool_registry: std::sync::Arc::new(tools),
             base_environment: tool_runtime.environment().clone(),
@@ -679,7 +680,7 @@ pub enum BackendCall {
     ResolvePython,
     /// A runtime version resolution.
     ResolveNode,
-    /// A Python environment materialization into a staging directory.
+    /// A Python environment materialization directly into its final digest directory.
     MaterializePython,
     /// A Node environment materialization into a staging directory.
     MaterializeNode,
@@ -879,19 +880,28 @@ impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
 
     fn materialize_python<'a>(
         &'a self,
-        staging: &'a std::path::Path,
+        environment_dir: &'a std::path::Path,
         _dependencies: &'a std::collections::BTreeMap<String, String>,
     ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             self.record(BackendCall::MaterializePython);
+            self.gate().await;
             if let Some(message) = self.inner.python_failure.lock().expect("fake lock").take() {
                 return Err(message);
             }
-            self.gate().await;
-            std::fs::create_dir_all(staging.join("bin")).map_err(|error| error.to_string())?;
-            std::fs::write(staging.join("bin").join("python"), b"#!fake python\n")
+            std::fs::create_dir_all(environment_dir.join("bin"))
                 .map_err(|error| error.to_string())?;
-            std::fs::create_dir_all(staging.join("lib/python3.12/site-packages"))
+            std::fs::write(
+                environment_dir.join("bin").join("python"),
+                b"#!fake python\n",
+            )
+            .map_err(|error| error.to_string())?;
+            std::fs::write(
+                environment_dir.join("bin").join("fake-tool"),
+                format!("#!{}\n", environment_dir.join("bin/python").display()),
+            )
+            .map_err(|error| error.to_string())?;
+            std::fs::create_dir_all(environment_dir.join("lib/python3.12/site-packages"))
                 .map_err(|error| error.to_string())?;
             Ok(())
         })
@@ -904,10 +914,10 @@ impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
     ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             self.record(BackendCall::MaterializeNode);
+            self.gate().await;
             if let Some(message) = self.inner.node_failure.lock().expect("fake lock").take() {
                 return Err(message);
             }
-            self.gate().await;
             std::fs::create_dir_all(staging.join("node_modules/.bin"))
                 .map_err(|error| error.to_string())?;
             std::fs::write(
