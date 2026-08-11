@@ -373,10 +373,10 @@ impl<'a> AgentExecution<'a> {
                 // next model turn. Tests park here to make cancellation
                 // observable deterministically between turns.
                 #[cfg(test)]
-                if terminal.is_none() {
-                    if let Some(pause) = &self.continuation_pause {
-                        pause.park_at_continuation_boundary();
-                    }
+                if terminal.is_none()
+                    && let Some(pause) = &self.continuation_pause
+                {
+                    pause.park_at_continuation_boundary();
                 }
             }
             terminal.expect("the attempt must settle")
@@ -2120,7 +2120,8 @@ mod tests {
             crate::capabilities::CapabilityCoordinatorConfig {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
-                tool_registry: tools,
+                base_tool_registry: tools,
+                mcp_servers: Vec::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("env-store"),
             },

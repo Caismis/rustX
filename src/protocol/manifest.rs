@@ -7,8 +7,9 @@
 //! starts, and that snapshot is immutable for the attempt's lifetime.
 //!
 //! M1 establishes the boundary with the smallest typed representation
-//! needed; capability mutation, skill materialization, and MCP binding logic
-//! are later milestones. No TypeScript/control-plane model is imported.
+//! needed; capability mutation, Skill materialization, and external MCP/Python
+//! binding provenance are runtime-owned. No TypeScript/control-plane model is
+//! imported.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +17,11 @@ use crate::model::types::{ModelProtocol, ReasoningEffort};
 use crate::runtime::identity::{
     AgentId, AgentVersionId, CapabilityRevision, McpServerId, SkillId, SkillVersionId, ToolId,
 };
+use crate::tools::types::ToolOrigin;
 
-/// The current schema version of [`RuntimeManifest`].
-pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
+/// The current schema version of [`RuntimeManifest`]. M7 version 2 adds
+/// provider-independent `ToolOrigin` provenance to every tool binding.
+pub const MANIFEST_SCHEMA_VERSION: u16 = 2;
 
 /// The immutable execution description of one attempt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,9 +67,8 @@ pub struct ModelManifest {
 
 /// The capability set observed by an attempt.
 ///
-/// Skill and MCP binding data is not yet frozen by later milestones; these
-/// bindings are the smallest typed runtime-owned representation that
-/// establishes the manifest boundary.
+/// Skill, MCP, and Python binding data is the typed runtime-owned provenance
+/// projection of one immutable capability revision.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilitiesManifest {
     /// Monotonic capability revision snapshot by the attempt.
@@ -98,6 +100,8 @@ pub struct ToolBinding {
     pub tool_id: ToolId,
     /// Stable tool name.
     pub name: String,
+    /// Provider-independent origin and immutable provenance.
+    pub origin: ToolOrigin,
 }
 
 /// An MCP server bound into the capability set.
@@ -172,6 +176,7 @@ mod tests {
                 tools: vec![ToolBinding {
                     tool_id: ToolId::new("tool-bash"),
                     name: "bash".to_owned(),
+                    origin: crate::tools::types::ToolOrigin::Builtin,
                 }],
                 mcp: vec![McpBinding {
                     server_id: McpServerId::new("mcp-fs"),
@@ -206,6 +211,6 @@ mod tests {
     #[test]
     fn manifest_schema_version_is_explicit() {
         let value = serde_json::to_value(example_manifest()).expect("serialize manifest");
-        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["schema_version"], 2);
     }
 }

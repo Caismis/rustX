@@ -3,7 +3,7 @@
 //! M1 defined the declarative tool data contracts in [`crate::tools::types`];
 //! M3 added the runtime-owned execution contract; M5 replaces the
 //! provisional `Tool` trait with the canonical [`ToolExecutor`] boundary that
-//! native tools use now and MCP/Python executors reuse later. The agent loop
+//! native, MCP, and Python tools share this boundary. The agent loop
 //! (M3) owns scheduling: it preflights every model-issued [`ToolCall`]
 //! against the [`ToolRegistry`] (identity resolution, execution-policy
 //! resolution, runtime metadata extraction, business argument validation)
@@ -14,7 +14,7 @@
 //! The registry owns the definition/executor relationship: one
 //! [`ToolDefinition`] is paired with one `Arc<dyn ToolExecutor>` at
 //! registration. An executor object does not own its definition, so one
-//! implementation object (for example a future MCP executor) may serve
+//! implementation object may serve
 //! multiple registered definitions.
 //!
 //! There is no plugin framework, no dynamic loading, and no speculative
@@ -208,6 +208,27 @@ pub struct ToolRegistry {
     by_name: HashMap<String, usize>,
 }
 
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ToolRegistry")
+            .field("definitions", &self.definitions())
+            .finish()
+    }
+}
+
+impl Clone for ToolRegistry {
+    fn clone(&self) -> Self {
+        let mut clone = Self::new();
+        for entry in &self.entries {
+            clone
+                .register(entry.definition.clone(), entry.executor.clone())
+                .expect("a validated registry clones without registration errors");
+        }
+        clone
+    }
+}
+
 /// One registered definition/executor pair.
 struct RegistryEntry {
     definition: ToolDefinition,
@@ -290,6 +311,26 @@ impl ToolRegistry {
             executor,
         });
         Ok(())
+    }
+
+    /// Composes a new registry from this immutable base and additional
+    /// definitions. The base entries retain their deterministic order and
+    /// external callers must provide their entries in their canonical order.
+    /// Registration remains the single validation and collision boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a registry error if an added definition duplicates an id or
+    /// model-facing name, or violates the canonical schema contract.
+    pub fn compose(
+        &self,
+        additions: impl IntoIterator<Item = (ToolDefinition, Arc<dyn ToolExecutor>)>,
+    ) -> Result<Self, ToolRegistryError> {
+        let mut composed = self.clone();
+        for (definition, executor) in additions {
+            composed.register(definition, executor)?;
+        }
+        Ok(composed)
     }
 
     /// The canonical definitions of every registered tool in registration

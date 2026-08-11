@@ -11,7 +11,8 @@ use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_MODEL_TOOL_RESULT_BYTES, bounded_text_preview};
-use crate::tools::native::{NativeToolPolicy, native_definition};
+use crate::tools::native::native_definition;
+use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{
     ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolResultContent,
     TruncationState,
@@ -22,7 +23,7 @@ pub const NAME: &str = "read";
 
 /// The canonical business schema of the tool.
 #[must_use]
-pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
+pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
     native_definition(
         "tool-read",
         NAME,

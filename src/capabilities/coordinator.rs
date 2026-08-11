@@ -1,14 +1,15 @@
 //! The capability coordinator: preparation, quiescent commit, and attempt
 //! leases (M6).
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::runtime::identity::{CapabilityRevision, ConversationId};
+use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
@@ -16,6 +17,8 @@ use crate::skills::environments::{
 use crate::skills::{SkillDiscovery, SkillSnapshot, merge_dependency_manifests};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::ToolRegistry;
+use crate::tools::mcp::{McpServerConfig, McpServerRuntime};
+use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
 
 /// The coordinator configuration of one conversation/capability owner.
@@ -25,8 +28,10 @@ pub struct CapabilityCoordinatorConfig {
     pub conversation_id: ConversationId,
     /// The canonical conversation Workspace (the Skill root anchor).
     pub workspace: Workspace,
-    /// The immutable `ToolRegistry` handle of the capability set.
-    pub tool_registry: Arc<ToolRegistry>,
+    /// The deterministic native/runtime registry used as the composition base.
+    pub base_tool_registry: Arc<ToolRegistry>,
+    /// The immutable configured MCP server set for this coordinator.
+    pub mcp_servers: Vec<McpServerConfig>,
     /// The base authorized `ToolEnvironment` (without Skill overlays).
     pub base_environment: ToolEnvironment,
     /// The caller-configured runtime-private environment store root,
@@ -48,7 +53,11 @@ struct CoordinatorState {
 struct CoordinatorInner {
     conversation_id: ConversationId,
     workspace: Workspace,
-    tool_registry: Arc<ToolRegistry>,
+    base_tool_registry: Arc<ToolRegistry>,
+    mcp_servers: Vec<McpServerConfig>,
+    mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
+    mcp_epoch_sources: Mutex<BTreeMap<McpServerId, Arc<AtomicU64>>>,
+    python_store: PythonToolStore,
     base_environment: ToolEnvironment,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -88,6 +97,8 @@ pub struct PreparedCapabilityCandidate {
     python: Option<crate::skills::environments::PythonEnvironment>,
     node: Option<crate::skills::environments::NodeEnvironment>,
     effective_environment: ToolEnvironment,
+    candidate_registry: Arc<ToolRegistry>,
+    mcp_epochs: BTreeMap<McpServerId, u64>,
 }
 
 impl PreparedCapabilityCandidate {
@@ -165,12 +176,25 @@ impl CapabilityCoordinator {
                 },
             );
         }
+        let mut server_ids = std::collections::BTreeSet::new();
+        for server in &config.mcp_servers {
+            if server.server_id.as_str().is_empty() || !server_ids.insert(server.server_id.clone())
+            {
+                return Err(CapabilityPreparationError::Mcp(
+                    "MCP server ids must be non-empty and unique".to_owned(),
+                ));
+            }
+        }
+        let mut mcp_servers = config.mcp_servers;
+        mcp_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+        let python_store = PythonToolStore::new(environment_store.root().join("m7-tools"))
+            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
             config.workspace.root().to_path_buf(),
             CapabilityRevision::default(),
-            config.tool_registry.clone(),
+            config.base_tool_registry.clone(),
             initial_skills,
             None,
             None,
@@ -180,7 +204,11 @@ impl CapabilityCoordinator {
             inner: Arc::new(CoordinatorInner {
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
-                tool_registry: config.tool_registry,
+                base_tool_registry: config.base_tool_registry,
+                mcp_servers,
+                mcp_runtimes: tokio::sync::Mutex::new(BTreeMap::new()),
+                mcp_epoch_sources: Mutex::new(BTreeMap::new()),
+                python_store,
                 base_environment: config.base_environment,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -229,6 +257,7 @@ impl CapabilityCoordinator {
     ///
     /// Panics only if the capability state lock is poisoned, which would
     /// mean a previous operation panicked while holding the lock.
+    #[allow(clippy::too_many_lines)]
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
@@ -261,12 +290,99 @@ impl CapabilityCoordinator {
         let skills = Arc::new(SkillSnapshot::new(
             packages.into_iter().map(Arc::new).collect(),
         ));
+        let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
+            .discover()
+            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+        let mut python_tools = Vec::new();
+        for package in python_packages {
+            let published = self
+                .inner
+                .python_store
+                .publish(&package)
+                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+            let environment = self
+                .inner
+                .python_store
+                .ensure_environment(&published)
+                .await
+                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+            let executor = Arc::new(
+                PythonToolExecutor::new(&self.inner.python_store, published, environment)
+                    .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?,
+            );
+            python_tools.push((
+                crate::tools::types::ToolDefinition {
+                    id: crate::runtime::identity::ToolId::new(
+                        crate::tools::python::python_tool_id(&package.name),
+                    ),
+                    name: package.name,
+                    description: package.description,
+                    input_schema: package.input_schema,
+                    execution_policy: package.policy.execution,
+                    concurrency_policy: package.policy.concurrency,
+                    replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+                    origin: crate::tools::types::ToolOrigin::Python {
+                        tool_version_id: package.tool_version_id,
+                    },
+                },
+                executor as Arc<dyn crate::tools::executor::ToolExecutor>,
+            ));
+        }
+        let mut mcp_tools = Vec::new();
+        let mut mcp_epochs = BTreeMap::new();
+        for server in &self.inner.mcp_servers {
+            let mut runtimes = self.inner.mcp_runtimes.lock().await;
+            let runtime = if let Some(runtime) = runtimes.get(&server.server_id) {
+                runtime.clone()
+            } else {
+                let epoch = Arc::new(AtomicU64::new(0));
+                let epoch_source = epoch.clone();
+                let runtime = McpServerRuntime::connect(server, &self.inner.workspace, epoch)
+                    .await
+                    .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+                self.inner
+                    .mcp_epoch_sources
+                    .lock()
+                    .expect("MCP epoch source lock")
+                    .insert(server.server_id.clone(), epoch_source);
+                runtimes.insert(server.server_id.clone(), runtime.clone());
+                runtime
+            };
+            drop(runtimes);
+            let epoch_before = runtime.change_epoch();
+            let tools = runtime
+                .list_tools()
+                .await
+                .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+            let epoch_after = runtime.change_epoch();
+            if epoch_before != epoch_after {
+                return Err(CapabilityPreparationError::Mcp(
+                    "MCP tool catalog changed during discovery".to_owned(),
+                ));
+            }
+            mcp_epochs.insert(server.server_id.clone(), epoch_after);
+            mcp_tools.extend(crate::tools::mcp::definitions(
+                &server.server_id,
+                server.policy,
+                &runtime,
+                tools,
+            ));
+        }
+        mcp_tools.extend(python_tools);
+        let candidate_registry = Arc::new(
+            self.inner
+                .base_tool_registry
+                .compose(mcp_tools)
+                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
+        );
         Ok(PreparedCapabilityCandidate {
             base_revision,
             skills,
             python,
             node,
             effective_environment,
+            candidate_registry,
+            mcp_epochs,
         })
     }
 
@@ -319,6 +435,20 @@ impl CapabilityCoordinator {
         if state.active_attempts > 0 {
             return Err(CapabilityCommitError::Busy);
         }
+        for (server_id, candidate_epoch) in &candidate.mcp_epochs {
+            let current_epoch = self
+                .inner
+                .mcp_epoch_sources
+                .lock()
+                .expect("MCP epoch source lock")
+                .get(server_id)
+                .map_or(*candidate_epoch, |epoch| epoch.load(Ordering::Acquire));
+            if current_epoch != *candidate_epoch {
+                return Err(CapabilityCommitError::StaleMcpCandidate {
+                    server_id: server_id.clone(),
+                });
+            }
+        }
         if candidate_is_noop(&candidate, &state.snapshot) {
             return Ok(state.snapshot.clone());
         }
@@ -327,7 +457,7 @@ impl CapabilityCoordinator {
             self.inner.conversation_id.clone(),
             self.inner.workspace.root().to_path_buf(),
             revision,
-            self.inner.tool_registry.clone(),
+            candidate.candidate_registry,
             candidate.skills,
             candidate.python,
             candidate.node,
@@ -470,6 +600,7 @@ fn candidate_is_noop(
     current: &CapabilitySnapshot,
 ) -> bool {
     candidate.skills.bindings() == current.skills().bindings()
+        && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.python.as_ref().map(|env| env.digest.clone())
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())
@@ -611,7 +742,8 @@ body
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
         })

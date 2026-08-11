@@ -404,13 +404,13 @@ impl FreshInboundTurn {
                 .iter()
                 .position(|message| message_id_of(message) == *id)
                 .ok_or_else(|| FreshInboundError::UnknownMessage(id.clone()))?;
-            if let Some(previous) = previous_position {
-                if position <= previous {
-                    return Err(FreshInboundError::OutOfCanonicalOrder {
-                        previous: message_id_of(&history[previous]),
-                        next: id.clone(),
-                    });
-                }
+            if let Some(previous) = previous_position
+                && position <= previous
+            {
+                return Err(FreshInboundError::OutOfCanonicalOrder {
+                    previous: message_id_of(&history[previous]),
+                    next: id.clone(),
+                });
             }
             let message = &history[position];
             match message {

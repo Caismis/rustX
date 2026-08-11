@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "runtime_version": "0.1.0",
   "agent": {
     "id": "agent-a",
@@ -22,11 +22,13 @@
     "tools": [
       {
         "tool_id": "tool-bash",
-        "name": "bash"
+        "name": "bash",
+        "origin": "builtin"
       },
       {
         "tool_id": "tool-list",
-        "name": "list_directory"
+        "name": "list_directory",
+        "origin": "builtin"
       }
     ],
     "mcp": [

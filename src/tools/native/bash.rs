@@ -146,8 +146,9 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
 };
+use crate::tools::native::native_definition;
 use crate::tools::native::support::failed_result;
-use crate::tools::native::{NativeToolPolicy, native_definition};
+use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{
     ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
     ToolResultContent, TruncationState,
@@ -158,7 +159,7 @@ pub const NAME: &str = "bash";
 
 /// The canonical business schema of the tool.
 #[must_use]
-pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
+pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
     native_definition(
         "tool-bash",
         NAME,

@@ -1209,8 +1209,8 @@ mod tests {
                 let message = format!("{}😀", "x".repeat(1024));
                 context.progress.report(ToolProgress {
                     message: Some(message),
-                    completed: Some(1),
-                    total: Some(2),
+                    completed: Some(1.0),
+                    total: Some(2.0),
                 });
                 Box::pin(async move { success() })
             }
@@ -1266,8 +1266,8 @@ mod tests {
             message.len() <= crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES,
             "the snapshot message is bounded"
         );
-        assert_eq!(progress.completed, Some(1));
-        assert_eq!(progress.total, Some(2));
+        assert_eq!(progress.completed, Some(1.0));
+        assert_eq!(progress.total, Some(2.0));
         let progress_events = sink
             .as_ref()
             .events()

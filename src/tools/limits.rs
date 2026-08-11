@@ -46,6 +46,11 @@ pub fn bounded_preview(data: &[u8], limit: usize) -> (Vec<u8>, bool) {
         return (data.to_vec(), false);
     }
     let marker = format!("\n...[truncated {} bytes]...\n", data.len() - limit);
+    if marker.len() >= limit {
+        let mut marker = marker.into_bytes();
+        marker.truncate(limit);
+        return (marker, true);
+    }
     let content = limit.saturating_sub(marker.len());
     let head = content / 2;
     let tail = content - head;
@@ -119,8 +124,8 @@ mod tests {
     fn ascii_at_the_boundary_is_preserved() {
         let progress = ToolProgress {
             message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES)),
-            completed: Some(1),
-            total: Some(2),
+            completed: Some(1.0),
+            total: Some(2.0),
         };
         let bounded = bound_tool_progress(progress.clone());
         assert_eq!(
@@ -128,8 +133,8 @@ mod tests {
             MAX_PROGRESS_MESSAGE_BYTES
         );
         assert_eq!(bounded.message, progress.message);
-        assert_eq!(bounded.completed, Some(1));
-        assert_eq!(bounded.total, Some(2));
+        assert_eq!(bounded.completed, Some(1.0));
+        assert_eq!(bounded.total, Some(2.0));
     }
 
     /// ASCII crossing the boundary is truncated to the bound.
@@ -182,21 +187,21 @@ mod tests {
     fn normalization_is_deterministic_and_preserves_counts() {
         let progress = ToolProgress {
             message: Some("y".repeat(MAX_PROGRESS_MESSAGE_BYTES + 5)),
-            completed: Some(7),
-            total: Some(9),
+            completed: Some(7.0),
+            total: Some(9.0),
         };
         let first = bound_tool_progress(progress.clone());
         let second = bound_tool_progress(progress);
         assert_eq!(first, second);
-        assert_eq!(first.completed, Some(7));
-        assert_eq!(first.total, Some(9));
+        assert_eq!(first.completed, Some(7.0));
+        assert_eq!(first.total, Some(9.0));
         let none_message = bound_tool_progress(ToolProgress {
             message: None,
-            completed: Some(3),
-            total: Some(4),
+            completed: Some(3.0),
+            total: Some(4.0),
         });
         assert_eq!(none_message.message, None);
-        assert_eq!(none_message.completed, Some(3));
-        assert_eq!(none_message.total, Some(4));
+        assert_eq!(none_message.completed, Some(3.0));
+        assert_eq!(none_message.total, Some(4.0));
     }
 }

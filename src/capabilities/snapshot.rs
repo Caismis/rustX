@@ -1,4 +1,4 @@
-//! The immutable active capability snapshot (M6).
+//! The immutable active capability snapshot.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,9 +26,8 @@ use crate::tools::executor::ToolRegistry;
 ///
 /// The snapshot is fully immutable: an attempt uses exactly this snapshot
 /// for its complete lifetime, and Skill candidates never mutate it. The
-/// `ToolRegistry` handle is the same immutable registry of the attempt's
-/// capability set (see `tools::executor::ToolRegistry`); M6 candidates
-/// reuse the same handle, which is the M7 seam without implementing M7.
+/// The `ToolRegistry` handle is the immutable registry for this exact
+/// capability revision; a later candidate owns a different registry handle.
 #[derive(Clone)]
 pub struct CapabilitySnapshot {
     conversation_id: ConversationId,
@@ -43,14 +42,15 @@ pub struct CapabilitySnapshot {
 }
 
 /// Two snapshots are equal when their capability content is equal: the
-/// revision, the Skill snapshot, the environment identities, and the
-/// effective environment. The shared immutable `ToolRegistry` handle is not
-/// part of the equality (it is the same handle across candidates).
+/// revision, ordered canonical tool definitions, Skill snapshot, environment
+/// identities, and effective environment. Executor pointer identity is not
+/// compared.
 impl PartialEq for CapabilitySnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.conversation_id == other.conversation_id
             && self.workspace_root == other.workspace_root
             && self.revision == other.revision
+            && self.tool_registry.definitions() == other.tool_registry.definitions()
             && self.skills == other.skills
             && self.python_environment == other.python_environment
             && self.node_environment == other.node_environment
@@ -184,9 +184,21 @@ impl CapabilitySnapshot {
                 .map(|definition| crate::protocol::manifest::ToolBinding {
                     tool_id: definition.id.clone(),
                     name: definition.name.clone(),
+                    origin: definition.origin.clone(),
                 })
                 .collect(),
-            mcp: Vec::new(),
+            mcp: self
+                .tool_registry
+                .definitions()
+                .into_iter()
+                .filter_map(|definition| match definition.origin {
+                    crate::tools::types::ToolOrigin::Mcp { server_id } => Some(server_id),
+                    _ => None,
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .map(|server_id| crate::protocol::manifest::McpBinding { server_id })
+                .collect(),
         }
     }
 }

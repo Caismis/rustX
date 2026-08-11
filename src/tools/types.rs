@@ -6,8 +6,8 @@
 //! executors. The canonical [`ToolDefinition`] is tool-owned and carries the
 //! two independent execution policy axes; the provider-neutral compiled
 //! [`ModelToolDefinition`] is what actually reaches a model request.
-//! Execution scheduling and executors are runtime-owned (M3+); MCP and
-//! Python executors reuse the same contract in later milestones. No external
+//! Execution scheduling and executors are runtime-owned (M3+); native, MCP,
+//! and Python executors reuse the same contract. No external
 //! SDK type appears here.
 
 use serde::{Deserialize, Serialize};
@@ -97,6 +97,37 @@ pub enum ToolConcurrencyPolicy {
     Sequential,
     /// Multiple adjacent calls may execute concurrently.
     Parallel,
+}
+
+/// The two origin-independent policy axes attached to an external tool
+/// configuration. Native tools use the concrete `NativeToolPolicies` table;
+/// MCP servers and Python manifests carry this value directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolInvocationPolicy {
+    /// Foreground/background ownership policy.
+    pub execution: ToolExecutionPolicy,
+    /// In-batch scheduling policy.
+    pub concurrency: ToolConcurrencyPolicy,
+}
+
+impl Default for ToolInvocationPolicy {
+    fn default() -> Self {
+        Self::new(
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        )
+    }
+}
+
+impl ToolInvocationPolicy {
+    /// Creates a policy from the two canonical axes.
+    #[must_use]
+    pub const fn new(execution: ToolExecutionPolicy, concurrency: ToolConcurrencyPolicy) -> Self {
+        Self {
+            execution,
+            concurrency,
+        }
+    }
 }
 
 /// The resolved execution ownership of one canonical invocation.
@@ -274,17 +305,17 @@ pub struct TruncationState {
 /// message text is bounded by [`MAX_PROGRESS_MESSAGE_BYTES`].
 ///
 /// [`MAX_PROGRESS_MESSAGE_BYTES`]: crate::tools::limits::MAX_PROGRESS_MESSAGE_BYTES
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ToolProgress {
     /// A short human-readable progress message, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     /// Completed units, when a total is known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed: Option<u64>,
+    pub completed: Option<f64>,
     /// Total units, when known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
+    pub total: Option<f64>,
 }
 
 /// A content block inside a tool result.

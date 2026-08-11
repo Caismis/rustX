@@ -105,10 +105,10 @@ impl StructuralIndex {
             };
             let mut end = agent_position;
             for block in &agent.content {
-                if let AgentContentBlock::ToolCall(call) = block {
-                    if let Some(&result_position) = results.get(&call.id) {
-                        end = end.max(result_position);
-                    }
+                if let AgentContentBlock::ToolCall(call) = block
+                    && let Some(&result_position) = results.get(&call.id)
+                {
+                    end = end.max(result_position);
                 }
             }
             turn_ends.insert(agent_position, end);

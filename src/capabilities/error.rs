@@ -18,6 +18,12 @@ pub enum CapabilityPreparationError {
     EnvironmentStoreOverlapsWorkspace { store_root: String },
     /// A shared environment identity/materialization failure.
     Environment(EnvironmentPreparationError),
+    /// An MCP server could not be discovered or its catalog was unstable.
+    Mcp(String),
+    /// A custom Python `ToolVersion` could not be discovered, published, or prepared.
+    Python(String),
+    /// The composed canonical registry was rejected as invalid or colliding.
+    ToolRegistry(String),
 }
 
 impl core::fmt::Display for CapabilityPreparationError {
@@ -31,6 +37,9 @@ impl core::fmt::Display for CapabilityPreparationError {
                  Workspace"
             ),
             Self::Environment(error) => write!(f, "{error}"),
+            Self::Mcp(error) => write!(f, "MCP preparation failed: {error}"),
+            Self::Python(error) => write!(f, "Python tool preparation failed: {error}"),
+            Self::ToolRegistry(error) => write!(f, "tool registry composition failed: {error}"),
         }
     }
 }
@@ -66,6 +75,10 @@ pub enum CapabilityCommitError {
     },
     /// A capability commit while an attempt lease is active is rejected.
     Busy,
+    /// A tools/list candidate was invalidated before the swap.
+    StaleMcpCandidate {
+        server_id: crate::runtime::identity::McpServerId,
+    },
 }
 
 impl core::fmt::Display for CapabilityCommitError {
@@ -82,6 +95,10 @@ impl core::fmt::Display for CapabilityCommitError {
             Self::Busy => write!(
                 f,
                 "a capability commit is rejected while an attempt capability lease is active"
+            ),
+            Self::StaleMcpCandidate { server_id } => write!(
+                f,
+                "MCP capability candidate for server {server_id} was invalidated before commit"
             ),
         }
     }

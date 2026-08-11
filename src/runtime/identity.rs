@@ -151,6 +151,14 @@ id_type! {
 }
 
 id_type! {
+    /// Identifies an immutable environment owned by custom Python tools.
+    ///
+    /// This identity is intentionally separate from the M6 shared Skill
+    /// environment identity even when both happen to contain Python.
+    PythonToolEnvironmentDigest
+}
+
+id_type! {
     /// Identifies the immutable shared Node environment of one active Skill
     /// capability set.
     ///
@@ -207,8 +215,9 @@ impl Default for CapabilityRevision {
 mod tests {
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
-        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
-        SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
+        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
+        PythonToolEnvironmentDigest, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId,
+        ToolVersionId, TurnId,
     };
 
     /// Strong identifiers serialize as plain strings, not as structs.
@@ -250,6 +259,9 @@ mod tests {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ));
         let _ = round_trip(&PythonEnvironmentDigest::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
+        let _ = round_trip(&PythonToolEnvironmentDigest::new(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ));
         let _ = round_trip(&NodeEnvironmentDigest::new(

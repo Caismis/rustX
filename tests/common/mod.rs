@@ -662,7 +662,8 @@ pub async fn capability_lease(
         rustx::capabilities::CapabilityCoordinatorConfig {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
-            tool_registry: std::sync::Arc::new(tools),
+            base_tool_registry: std::sync::Arc::new(tools),
+            mcp_servers: Vec::new(),
             base_environment: tool_runtime.environment().clone(),
             environment_store_root: dir.path().join("skill-env"),
         },

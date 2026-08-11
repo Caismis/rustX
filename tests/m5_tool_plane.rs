@@ -394,12 +394,11 @@ async fn traversal_tools_do_not_follow_directory_symlinks() {
 fn native_tools_register_under_every_legal_execution_policy() {
     use rustx::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use rustx::tools::executor::{PreflightOutcome, ToolRegistry};
-    use rustx::tools::native::{
-        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
-    };
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
     use rustx::tools::runtime::ConversationToolRuntime;
     use rustx::tools::types::{
         ToolCall, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationMode,
+        ToolInvocationPolicy,
     };
 
     for execution in [
@@ -422,7 +421,7 @@ fn native_tools_register_under_every_legal_execution_policy() {
             NativeToolResources {
                 background: runtime.background().clone(),
             },
-            NativeToolPolicies::uniform(NativeToolPolicy {
+            NativeToolPolicies::uniform(ToolInvocationPolicy {
                 execution,
                 concurrency: ToolConcurrencyPolicy::Sequential,
             }),
@@ -547,12 +546,11 @@ fn native_tools_register_under_every_legal_execution_policy() {
 fn mixed_native_policies_coexist_and_preflight_independently() {
     use rustx::runtime::identity::{ConversationId, ToolCallId, ToolId};
     use rustx::tools::executor::{PreflightOutcome, ToolRegistry};
-    use rustx::tools::native::{
-        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
-    };
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
     use rustx::tools::runtime::ConversationToolRuntime;
     use rustx::tools::types::{
         ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocationMode,
+        ToolInvocationPolicy,
     };
 
     let dir = tempfile::tempdir().expect("temp dir");
@@ -571,27 +569,27 @@ fn mixed_native_policies_coexist_and_preflight_independently() {
             background: runtime.background().clone(),
         },
         NativeToolPolicies {
-            read: NativeToolPolicy {
+            read: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::ForegroundOnly,
                 concurrency: ToolConcurrencyPolicy::Sequential,
             },
-            write: NativeToolPolicy {
+            write: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::BackgroundOnly,
                 concurrency: ToolConcurrencyPolicy::Sequential,
             },
-            edit: NativeToolPolicy {
+            edit: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::ForegroundOnly,
                 concurrency: ToolConcurrencyPolicy::Sequential,
             },
-            glob: NativeToolPolicy {
+            glob: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::ForegroundOnly,
                 concurrency: ToolConcurrencyPolicy::Parallel,
             },
-            grep: NativeToolPolicy {
+            grep: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::ModelSelectable,
                 concurrency: ToolConcurrencyPolicy::Parallel,
             },
-            bash: NativeToolPolicy {
+            bash: ToolInvocationPolicy {
                 execution: ToolExecutionPolicy::ModelSelectable,
                 concurrency: ToolConcurrencyPolicy::Sequential,
             },
@@ -737,16 +735,14 @@ fn mixed_native_policies_coexist_and_preflight_independently() {
 fn default_native_policies_are_conservative_for_every_ordinary_tool() {
     use rustx::runtime::identity::ConversationId;
     use rustx::tools::executor::ToolRegistry;
-    use rustx::tools::native::{
-        NativeToolPolicies, NativeToolPolicy, NativeToolResources, register_native_tools,
-    };
+    use rustx::tools::native::{NativeToolPolicies, NativeToolResources, register_native_tools};
     use rustx::tools::runtime::ConversationToolRuntime;
-    use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+    use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
     let defaults = NativeToolPolicies::default();
     assert_eq!(
         defaults,
-        NativeToolPolicies::uniform(NativeToolPolicy::default())
+        NativeToolPolicies::uniform(ToolInvocationPolicy::default())
     );
     for policy in [
         defaults.read,

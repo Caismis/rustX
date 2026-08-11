@@ -384,23 +384,23 @@ impl ChatStreamNormalizer {
             events.push(ModelEvent::UsageUpdate { usage });
         }
         if let Some(choice) = chunk.choices.first() {
-            if let Some(text) = &choice.delta.content {
-                if !text.is_empty() {
-                    let block_index = self.blocks.allocate(ChatBlockKey::Text);
-                    events.push(ModelEvent::TextDelta {
-                        block_index,
-                        text: text.clone(),
-                    });
-                }
+            if let Some(text) = &choice.delta.content
+                && !text.is_empty()
+            {
+                let block_index = self.blocks.allocate(ChatBlockKey::Text);
+                events.push(ModelEvent::TextDelta {
+                    block_index,
+                    text: text.clone(),
+                });
             }
-            if let Some(refusal) = &choice.delta.refusal {
-                if !refusal.is_empty() {
-                    let block_index = self.blocks.allocate(ChatBlockKey::Refusal);
-                    events.push(ModelEvent::RefusalDelta {
-                        block_index,
-                        text: refusal.clone(),
-                    });
-                }
+            if let Some(refusal) = &choice.delta.refusal
+                && !refusal.is_empty()
+            {
+                let block_index = self.blocks.allocate(ChatBlockKey::Refusal);
+                events.push(ModelEvent::RefusalDelta {
+                    block_index,
+                    text: refusal.clone(),
+                });
             }
             for tool_chunk in &choice.delta.tool_calls {
                 self.push_tool_call_chunk(tool_chunk, &mut events)?;
@@ -459,17 +459,16 @@ impl ChatStreamNormalizer {
                 call: start,
             });
         }
-        if let Some(function) = &chunk.function {
-            if let Some(arguments) = &function.arguments {
-                if !arguments.is_empty() {
-                    let call_id = assembly.call_id.clone().expect("call id known after start");
-                    events.push(ModelEvent::ToolCallArgumentsDelta {
-                        block_index: assembly.block_index,
-                        call_id,
-                        arguments_delta: arguments.clone(),
-                    });
-                }
-            }
+        if let Some(function) = &chunk.function
+            && let Some(arguments) = &function.arguments
+            && !arguments.is_empty()
+        {
+            let call_id = assembly.call_id.clone().expect("call id known after start");
+            events.push(ModelEvent::ToolCallArgumentsDelta {
+                block_index: assembly.block_index,
+                call_id,
+                arguments_delta: arguments.clone(),
+            });
         }
         Ok(())
     }

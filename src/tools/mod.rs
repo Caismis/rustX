@@ -13,7 +13,9 @@ pub mod background;
 pub mod environment;
 pub mod executor;
 pub mod limits;
+pub mod mcp;
 pub mod native;
+pub mod python;
 pub mod runtime;
 pub mod schema;
 pub mod types;
@@ -40,7 +42,7 @@ pub use schema::{
 pub use types::{
     ModelToolDefinition, ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition,
     ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode, ToolOrigin, ToolProgress, ToolReplayPolicy, ToolResultContent,
-    TruncationState,
+    ToolInvocationMode, ToolInvocationPolicy, ToolOrigin, ToolProgress, ToolReplayPolicy,
+    ToolResultContent, TruncationState,
 };
 pub use workspace::{Workspace, WorkspaceError};

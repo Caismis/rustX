@@ -504,11 +504,11 @@ pub fn render_agent_status(status: &AgentStatus) -> String {
                             execution.tool_name,
                             execution.state.name()
                         );
-                        if let Some(progress) = &execution.progress {
-                            if let Some(message) = &progress.message {
-                                line.push_str(" | ");
-                                line.push_str(message);
-                            }
+                        if let Some(progress) = &execution.progress
+                            && let Some(message) = &progress.message
+                        {
+                            line.push_str(" | ");
+                            line.push_str(message);
                         }
                         lines.push(line);
                     }
