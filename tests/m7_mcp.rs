@@ -3,28 +3,13 @@
 #[cfg(all(unix, feature = "mcp-fixture"))]
 mod unix_tests {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
-    use rmcp::model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
-        ProgressNotificationParam, ServerCapabilities, ServerInfo, SubscriptionFilter, Tool,
-    };
-    use rmcp::service::{RequestContext, SubscriptionContext};
     use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService,
     };
-    use rmcp::{RoleServer, ServerHandler, ServiceExt};
+    use rustx::tools::mcp::fixture::FixtureServer;
     use tokio_util::sync::CancellationToken;
-
-    #[derive(Clone, Default)]
-    struct FixtureServer {
-        changed: Arc<AtomicBool>,
-        sink: Arc<tokio::sync::Mutex<Option<rmcp::service::SubscriptionSink>>>,
-        slow_started: Arc<tokio::sync::Notify>,
-        cancel_observed: Arc<tokio::sync::Notify>,
-        list_changed_supported: bool,
-    }
 
     struct NoProgress;
 
@@ -45,156 +30,17 @@ mod unix_tests {
         }
     }
 
-    impl ServerHandler for FixtureServer {
-        fn get_info(&self) -> ServerInfo {
-            let mut capabilities = ServerCapabilities::builder().enable_tools();
-            if self.list_changed_supported {
-                capabilities = capabilities.enable_tool_list_changed();
-            }
-            ServerInfo::new(capabilities.build())
-        }
-
-        fn get_tool(&self, name: &str) -> Option<Tool> {
-            Some(fixture_tool_named(name))
-        }
-
-        fn list_tools(
-            &self,
-            _request: Option<rmcp::model::PaginatedRequestParams>,
-            _context: RequestContext<RoleServer>,
-        ) -> impl std::future::Future<
-            Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>,
-        > + Send {
-            let tools = if self.changed.load(Ordering::Acquire) {
-                vec![fixture_tool_named("echo"), fixture_tool_named("new_tool")]
-            } else {
-                vec![
-                    fixture_tool_named("echo"),
-                    fixture_tool_named("mutate"),
-                    fixture_tool_named("slow"),
-                ]
-            };
-            let result = rmcp::model::ListToolsResult {
-                tools,
-                ..Default::default()
-            };
-            std::future::ready(Ok(result))
-        }
-
-        fn accepted_subscription_filter(
-            &self,
-            _requested: &SubscriptionFilter,
-        ) -> Option<SubscriptionFilter> {
-            self.list_changed_supported
-                .then(|| SubscriptionFilter::builder().tools_list_changed().build())
-        }
-
-        async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
-            *self.sink.lock().await = Some(context.sink().clone());
-            context.cancelled().await;
-            Ok(())
-        }
-
-        fn call_tool(
-            &self,
-            request: CallToolRequestParams,
-            context: RequestContext<RoleServer>,
-        ) -> impl std::future::Future<Output = Result<CallToolResponse, rmcp::ErrorData>> + Send
-        {
-            let changed = self.changed.clone();
-            let sink = self.sink.clone();
-            let slow_started = self.slow_started.clone();
-            let cancel_observed = self.cancel_observed.clone();
-            async move {
-                if request.name == "echo" {
-                    Ok(CallToolResult::success(vec![ContentBlock::text("fixture echo")]).into())
-                } else if request.name == "mutate" {
-                    changed.store(true, Ordering::Release);
-                    if let Some(token) = context.meta.get_progress_token() {
-                        context
-                            .peer
-                            .notify_progress(
-                                ProgressNotificationParam::new(token, 0.5)
-                                    .with_total(3.5)
-                                    .with_message("fractional"),
-                            )
-                            .await
-                            .map_err(|error| {
-                                rmcp::ErrorData::internal_error(
-                                    format!("cannot notify progress: {error}"),
-                                    None,
-                                )
-                            })?;
-                    }
-                    let sink = sink.lock().await.clone().ok_or_else(|| {
-                        rmcp::ErrorData::internal_error("subscription is not ready", None)
-                    })?;
-                    sink.notify_tool_list_changed().await.map_err(|error| {
-                        rmcp::ErrorData::internal_error(
-                            format!("cannot notify tool list change: {error}"),
-                            None,
-                        )
-                    })?;
-                    Ok(CallToolResult::success(vec![ContentBlock::text("fixture changed")]).into())
-                } else if request.name == "slow" {
-                    if let Some(token) = context.meta.get_progress_token() {
-                        context
-                            .peer
-                            .notify_progress(ProgressNotificationParam::new(token, 0.25))
-                            .await
-                            .map_err(|error| {
-                                rmcp::ErrorData::internal_error(
-                                    format!("cannot notify slow-call progress: {error}"),
-                                    None,
-                                )
-                            })?;
-                    }
-                    slow_started.notify_one();
-                    context.ct.cancelled().await;
-                    cancel_observed.notify_one();
-                    Ok(
-                        CallToolResult::success(vec![ContentBlock::text("fixture cancelled")])
-                            .into(),
-                    )
-                } else {
-                    Err(rmcp::ErrorData::method_not_found::<
-                        rmcp::model::CallToolRequestMethod,
-                    >())
-                }
-            }
-        }
-    }
-
-    fn fixture_tool_named(name: &str) -> Tool {
-        let mut tool = Tool::default();
-        tool.name = name.to_owned().into();
-        tool.description = Some(format!("fixture {name}").into());
-        let mut schema = JsonObject::new();
-        schema.insert("type".to_owned(), serde_json::json!("object"));
-        schema.insert("properties".to_owned(), serde_json::json!({}));
-        schema.insert("additionalProperties".to_owned(), serde_json::json!(false));
-        tool.input_schema = Arc::new(schema);
-        tool
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn stdio_discovery_and_call_use_canonical_executor() {
-        if std::env::var_os("RUSTX_M7_MCP_FIXTURE").is_some() {
-            let server = FixtureServer {
-                list_changed_supported: true,
-                ..FixtureServer::default()
-            }
-            .serve(rmcp::transport::stdio())
-            .await
-            .expect("fixture server");
-            server.waiting().await.expect("fixture server wait");
+        if rustx::tools::mcp::fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
             return;
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let artifacts_dir = tempfile::tempdir().expect("artifacts");
+        let cancel_marker = workspace_dir.path().join("fixture-cancel-observed");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        let epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let invalidation = Arc::new(rustx::tools::mcp::McpInvalidationState::new());
         let config = rustx::tools::mcp::McpServerConfig {
             server_id: rustx::runtime::identity::McpServerId::new("fixture"),
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
@@ -202,25 +48,27 @@ mod unix_tests {
                     .expect("test executable")
                     .display()
                     .to_string(),
-                args: vec![
-                    "--exact".to_owned(),
-                    "unix_tests::stdio_discovery_and_call_use_canonical_executor".to_owned(),
-                    "--quiet".to_owned(),
-                    "--nocapture".to_owned(),
-                    "--test-threads".to_owned(),
-                    "1".to_owned(),
-                ],
+                args: rustx::tools::mcp::fixture::fixture_spawn_args(
+                    "unix_tests::stdio_discovery_and_call_use_canonical_executor",
+                ),
                 cwd: None,
-                environment: std::collections::BTreeMap::from([(
-                    "RUSTX_M7_MCP_FIXTURE".to_owned(),
-                    "1".to_owned(),
-                )]),
+                environment: std::collections::BTreeMap::from([
+                    (
+                        rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                        "1".to_owned(),
+                    ),
+                    (
+                        rustx::tools::mcp::fixture::CANCEL_FILE_ENV.to_owned(),
+                        cancel_marker.display().to_string(),
+                    ),
+                ]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
         };
-        let runtime = rustx::tools::mcp::McpServerRuntime::connect(&config, &workspace, epoch)
-            .await
-            .expect("MCP connect");
+        let runtime =
+            rustx::tools::mcp::McpServerRuntime::connect(&config, &workspace, invalidation)
+                .await
+                .expect("MCP connect");
         let tools = runtime.list_tools().await.expect("tools/list");
         assert_eq!(
             tools
@@ -315,6 +163,14 @@ mod unix_tests {
             slow_result.status,
             rustx::tools::types::ToolExecutionStatus::Cancelled { .. }
         ));
+        // The server-side cancellation context must become observable in
+        // the fixture process, not only that rustX returned `Cancelled`.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            wait_for_file(&cancel_marker),
+        )
+        .await
+        .expect("the fixture server must observe the cancellation notification");
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
             runtime.wait_for_change(initial_epoch),
@@ -345,6 +201,8 @@ mod unix_tests {
             list_changed_supported: true,
             ..FixtureServer::default()
         };
+        let slow_started = fixture.slow_started.clone();
+        let cancel_observed = fixture.cancel_observed.clone();
         let service = StreamableHttpService::<FixtureServer, LocalSessionManager>::new(
             move || Ok(fixture.clone()),
             Arc::default(),
@@ -371,7 +229,7 @@ mod unix_tests {
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
             &config,
             &workspace,
-            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
         )
         .await
         .expect("HTTP MCP connect");
@@ -436,9 +294,141 @@ mod unix_tests {
                 .collect::<Vec<_>>(),
             ["echo", "new_tool"]
         );
+        // HTTP cancellation: the server-side cancellation context becomes
+        // observable (the fixture's `slow` tool waits on it), not only that
+        // rustX returned `Cancelled`.
+        let slow_executor = definitions
+            .iter()
+            .find(|(definition, _)| definition.name == "slow")
+            .map(|(_, executor)| executor.clone())
+            .expect("HTTP slow executor");
+        let slow_cancellation = rustx::runtime::CancellationSignal::new();
+        let slow_future = rustx::tools::executor::ToolExecutor::execute(
+            slow_executor.as_ref(),
+            rustx::tools::types::ToolInvocation {
+                call_id: rustx::runtime::identity::ToolCallId::new("http-slow"),
+                tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(
+                    &config.server_id,
+                    "slow",
+                )),
+                tool_name: "slow".to_owned(),
+                mode: rustx::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({}),
+            },
+            rustx::tools::executor::ToolExecutionContext {
+                conversation_id: runtime_bundle.conversation_id(),
+                execution_id: None,
+                cancellation: slow_cancellation.clone(),
+                workspace: runtime_bundle.workspace(),
+                progress: &progress,
+                artifacts: runtime_bundle.artifacts(),
+                environment: runtime_bundle.environment(),
+            },
+        );
+        tokio::pin!(slow_future);
+        tokio::select! {
+            () = slow_started.notified() => {}
+            result = &mut slow_future => panic!("HTTP slow call completed before cancellation: {result:?}"),
+        }
+        slow_cancellation.cancel();
+        let slow_result = slow_future.await;
+        assert!(matches!(
+            slow_result.status,
+            rustx::tools::types::ToolExecutionStatus::Cancelled { .. }
+        ));
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            cancel_observed.notified(),
+        )
+        .await
+        .expect("the HTTP fixture server must observe the cancellation notification");
+
         runtime.close().await;
         cancellation.cancel();
         server_task.abort();
         let _ = server_task.await;
+    }
+
+    /// Pagination: the official-rmcp fixture serves a five-tool catalog two
+    /// tools per page; the canonical registry contains the finite complete
+    /// sorted catalog.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn paginated_tools_list_produces_the_finite_complete_sorted_catalog() {
+        if rustx::tools::mcp::fixture::serve_if_fixture_mode(FixtureServer::from_env()).await {
+            return;
+        }
+        let workspace_dir = tempfile::tempdir().expect("workspace");
+        let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
+        let config = rustx::tools::mcp::McpServerConfig {
+            server_id: rustx::runtime::identity::McpServerId::new("paged-fixture"),
+            transport: rustx::tools::mcp::McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: rustx::tools::mcp::fixture::fixture_spawn_args(
+                    "unix_tests::paginated_tools_list_produces_the_finite_complete_sorted_catalog",
+                ),
+                cwd: None,
+                environment: std::collections::BTreeMap::from([
+                    (
+                        rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                        "1".to_owned(),
+                    ),
+                    (
+                        rustx::tools::mcp::fixture::PAGE_SIZE_ENV.to_owned(),
+                        "2".to_owned(),
+                    ),
+                ]),
+            },
+            policy: rustx::tools::types::ToolInvocationPolicy::default(),
+        };
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+            &config,
+            &workspace,
+            Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
+        )
+        .await
+        .expect("paged MCP connect");
+        let tools = runtime.list_tools().await.expect("paged tools/list");
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "beta", "delta", "echo", "gamma"],
+            "the canonical catalog is the finite complete sorted set"
+        );
+        let registry = rustx::tools::executor::ToolRegistry::new()
+            .compose(rustx::tools::mcp::definitions(
+                &config.server_id,
+                config.policy,
+                &runtime,
+                tools,
+            ))
+            .expect("registry");
+        assert_eq!(
+            registry
+                .definitions()
+                .iter()
+                .map(|definition| definition.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "beta", "delta", "echo", "gamma"]
+        );
+        runtime.close().await;
+    }
+
+    /// Waits for a marker file with a strict deadline (a deadlock guard,
+    /// never a synchronization mechanism).
+    async fn wait_for_file(path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "marker file never appeared: {}",
+                path.display()
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 }

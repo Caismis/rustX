@@ -350,6 +350,24 @@ Implement:
   response-vs-cancellation linearization
 - Monotonic `tools/list_changed` invalidation epochs; refresh preparation and
   quiescent commit, never active-registry mutation
+- One shared MCP invalidation synchronization boundary: notification epoch
+  mutation, preparation epoch snapshots, and the commit's final epoch
+  validation + snapshot swap all serialize through the same mutex-protected
+  state, with explicit lock ordering (capability state lock ->
+  invalidation guard; the notification path holds only the guard). The
+  notification-wins and commit-wins interleavings are proven by
+  coordinator-level deterministic regressions.
+- The interactive MCP stdio supervisor unit: the M5 Bash supervisor shape
+  applied to a long-lived server, composed from the same shared structural
+  ownership core (fixed-membership seccomp, group-scoped kernel terminal
+  proof, single-owner anchor discipline, TERM/grace/KILL against the inner's
+  own group, adopted-anchor emergency containment, driver-owned settlement
+  with direct-child reap before publication, EOF-drained bounded stderr).
+  Deterministic regressions cover normal shutdown, outliving server
+  children, `setsid`/`setpgid` escape attempts, TERM-resistant servers,
+  inner-supervisor loss, business-handle drop, post-spawn handshake failure,
+  direct supervisor reap, and >64 KiB stderr while the server continues
+  operating.
 
 ### Custom Python tools
 
@@ -358,10 +376,21 @@ Implement:
 - Immutable one-level packages at `<workspace>/.agents/tools/`
 - Content-derived `ToolVersionId` plus separate
   `PythonToolEnvironmentDigest`
-- Immutable source publication, checked `uv.lock`, and store-owned coalesced
-  frozen `uv` materialization with ready metadata
+- Immutable source publication (`tool-versions/<id>/source/` + version
+  marker; reuse validates the published source content digest against the
+  claimed identity), checked `uv.lock`, and store-owned coalesced
+  frozen `uv` materialization with ready metadata that locks every
+  deterministic identity input; per-ToolVersion environment bindings are
+  recorded outside the environment's immutable dependency identity
+- The exact probed interpreter is pinned to uv (`UV_PYTHON`), managed Python
+  downloads stay disabled, and every preparation command has a finite
+  deadline (timeout = explicit preparation failure)
 - Canonical schema preflight, private-file invocation harness, supervised
   process execution, and bounded JSON result normalization
+- The M6 environment build-owner coordination pattern for same-digest
+  builds: one store-owned logical owner per digest until terminal
+  publication, no-lost-wakeup waiters, RAII owner guard, pointer-identity
+  in-flight removal, and no overlap between retry and a previous owner
 
 Exit criteria:
 
@@ -372,6 +401,15 @@ Exit criteria:
 - M7 raises rustX's MSRV to Rust 1.88 for the current rmcp release. Python
   environments isolate dependencies but are not security sandboxes; metadata
   for future GC is written, but no GC runs.
+- Issue #10 acceptance criteria are complete: a fully local/offline fixture
+  proves that two tools depending on conflicting versions of the same local
+  package materialize distinct environments, both execute, and each observes
+  its own version with no public PyPI access; coordinator-level MCP
+  list-change race regressions prove the Busy/Stale/commit interleavings;
+  stdio and Streamable HTTP cancellation prove server-side observation of
+  the cancellation notification; and an official-rmcp paginated fixture
+  proves the canonical registry contains the finite complete sorted
+  catalog.
 
 ## Milestone 8 — Runtime events and durability
 

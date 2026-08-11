@@ -1,0 +1,300 @@
+//! Official-rmcp fixture server shared by the M7 local integration tests.
+//!
+//! Feature-gated behind `mcp-fixture`; never used by production code. The
+//! fixture is served either in-process (Streamable HTTP) or as a self-spawned
+//! stdio server (the test binary re-runs itself in fixture mode).
+//!
+//! The fixture exposes:
+//!
+//! - `echo` — deterministic success;
+//! - `mutate` — flips the catalog, emits one fractional progress
+//!   notification, then a `tools/list_changed` notification;
+//! - `slow` — notifies call-start, awaits the server-side cancellation
+//!   context (proving the client's cancellation notification reached the
+//!   server), records the observation, and returns;
+//! - when pagination is enabled, a multi-page `tools/list` catalog of
+//!   `[alpha, beta, gamma, delta, echo]` served two tools per page.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
+    PaginatedRequestParams, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+    SubscriptionFilter, Tool,
+};
+use rmcp::service::{RequestContext, SubscriptionContext};
+use rmcp::{RoleServer, ServerHandler, ServiceExt};
+
+/// The environment variable selecting fixture mode when the test binary is
+/// re-executed as its own stdio MCP server.
+pub const FIXTURE_MODE_ENV: &str = "RUSTX_M7_MCP_FIXTURE";
+/// The environment variable naming the marker file the `slow` tool writes
+/// the moment its server-side cancellation context fires (self-spawned
+/// stdio fixtures, where the fixture state lives in another process).
+pub const CANCEL_FILE_ENV: &str = "RUSTX_M7_FIXTURE_CANCEL_FILE";
+/// The environment variable selecting the paginated `tools/list` catalog
+/// page size (self-spawned stdio fixtures).
+pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
+
+impl FixtureServer {
+    /// Builds a fixture from the self-spawn environment: cancellation
+    /// marker file and pagination page size, when set.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            list_changed_supported: true,
+            cancel_observed_file: std::env::var_os(CANCEL_FILE_ENV).map(PathBuf::from),
+            page_size: std::env::var(PAGE_SIZE_ENV)
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok()),
+            ..Self::default()
+        }
+    }
+
+    /// The fixture tool catalog for the current state. In pagination mode
+    /// the catalog is the finite five-tool set served two tools per page.
+    fn catalog(&self) -> Vec<Tool> {
+        if let Some(page_size) = self.page_size {
+            let _ = page_size;
+            return vec![
+                fixture_tool_named("alpha"),
+                fixture_tool_named("beta"),
+                fixture_tool_named("delta"),
+                fixture_tool_named("echo"),
+                fixture_tool_named("gamma"),
+            ];
+        }
+        if self.changed.load(Ordering::Acquire) {
+            vec![fixture_tool_named("echo"), fixture_tool_named("new_tool")]
+        } else {
+            vec![
+                fixture_tool_named("echo"),
+                fixture_tool_named("mutate"),
+                fixture_tool_named("slow"),
+            ]
+        }
+    }
+}
+
+/// The shared observable state of one fixture instance.
+#[derive(Clone, Default)]
+pub struct FixtureServer {
+    /// The catalog flip observed by `tools/list`.
+    pub changed: Arc<AtomicBool>,
+    /// The current subscription sink, installed by `listen`.
+    pub sink: Arc<tokio::sync::Mutex<Option<rmcp::service::SubscriptionSink>>>,
+    /// Fired when the `slow` tool starts executing server-side.
+    pub slow_started: Arc<tokio::sync::Notify>,
+    /// Fired when the `slow` tool's server-side cancellation context
+    /// becomes observable.
+    pub cancel_observed: Arc<tokio::sync::Notify>,
+    /// When set, the `slow` tool additionally writes a marker file the
+    /// moment its cancellation context fires (for self-spawned stdio
+    /// fixtures, where the fixture state lives in another process).
+    pub cancel_observed_file: Option<PathBuf>,
+    /// Whether the server advertises and accepts `tools/list_changed`.
+    pub list_changed_supported: bool,
+    /// When set, `tools/list` paginates its catalog with this page size.
+    pub page_size: Option<usize>,
+}
+
+impl FixtureServer {
+    /// A fixture with `tools/list_changed` support.
+    #[must_use]
+    pub fn with_list_changed() -> Self {
+        Self {
+            list_changed_supported: true,
+            ..Self::default()
+        }
+    }
+}
+
+impl ServerHandler for FixtureServer {
+    fn get_info(&self) -> ServerInfo {
+        let mut capabilities = ServerCapabilities::builder().enable_tools();
+        if self.list_changed_supported {
+            capabilities = capabilities.enable_tool_list_changed();
+        }
+        ServerInfo::new(capabilities.build())
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        Some(fixture_tool_named(name))
+    }
+
+    fn list_tools(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::ListToolsResult, rmcp::ErrorData>> + Send
+    {
+        let tools = self.catalog();
+        let Some(page_size) = self.page_size else {
+            let result = rmcp::model::ListToolsResult {
+                tools,
+                ..Default::default()
+            };
+            return std::future::ready(Ok(result));
+        };
+        // Cursor-based pagination: the cursor is the index of the first tool
+        // of the next page; `None` starts at page zero.
+        let cursor = request.and_then(|request| request.cursor);
+        let start = cursor
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let next_start = start + page_size;
+        let page = tools
+            .into_iter()
+            .skip(start)
+            .take(page_size)
+            .collect::<Vec<_>>();
+        let next_cursor = if next_start < self.catalog().len() {
+            Some(next_start.to_string())
+        } else {
+            None
+        };
+        std::future::ready(Ok(rmcp::model::ListToolsResult {
+            tools: page,
+            next_cursor,
+            ..Default::default()
+        }))
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        _requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        self.list_changed_supported
+            .then(|| SubscriptionFilter::builder().tools_list_changed().build())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        *self.sink.lock().await = Some(context.sink().clone());
+        context.cancelled().await;
+        Ok(())
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<CallToolResponse, rmcp::ErrorData>> + Send {
+        let changed = self.changed.clone();
+        let sink = self.sink.clone();
+        let slow_started = self.slow_started.clone();
+        let cancel_observed = self.cancel_observed.clone();
+        let cancel_observed_file = self.cancel_observed_file.clone();
+        async move {
+            if request.name == "echo" {
+                Ok(CallToolResult::success(vec![ContentBlock::text("fixture echo")]).into())
+            } else if request.name == "mutate" {
+                changed.store(true, Ordering::Release);
+                if let Some(token) = context.meta.get_progress_token() {
+                    context
+                        .peer
+                        .notify_progress(
+                            ProgressNotificationParam::new(token, 0.5)
+                                .with_total(3.5)
+                                .with_message("fractional"),
+                        )
+                        .await
+                        .map_err(|error| {
+                            rmcp::ErrorData::internal_error(
+                                format!("cannot notify progress: {error}"),
+                                None,
+                            )
+                        })?;
+                }
+                let sink = sink.lock().await.clone().ok_or_else(|| {
+                    rmcp::ErrorData::internal_error("subscription is not ready", None)
+                })?;
+                sink.notify_tool_list_changed().await.map_err(|error| {
+                    rmcp::ErrorData::internal_error(
+                        format!("cannot notify tool list change: {error}"),
+                        None,
+                    )
+                })?;
+                Ok(CallToolResult::success(vec![ContentBlock::text("fixture changed")]).into())
+            } else if request.name == "slow" {
+                if let Some(token) = context.meta.get_progress_token() {
+                    context
+                        .peer
+                        .notify_progress(ProgressNotificationParam::new(token, 0.25))
+                        .await
+                        .map_err(|error| {
+                            rmcp::ErrorData::internal_error(
+                                format!("cannot notify slow-call progress: {error}"),
+                                None,
+                            )
+                        })?;
+                }
+                slow_started.notify_waiters();
+                context.ct.cancelled().await;
+                cancel_observed.notify_waiters();
+                if let Some(path) = &cancel_observed_file {
+                    let _ = std::fs::write(path, "cancel_observed");
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text("fixture cancelled")]).into())
+            } else {
+                Err(rmcp::ErrorData::method_not_found::<
+                    rmcp::model::CallToolRequestMethod,
+                >())
+            }
+        }
+    }
+}
+
+/// Builds one canonical fixture tool definition.
+#[must_use]
+pub fn fixture_tool_named(name: &str) -> Tool {
+    let mut tool = Tool::default();
+    tool.name = name.to_owned().into();
+    tool.description = Some(format!("fixture {name}").into());
+    let mut schema = JsonObject::new();
+    schema.insert("type".to_owned(), serde_json::json!("object"));
+    schema.insert("properties".to_owned(), serde_json::json!({}));
+    schema.insert("additionalProperties".to_owned(), serde_json::json!(false));
+    tool.input_schema = Arc::new(schema);
+    tool
+}
+
+/// Serves one fixture over stdio until the client closes the transport.
+pub async fn serve_stdio(fixture: FixtureServer) {
+    let server = fixture
+        .serve(rmcp::transport::stdio())
+        .await
+        .expect("fixture server");
+    server.waiting().await.expect("fixture server wait");
+}
+
+/// Runs the current test binary as a stdio fixture server, when
+/// [`FIXTURE_MODE_ENV`] selects fixture mode.
+///
+/// Every M7 local stdio test starts with this branch: with the fixture env
+/// variable set, the re-executed binary serves the fixture and returns, so
+/// the parent test process can drive the exact same fixture through the real
+/// rustX `McpServerRuntime` stdio transport.
+pub async fn serve_if_fixture_mode(fixture: FixtureServer) -> bool {
+    if std::env::var_os(FIXTURE_MODE_ENV).is_some() {
+        serve_stdio(fixture).await;
+        true
+    } else {
+        false
+    }
+}
+
+/// The argument vector that re-runs the current test binary as exactly this
+/// test in fixture mode.
+#[must_use]
+pub fn fixture_spawn_args(test_name: &str) -> Vec<String> {
+    vec![
+        "--exact".to_owned(),
+        test_name.to_owned(),
+        "--quiet".to_owned(),
+        "--nocapture".to_owned(),
+        "--test-threads".to_owned(),
+        "1".to_owned(),
+    ]
+}

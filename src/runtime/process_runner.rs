@@ -69,6 +69,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::runtime::cancellation::CancellationSignal;
 #[cfg(unix)]
+use crate::runtime::supervised_unit::{EmergencyContainment, emergency_contain_group};
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
@@ -185,176 +187,6 @@ pub(crate) trait SupervisedProcessRunner: Send + Sync {
         spec: SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
     ) -> BoxFuture<'_, Result<CapturedProcessResult, String>>;
-}
-
-/// The explicit command description of one long-lived interactive server.
-/// Unlike [`SupervisedCommandSpec`], the business stdin/stdout pair belongs
-/// to the child protocol; supervisor control uses a private Unix socket.
-#[cfg(unix)]
-#[derive(Debug, Clone)]
-pub(crate) struct InteractiveProcessSpec {
-    /// The executable to run inside the owned process group.
-    pub program: PathBuf,
-    /// Explicit program arguments.
-    pub args: Vec<String>,
-    /// Explicit working directory.
-    pub cwd: PathBuf,
-    /// Explicit environment, never inherited.
-    pub environment: Vec<(String, String)>,
-}
-
-/// A rustX-owned interactive process handle.
-///
-/// The returned protocol streams are business-facing handles. The detached
-/// driver owns the supervisor child and the control connection, so dropping
-/// the streams cannot abandon the process hierarchy. `Drop` requests orderly
-/// shutdown; the driver waits for the supervisor's terminal event and then
-/// reaps its direct child.
-#[cfg(unix)]
-pub(crate) struct SupervisedInteractiveProcess {
-    pub stdin: Option<tokio::process::ChildStdin>,
-    pub stdout: Option<tokio::process::ChildStdout>,
-    pub(crate) _stderr: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    settled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    settled_notify: std::sync::Arc<tokio::sync::Notify>,
-    shutdown: Option<tokio::sync::mpsc::Sender<()>>,
-}
-
-#[cfg(unix)]
-impl SupervisedInteractiveProcess {
-    /// Starts one interactive process under the dedicated long-lived owner.
-    pub(crate) async fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
-
-        let socket_path = std::env::temp_dir().join(format!(
-            "rustx-interactive-{}-{}.sock",
-            std::process::id(),
-            NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
-        ));
-        let listener = tokio::net::UnixListener::bind(&socket_path)
-            .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
-        let mut supervisor = tokio::process::Command::new(interactive_supervisor_binary());
-        supervisor
-            .arg("outer")
-            .arg(&spec.program)
-            .args(&spec.args)
-            .current_dir(&spec.cwd)
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (key, value) in &spec.environment {
-            supervisor.env(key, value);
-        }
-        supervisor.env("RUSTX_INTERACTIVE_CONTROL", &socket_path);
-        let mut child = supervisor
-            .spawn()
-            .map_err(|error| format!("cannot spawn interactive supervisor: {error}"))?;
-        drop(supervisor);
-        let (control, _) = listener
-            .accept()
-            .await
-            .map_err(|error| format!("cannot accept interactive control socket: {error}"))?;
-        let _ = std::fs::remove_file(&socket_path);
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let stderr_capture = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        if let Some(mut stderr_pipe) = stderr {
-            let capture = stderr_capture.clone();
-            tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let mut buffer = [0u8; 8192];
-                loop {
-                    match stderr_pipe.read(&mut buffer).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(count) => {
-                            let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
-                            bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-                        }
-                    }
-                    if bytes.len() >= MAX_PROCESS_OUTPUT_BYTES {
-                        break;
-                    }
-                }
-                *capture.lock().expect("interactive stderr lock") = bytes;
-            });
-        }
-        let (control_read, mut control_write) = control.into_split();
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel(1);
-        let settled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let settled_notify = std::sync::Arc::new(tokio::sync::Notify::new());
-        let settled_for_driver = settled.clone();
-        let settled_notify_for_driver = settled_notify.clone();
-        tokio::spawn(async move {
-            let mut control_read = control_read;
-            let mut requested = false;
-            loop {
-                tokio::select! {
-                    command = shutdown_rx.recv(), if !requested => {
-                        if command.is_some() {
-                            let _ = control_write.write_all(&[0x10]).await;
-                        }
-                        requested = true;
-                    }
-                    event = control_read.read_u8() => {
-                        match event {
-                            Ok(0x20) | Err(_) => break,
-                            Ok(_) => {}
-                        }
-                    }
-                }
-            }
-            // The supervisor's terminal event is authoritative for group
-            // settlement. The direct supervisor child is still reaped here.
-            let _ = child.wait().await;
-            settled_for_driver.store(true, std::sync::atomic::Ordering::Release);
-            settled_notify_for_driver.notify_waiters();
-        });
-        Ok(Self {
-            stdin,
-            stdout,
-            _stderr: stderr_capture,
-            settled,
-            settled_notify,
-            shutdown: Some(shutdown_tx),
-        })
-    }
-
-    /// Requests orderly server retirement without using the business stdin.
-    pub(crate) fn request_shutdown(&self) {
-        if let Some(shutdown) = &self.shutdown {
-            let _ = shutdown.try_send(());
-        }
-    }
-
-    /// Waits until the detached supervisor driver has observed its terminal
-    /// event and reaped the direct supervisor child.
-    pub(crate) async fn wait_for_settlement(&self) {
-        if self.settled.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        loop {
-            let notified = self.settled_notify.notified();
-            if self.settled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-            notified.await;
-            if self.settled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for SupervisedInteractiveProcess {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.try_send(());
-        }
-    }
 }
 
 /// The production supervised process runner backed by the shared runner.
@@ -754,30 +586,16 @@ async fn wait_for_terminal_release(_control: Option<&RunnerTestControl>) {
     std::future::pending::<()>().await;
 }
 
-/// The `TERMINATE` control-message kind (mirrors
-/// `bash_supervisor::MSG_TERMINATE`).
+// The frame protocol constants come from the shared supervisor-unit core
+// (`crate::runtime::supervised_unit`), so the runner and both supervisor
+// units share one wire protocol.
 #[cfg(unix)]
-const MSG_TERMINATE: u8 = 0x10;
+pub(crate) use crate::runtime::supervised_unit::MSG_ALL_CHILDREN_REAPED;
 #[cfg(unix)]
-const MSG_START: u8 = 0x11;
-#[cfg(unix)]
-const MSG_TERMINAL_ACK: u8 = 0x12;
-
-/// The supervisor event kinds (mirror `bash_supervisor`).
-#[cfg(unix)]
-const MSG_SHELL_EXITED: u8 = 0x02;
-#[cfg(unix)]
-pub(crate) const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
-#[cfg(unix)]
-const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
-#[cfg(unix)]
-const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
-#[cfg(unix)]
-const MSG_ANCHOR_READY: u8 = 0x06;
-#[cfg(unix)]
-const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
-#[cfg(unix)]
-const MSG_NO_OWNERSHIP: u8 = 0x08;
+pub(crate) use crate::runtime::supervised_unit::{
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
+    MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
+};
 
 /// The test-only control seams of one owned invocation.
 ///
@@ -1323,120 +1141,6 @@ impl SupervisedCommandRunner {
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The explicit outcome of catastrophic emergency containment.
-///
-/// `Ok(())` alone would be ambiguous (contained-and-terminal vs. no anchor
-/// vs. normal path already completed), so the result distinguishes the
-/// terminal proof from the unavailable-anchor state:
-///
-/// - [`EmergencyContainment::TerminalProven`]: the anchor was retained,
-///   the fallback signal was issued while retained, the group-scoped wait
-///   reached `ECHILD`, and the anchor was released — the owned invocation
-///   group is terminal.
-/// - [`EmergencyContainment::AnchorUnavailable`]: the anchor is not a
-///   waitable child of rustX without a prior authoritative terminal event.
-///   This is **not** a terminal proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmergencyContainment {
-    /// The anchor was retained, the fallback signal was issued while that
-    /// identity was retained, the group-scoped wait reached `ECHILD`, and
-    /// the anchor was then released.
-    TerminalProven,
-    /// The invocation anchor is unavailable without a prior authoritative
-    /// terminal proof. Never a terminal result.
-    AnchorUnavailable,
-}
-
-/// Catastrophic fallback after the outer supervisor has been reaped.
-///
-/// rustX is a subreaper, so the dead outer's invocation descendants are now
-/// rustX children. The inner leader is retained with `WNOWAIT` before its
-/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
-/// used by the normal outer path. Only after the group-scoped child wait
-/// reaches `ECHILD` is the anchor identity released and terminality proven.
-///
-/// The anchor is matched only by pid; the invocation group only by its
-/// retained pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists
-/// here, so unrelated adopted children are never consumed.
-#[cfg(target_os = "linux")]
-fn emergency_contain_group(
-    pgid: i32,
-    anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    use nix::errno::Errno;
-    use nix::sys::signal::{Signal, killpg};
-    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-    use nix::unistd::Pid;
-    #[cfg(not(test))]
-    let _ = anchor_unavailable;
-
-    #[cfg(test)]
-    if anchor_unavailable {
-        // The regression seam: the anchor reads as not waitable without a
-        // prior authoritative terminal event. The semantic state is what
-        // matters — never an actual pid reuse.
-        return Ok(EmergencyContainment::AnchorUnavailable);
-    }
-    let anchor = Pid::from_raw(pgid);
-    loop {
-        // Anchor retention: observe the adopted inner leader's terminal
-        // state without consuming its identity (`WNOWAIT`). The numeric
-        // group id stays provably allocated while this returns Exited or
-        // Signaled.
-        match waitid(
-            Id::Pid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => {
-                // The anchor is not a waitable child of rustX: the owned
-                // group may still exist. ECHILD from the anchor wait is
-                // never a terminal process-group proof, and the cached
-                // numeric pgid is never signaled after anchor loss.
-                return Ok(EmergencyContainment::AnchorUnavailable);
-            }
-            Err(error) => {
-                return Err(format!("cannot retain the lost invocation anchor: {error}"));
-            }
-        }
-    }
-
-    match killpg(anchor, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => {}
-        Err(error) => {
-            return Err(format!("cannot contain the lost invocation group: {error}"));
-        }
-    }
-    loop {
-        // The group-scoped terminal proof: no adopted child of rustX
-        // remains in the invocation group. The anchor itself is released
-        // (reaped) by this same wait, strictly after the fallback signal.
-        match waitid(
-            Id::PGid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return Ok(EmergencyContainment::TerminalProven),
-            Err(error) => {
-                return Err(format!(
-                    "cannot prove the lost invocation group terminal: {error}"
-                ));
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn emergency_contain_group(
-    _pgid: i32,
-    _anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    Err("fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
-}
-
 /// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
 /// (integration tests), otherwise the `bash-supervisor` sibling of the
 /// current executable (production), otherwise the binary-directory sibling
@@ -1488,13 +1192,15 @@ pub(crate) fn interactive_supervisor_binary() -> PathBuf {
 /// terminal child-set events are already in flight or were received; the
 /// supervision loop's read side remains authoritative.
 #[cfg(unix)]
-async fn send_terminate(stream: &mut tokio::net::UnixStream) {
+pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
     let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
     let _ = stream.write_all(&frame).await;
 }
 
 #[cfg(unix)]
-async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
+pub(crate) async fn send_start<W: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut W,
+) -> Result<(), String> {
     let frame = [1u8, 0, 0, 0, MSG_START];
     stream
         .write_all(&frame)
@@ -1503,7 +1209,7 @@ async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
+pub(crate) async fn send_terminal_ack<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
     let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
     let _ = stream.write_all(&frame).await;
 }
@@ -1513,8 +1219,8 @@ async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
 ///
 /// `Ok(None)` means the control channel reached EOF: the supervisor exited.
 #[cfg(unix)]
-pub(crate) async fn read_supervisor_event(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn read_supervisor_event<R: tokio::io::AsyncRead + Unpin>(
+    stream: &mut R,
 ) -> Result<Option<SupervisorEvent>, String> {
     let mut header = [0u8; 4];
     match stream.read_exact(&mut header).await {

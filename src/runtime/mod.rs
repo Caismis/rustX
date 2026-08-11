@@ -23,6 +23,15 @@ pub mod cancellation;
 pub mod continuation;
 pub mod identity;
 pub mod inbound;
+/// The rustX-side driver of one long-lived interactive process (MCP stdio
+/// servers), owning physical settlement of the interactive supervisor unit.
+pub(crate) mod interactive_process;
+/// The long-lived interactive supervisor unit (M5-equivalent ownership).
+/// The binary entry points are reachable only from the dedicated
+/// `interactive-supervisor` bin and from tests via self-exec; they are
+/// documented-hidden binary entry points, never runtime API.
+#[doc(hidden)]
+pub mod interactive_supervisor;
 /// The internal owned supervised command runner shared by native Bash and
 /// Skill environment materialization: the M5 Bash process-group lifecycle
 /// extracted so package-manager work reuses the same rustX-owned
@@ -35,6 +44,10 @@ pub(crate) mod process_runner;
 /// catastrophic fallback. Internal coordination only — it is not part of
 /// the public runtime API.
 pub(crate) mod process_supervision;
+/// The shared structural ownership core of every rustX-owned supervised
+/// process unit (M5 Bash and M7 interactive MCP stdio). Internal
+/// coordination only — it is not part of the public runtime API.
+pub(crate) mod supervised_unit;
 pub mod types;
 
 pub use cancellation::CancellationSignal;

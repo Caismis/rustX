@@ -6,10 +6,13 @@
 //! rmcp peer, transport, notification subscription, and (for stdio) the
 //! rustX interactive process owner.
 
+#[cfg(feature = "mcp-fixture")]
+#[doc(hidden)]
+pub mod fixture;
+
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use base64::Engine;
@@ -26,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::runtime::identity::{McpServerId, ToolId};
-use crate::runtime::process_runner::{InteractiveProcessSpec, SupervisedInteractiveProcess};
+use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
@@ -40,6 +43,99 @@ use crate::tools::workspace::Workspace;
 
 /// The MCP protocol revision implemented by M7.
 pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+
+/// The one shared `tools/list_changed` invalidation synchronization boundary
+/// of a capability coordinator.
+///
+/// MCP invalidation epoch mutation (a received `tools/list_changed`
+/// notification) and capability snapshot activation (preparation epoch
+/// snapshot + commit epoch validation) share exactly one mutex, so they have
+/// one synchronization order:
+///
+/// - if the notification wins first, the prepared candidate cannot commit
+///   (its epoch is stale);
+/// - if the commit wins first, the notification belongs to a future refresh
+///   and can never retroactively invalidate the already-committed snapshot.
+///
+/// Lock ordering is explicit and documented: the capability commit lock
+/// (the coordinator's `state` mutex) is always acquired **before** this
+/// invalidation guard, and the notification path acquires **only** this
+/// guard. No path ever takes the capability state lock while holding this
+/// guard, so no cycle exists.
+///
+/// The type is `pub` only because the public `McpServerRuntime::connect`
+/// entry point accepts it; it is an internal runtime coordination boundary,
+/// not a stable application interface.
+#[doc(hidden)]
+pub struct McpInvalidationState {
+    inner: std::sync::Mutex<BTreeMap<McpServerId, u64>>,
+}
+
+impl McpInvalidationState {
+    /// Creates an empty invalidation state.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Acquires the invalidation guard: the single shared boundary of epoch
+    /// mutation and epoch validation.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the invalidation lock is poisoned.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn lock(&self) -> McpInvalidationGuard<'_> {
+        McpInvalidationGuard {
+            guard: self.inner.lock().expect("MCP invalidation lock poisoned"),
+        }
+    }
+
+    /// The current invalidation epoch of one server.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the invalidation lock is poisoned.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn epoch(&self, server_id: &McpServerId) -> u64 {
+        self.lock().epoch(server_id)
+    }
+}
+
+impl Default for McpInvalidationState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The held invalidation guard: epoch reads and mutations under it are
+/// ordered against the capability commit's epoch validation and swap.
+#[doc(hidden)]
+pub struct McpInvalidationGuard<'a> {
+    guard: std::sync::MutexGuard<'a, BTreeMap<McpServerId, u64>>,
+}
+
+impl McpInvalidationGuard<'_> {
+    /// The current epoch of one server.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn epoch(&self, server_id: &McpServerId) -> u64 {
+        self.guard.get(server_id).copied().unwrap_or(0)
+    }
+
+    /// Advances one server's invalidation epoch — the exact mutation the
+    /// `tools/list_changed` notification performs.
+    #[doc(hidden)]
+    pub fn advance(&mut self, server_id: &McpServerId) {
+        let current = self.guard.get(server_id).copied().unwrap_or(0);
+        self.guard.insert(server_id.clone(), current + 1);
+    }
+}
 
 /// A configured MCP server transport.
 #[derive(Clone, PartialEq, Eq)]
@@ -143,7 +239,7 @@ pub struct McpServerRuntime {
     service: Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     handler: McpClientHandler,
     process: Option<Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
-    change_epoch: Arc<AtomicU64>,
+    invalidation: Arc<McpInvalidationState>,
     change_notify: Arc<tokio::sync::Notify>,
 }
 
@@ -152,7 +248,7 @@ impl std::fmt::Debug for McpServerRuntime {
         formatter
             .debug_struct("McpServerRuntime")
             .field("server_id", &self.server_id)
-            .field("change_epoch", &self.change_epoch.load(Ordering::Acquire))
+            .field("change_epoch", &self.change_epoch())
             .finish_non_exhaustive()
     }
 }
@@ -168,7 +264,7 @@ impl McpServerRuntime {
     pub async fn connect(
         config: &McpServerConfig,
         workspace: &Workspace,
-        change_epoch: Arc<AtomicU64>,
+        invalidation: Arc<McpInvalidationState>,
     ) -> Result<Arc<Self>, McpError> {
         if config.server_id.as_str().is_empty() {
             return Err(McpError::Configuration(
@@ -202,7 +298,6 @@ impl McpServerRuntime {
                     cwd,
                     environment: explicit_environment,
                 })
-                .await
                 .map_err(McpError::Discovery)?;
                 let mut process = process;
                 let stdout = process
@@ -215,7 +310,21 @@ impl McpServerRuntime {
                     .ok_or_else(|| McpError::Discovery("stdio stdin unavailable".to_owned()))?;
                 let transport =
                     rmcp::transport::async_rw::AsyncRwTransport::new_client(stdout, stdin);
-                let service = start_client_service(handler.clone(), transport).await?;
+                // A handshake failure drops `process`, which requests
+                // shutdown from the runtime-owned driver — the physical
+                // owner is never abandoned. The bounded stderr preview is
+                // the server's own diagnosis of why the handshake failed.
+                let service = match start_client_service(handler.clone(), transport).await {
+                    Ok(service) => service,
+                    Err(error) => {
+                        let preview = process.stderr_preview();
+                        return Err(if preview.is_empty() {
+                            error
+                        } else {
+                            McpError::Discovery(format!("{error}; server stderr: {preview}"))
+                        });
+                    }
+                };
                 (service, Some(Arc::new(tokio::sync::Mutex::new(process))))
             }
             McpTransportConfig::StreamableHttp { endpoint, headers } => {
@@ -266,7 +375,7 @@ impl McpServerRuntime {
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
             handler,
             process,
-            change_epoch,
+            invalidation,
             change_notify: Arc::new(tokio::sync::Notify::new()),
         });
         if info
@@ -280,7 +389,8 @@ impl McpServerRuntime {
                 .listen(SubscriptionFilter::builder().tools_list_changed().build())
                 .await
                 .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))?;
-            let epoch = runtime.change_epoch.clone();
+            let server_id = runtime.server_id.clone();
+            let invalidation = runtime.invalidation.clone();
             let change_notify = runtime.change_notify.clone();
             tokio::spawn(async move {
                 while let Ok(Some(notification)) = subscription.next().await {
@@ -288,7 +398,12 @@ impl McpServerRuntime {
                         notification,
                         ServerNotification::ToolListChangedNotification(_)
                     ) {
-                        epoch.fetch_add(1, Ordering::AcqRel);
+                        // The one shared invalidation boundary: the epoch
+                        // mutation serializes against preparation epoch
+                        // snapshots and the commit's epoch validation + swap.
+                        let mut guard = invalidation.lock();
+                        guard.advance(&server_id);
+                        drop(guard);
                         change_notify.notify_waiters();
                     }
                 }
@@ -306,7 +421,7 @@ impl McpServerRuntime {
     /// The invalidation epoch at the current observation point.
     #[must_use]
     pub fn change_epoch(&self) -> u64 {
-        self.change_epoch.load(Ordering::Acquire)
+        self.invalidation.epoch(&self.server_id)
     }
 
     /// Waits for a newer tools/list invalidation epoch without polling.
@@ -396,10 +511,10 @@ impl McpServerRuntime {
                     };
                 }
                 progress_item = progress.next() => {
-                    if let Some(progress_item) = progress_item
-                        && progress_item.progress.is_finite()
-                        && progress_item.total.is_none_or(f64::is_finite)
-                    {
+                    if let Some(progress_item) = progress_item {
+                        // The shared canonical normalization drops non-finite
+                        // `completed`/`total` values; the remote value needs
+                        // no adapter-local filter.
                         context.progress.report(bound_tool_progress(crate::tools::types::ToolProgress {
                             message: progress_item.message,
                             completed: Some(progress_item.progress),

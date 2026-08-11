@@ -226,7 +226,6 @@
 //! is never silently weakened.
 
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -234,11 +233,19 @@ use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
 use nix::unistd::{Pid, read, write};
 
+use crate::runtime::supervised_unit::{
+    INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY,
+    MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED,
+    MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE,
+    TERMINAL_ACK_TIMEOUT, become_child_subreaper, enforce_fixed_group_membership,
+    ignore_group_term,
+};
+
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
-pub const ROLE_OUTER: &str = "outer";
+pub const ROLE_OUTER: &str = crate::runtime::supervised_unit::ROLE_OUTER;
 
 /// The inner supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
-pub const ROLE_INNER: &str = "inner";
+pub const ROLE_INNER: &str = crate::runtime::supervised_unit::ROLE_INNER;
 
 /// The environment variable carrying the `/bin/bash -c` command into the
 /// supervisor (the command travels in argv today; the environment simply
@@ -275,61 +282,10 @@ pub const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
 /// production.
 pub const OUTER_BARRIER_DIR_ENV: &str = "RUSTX_TEST_OUTER_BARRIER_DIR";
 
-/// The shell's canonical exit status: `{ exit_code: i32 LE, signaled: u8,
-/// signal: i32 LE }`.
-const MSG_SHELL_EXITED: u8 = 0x02;
-
-/// All invocation-owned children are reaped (kernel `ECHILD` reached).
-const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
-
-/// A process-control failure; payload is the human-readable message.
-const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
-
-/// One attempted group signal for test observability:
-/// `{ pgid: i32 LE, signal: i32 LE, emitted: u8 }`.
-const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
-
-/// Inner -> rustX: setup is complete and Bash has not yet been spawned;
-/// payload is the invocation PGID (`i32 LE`).
-const MSG_ANCHOR_READY: u8 = 0x06;
-
-/// Inner -> rustX: Bash was successfully spawned in the fixed group.
-const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
-
-/// Supervisor -> rustX: setup ended before any Bash process was spawned.
-const MSG_NO_OWNERSHIP: u8 = 0x08;
-
-/// rustX -> supervisor: run the `TERM` -> grace -> `KILL` sequence.
-const MSG_TERMINATE: u8 = 0x10;
-
-/// rustX -> inner: the runtime retained the anchor identity and authorizes
-/// the Bash spawn.
-const MSG_START: u8 = 0x11;
-
-/// rustX -> outer: the authoritative terminal frame was parsed.
-const MSG_TERMINAL_ACK: u8 = 0x12;
-
-/// The inner supervisor's exit status for a normal completion: it reached
-/// the kernel `ECHILD` terminal child state (or no owned process tree was
-/// ever created), so the outer supervisor only needs to reap it and its
-/// child domain is provably empty.
-const INNER_EXIT_NORMAL: i32 = 0;
-
-/// The inner supervisor's exit status for an abnormal termination with
-/// possibly-live owned work: the outer supervisor must actively contain
-/// the invocation process group (one structurally-anchored fallback
-/// `SIGKILL`) before reaping.
-const INNER_EXIT_CONTAINMENT: i32 = 42;
-
-/// The internal poll cadence of the supervisor loops (an implementation
-/// detail of the grace period and the wait loops — never a test
-/// synchronization mechanism).
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
-const TERMINAL_ACK_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// The `TERM` -> `KILL` grace period, kept in sync with
-/// `crate::tools::limits::BASH_TERM_GRACE`.
-const TERM_GRACE: Duration = Duration::from_secs(2);
+// All protocol constants, exit codes, structural primitives, and the
+// `TERM` -> grace -> `KILL` timings come from the shared supervisor-unit
+// core (`crate::runtime::supervised_unit`), so the Bash and interactive
+// units share one ownership model.
 
 /// Runs the outer supervisor; never returns.
 pub fn run_outer_supervisor() -> ! {
@@ -1034,357 +990,8 @@ fn supervisor_binary() -> std::path::PathBuf {
     std::env::current_exe().expect("current executable")
 }
 
-/// `PR_SET_CHILD_SUBREAPER`: orphaned descendants of the shell reparent
-/// into this process's child domain instead of being rediscovered from
-/// `/proc`.
-///
-/// This is one of the narrowly scoped production OS shims: subreaper setup,
-/// SIGTERM handler installation, `PR_SET_NO_NEW_PRIVS`, and seccomp filter
-/// installation. Linux-only: the lifecycle contract is claimed only where
-/// the kernel provides the subreaper mechanism.
-#[allow(unsafe_code)]
-fn become_child_subreaper() -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        // SAFETY: prctl with PR_SET_CHILD_SUBREAPER and a literal 1 is a
-        // single scalar syscall with no pointer arguments.
-        let result = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
-        if result != 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Err("the invocation supervisor requires Linux (PR_SET_CHILD_SUBREAPER)".to_owned())
-    }
-}
-
-/// The no-op `SIGTERM` handler of the inner supervisor: the invocation
-/// group `TERM` must not kill the inner supervisor while bash and its
-/// descendants handle it.
-///
-/// A **caught** handler (not `SIG_IGN`) is required: `exec` resets caught
-/// dispositions to the default, so `/bin/bash` starts with a default
-/// `SIGTERM` disposition and its own `trap '...' TERM` handlers stay
-/// effective. An ignored signal would be inherited by bash, and a
-/// non-interactive shell cannot re-trap a signal that was ignored on entry.
-///
-/// This is the second narrowly scoped `libc` call of the crate (besides
-/// [`become_child_subreaper`]); the handled signal is delivered to the
-/// process only by the invocation's own `killpg`, and the handler runs no
-/// application code beyond a return.
-extern "C" fn ignore_sigterm(_signal: libc::c_int) {}
-
-#[allow(unsafe_code)]
-fn ignore_group_term() -> Result<(), String> {
-    // SAFETY: installing a no-op handler with no pointer payload is a
-    // single scalar libc call; the handler never dereferences anything.
-    let handler = ignore_sigterm as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    let result = unsafe { libc::signal(libc::SIGTERM, handler) };
-    if result == libc::SIG_ERR {
-        return Err(std::io::Error::last_os_error().to_string());
-    }
-    Ok(())
-}
-
-/// The `AUDIT_ARCH` constant of the compiled architecture, used by the
-/// seccomp filter to reject syscalls from an unexpected ABI before any
-/// other check.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const AUDIT_ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
-#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const AUDIT_ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
-#[cfg(all(target_os = "linux", target_arch = "riscv64"))]
-const AUDIT_ARCH: u32 = 0xC000_00F3; // AUDIT_ARCH_RISCV64
-
-/// The `sock_filter` BPF program of the fixed-membership restriction:
-///
-/// ```text
-/// 0: load seccomp_data.arch
-/// 1: if arch == the compiled AUDIT_ARCH -> 2, else -> last (kill, fail closed)
-/// 2: load seccomp_data.nr
-/// 3 (x86-64 only): if the x32 bit is set -> EPERM
-/// next: if nr == setpgid -> EPERM
-/// next: if nr == setsid -> EPERM
-/// next: allow
-/// next: return EPERM
-/// last: kill (foreign audit architecture)
-/// ```
-///
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn membership_restriction_program() -> [libc::sock_filter; 9] {
-    use libc::{BPF_ABS, BPF_JEQ, BPF_JMP, BPF_JSET, BPF_K, BPF_LD, BPF_RET, BPF_W};
-    [
-        libc::sock_filter {
-            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
-            jt: 0,
-            jf: 0,
-            k: 4,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 0,
-            jf: 6,
-            k: AUDIT_ARCH,
-        },
-        libc::sock_filter {
-            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JSET | BPF_K) as u16,
-            jt: 3,
-            jf: 0,
-            k: 0x4000_0000, // __X32_SYSCALL_BIT
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 2,
-            jf: 0,
-            k: libc::SYS_setpgid as u32,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 1,
-            jf: 0,
-            k: libc::SYS_setsid as u32,
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x7FFF_0000, // SECCOMP_RET_ALLOW
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x0005_0000 | libc::EPERM as u32, // SECCOMP_RET_ERRNO | EPERM
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x8000_0000, // SECCOMP_RET_KILL_PROCESS
-        },
-    ]
-}
-
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "aarch64", target_arch = "riscv64")
-))]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn membership_restriction_program() -> [libc::sock_filter; 8] {
-    use libc::{BPF_ABS, BPF_JEQ, BPF_JMP, BPF_K, BPF_LD, BPF_RET, BPF_W};
-    [
-        libc::sock_filter {
-            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
-            jt: 0,
-            jf: 0,
-            k: 4,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 0,
-            jf: 5,
-            k: AUDIT_ARCH,
-        },
-        libc::sock_filter {
-            code: (BPF_LD | BPF_W | BPF_ABS) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 2,
-            jf: 0,
-            k: libc::SYS_setpgid as u32,
-        },
-        libc::sock_filter {
-            code: (BPF_JMP | BPF_JEQ | BPF_K) as u16,
-            jt: 1,
-            jf: 0,
-            k: libc::SYS_setsid as u32,
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x7FFF_0000,
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x0005_0000 | libc::EPERM as u32,
-        },
-        libc::sock_filter {
-            code: (BPF_RET | BPF_K) as u16,
-            jt: 0,
-            jf: 0,
-            k: 0x8000_0000,
-        },
-    ]
-}
-
-/// Installs the fixed-membership restriction: `PR_SET_NO_NEW_PRIVS` plus a
-/// `seccomp` filter that rejects `setpgid(2)` and `setsid(2)` with
-/// `EPERM`. The filter is inherited by `/bin/bash` and every descendant
-/// across `fork`/`exec`; with `no_new_privs` set, a descendant can only
-/// stack *more* restrictive filters, never remove this one, and no
-/// privilege gain can bypass it. This is the third narrowly scoped `libc`
-/// call site of the crate (besides [`become_child_subreaper`] and
-/// [`ignore_group_term`]).
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "riscv64"
-    )
-))]
-#[allow(unsafe_code)]
-fn enforce_fixed_group_membership() -> Result<(), String> {
-    // SAFETY: prctl with PR_SET_NO_NEW_PRIVS and a literal 1 is a single
-    // scalar syscall with no pointer arguments; it is required to install a
-    // seccomp filter without CAP_SYS_ADMIN, is inherited across fork/exec,
-    // and can never be cleared by a descendant.
-    let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    if result != 0 {
-        return Err(format!(
-            "cannot set PR_SET_NO_NEW_PRIVS: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let program = membership_restriction_program();
-    let fprog = libc::sock_fprog {
-        len: u16::try_from(program.len()).expect("the membership filter fits u16"),
-        filter: program.as_ptr().cast_mut(),
-    };
-    // SAFETY: seccomp(SECCOMP_SET_MODE_FILTER, 0, &fprog) copies the BPF
-    // program into the kernel during the call — the pointer is not
-    // retained. The stack-local program lives for the whole call.
-    let result =
-        unsafe { libc::syscall(libc::SYS_seccomp, libc::SECCOMP_SET_MODE_FILTER, 0, &fprog) };
-    if result != 0 {
-        return Err(format!(
-            "cannot install the membership seccomp filter: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(all(
-    target_os = "linux",
-    any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "riscv64"
-    )
-)))]
-fn enforce_fixed_group_membership() -> Result<(), String> {
-    Err("Bash lifecycle supervision requires Linux on x86_64, aarch64, or riscv64".to_owned())
-}
-
-#[cfg(all(
-    test,
-    target_os = "linux",
-    any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        target_arch = "riscv64"
-    )
-))]
-mod seccomp_tests {
-    use super::*;
-    use nix::sys::wait::{WaitStatus, waitpid};
-    use nix::unistd::{Pid, getpgrp, getsid};
-
-    #[derive(Clone, Copy)]
-    enum Call {
-        Setsid,
-        Setpgid,
-    }
-
-    #[allow(unsafe_code)]
-    fn assert_filtered(call: Call, x32: bool) {
-        // SAFETY: the throwaway child installs the real production filter,
-        // performs one scalar syscall, and exits without returning through
-        // the multi-threaded test process.
-        let pid = unsafe { libc::fork() };
-        assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
-        if pid == 0 {
-            let before_pgrp = getpgrp();
-            let before_sid = getsid(None).ok();
-            let installed = enforce_fixed_group_membership().is_ok();
-            let native = match call {
-                Call::Setsid => libc::SYS_setsid,
-                Call::Setpgid => libc::SYS_setpgid,
-            };
-            let number = if x32 { native | 0x4000_0000 } else { native };
-            // SAFETY: both tested syscalls take only scalar arguments.
-            let result = unsafe {
-                match call {
-                    Call::Setsid => libc::syscall(number),
-                    Call::Setpgid => libc::syscall(number, 0, 0),
-                }
-            };
-            let denied =
-                result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-            let unchanged = getpgrp() == before_pgrp && getsid(None).ok() == before_sid;
-            // SAFETY: terminate the isolated child immediately; the status
-            // encodes installation, deterministic EPERM, and no mutation.
-            unsafe { libc::_exit(i32::from(!(installed && denied && unchanged))) };
-        }
-        let status = waitpid(Pid::from_raw(pid), None).expect("reap seccomp test child");
-        assert_eq!(status, WaitStatus::Exited(Pid::from_raw(pid), 0));
-    }
-
-    #[test]
-    fn native_setsid_is_denied_by_the_installed_filter() {
-        assert_filtered(Call::Setsid, false);
-    }
-
-    #[test]
-    fn native_setpgid_is_denied_by_the_installed_filter() {
-        assert_filtered(Call::Setpgid, false);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn x32_setsid_is_denied_by_the_filter_with_eperm() {
-        assert_filtered(Call::Setsid, true);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn x32_setpgid_is_denied_by_the_filter_with_eperm() {
-        assert_filtered(Call::Setpgid, true);
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn x86_64_program_has_fail_closed_x32_and_membership_branches() {
-        let program = membership_restriction_program();
-        assert_eq!(program.len(), 9);
-        assert_eq!(program[0].k, 4);
-        assert_eq!(program[1].k, AUDIT_ARCH);
-        assert_eq!(program[2].k, 0);
-        assert_eq!(program[3].k, 0x4000_0000);
-        assert_eq!(program[4].k, u32::try_from(libc::SYS_setpgid).unwrap());
-        assert_eq!(program[5].k, u32::try_from(libc::SYS_setsid).unwrap());
-        assert_eq!(program[6].k, 0x7FFF_0000);
-        assert_eq!(program[7].k, 0x0005_0000 | libc::EPERM as u32);
-        assert_eq!(program[8].k, 0x8000_0000);
-    }
-}
+// Structural primitives (`become_child_subreaper`, `ignore_group_term`,
+// `enforce_fixed_group_membership`) come from the shared supervisor-unit core.
 
 #[cfg(all(
     test,

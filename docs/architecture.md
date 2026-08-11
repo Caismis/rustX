@@ -866,28 +866,59 @@ dispatcher, list-change subscription, and supervised stdio owner when used.
 Executors capture an `Arc` to that runtime. The observed remote tool surface
 and binding are immutable for a capability revision, but rustX does not claim
 to snapshot the implementation behavior of the independent remote server.
-`tools/list_changed` increments a monotonic invalidation epoch and wakes a
-narrow refresh seam; it never mutates an active registry. Preparation rejects
-a catalog that changes during discovery, and commit rejects a candidate whose
-epoch changed before the protected snapshot swap.
+`tools/list_changed` epoch mutation and capability snapshot activation share
+exactly one synchronization boundary — the mutex-protected MCP invalidation
+state: notification epoch advancement, preparation epoch snapshots, and the
+commit's final epoch validation plus snapshot swap all serialize through the
+same guard. If the notification wins first, the prepared candidate cannot
+commit and the active snapshot is unchanged; if the commit wins first, the
+notification belongs to a future refresh and can never retroactively
+invalidate the already-committed snapshot. Lock ordering is explicit and
+documented (capability state lock -> MCP invalidation guard; the notification
+path holds only the guard), so no cycle exists. Preparation rejects a catalog
+that changes during discovery, and commit rejects a candidate whose epoch
+changed before the protected snapshot swap.
 
-MCP stdio uses the runtime-owned interactive supervisor, whose control socket
-is separate from the server's stdin/stdout protocol pair. The supervisor owns
-the process group, bounded stderr diagnostics, TERM/grace/KILL shutdown,
-descendant reaping, and direct-child settlement. Streamable HTTP uses the
-current rmcp client transport with explicit static headers and no
+MCP stdio uses the runtime-owned interactive supervisor unit, whose control
+sockets are separate from the server's stdin/stdout protocol pair. The unit
+is the M5 Bash supervisor shape applied to a long-lived server, composed
+from the same shared structural ownership core
+(`src/runtime/supervised_unit`): an inner supervisor calls `setsid()`,
+installs the fixed-membership seccomp restriction, and issues
+`TERM -> grace -> KILL` with `killpg` against its own process group; an
+outer supervisor is the reaper of last resort with the single-owner anchor
+discipline and the authoritative terminal report. The kernel-mediated
+terminal proof is the group-scoped wait (`waitid(Id::PGid)` returning
+`ECHILD`) — never a `/proc` scan or a `killpg(0)` probe. rustX's detached
+driver task owns physical settlement from the moment the supervisor spawn
+succeeds, drains the server's stderr until EOF (bounded preview), reaps the
+direct supervisor child before publishing settlement, and runs the shared
+adopted-anchor emergency containment when the unit is lost. Streamable HTTP
+uses the current rmcp client transport with explicit static headers and no
 `Mcp-Session-Id` compatibility state.
 
 Custom Python packages are discovered only from
 `<workspace>/.agents/tools/<tool-name>/`. Candidate preparation reads a finite
-package snapshot, computes `ToolVersionId`, publishes it immutably, validates
+package snapshot, computes `ToolVersionId`, publishes it immutably as
+`tool-versions/<ToolVersionId>/source/` plus a version marker (the executor
+and every uv command use exactly the `source/` root; reuse validates the
+published source content digest against the claimed identity), validates
 the existing `uv.lock`, and materializes a distinct immutable
-`PythonToolEnvironmentDigest` environment. ToolVersion identity and
-environment identity are separate: source/description/schema changes can
-change the former without changing the latter. The environment isolates
-dependencies, not filesystem, network, or security permissions. A harness
-uses a private input file and one bounded JSON result envelope; the Python
-subprocess uses the shared supervised short-lived runner.
+`PythonToolEnvironmentDigest` environment whose ready marker locks every
+deterministic identity input (format, OS, architecture, digest, lock digest,
+Python runtime identity, uv identity). ToolVersion identity and environment
+identity are separate: source/description/schema changes can change the
+former without changing the latter, and each ToolVersion -> environment
+binding is recorded deterministically outside the environment's immutable
+dependency identity. The environment isolates dependencies, not filesystem,
+network, or security permissions. The interpreter whose identity enters the
+digest is pinned to uv via `UV_PYTHON`, managed Python downloads stay
+disabled, and every preparation command has a finite deadline (a timeout is
+an explicit preparation failure). A harness uses a private input file and
+one bounded JSON result envelope; the Python subprocess uses the shared
+supervised short-lived runner. Same-digest in-flight builds coalesce behind
+one store-owned owner task (callers only wait; owner failure publishes a
+terminal error and removes the in-flight entry).
 
 ### Layer 5: Skill plane
 
