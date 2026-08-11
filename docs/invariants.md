@@ -198,10 +198,15 @@ against the canonical Workspace before any directory is created, including
 through symlinked existing ancestors. Python environments are built at their
 final digest path and become reusable only after an exact deterministic ready
 manifest is atomically committed; Node environments use private staging and
-atomic rename. Same-process preparations of one ecosystem/digest coalesce,
-and published digest environments are immutable: they are reused only when
-their committed manifest matches the expected digest inputs and are never
-installed into again.
+atomic rename. Same-process preparations of one ecosystem/digest coalesce
+behind one `EnvironmentStore`-owned materialization task. Candidate
+preparation lifetime is distinct from shared build lifetime: dropping a
+caller only stops its wait, while the owner continues through supervised
+process settlement and publication. Published digest environments are
+immutable: they are reused only when their committed manifest matches the
+expected digest inputs and are never installed into again. The in-flight
+entry is released only after the owner returns, making a retry unable to
+overlap the previous physical writer.
 
 **Workspace-file limitation.** Capability metadata and environment
 identities are snapshotted, but lazy Skill source files

@@ -8,6 +8,7 @@
 //! (watches, notify gates, registry state) — never sleeps.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use rustx::capabilities::{
@@ -624,10 +625,82 @@ async fn same_digest_preparations_coalesce_for_python_and_node() {
     );
 }
 
-/// An owning same-digest build failure is shared by overlapping waiters, and
-/// a later retry can acquire ownership and publish normally.
+/// Cancelling the initiating preparation only drops that caller's wait. The
+/// EnvironmentStore-owned Python build remains the sole final-path writer;
+/// the second caller joins it while the materialization gate is held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn same_digest_build_failure_propagates_and_retry_recovers() {
+async fn dropped_prepare_waiter_does_not_cancel_python_build_owner() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    let gate = conversation.backend.install_materialize_gate();
+    let first_coordinator = conversation.coordinator.clone();
+    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
+    gate.await_entered().await;
+
+    first.abort();
+    assert!(
+        first
+            .await
+            .expect_err("caller A was aborted")
+            .is_cancelled()
+    );
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1,
+        "aborting the initiating caller does not drop the physical build"
+    );
+
+    let mut second = Box::pin(conversation.coordinator.prepare_candidate());
+    let waker = futures_util::task::noop_waker_ref();
+    let mut context = std::task::Context::from_waker(waker);
+    assert!(
+        matches!(second.as_mut().poll(&mut context), std::task::Poll::Pending),
+        "caller B joins the gated in-flight build"
+    );
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1,
+        "joining a live build never creates a second final-path writer"
+    );
+    let store_root = conversation.dir.path().join("skill-env").join("python");
+    assert!(
+        std::fs::read_dir(&store_root)
+            .expect("python store")
+            .filter_map(Result::ok)
+            .all(|entry| {
+                !entry
+                    .path()
+                    .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
+                    .exists()
+            }),
+        "the gated Python final path is not reusable before publication"
+    );
+
+    gate.release();
+    let candidate = second.await.expect("caller B prepare");
+    assert!(candidate.python_environment().is_some());
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1
+    );
+}
+
+/// An EnvironmentStore-owned same-digest build failure is shared by a waiter
+/// even after the initiating caller is gone. Retry ownership becomes legal
+/// only after the failed physical writer has returned and published failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropped_build_waiter_cannot_start_an_early_retry() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -640,13 +713,32 @@ async fn same_digest_build_failure_propagates_and_retry_recovers() {
         .fail_python_materialization("injected same-digest failure");
     let gate = conversation.backend.install_materialize_gate();
     let first_coordinator = conversation.coordinator.clone();
-    let second_coordinator = conversation.coordinator.clone();
     let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
-    let second = tokio::spawn(async move { second_coordinator.prepare_candidate().await });
     gate.await_entered().await;
+
+    first.abort();
+    assert!(
+        first
+            .await
+            .expect_err("caller A was aborted")
+            .is_cancelled()
+    );
+    let mut second = Box::pin(conversation.coordinator.prepare_candidate());
+    let waker = futures_util::task::noop_waker_ref();
+    let mut context = std::task::Context::from_waker(waker);
+    assert!(
+        matches!(second.as_mut().poll(&mut context), std::task::Poll::Pending),
+        "caller B remains attached to the live failed build"
+    );
+    assert_eq!(
+        conversation
+            .backend
+            .materialization_count(Ecosystem::Python),
+        1,
+        "no retry writer starts while the original materialization is gated"
+    );
     gate.release();
-    assert!(first.await.expect("first task").is_err());
-    assert!(second.await.expect("second task").is_err());
+    assert!(second.await.is_err());
     assert_eq!(
         conversation
             .backend
@@ -1402,7 +1494,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let result = rustx::agent::AgentExecution::new(
         request,
         &model,
-        &lease,
+        lease,
         &cancellation,
         runtime,
         &tool_runtime,
@@ -1445,5 +1537,23 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
                 .contains("## Skills")),
         "the Skill catalog must never appear in committed-message events"
     );
-    drop(lease);
+    assert_eq!(
+        coordinator.active_attempts(),
+        0,
+        "settling the execution releases its owned attempt lease"
+    );
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill revision two.",
+        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+    );
+    let next_candidate = coordinator
+        .prepare_candidate()
+        .await
+        .expect("prepare the next capability revision");
+    assert!(
+        coordinator.commit(next_candidate).is_ok(),
+        "a settled execution immediately permits the next capability commit"
+    );
 }

@@ -87,6 +87,13 @@
 //! contents remain uncommitted until the complete deterministic manifest is
 //! atomically installed as the ready marker. A digest directory without that
 //! marker is incomplete and is never reused.
+//!
+//! Candidate preparation callers wait on an `EnvironmentStore`-owned build
+//! task for each `(ecosystem, digest)`. Dropping one caller only stops that
+//! caller's wait; it never releases the in-flight entry or cancels the shared
+//! physical materialization. The owner publishes the result and removes the
+//! in-flight entry only after materialization, validation, and publication
+//! have returned, so a retry cannot overlap the previous writer.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -441,10 +448,10 @@ struct BuildState {
     notify: Notify,
 }
 
-/// Completes a process-local build entry even if its owning preparation is
-/// cancelled while the backend is running. Waiters must never remain
-/// attached to an in-flight build with no owner capable of publishing a
-/// result.
+/// Completes a process-local build entry if its EnvironmentStore-owned task
+/// exits unexpectedly. The guard lives inside that detached owner task, never
+/// in a candidate preparation caller, so caller cancellation cannot release
+/// an in-flight build while its physical materialization is running.
 struct BuildOwnerGuard {
     in_flight: Arc<Mutex<HashMap<BuildKey, Arc<BuildState>>>>,
     key: BuildKey,
@@ -459,7 +466,6 @@ impl BuildOwnerGuard {
             .result
             .lock()
             .expect("environment build result lock") = Some(result);
-        self.state.notify.notify_waiters();
         let mut in_flight = self.in_flight.lock().expect("environment build lock");
         if in_flight
             .get(&self.key)
@@ -468,6 +474,8 @@ impl BuildOwnerGuard {
             in_flight.remove(&self.key);
         }
         self.completed = true;
+        drop(in_flight);
+        self.state.notify.notify_waiters();
     }
 }
 
@@ -478,7 +486,7 @@ impl Drop for BuildOwnerGuard {
         }
         self.finish(Err(EnvironmentPreparationError::MaterializationFailed {
             ecosystem: self.key.ecosystem,
-            detail: "the environment build owner was cancelled".to_owned(),
+            detail: "the environment build owner exited before terminal publication".to_owned(),
         }));
     }
 }
@@ -530,17 +538,18 @@ impl EnvironmentStore {
     }
 
     /// Coalesces same-process builds of one immutable environment digest.
-    /// Exactly one caller owns materialization; equivalent callers await its
-    /// result and receive the same final environment path. A failed owner
-    /// publishes no reusable state, and a later call can acquire ownership
-    /// for a retry.
+    /// Exactly one detached `EnvironmentStore` task owns materialization;
+    /// equivalent callers only await its result and receive the same final
+    /// environment path. A failed owner publishes no reusable state, and a
+    /// later call can acquire ownership for a retry only after the owner has
+    /// returned from the complete materialization lifecycle.
     async fn coordinate_build<F>(
         &self,
         key: BuildKey,
         build: F,
     ) -> Result<PathBuf, EnvironmentPreparationError>
     where
-        F: Future<Output = Result<PathBuf, EnvironmentPreparationError>>,
+        F: Future<Output = Result<PathBuf, EnvironmentPreparationError>> + Send + 'static,
     {
         let (state, owner) = {
             let mut in_flight = self.in_flight.lock().expect("environment build lock");
@@ -555,40 +564,45 @@ impl EnvironmentStore {
                 (state, true)
             }
         };
-        if !owner {
-            let mut notified = Box::pin(state.notify.notified());
-            loop {
-                if let Some(result) = state
-                    .result
-                    .lock()
-                    .expect("environment build result lock")
-                    .clone()
-                {
-                    return result;
-                }
-                notified.as_mut().enable();
-                if state
-                    .result
-                    .lock()
-                    .expect("environment build result lock")
-                    .is_some()
-                {
-                    continue;
-                }
-                notified.await;
-                notified = Box::pin(state.notify.notified());
-            }
+        if owner {
+            let owner_guard = BuildOwnerGuard {
+                in_flight: self.in_flight.clone(),
+                key,
+                state: state.clone(),
+                completed: false,
+            };
+            // Dropping a JoinHandle detaches the task; it does not abort it.
+            // The caller therefore cannot become the physical materialization
+            // owner merely by being cancelled while waiting below.
+            std::mem::drop(tokio::spawn(async move {
+                let mut owner_guard = owner_guard;
+                let result = build.await;
+                owner_guard.finish(result);
+            }));
         }
 
-        let mut owner_guard = BuildOwnerGuard {
-            in_flight: self.in_flight.clone(),
-            key,
-            state,
-            completed: false,
-        };
-        let result = build.await;
-        owner_guard.finish(result.clone());
-        result
+        let mut notified = Box::pin(state.notify.notified());
+        loop {
+            if let Some(result) = state
+                .result
+                .lock()
+                .expect("environment build result lock")
+                .clone()
+            {
+                return result;
+            }
+            notified.as_mut().enable();
+            if state
+                .result
+                .lock()
+                .expect("environment build result lock")
+                .is_some()
+            {
+                continue;
+            }
+            notified.await;
+            notified = Box::pin(state.notify.notified());
+        }
     }
 
     /// Ensures the shared Python environment of the merged dependency set.
@@ -628,15 +642,20 @@ impl EnvironmentStore {
             ecosystem: Ecosystem::Python,
             digest: digest.to_string(),
         };
+        let store = self.clone();
+        let build_versions = versions.clone();
+        let build_dependencies = dependencies.clone();
+        let build_digest = digest.to_string();
         let published = self
-            .coordinate_build(build_key, async {
-                self.build_python_environment(
-                    final_dir.clone(),
-                    digest.as_str(),
-                    &versions,
-                    dependencies,
-                )
-                .await
+            .coordinate_build(build_key, async move {
+                store
+                    .build_python_environment(
+                        final_dir,
+                        &build_digest,
+                        &build_versions,
+                        &build_dependencies,
+                    )
+                    .await
             })
             .await?;
         validate_published_manifest(
@@ -697,15 +716,20 @@ impl EnvironmentStore {
             ecosystem: Ecosystem::Node,
             digest: digest.to_string(),
         };
+        let store = self.clone();
+        let build_versions = versions.clone();
+        let build_dependencies = dependencies.clone();
+        let build_digest = digest.to_string();
         let published = self
-            .coordinate_build(build_key, async {
-                self.build_node_environment(
-                    final_dir.clone(),
-                    digest.as_str(),
-                    &versions,
-                    dependencies,
-                )
-                .await
+            .coordinate_build(build_key, async move {
+                store
+                    .build_node_environment(
+                        final_dir,
+                        &build_digest,
+                        &build_versions,
+                        &build_dependencies,
+                    )
+                    .await
             })
             .await?;
         validate_published_manifest(

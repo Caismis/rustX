@@ -16,6 +16,11 @@
 //!   (`environments`);
 //! - compact model-visible Skill catalog rendering (`catalog`).
 //!
+//! Candidate preparation callers wait on an `EnvironmentStore`-owned
+//! `(ecosystem, digest)` build task. Caller cancellation stops only that
+//! caller's wait; the physical materialization remains owned until its
+//! supervised subprocess hierarchy settles and publication returns.
+//!
 //! Skills remain workflow/instruction packages: they are not tools and not
 //! a parallel execution protocol. Skill execution flows through ordinary
 //! native Read/Bash against the Workspace. The capability coordination

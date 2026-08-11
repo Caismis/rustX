@@ -311,7 +311,9 @@ Implemented:
   manifest is atomically committed; Node uses private staging followed by
   atomic rename. Both are immutable after publication in a canonical,
   symlink-safe runtime-private store, and same-process preparations of one
-  ecosystem/digest coalesce behind one in-flight build owner.
+  ecosystem/digest coalesce behind one `EnvironmentStore`-owned in-flight
+  build task; candidate callers only wait on the shared result and caller
+  cancellation does not release the entry before physical settlement.
 - Scripts, references, and assets layout, executed through native
   Read/Bash against the Workspace (no `skill_search`/`activate_skill`/
   `skill_view`/`run_skill`/`run_skill_script`)

@@ -902,8 +902,12 @@ The M6 implementation (`src/skills`) freezes the Skill plane boundary:
   as the ready marker; Node uses private staging followed by atomic rename.
   Both are reused only when the committed manifest matches the expected
   digest inputs, and neither is installed into again. Same-process
-  preparations of one ecosystem/digest coalesce behind one in-flight build
-  owner.
+  preparations of one ecosystem/digest coalesce behind one
+  `EnvironmentStore`-owned build task: candidate callers only wait on its
+  result, so caller cancellation cannot cancel the physical materialization
+  or release the in-flight entry. The owner publishes the terminal result and
+  releases that entry only after materialization, validation, and publication
+  return.
 - **Catalog.** The model-visible catalog is rendered compactly from the
   attempt's immutable Skill snapshot: the common `.agents/skills/` root
   once, then `- <name>: <description>` per validated Skill in
