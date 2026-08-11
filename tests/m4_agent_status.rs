@@ -858,7 +858,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
             Some(Tz::Asia__Tokyo),
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -925,7 +925,7 @@ async fn runtime_originated_inbound_triggers_status() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -974,7 +974,7 @@ async fn no_role_heuristic_triggers_status() {
     let result = AgentExecution::new(
         request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1020,7 +1020,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
     let result = AgentExecution::new(
         request("attempt-1", vec![initial], trigger, None),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1089,7 +1089,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1193,7 +1193,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1267,7 +1267,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1358,7 +1358,7 @@ async fn foreground_tool_continuation_has_no_status() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1423,7 +1423,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             250,
@@ -1715,7 +1715,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             None,
         ),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(
             400,

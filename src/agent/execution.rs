@@ -160,15 +160,15 @@ pub struct AgentExecutionResult {
 /// One agent attempt execution.
 ///
 /// The loop borrows the model adapter, the immutable tool registry, the
-/// attempt cancellation signal, and owns the mandatory M4 context runtime,
-/// the conversation tool runtime (whose canonical mailbox the loop drains),
-/// the execution state machine, the committed history, the retained
-/// continuation state, the pending fresh inbound trigger, and the runtime
-/// event trace.
+/// attempt cancellation signal, and owns the attempt capability lease, the
+/// mandatory M4 context runtime, the conversation tool runtime (whose
+/// canonical mailbox the loop drains), the execution state machine, the
+/// committed history, the retained continuation state, the pending fresh
+/// inbound trigger, and the runtime event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
-    capability: &'a AttemptCapabilityLease,
+    capability: AttemptCapabilityLease,
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
     state: ExecutionStateMachine,
@@ -227,15 +227,17 @@ enum Terminal {
 }
 
 impl<'a> AgentExecution<'a> {
-    /// Creates an attempt execution over the given adapter, the attempt
+    /// Creates an attempt execution over the given adapter, the owned attempt
     /// capability lease, the cancellation signal, the mandatory M4 context
     /// runtime, and the conversation tool runtime.
     ///
-    /// The attempt capability lease pins the immutable capability snapshot
-    /// (revision, `ToolRegistry` handle, Skill catalog, environment
-    /// identities, and the effective `ToolEnvironment`) for the complete
-    /// lifetime of this attempt: every model/tool cycle inside the attempt
-    /// uses exactly that snapshot and never re-discovers Skills. The
+    /// The attempt capability lease is moved into the execution and pins the
+    /// immutable capability snapshot (revision, `ToolRegistry` handle, Skill
+    /// catalog, environment identities, and the effective `ToolEnvironment`)
+    /// for the complete lifetime of this attempt: every model/tool cycle
+    /// inside the attempt uses exactly that snapshot and never re-discovers
+    /// Skills. Constructor failure drops the owned lease, and successful
+    /// execution settlement drops it with the consumed execution. The
     /// execution cannot be constructed without a lease — there is no
     /// capability-free constructor.
     ///
@@ -261,7 +263,7 @@ impl<'a> AgentExecution<'a> {
     pub fn new(
         request: AgentExecutionRequest,
         adapter: &'a dyn ModelAdapter,
-        capability: &'a AttemptCapabilityLease,
+        capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime<'a>,
         tool_runtime: &'a ConversationToolRuntime,
@@ -2135,13 +2137,13 @@ mod tests {
         let adapter = ScriptedAdapter::new(Vec::new());
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let tool_runtime = tool_runtime();
-        let (_dir, _coordinator, lease) =
-            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
 
         let execution = AgentExecution::new(
             request(),
             &adapter,
-            &lease,
+            lease,
             &cancellation,
             runtime(),
             &tool_runtime,
@@ -2150,6 +2152,7 @@ mod tests {
 
         assert_eq!(adapter.request_count(), 0, "construction is pre-execution");
         drop(execution);
+        assert_eq!(coordinator.active_attempts(), 0);
     }
 
     #[tokio::test]
@@ -2157,8 +2160,9 @@ mod tests {
         let adapter = ScriptedAdapter::new(Vec::new());
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let owner_runtime = tool_runtime();
-        let (_dir, _coordinator, lease) =
+        let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
         let other_dir = tempfile::tempdir().expect("other runtime directory");
         std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
@@ -2173,7 +2177,7 @@ mod tests {
         let result = AgentExecution::new(
             other_request,
             &adapter,
-            &lease,
+            lease,
             &cancellation,
             runtime(),
             &other_runtime,
@@ -2188,6 +2192,7 @@ mod tests {
             0,
             "rejection precedes model requests"
         );
+        assert_eq!(coordinator.active_attempts(), 0);
     }
 
     #[tokio::test]
@@ -2195,8 +2200,9 @@ mod tests {
         let adapter = ScriptedAdapter::new(Vec::new());
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let owner_runtime = tool_runtime();
-        let (_dir, _coordinator, lease) =
+        let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
         let other_dir = tempfile::tempdir().expect("other workspace directory");
         std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
@@ -2209,7 +2215,7 @@ mod tests {
         let result = AgentExecution::new(
             request(),
             &adapter,
-            &lease,
+            lease,
             &cancellation,
             runtime(),
             &other_runtime,
@@ -2224,6 +2230,7 @@ mod tests {
             0,
             "rejection precedes model requests"
         );
+        assert_eq!(coordinator.active_attempts(), 0);
     }
 
     /// The generic turn-boundary invariant with no mailbox attached: turn 1
@@ -2257,7 +2264,7 @@ mod tests {
         let mut execution = AgentExecution::new(
             request(),
             &adapter,
-            &lease,
+            lease,
             &cancellation,
             runtime(),
             &tool_runtime,
@@ -2344,7 +2351,7 @@ mod tests {
         let mut execution = AgentExecution::new(
             request(),
             &adapter,
-            &lease,
+            lease,
             &cancellation,
             runtime(),
             &tool_runtime,
@@ -2565,7 +2572,7 @@ mod tests {
             AgentExecution::new(
                 request(),
                 &adapter,
-                &lease,
+                lease,
                 &cancellation,
                 runtime(),
                 &tool_runtime,

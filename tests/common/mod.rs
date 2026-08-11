@@ -629,10 +629,22 @@ pub struct CapabilityFixture {
 }
 
 impl CapabilityFixture {
-    /// The pinned attempt capability lease.
+    /// Moves the pinned attempt capability lease out of the fixture.
     #[must_use]
-    pub fn lease(&self) -> &rustx::capabilities::AttemptCapabilityLease {
-        &self.lease
+    pub fn into_lease(self) -> rustx::capabilities::AttemptCapabilityLease {
+        self.lease
+    }
+
+    /// Moves the lease and coordinator out together when a test must keep the
+    /// registered executor handles alive after the attempt settles.
+    #[must_use]
+    pub fn into_lease_and_coordinator(
+        self,
+    ) -> (
+        rustx::capabilities::AttemptCapabilityLease,
+        rustx::capabilities::CapabilityCoordinator,
+    ) {
+        (self.lease, self.coordinator)
     }
 }
 

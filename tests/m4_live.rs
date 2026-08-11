@@ -92,7 +92,7 @@ async fn live_step(
     AgentExecution::new(
         request,
         adapter,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,

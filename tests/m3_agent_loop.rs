@@ -99,7 +99,7 @@ async fn run(
     AgentExecution::new(
         request("attempt-1"),
         model,
-        capability.lease(),
+        capability.into_lease(),
         cancellation,
         runtime(),
         &tool_runtime,
@@ -2488,7 +2488,7 @@ async fn run_with_mailbox(
     AgentExecution::new(
         request("attempt-1"),
         model,
-        capability.lease(),
+        capability.into_lease(),
         cancellation,
         runtime(),
         &tool_runtime,
@@ -2511,7 +2511,7 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
     let error = AgentExecution::new(
         request("attempt-1"),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime(),
         &tool_runtime,

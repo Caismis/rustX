@@ -478,10 +478,13 @@ fn candidate_is_noop(
 
 /// The RAII-style attempt capability lease.
 ///
-/// One `AgentExecution` holds exactly one lease for its complete lifetime;
+/// One `AgentExecution` owns exactly one lease for its complete lifetime;
 /// every model/tool cycle inside that attempt uses the pinned immutable
-/// snapshot and never re-discovers Skills. Conversation-owned detached
-/// background executions do not hold an attempt lease.
+/// snapshot and never re-discovers Skills. The lease is acquired before
+/// construction, moved into the execution, and released by normal
+/// destruction when construction fails or the consumed execution settles.
+/// Conversation-owned detached background executions do not hold an attempt
+/// lease.
 pub struct AttemptCapabilityLease {
     inner: Arc<CoordinatorInner>,
     snapshot: Arc<CapabilitySnapshot>,

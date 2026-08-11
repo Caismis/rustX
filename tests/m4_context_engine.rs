@@ -1308,7 +1308,7 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -1422,7 +1422,7 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2283,7 +2283,7 @@ async fn proactive_compaction_before_the_next_turn() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2462,7 +2462,7 @@ async fn below_threshold_runs_without_compaction() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2521,7 +2521,7 @@ async fn overflow_compact_and_retry_succeeds() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2635,7 +2635,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2709,7 +2709,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2785,7 +2785,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2862,7 +2862,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2930,7 +2930,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
         let result = AgentExecution::new(
             request("attempt-1", vec![user("msg-user-1", "hi")], 0),
             &model,
-            capability.lease(),
+            capability.into_lease(),
             &cancellation,
             runtime,
             &tool_runtime,
@@ -3003,7 +3003,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3143,7 +3143,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
     let result = AgentExecution::new(
         fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         rustx::context::ContextRuntime::with_status_composer(
             engine(10_000_000, 0, 0, weighted(10, 10, 10)),
@@ -3236,7 +3236,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
     let result = AgentExecution::new(
         fresh_request("attempt-1", initial),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
         &tool_runtime,
@@ -3311,7 +3311,7 @@ async fn no_progress_compaction_fails_without_retry() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3384,7 +3384,7 @@ async fn cancel_before_proactive_compaction() {
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3443,7 +3443,7 @@ async fn cancel_while_summary_generation_is_pending() {
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3543,7 +3543,7 @@ async fn run_continuation_case(
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3946,7 +3946,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4126,7 +4126,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4202,7 +4202,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4365,7 +4365,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "hi")], 0),
         &model,
-        capability.lease(),
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,

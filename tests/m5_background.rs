@@ -712,7 +712,7 @@ async fn run_with_mailbox(
     AgentExecution::new(
         request(),
         model,
-        capability.lease(),
+        capability.into_lease(),
         cancellation,
         runtime(),
         tool_runtime,

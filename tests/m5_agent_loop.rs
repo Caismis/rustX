@@ -81,16 +81,20 @@ async fn run(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     mailbox: Option<rustx::runtime::inbound::ConversationInboundMailbox>,
-) -> (AgentExecutionResult, common::CapabilityFixture) {
+) -> (
+    AgentExecutionResult,
+    rustx::capabilities::CapabilityCoordinator,
+) {
     let tool_runtime = match mailbox {
         Some(mailbox) => common::tool_runtime_with_mailbox("conv-1", mailbox),
         None => common::tool_runtime("conv-1"),
     };
     let capability = common::capability_lease(tools, &tool_runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
     let result = AgentExecution::new(
         request(),
         model,
-        capability.lease(),
+        lease,
         cancellation,
         runtime(),
         &tool_runtime,
@@ -98,7 +102,7 @@ async fn run(
     .expect("conversation identity matches the tool runtime")
     .run()
     .await;
-    (result, capability)
+    (result, coordinator)
 }
 
 fn started() -> ModelEvent {

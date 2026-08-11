@@ -261,10 +261,11 @@ attempt uses exactly the pinned immutable `CapabilitySnapshot`:
 
 No model turn re-discovers Skills or re-queries the conversation capability
 pointer. A capability commit while the attempt lease is active is rejected
-as busy; the lease releases when the attempt settles. The lease owner is
-structurally bound to the `ConversationId` and canonical Workspace root of
-the corresponding `ConversationToolRuntime`; a mismatch is rejected before
-any model request or tool execution begins.
+as busy; the lease is moved into `AgentExecution` and releases when the
+consumed execution is dropped after settlement (or when construction fails).
+The lease owner is structurally bound to the `ConversationId` and canonical
+Workspace root of the corresponding `ConversationToolRuntime`; a mismatch is
+rejected before any model request or tool execution begins.
 
 ## 9. Conversation inbound mailbox (Issue #22)
 
