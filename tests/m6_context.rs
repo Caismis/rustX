@@ -159,6 +159,16 @@ async fn chat_completions_places_the_catalog_in_a_system_message() {
         .expect("messages")
         .as_array()
         .expect("array");
+    let roles: Vec<&str> = messages
+        .iter()
+        .map(|message| {
+            message
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .expect("role")
+        })
+        .collect();
+    assert_eq!(roles, vec!["system", "system", "assistant", "user"]);
     let system_messages: Vec<&str> = messages
         .iter()
         .filter(|message| message.get("role") == Some(&serde_json::json!("system")))

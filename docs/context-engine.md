@@ -759,8 +759,9 @@ instructions in the top-level `instructions` channel on every request
 (including stored continuations, whose sliced canonical history never
 carries the catalog), Anthropic Messages pushes it into the top-level
 `system` content after the canonical system blocks, and OpenAI Chat
-Completions emits one deterministic system message after the canonical
-system messages. It is never attached to a user message. The catalog is
+Completions emits one deterministic system message in the trusted system
+prefix after the canonical system messages and before the conversational
+transcript. It is never attached to a user message. The catalog is
 carried by the Layer 0 `SkillCatalogAttachment` (`src/model/types.rs`);
 `src/model` never references context or capability modules.
 

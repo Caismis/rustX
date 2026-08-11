@@ -535,6 +535,7 @@ struct FrontmatterSerde {
 
 /// The frontmatter parse outcome distinguishes a malformed YAML block from
 /// a metadata map that violates the standard string-to-string constraint.
+#[derive(Debug)]
 enum FrontmatterFailure {
     /// The YAML block is malformed or the standard fields have the wrong
     /// shape.
@@ -558,21 +559,35 @@ impl From<FrontmatterFailure> for String {
 /// The frontmatter is the first `---`-delimited block at the start of the
 /// file. A missing opening or closing delimiter is malformed.
 fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> {
-    let body = markdown.strip_prefix("---\n").or_else(|| {
-        markdown
-            .strip_prefix("---\r\n")
-            .or_else(|| markdown.strip_prefix("---\u{FEFF}"))
-    });
-    let Some(remainder) = body else {
+    let Some(opening_end) = frontmatter_line_end(markdown, 0) else {
         return Err(FrontmatterFailure::Malformed(
             "SKILL.md must start with a YAML frontmatter block".to_owned(),
         ));
     };
-    let (yaml_block, _markdown_body) = remainder.split_once("\n---").ok_or_else(|| {
-        FrontmatterFailure::Malformed(
+    if line_content(&markdown[..opening_end]) != "---" {
+        return Err(FrontmatterFailure::Malformed(
+            "SKILL.md must start with a YAML frontmatter block".to_owned(),
+        ));
+    }
+    let remainder = &markdown[opening_end..];
+    let mut cursor = 0;
+    let mut closing = None;
+    while cursor < remainder.len() {
+        let Some(end) = frontmatter_line_end(remainder, cursor) else {
+            break;
+        };
+        if line_content(&remainder[cursor..end]) == "---" {
+            closing = Some((cursor, end));
+            break;
+        }
+        cursor = end;
+    }
+    let Some((closing_start, _closing_end)) = closing else {
+        return Err(FrontmatterFailure::Malformed(
             "SKILL.md frontmatter is missing its closing delimiter".to_owned(),
-        )
-    })?;
+        ));
+    };
+    let yaml_block = &remainder[..closing_start];
     let frontmatter: FrontmatterSerde = serde_yaml::from_str(yaml_block).map_err(|error| {
         FrontmatterFailure::Malformed(format!("frontmatter is not valid YAML: {error}"))
     })?;
@@ -595,4 +610,55 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> 
         compatibility: frontmatter.compatibility,
         allowed_tools: frontmatter.allowed_tools,
     })
+}
+
+/// Returns the end offset (exclusive) of the line beginning at `start`.
+/// An EOF-terminated final line is still a line; delimiter recognition remains
+/// exact because only the complete line content `---` is accepted.
+fn frontmatter_line_end(text: &str, start: usize) -> Option<usize> {
+    if start >= text.len() {
+        return None;
+    }
+    Some(
+        text[start..]
+            .find('\n')
+            .map_or(text.len(), |relative| start + relative + 1),
+    )
+}
+
+/// Removes only the line ending from one frontmatter line.
+fn line_content(line: &str) -> &str {
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
+#[cfg(test)]
+mod frontmatter_tests {
+    use super::parse_frontmatter;
+
+    #[test]
+    fn accepts_lf_and_crlf_delimiter_lines() {
+        let lf = parse_frontmatter("---\nname: pdf\ndescription: test\n---\nbody\n")
+            .expect("LF frontmatter");
+        assert_eq!(lf.name, "pdf");
+        let crlf = parse_frontmatter("---\r\nname: pdf\r\ndescription: test\r\n---\r\nbody\r\n")
+            .expect("CRLF frontmatter");
+        assert_eq!(crlf.description, "test");
+    }
+
+    #[test]
+    fn requires_exact_opening_and_closing_delimiter_lines() {
+        assert!(parse_frontmatter("name: pdf\n---\nbody\n").is_err());
+        assert!(parse_frontmatter("---\nname: pdf\ndescription: test\n---oops\nbody\n").is_err());
+        assert!(parse_frontmatter("---\nname: pdf\ndescription: test\nbody\n").is_err());
+    }
+
+    #[test]
+    fn delimiter_text_inside_a_quoted_scalar_is_not_a_boundary() {
+        let parsed = parse_frontmatter(
+            "---\nname: pdf\ndescription: 'text --- remains scalar'\n---\nbody\n",
+        )
+        .expect("quoted scalar");
+        assert_eq!(parsed.description, "text --- remains scalar");
+    }
 }

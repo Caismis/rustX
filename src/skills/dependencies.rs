@@ -41,7 +41,7 @@ pub const PYTHON_DEPENDENCIES_METADATA_KEY: &str = "rustx.python-dependencies";
 pub const NODE_DEPENDENCIES_METADATA_KEY: &str = "rustx.node-dependencies";
 
 /// The dependency ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ecosystem {
     /// The Python ecosystem (`pip`/`PyPI`).
@@ -62,6 +62,13 @@ pub enum DependencyError {
         ecosystem: Ecosystem,
         package: String,
         version: String,
+    },
+    /// Two differently spelled Python distribution names normalize to one
+    /// package but declare different exact versions inside one Skill.
+    NormalizedNameConflict {
+        ecosystem: Ecosystem,
+        normalized: String,
+        declarations: Vec<(String, String)>,
     },
 }
 
@@ -88,6 +95,20 @@ impl core::fmt::Display for DependencyError {
                  M6 supports direct exact versions only (no ranges, tags, extras, markers, \
                  URLs, VCS, local paths, editable installs, or workspace references)"
             ),
+            Self::NormalizedNameConflict {
+                ecosystem,
+                normalized,
+                declarations,
+            } => {
+                write!(
+                    f,
+                    "{ecosystem}: normalized package {normalized:?} has conflicting exact versions:"
+                )?;
+                for (name, version) in declarations {
+                    write!(f, " {name:?} declares {version:?};")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -207,12 +228,14 @@ fn parse_json_object(
         return Err(DependencyError::NotAnObject(value.to_owned()));
     };
     let mut normalized = BTreeMap::new();
-    for (package, version) in map {
-        let package =
-            normalize(&package, ecosystem).map_err(|_| DependencyError::InvalidPackageName {
+    let mut originals: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (original_package, version) in map {
+        let package = normalize(&original_package, ecosystem).map_err(|_| {
+            DependencyError::InvalidPackageName {
                 ecosystem,
-                name: package.clone(),
-            })?;
+                name: original_package.clone(),
+            }
+        })?;
         let serde_json::Value::String(version) = version else {
             return Err(DependencyError::InvalidVersion {
                 ecosystem,
@@ -227,7 +250,28 @@ fn parse_json_object(
                 version: version.clone(),
             }
         })?;
-        normalized.insert(package, version);
+        match normalized.get(&package) {
+            Some(existing) if existing == &version => {
+                originals
+                    .entry(package)
+                    .or_default()
+                    .push((original_package, version));
+            }
+            Some(_existing) => {
+                let mut declarations = originals.remove(&package).unwrap_or_default();
+                declarations.push((original_package, version));
+                declarations.sort();
+                return Err(DependencyError::NormalizedNameConflict {
+                    ecosystem,
+                    normalized: package,
+                    declarations,
+                });
+            }
+            None => {
+                originals.insert(package.clone(), vec![(original_package, version.clone())]);
+                normalized.insert(package, version);
+            }
+        }
     }
     Ok(normalized)
 }
@@ -444,6 +488,34 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    /// Python spellings that normalize to one package coalesce when their
+    /// exact versions agree.
+    #[test]
+    fn normalized_python_aliases_coalesce_when_versions_match() {
+        let parsed = parse_python_dependencies(r#"{"foo_bar":"1.0","foo-bar":"1.0"}"#)
+            .expect("aliases coalesce");
+        assert_eq!(parsed.get("foo-bar"), Some(&"1.0".to_owned()));
+    }
+
+    /// A normalized-name version conflict is deterministic and retains the
+    /// original spellings, regardless of JSON source-key order.
+    #[test]
+    fn normalized_python_alias_conflicts_are_order_independent() {
+        let first = parse_python_dependencies(r#"{"foo_bar":"1.0","foo-bar":"2.0"}"#)
+            .expect_err("conflict");
+        let second = parse_python_dependencies(r#"{"foo-bar":"2.0","foo_bar":"1.0"}"#)
+            .expect_err("conflict");
+        assert_eq!(first, second);
+        assert!(matches!(
+            first,
+            DependencyError::NormalizedNameConflict {
+                ecosystem: Ecosystem::Python,
+                normalized,
+                ..
+            } if normalized == "foo-bar"
+        ));
     }
 
     /// Scoped Node package names parse.
