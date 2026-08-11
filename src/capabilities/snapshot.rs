@@ -1,10 +1,11 @@
 //! The immutable active capability snapshot (M6).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::model::types::SkillCatalogAttachment;
 use crate::protocol::manifest::CapabilitiesManifest;
-use crate::runtime::identity::CapabilityRevision;
+use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
 use crate::skills::{SkillCatalogEntry, SkillSnapshot};
 use crate::tools::environment::ToolEnvironment;
@@ -30,6 +31,8 @@ use crate::tools::executor::ToolRegistry;
 /// reuse the same handle, which is the M7 seam without implementing M7.
 #[derive(Clone)]
 pub struct CapabilitySnapshot {
+    conversation_id: ConversationId,
+    workspace_root: PathBuf,
     revision: CapabilityRevision,
     tool_registry: Arc<ToolRegistry>,
     skills: Arc<SkillSnapshot>,
@@ -45,7 +48,9 @@ pub struct CapabilitySnapshot {
 /// part of the equality (it is the same handle across candidates).
 impl PartialEq for CapabilitySnapshot {
     fn eq(&self, other: &Self) -> bool {
-        self.revision == other.revision
+        self.conversation_id == other.conversation_id
+            && self.workspace_root == other.workspace_root
+            && self.revision == other.revision
             && self.skills == other.skills
             && self.python_environment == other.python_environment
             && self.node_environment == other.node_environment
@@ -56,6 +61,8 @@ impl PartialEq for CapabilitySnapshot {
 impl core::fmt::Debug for CapabilitySnapshot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("CapabilitySnapshot")
+            .field("conversation_id", &self.conversation_id)
+            .field("workspace_root", &self.workspace_root)
             .field("revision", &self.revision)
             .field("skills", &self.skills)
             .field("python_environment", &self.python_environment)
@@ -68,7 +75,10 @@ impl core::fmt::Debug for CapabilitySnapshot {
 impl CapabilitySnapshot {
     /// Builds the immutable snapshot from the prepared candidate pieces.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        conversation_id: ConversationId,
+        workspace_root: PathBuf,
         revision: CapabilityRevision,
         tool_registry: Arc<ToolRegistry>,
         skills: Arc<SkillSnapshot>,
@@ -80,6 +90,8 @@ impl CapabilitySnapshot {
             .render_catalog()
             .map(|rendered| SkillCatalogAttachment { rendered });
         Self {
+            conversation_id,
+            workspace_root,
             revision,
             tool_registry,
             skills,
@@ -88,6 +100,18 @@ impl CapabilitySnapshot {
             effective_environment,
             skill_catalog,
         }
+    }
+
+    /// The conversation owner of this immutable capability snapshot.
+    #[must_use]
+    pub fn conversation_id(&self) -> &ConversationId {
+        &self.conversation_id
+    }
+
+    /// The canonical Workspace owner of this immutable capability snapshot.
+    #[must_use]
+    pub fn workspace_root(&self) -> &Path {
+        &self.workspace_root
     }
 
     /// The monotonic capability revision of this snapshot.

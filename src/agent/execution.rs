@@ -272,6 +272,17 @@ impl<'a> AgentExecution<'a> {
                 actual: tool_runtime.conversation_id().clone(),
             });
         }
+        let snapshot = capability.snapshot();
+        if snapshot.conversation_id() != tool_runtime.conversation_id()
+            || snapshot.workspace_root() != tool_runtime.workspace().root()
+        {
+            return Err(MailboxError::CapabilityOwnershipMismatch {
+                capability_conversation: snapshot.conversation_id().clone(),
+                runtime_conversation: tool_runtime.conversation_id().clone(),
+                capability_workspace: snapshot.workspace_root().to_path_buf(),
+                runtime_workspace: tool_runtime.workspace().root().to_path_buf(),
+            });
+        }
         Ok(Self {
             history: request.initial_messages.clone(),
             request,
@@ -2105,6 +2116,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let coordinator = crate::capabilities::CapabilityCoordinator::new(
             crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 tool_registry: tools,
                 base_environment: tool_runtime.environment().clone(),
@@ -2116,6 +2128,102 @@ mod tests {
         coordinator.commit(candidate).expect("commit");
         let lease = coordinator.acquire_attempt_lease();
         (dir, coordinator, lease)
+    }
+
+    #[tokio::test]
+    async fn capability_lease_owner_matches_runtime_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+
+        let execution = AgentExecution::new(
+            request(),
+            &adapter,
+            &lease,
+            &cancellation,
+            runtime(),
+            &tool_runtime,
+        )
+        .expect("matching capability owner is accepted");
+
+        assert_eq!(adapter.request_count(), 0, "construction is pre-execution");
+        drop(execution);
+    }
+
+    #[tokio::test]
+    async fn capability_lease_rejects_different_conversation_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        let other_dir = tempfile::tempdir().expect("other runtime directory");
+        std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
+        let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new("conv-2"),
+            other_dir.path().join("workspace"),
+            other_dir.path().join("artifacts"),
+        )
+        .expect("other tool runtime");
+        let mut other_request = request();
+        other_request.conversation_id = ConversationId::new("conv-2");
+
+        let result = AgentExecution::new(
+            other_request,
+            &adapter,
+            &lease,
+            &cancellation,
+            runtime(),
+            &other_runtime,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::runtime::inbound::MailboxError::CapabilityOwnershipMismatch { .. })
+        ));
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "rejection precedes model requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_lease_rejects_different_workspace_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        let other_dir = tempfile::tempdir().expect("other workspace directory");
+        std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
+        let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            other_dir.path().join("workspace"),
+            other_dir.path().join("artifacts"),
+        )
+        .expect("other tool runtime");
+
+        let result = AgentExecution::new(
+            request(),
+            &adapter,
+            &lease,
+            &cancellation,
+            runtime(),
+            &other_runtime,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::runtime::inbound::MailboxError::CapabilityOwnershipMismatch { .. })
+        ));
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "rejection precedes model requests"
+        );
     }
 
     /// The generic turn-boundary invariant with no mailbox attached: turn 1

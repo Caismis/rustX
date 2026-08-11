@@ -1,13 +1,14 @@
 //! The capability coordinator: preparation, quiescent commit, and attempt
 //! leases (M6).
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::runtime::identity::CapabilityRevision;
+use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
@@ -20,6 +21,8 @@ use crate::tools::workspace::Workspace;
 /// The coordinator configuration of one conversation/capability owner.
 #[derive(Clone)]
 pub struct CapabilityCoordinatorConfig {
+    /// The conversation that owns this coordinator and every lease it emits.
+    pub conversation_id: ConversationId,
     /// The canonical conversation Workspace (the Skill root anchor).
     pub workspace: Workspace,
     /// The immutable `ToolRegistry` handle of the capability set.
@@ -43,6 +46,7 @@ struct CoordinatorState {
 
 /// The conversation/capability-owner coordination state.
 struct CoordinatorInner {
+    conversation_id: ConversationId,
     workspace: Workspace,
     tool_registry: Arc<ToolRegistry>,
     base_environment: ToolEnvironment,
@@ -92,6 +96,18 @@ impl PreparedCapabilityCandidate {
     pub fn skill_packages(&self) -> &[Arc<crate::skills::SkillPackage>] {
         self.skills.packages()
     }
+
+    /// The prepared immutable Python environment identity, when present.
+    #[must_use]
+    pub fn python_environment(&self) -> Option<&crate::skills::environments::PythonEnvironment> {
+        self.python.as_ref()
+    }
+
+    /// The prepared immutable Node environment identity, when present.
+    #[must_use]
+    pub fn node_environment(&self) -> Option<&crate::skills::environments::NodeEnvironment> {
+        self.node.as_ref()
+    }
 }
 
 impl CapabilityCoordinator {
@@ -124,20 +140,35 @@ impl CapabilityCoordinator {
         config: CapabilityCoordinatorConfig,
         backend: Arc<dyn SkillEnvironmentBackend>,
     ) -> Result<Self, CapabilityPreparationError> {
-        let store_root = std::fs::canonicalize(&config.environment_store_root)
-            .unwrap_or_else(|_| config.environment_store_root.clone());
-        if store_root.starts_with(config.workspace.root())
-            || config.workspace.root().starts_with(&store_root)
-        {
+        let prospective_store_root = prospective_canonical_path(&config.environment_store_root)
+            .map_err(|detail| {
+                CapabilityPreparationError::Environment(
+                    crate::skills::EnvironmentPreparationError::StagingFailed { detail },
+                )
+            })?;
+        if paths_overlap(config.workspace.root(), &prospective_store_root) {
             return Err(
                 CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
                     store_root: config.environment_store_root.display().to_string(),
                 },
             );
         }
-        let environment_store = EnvironmentStore::new(config.environment_store_root, backend)?;
+        // Create through the prospective canonical target, not through the
+        // unresolved configured spelling. This prevents a symlink-prefix
+        // path from redirecting creation into the model Workspace after the
+        // overlap check has completed.
+        let environment_store = EnvironmentStore::new(prospective_store_root, backend)?;
+        if paths_overlap(config.workspace.root(), environment_store.root()) {
+            return Err(
+                CapabilityPreparationError::EnvironmentStoreOverlapsWorkspace {
+                    store_root: environment_store.root().display().to_string(),
+                },
+            );
+        }
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
+            config.conversation_id.clone(),
+            config.workspace.root().to_path_buf(),
             CapabilityRevision::default(),
             config.tool_registry.clone(),
             initial_skills,
@@ -147,6 +178,7 @@ impl CapabilityCoordinator {
         ));
         Ok(Self {
             inner: Arc::new(CoordinatorInner {
+                conversation_id: config.conversation_id,
                 workspace: config.workspace,
                 tool_registry: config.tool_registry,
                 base_environment: config.base_environment,
@@ -292,6 +324,8 @@ impl CapabilityCoordinator {
         }
         let revision = CapabilityRevision::new(state.revision.get() + 1);
         let snapshot = Arc::new(CapabilitySnapshot::new(
+            self.inner.conversation_id.clone(),
+            self.inner.workspace.root().to_path_buf(),
             revision,
             self.inner.tool_registry.clone(),
             candidate.skills,
@@ -354,6 +388,78 @@ impl CapabilityCoordinator {
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
+}
+
+/// Returns the canonical target that creation would reach without creating
+/// any missing component. Existing ancestors are canonicalized (therefore
+/// symlinks are resolved), and the non-existent suffix is appended only after
+/// that resolution.
+fn prospective_canonical_path(path: &Path) -> Result<PathBuf, String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("cannot resolve environment store path: {error}"))?
+            .join(path)
+    };
+    let normalized = normalize_absolute_path(&absolute)?;
+    let mut existing = normalized.clone();
+    let mut suffix = Vec::<OsString>::new();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            return Err(format!(
+                "cannot resolve environment store path {}",
+                path.display()
+            ));
+        };
+        suffix.push(name.to_os_string());
+        if !existing.pop() {
+            return Err(format!(
+                "cannot resolve environment store path {}",
+                path.display()
+            ));
+        }
+    }
+    let canonical_existing = std::fs::canonicalize(&existing)
+        .map_err(|error| format!("cannot canonicalize environment store ancestor: {error}"))?;
+    let mut result = canonical_existing;
+    for component in suffix.iter().rev() {
+        result.push(component);
+    }
+    Ok(result)
+}
+
+/// Normalizes an absolute path before resolving its deepest existing
+/// ancestor. Parent components are rejected because resolving them lexically
+/// before following symlinks could describe a different filesystem target
+/// from the path the OS will create.
+fn normalize_absolute_path(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "environment store path is not absolute: {}",
+            path.display()
+        ));
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::Normal(value) => normalized.push(value),
+            Component::ParentDir => {
+                return Err(format!(
+                    "environment store path contains an ambiguous parent component: {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left == right || left.starts_with(right) || right.starts_with(left)
 }
 
 /// Whether the candidate's capability content equals the current snapshot
@@ -500,6 +606,7 @@ body
         .expect("SKILL.md");
         let workspace = Workspace::new(&workspace_root).expect("workspace");
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace,
             tool_registry: Arc::new(ToolRegistry::new()),
             base_environment: ToolEnvironment::new(),
