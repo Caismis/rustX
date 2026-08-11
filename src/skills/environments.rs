@@ -75,8 +75,11 @@
 //! (`crate::runtime::process_runner`): the same rustX-owned supervisor/
 //! process-group domain, child-subreaper contract, cancellation/timeout
 //! settlement, explicit cwd, explicit child environment, finite timeout,
-//! and bounded diagnostics as native Bash. No independent bare subprocess
-//! hierarchy exists.
+//! and bounded diagnostics as native Bash. The runner-backed convenience
+//! boundary owns each physical invocation in a runtime driver task: the
+//! materializer/probe future waits for its result, but dropping that waiter
+//! does not cancel or abandon a started subprocess. No independent bare
+//! subprocess hierarchy exists.
 //!
 //! The materializer boundary is the [`SkillEnvironmentBackend`] seam:
 //! production uses the runner-backed backend; deterministic tests inject
@@ -93,7 +96,9 @@
 //! caller's wait; it never releases the in-flight entry or cancels the shared
 //! physical materialization. The owner publishes the result and removes the
 //! in-flight entry only after materialization, validation, and publication
-//! have returned, so a retry cannot overlap the previous writer.
+//! have returned, so a retry cannot overlap the previous writer. Thus the
+//! ownership layers are explicit: `EnvironmentStore` owns the logical build,
+//! while the runtime process runner owns each physical subprocess invocation.
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -1270,7 +1275,9 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
 
-    use crate::runtime::process_runner::{CapturedProcessResult, ProcessOutcomeIntent};
+    use crate::runtime::process_runner::{
+        CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner, RunnerTestControl,
+    };
 
     struct ScriptedRunner {
         results: Mutex<VecDeque<Result<CapturedProcessResult, String>>>,
@@ -1310,5 +1317,66 @@ mod tests {
             .expect_err("a non-zero probe cannot publish a runtime identity");
 
         assert!(error.contains("python3 --version exited with code Some(1)"));
+    }
+
+    /// A real capability preparation reaches the production runner-backed
+    /// Python probe. Once that probe has established ownership and reported
+    /// shell exit, aborting the preparation waiter must not drop the physical
+    /// runner before its terminal event and direct-child reap.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropped_prepare_candidate_waiter_does_not_abandon_runtime_probe() {
+        let dir = tempfile::tempdir().expect("temporary test directory");
+        let workspace_root = dir.path().join("workspace");
+        let skill_dir = workspace_root.join(".agents/skills/python");
+        std::fs::create_dir_all(&skill_dir).expect("skill directory");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: python\ndescription: probe ownership\nmetadata:\n  rustx.python-dependencies: '{\"example\":\"1.0.0\"}'\n---\nprobe\n",
+        )
+        .expect("skill manifest");
+        let workspace =
+            crate::tools::workspace::Workspace::new(&workspace_root).expect("workspace");
+        let conversation_id = crate::runtime::identity::ConversationId::new("probe-drop");
+        let mut control = RunnerTestControl::new();
+        control.pause_at_shell_exit = true;
+        let hook = control.lifecycle.clone();
+        let runner = Arc::new(RunnerBackedProcessRunner::with_test_control(control));
+        let backend = Arc::new(RunnerBackedSkillEnvironmentBackend::new(runner));
+        let coordinator = crate::capabilities::CapabilityCoordinator::with_backend(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id,
+                workspace,
+                tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                base_environment: crate::tools::environment::ToolEnvironment::new(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+            backend,
+        )
+        .expect("capability coordinator");
+        let prepare = tokio::spawn(async move { coordinator.prepare_candidate().await });
+
+        tokio::time::timeout(Duration::from_secs(15), hook.await_ownership_established())
+            .await
+            .expect("the runtime probe must establish physical ownership");
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
+            .await
+            .expect("the probe must reach the controlled pre-settlement boundary");
+        prepare.abort();
+        assert!(
+            prepare
+                .await
+                .expect_err("the preparation waiter must be aborted")
+                .is_cancelled(),
+            "caller cancellation only drops the preparation waiter"
+        );
+
+        hook.release();
+        tokio::time::timeout(Duration::from_secs(15), hook.await_terminal())
+            .await
+            .expect("the detached probe driver must prove group terminality");
+        tokio::time::timeout(Duration::from_secs(15), hook.await_direct_child_reaped())
+            .await
+            .expect("the detached probe driver must reap the supervisor child");
     }
 }

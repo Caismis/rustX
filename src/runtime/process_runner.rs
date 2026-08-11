@@ -31,13 +31,24 @@
 //! - a terminal result is returned only after the owned process group is
 //!   terminal and the direct supervisor child is reaped.
 //!
+//! # Result waiter versus invocation
+//!
+//! For the runner-backed convenience path, the business caller's result
+//! waiter lifetime is distinct from the physical supervised invocation
+//! lifetime. Once ownership begins, the runtime-owned driver continues
+//! `settle()` even if the waiter is dropped. An explicit
+//! [`CancellationSignal`] or the command timeout controls invocation
+//! termination; dropping the waiter only discards result delivery.
+//!
 //! # Two consumption shapes
 //!
 //! - [`SupervisedCommandRunner::spawn`] hands the child stdout/stderr pipes
 //!   to the caller (native Bash) so the caller owns its streaming capture;
 //! - [`run_supervised_command`] is the bounded convenience path (Skill
 //!   environment materialization): it captures bounded output internally
-//!   and returns it with the terminal outcome.
+//!   and returns it with the terminal outcome. `RunnerBackedProcessRunner`
+//!   owns this path in one detached invocation-driver task, so its returned
+//!   result waiter can be dropped without dropping the physical owner.
 //!
 //! The module implements no generic process-management framework beyond
 //! these two real consumers.
@@ -160,7 +171,15 @@ pub(crate) struct CapturedProcessResult {
 /// deterministic materialization tests inject scripted fakes instead of
 /// invoking real package managers.
 pub(crate) trait SupervisedProcessRunner: Send + Sync {
-    /// Runs one owned supervised command to its terminal state.
+    /// Waits for one rustX-owned supervised command to reach terminal state.
+    ///
+    /// The returned future is only the result waiter. Once physical
+    /// ownership begins, dropping this future does not cancel or abandon the
+    /// invocation: the runtime-owned driver continues through
+    /// [`SupervisedCommandRunner::settle`]. Explicit cancellation is governed
+    /// by [`SupervisedCommandSpec::cancellation`], and the finite timeout
+    /// remains an invocation lifecycle control. A dropped waiter only stops
+    /// observing the eventual result.
     fn run(
         &self,
         spec: SupervisedCommandSpec,
@@ -169,8 +188,24 @@ pub(crate) trait SupervisedProcessRunner: Send + Sync {
 }
 
 /// The production supervised process runner backed by the shared runner.
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RunnerBackedProcessRunner;
+#[derive(Clone, Default)]
+pub(crate) struct RunnerBackedProcessRunner {
+    #[cfg(test)]
+    control: Option<RunnerTestControl>,
+}
+
+#[cfg(test)]
+impl RunnerBackedProcessRunner {
+    /// Creates a production runner with a test-only lifecycle control seam.
+    /// The production backend still passes `None` at every probe/materializer
+    /// call site; the runner supplies this control at the shared boundary so
+    /// those paths are tested without a probe-specific executor.
+    pub(crate) fn with_test_control(control: RunnerTestControl) -> Self {
+        Self {
+            control: Some(control),
+        }
+    }
+}
 
 impl SupervisedProcessRunner for RunnerBackedProcessRunner {
     fn run(
@@ -178,7 +213,21 @@ impl SupervisedProcessRunner for RunnerBackedProcessRunner {
         spec: SupervisedCommandSpec,
         control: Option<RunnerTestControl>,
     ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
-        Box::pin(run_supervised_command(spec, control))
+        #[cfg(test)]
+        let control = control.or_else(|| self.control.clone());
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        // The driver is the physical invocation owner. Dropping the JoinHandle
+        // detaches this task; dropping `result_rx` later therefore only loses
+        // result delivery and cannot drop `SupervisedCommandRunner` mid-settle.
+        std::mem::drop(tokio::spawn(async move {
+            let result = run_supervised_command(spec, control).await;
+            let _ = result_tx.send(result);
+        }));
+        Box::pin(async move {
+            result_rx.await.map_err(|_| {
+                "the supervised invocation driver exited before publishing a result".to_owned()
+            })?
+        })
     }
 }
 
@@ -300,6 +349,18 @@ pub(crate) struct RunnerLifecycleHook {
     proceed_tx: tokio::sync::watch::Sender<bool>,
     #[cfg(test)]
     proceed_rx: tokio::sync::watch::Receiver<bool>,
+    #[cfg(test)]
+    ownership_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(test)]
+    ownership_rx: tokio::sync::watch::Receiver<bool>,
+    #[cfg(test)]
+    terminal_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(test)]
+    terminal_rx: tokio::sync::watch::Receiver<bool>,
+    #[cfg(test)]
+    direct_child_reaped_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(test)]
+    direct_child_reaped_rx: tokio::sync::watch::Receiver<bool>,
 }
 
 #[cfg(test)]
@@ -307,10 +368,19 @@ impl RunnerLifecycleHook {
     pub(crate) fn new() -> Self {
         let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
         let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
+        let (ownership_tx, ownership_rx) = tokio::sync::watch::channel(false);
+        let (terminal_tx, terminal_rx) = tokio::sync::watch::channel(false);
+        let (direct_child_reaped_tx, direct_child_reaped_rx) = tokio::sync::watch::channel(false);
         Self {
             shell_exit_tx,
             proceed_tx,
             proceed_rx,
+            ownership_tx,
+            ownership_rx,
+            terminal_tx,
+            terminal_rx,
+            direct_child_reaped_tx,
+            direct_child_reaped_rx,
         }
     }
 
@@ -334,6 +404,46 @@ impl RunnerLifecycleHook {
     /// Test side: releases the parked runner.
     pub(crate) fn release(&self) {
         let _ = self.proceed_tx.send(true);
+    }
+
+    /// Runner side: records the supervisor's ownership commit.
+    fn mark_ownership_established(&self) {
+        let _ = self.ownership_tx.send(true);
+    }
+
+    /// Runner side: records the authoritative group terminal event.
+    fn mark_terminal(&self) {
+        let _ = self.terminal_tx.send(true);
+    }
+
+    /// Runner side: records the direct supervisor-child reap.
+    fn mark_direct_child_reaped(&self) {
+        let _ = self.direct_child_reaped_tx.send(true);
+    }
+
+    /// Test side: waits for physical supervisor ownership to be established.
+    pub(crate) async fn await_ownership_established(&self) {
+        let mut rx = self.ownership_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    /// Test side: waits for the supervisor's authoritative group terminal
+    /// event, before or after the result waiter is released.
+    pub(crate) async fn await_terminal(&self) {
+        let mut rx = self.terminal_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    /// Test side: waits for rustX to reap the direct outer supervisor child.
+    pub(crate) async fn await_direct_child_reaped(&self) {
+        let mut rx = self.direct_child_reaped_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
     }
 }
 
@@ -810,6 +920,10 @@ impl SupervisedCommandRunner {
                     Ok(Some(SupervisorEvent::OwnershipEstablished)) => {
                         if let ProcessLifecycle::OwnershipPossible { pgid } = self.lifecycle {
                             self.lifecycle = ProcessLifecycle::Owned { pgid };
+                            #[cfg(test)]
+                            if let Some(control) = self.control.as_ref() {
+                                control.lifecycle.mark_ownership_established();
+                            }
                         } else {
                             self.failure = Some("invalid Bash ownership commit transition".to_owned());
                         }
@@ -832,6 +946,10 @@ impl SupervisedCommandRunner {
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
                         send_terminal_ack(&mut self.stream).await;
+                        #[cfg(test)]
+                        if let Some(control) = self.control.as_ref() {
+                            control.lifecycle.mark_terminal();
+                        }
                         #[cfg(test)]
                         if let Some(hold) = self.control.as_ref().and_then(|control| control.terminal_hold.as_ref()) {
                             let _ = hold.held_tx.send(true);
@@ -940,12 +1058,21 @@ impl SupervisedCommandRunner {
         // Process terminality was proven by the outer supervisor before this
         // point. Reaping the already-terminal direct child is semantically
         // required; it is never abandoned.
-        if !self.direct_child_reaped
-            && let Err(error) = self.child.wait().await
-        {
-            self.failure = Some(format!(
-                "cannot reap the terminal supervisor child: {error}"
-            ));
+        if !self.direct_child_reaped {
+            match self.child.wait().await {
+                Ok(_) => {
+                    self.direct_child_reaped = true;
+                    #[cfg(test)]
+                    if let Some(control) = self.control.as_ref() {
+                        control.lifecycle.mark_direct_child_reaped();
+                    }
+                }
+                Err(error) => {
+                    self.failure = Some(format!(
+                        "cannot reap the terminal supervisor child: {error}"
+                    ));
+                }
+            }
         }
 
         let intent = if let Some(failure_message) = self.failure.take() {
@@ -976,6 +1103,10 @@ impl SupervisedCommandRunner {
         if let Err(error) = self.child.wait().await {
             self.failure = Some(format!("cannot reap the lost outer supervisor: {error}"));
             return false;
+        }
+        #[cfg(test)]
+        if let Some(control) = control.as_ref() {
+            control.lifecycle.mark_direct_child_reaped();
         }
         #[cfg(test)]
         if let Some(hook) = control
@@ -1358,5 +1489,134 @@ impl core::fmt::Display for RunnerSpawnError {
             }
             Self::InjectedSupervisorSpawn => write!(f, "injected supervisor spawn failure"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProcessOutcomeIntent, RunnerBackedProcessRunner, RunnerTestControl, SupervisedCommandSpec,
+        SupervisedProcessRunner,
+    };
+    use crate::runtime::cancellation::CancellationSignal;
+    use std::time::Duration;
+
+    #[cfg(unix)]
+    fn spec(command: &str, cancellation: CancellationSignal) -> SupervisedCommandSpec {
+        SupervisedCommandSpec {
+            command: command.to_owned(),
+            cwd: std::env::temp_dir(),
+            environment: vec![("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned())],
+            timeout: Some(Duration::from_secs(30)),
+            cancellation,
+        }
+    }
+
+    #[cfg(unix)]
+    async fn await_lifecycle_settlement(control: &RunnerTestControl) {
+        tokio::time::timeout(Duration::from_secs(15), control.lifecycle.await_terminal())
+            .await
+            .expect("the supervisor must report group terminality");
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            control.lifecycle.await_direct_child_reaped(),
+        )
+        .await
+        .expect("rustX must reap the direct supervisor child");
+    }
+
+    /// The result waiter is not the physical process owner. Aborting the
+    /// waiter after the ownership commit leaves the detached driver alive;
+    /// explicit cancellation then drives the normal group terminal proof and
+    /// direct supervisor-child reap.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_runner_waiter_does_not_abandon_owned_invocation() {
+        let cancellation = CancellationSignal::new();
+        let control = RunnerTestControl::new();
+        let hook = control.lifecycle.clone();
+        let runner = std::sync::Arc::new(RunnerBackedProcessRunner::default());
+        let waiter_runner = runner.clone();
+        let waiter_control = control.clone();
+        let waiter_cancellation = cancellation.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_runner
+                .run(spec("sleep 30", waiter_cancellation), Some(waiter_control))
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(15), hook.await_ownership_established())
+            .await
+            .expect("physical ownership must be established before the waiter is dropped");
+        waiter.abort();
+        assert!(
+            waiter
+                .await
+                .expect_err("the waiter task must be aborted")
+                .is_cancelled(),
+            "only the result waiter is cancelled"
+        );
+
+        cancellation.cancel();
+        await_lifecycle_settlement(&control).await;
+    }
+
+    /// Explicit cancellation remains an invocation lifecycle control when a
+    /// live waiter is still observing the result.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn explicit_cancellation_still_settles_through_the_driver() {
+        let cancellation = CancellationSignal::new();
+        let control = RunnerTestControl::new();
+        let hook = control.lifecycle.clone();
+        let runner = std::sync::Arc::new(RunnerBackedProcessRunner::default());
+        let waiter_runner = runner.clone();
+        let waiter_control = control.clone();
+        let waiter_cancellation = cancellation.clone();
+        let waiter = tokio::spawn(async move {
+            waiter_runner
+                .run(spec("sleep 30", waiter_cancellation), Some(waiter_control))
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(15), hook.await_ownership_established())
+            .await
+            .expect("physical ownership must be established before cancellation");
+        cancellation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(15), waiter)
+            .await
+            .expect("the cancelled invocation must settle")
+            .expect("the waiter task must not panic")
+            .expect("the runner must publish a terminal result");
+        assert_eq!(result.intent, ProcessOutcomeIntent::Cancelled);
+        await_lifecycle_settlement(&control).await;
+    }
+
+    /// A live waiter still receives the ordinary bounded captured result from
+    /// the runner-owned driver.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_runner_waiter_receives_the_terminal_captured_result() {
+        let runner = RunnerBackedProcessRunner::default();
+        let result = runner
+            .run(
+                SupervisedCommandSpec {
+                    command: "printf runner-result".to_owned(),
+                    cwd: std::env::temp_dir(),
+                    environment: vec![(
+                        "PATH".to_owned(),
+                        "/usr/local/bin:/usr/bin:/bin".to_owned(),
+                    )],
+                    timeout: Some(Duration::from_secs(30)),
+                    cancellation: CancellationSignal::new(),
+                },
+                None,
+            )
+            .await
+            .expect("the completed result must be delivered to the waiter");
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
+        assert_eq!(result.stdout, b"runner-result");
+        assert!(result.stderr.is_empty());
     }
 }

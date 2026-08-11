@@ -125,7 +125,7 @@ impl CapabilityCoordinator {
         Self::with_backend(
             config,
             Arc::new(RunnerBackedSkillEnvironmentBackend::new(Arc::new(
-                RunnerBackedProcessRunner,
+                RunnerBackedProcessRunner::default(),
             ))),
         )
     }
