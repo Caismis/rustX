@@ -220,10 +220,6 @@ pub(crate) enum RunnerSpawnError {
     Subreaper(String),
     /// The supervisor control channel could not be created.
     ControlChannel(String),
-    /// The control channel could not be prepared for tokio adoption.
-    ControlChannelPrepare(String),
-    /// The control channel could not be opened by tokio.
-    ControlChannelOpen(String),
     /// The supervisor unit spawn failed.
     SupervisorSpawn(String),
     /// The test seam injected a supervisor spawn failure.
@@ -659,6 +655,17 @@ impl SupervisedCommandRunner {
         }
         let (stream_a, stream_b) = std::os::unix::net::UnixStream::pair()
             .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
+        // Complete every control-transport operation before the supervisor
+        // exists. Once `spawn()` succeeds, ownership transfers directly
+        // into the returned runner; no post-spawn setup error can strand an
+        // unreaped child.
+        nix::fcntl::fcntl(
+            &stream_a,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
+        let stream = tokio::net::UnixStream::from_std(stream_a)
+            .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?;
 
         let mut supervisor = tokio::process::Command::new(supervisor_binary());
         supervisor.current_dir(&spec.cwd);
@@ -711,22 +718,6 @@ impl SupervisedCommandRunner {
         // handle. Drop it after the one spawn so supervisor death is
         // observable as EOF.
         drop(supervisor);
-        if let Err(error) = nix::fcntl::fcntl(
-            &stream_a,
-            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
-        ) {
-            let _ = child.start_kill();
-            std::mem::drop(child.wait());
-            return Err(RunnerSpawnError::ControlChannelPrepare(error.to_string()));
-        }
-        let stream = match tokio::net::UnixStream::from_std(stream_a) {
-            Ok(stream) => stream,
-            Err(error) => {
-                let _ = child.start_kill();
-                std::mem::drop(child.wait());
-                return Err(RunnerSpawnError::ControlChannelOpen(error.to_string()));
-            }
-        };
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         Ok((
@@ -1362,11 +1353,9 @@ pub(crate) fn unix_signal_of(exit: ExitStatus) -> String {
 impl core::fmt::Display for RunnerSpawnError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Subreaper(error)
-            | Self::ControlChannel(error)
-            | Self::ControlChannelPrepare(error)
-            | Self::ControlChannelOpen(error)
-            | Self::SupervisorSpawn(error) => write!(f, "{error}"),
+            Self::Subreaper(error) | Self::ControlChannel(error) | Self::SupervisorSpawn(error) => {
+                write!(f, "{error}")
+            }
             Self::InjectedSupervisorSpawn => write!(f, "injected supervisor spawn failure"),
         }
     }

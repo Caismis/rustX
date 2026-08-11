@@ -851,12 +851,6 @@ fn supervisor_spawn_failure(error: &RunnerSpawnError) -> String {
         RunnerSpawnError::ControlChannel(message) => {
             format!("cannot create the bash supervisor control channel: {message}")
         }
-        RunnerSpawnError::ControlChannelPrepare(message) => {
-            format!("cannot prepare the bash supervisor control channel: {message}")
-        }
-        RunnerSpawnError::ControlChannelOpen(message) => {
-            format!("cannot open the bash supervisor control channel: {message}")
-        }
         RunnerSpawnError::SupervisorSpawn(message) => {
             format!("cannot spawn the bash supervisor: {message}")
         }
