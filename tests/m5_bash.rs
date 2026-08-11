@@ -357,7 +357,11 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
         arguments: serde_json::json!({"command": command}),
     };
     let prepared = registry
-        .prepare_dispatch(&invocation, &executor)
+        .prepare_dispatch(
+            &invocation,
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &CancellationSignal::new());
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
@@ -409,7 +413,11 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
         arguments: serde_json::json!({"command": "echo done"}),
     };
     let prepared = registry
-        .prepare_dispatch(&invocation, &executor)
+        .prepare_dispatch(
+            &invocation,
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &CancellationSignal::new());
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =

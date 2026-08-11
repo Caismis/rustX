@@ -573,11 +573,16 @@ fn translate_request(request: &ModelRequest) -> Result<CreateChatCompletionReque
 fn translate_messages(
     request: &ModelRequest,
 ) -> Result<Vec<ChatCompletionRequestMessage>, ModelError> {
-    let mut messages = Vec::new();
+    let mut system_messages = Vec::new();
+    let mut transcript_messages = Vec::new();
     for block in &request.messages {
-        messages.push(match block {
+        let translated = match block {
             MessageBlock::System(system) => {
-                let texts: Vec<String> = system.content.iter().map(|text| text.text.clone()).collect();
+                let texts: Vec<String> = system
+                    .content
+                    .iter()
+                    .map(|text| text.text.clone())
+                    .collect();
                 let content = match texts.len() {
                     1 => ChatCompletionRequestSystemMessageContent::Text(
                         texts.into_iter().next().expect("exactly one text"),
@@ -643,8 +648,28 @@ fn translate_messages(
             MessageBlock::Tool(tool_message) => {
                 ChatCompletionRequestMessage::Tool(translate_tool_message(tool_message)?)
             }
-        });
+        };
+        if matches!(&translated, ChatCompletionRequestMessage::System(_)) {
+            system_messages.push(translated);
+        } else {
+            transcript_messages.push(translated);
+        }
     }
+    // The Skill catalog is trusted system context: it is translated through
+    // the provider's system-level message mechanism together with the
+    // canonical trusted system context, as one deterministic system message
+    // after the canonical system messages. It is never attached to a user
+    // message.
+    if let Some(catalog) = &request.skill_catalog {
+        system_messages.push(ChatCompletionRequestMessage::System(
+            ChatCompletionRequestSystemMessage {
+                content: ChatCompletionRequestSystemMessageContent::Text(catalog.rendered.clone()),
+                name: None,
+            },
+        ));
+    }
+    let mut messages = system_messages;
+    messages.extend(transcript_messages);
     if messages.is_empty() {
         return Err(ModelError {
             kind: ModelErrorKind::InvalidRequest,

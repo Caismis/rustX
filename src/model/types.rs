@@ -42,6 +42,27 @@ pub struct AgentStatusAttachment {
     pub rendered: String,
 }
 
+/// The ephemeral Skill catalog attachment of one model request (M6).
+///
+/// This is the Layer 0 cross-layer model-request attachment contract of the
+/// Skill catalog projection: it is produced by the capability plane from
+/// the attempt's immutable Skill snapshot but owned here, so `ModelRequest`
+/// and every provider adapter depend only on runtime-owned data and never
+/// on context or capability implementation modules. The attachment is
+/// projection-only capability context — it is never canonical history,
+/// never checkpoint history, never returned in
+/// `AgentExecutionResult.messages`, and never emitted as a committed-message
+/// event — and provider adapters place it in **trusted system context**
+/// (`instructions` for `OpenAI` Responses, the top-level `system` content for
+/// Anthropic Messages, and the system-level message mechanism for `OpenAI`
+/// Chat Completions). It participates in the projection fingerprint, the
+/// full request token estimate, and the hard-fit/compaction calculations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillCatalogAttachment {
+    /// The canonical deterministic compact rendered Skill catalog.
+    pub rendered: String,
+}
+
 /// The model interaction protocol an adapter must speak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +118,12 @@ pub struct ModelRequest {
     /// turn, when one exists. Projection-only: never canonical history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AgentStatusAttachment>,
+    /// The ephemeral Skill catalog attachment of the attempt's immutable
+    /// Skill snapshot, when any Skill is active. Projection-only capability
+    /// context: never canonical history; placed by adapters in trusted
+    /// system context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_catalog: Option<SkillCatalogAttachment>,
     /// Reasoning effort for the generation.
     pub reasoning: ReasoningEffort,
     /// The runtime-resolved effective maximum output tokens.
@@ -215,21 +242,25 @@ mod tests {
             })],
             tools: Vec::new(),
             agent_status: None,
+            skill_catalog: None,
             reasoning: ReasoningEffort::Medium,
             max_output_tokens: 512,
             continuation: None,
         };
         let json = serde_json::to_string(&request).expect("serialize");
         assert!(
-            !json.contains("agent_status"),
-            "absent agent status must be omitted from the canonical encoding"
+            !json.contains("agent_status") && !json.contains("skill_catalog"),
+            "absent attachments must be omitted from the canonical encoding"
         );
         request.agent_status = Some(super::AgentStatusAttachment {
             target_message_id: MessageId::new("msg-inbound-1"),
             rendered: "status".to_owned(),
         });
+        request.skill_catalog = Some(super::SkillCatalogAttachment {
+            rendered: "## Skills\n".to_owned(),
+        });
         let json = serde_json::to_string(&request).expect("serialize");
-        assert!(json.contains("agent_status"));
+        assert!(json.contains("agent_status") && json.contains("skill_catalog"));
         let decoded: super::ModelRequest = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(decoded, request);
     }

@@ -1,0 +1,90 @@
+//! Capability preparation and commit errors (M6).
+
+use crate::runtime::identity::CapabilityRevision;
+use crate::skills::{DependencyConflict, EnvironmentPreparationError, SkillPackageError};
+
+/// A candidate capability preparation failure.
+///
+/// Preparation failure never mutates the active capability state: the
+/// current active revision remains authoritative.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityPreparationError {
+    /// Skill discovery/parsing/validation failed (one malformed Skill
+    /// fails the whole candidate transaction).
+    SkillDiscovery(SkillPackageError),
+    /// The merged dependency declarations conflict across active Skills.
+    DependencyConflict(DependencyConflict),
+    /// The environment store is not disjoint from the model Workspace.
+    EnvironmentStoreOverlapsWorkspace { store_root: String },
+    /// A shared environment identity/materialization failure.
+    Environment(EnvironmentPreparationError),
+}
+
+impl core::fmt::Display for CapabilityPreparationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SkillDiscovery(error) => write!(f, "skill discovery failed: {error}"),
+            Self::DependencyConflict(conflict) => write!(f, "{conflict}"),
+            Self::EnvironmentStoreOverlapsWorkspace { store_root } => write!(
+                f,
+                "the environment store root {store_root:?} must be disjoint from the model \
+                 Workspace"
+            ),
+            Self::Environment(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for CapabilityPreparationError {}
+
+impl From<SkillPackageError> for CapabilityPreparationError {
+    fn from(error: SkillPackageError) -> Self {
+        Self::SkillDiscovery(error)
+    }
+}
+
+impl From<DependencyConflict> for CapabilityPreparationError {
+    fn from(conflict: DependencyConflict) -> Self {
+        Self::DependencyConflict(conflict)
+    }
+}
+
+impl From<EnvironmentPreparationError> for CapabilityPreparationError {
+    fn from(error: EnvironmentPreparationError) -> Self {
+        Self::Environment(error)
+    }
+}
+
+/// A candidate capability activation (commit) failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityCommitError {
+    /// A candidate prepared from an obsolete base revision cannot overwrite
+    /// newer capability state.
+    StaleCandidate {
+        prepared_from: CapabilityRevision,
+        current: CapabilityRevision,
+    },
+    /// A capability commit while an attempt lease is active is rejected.
+    Busy,
+}
+
+impl core::fmt::Display for CapabilityCommitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::StaleCandidate {
+                prepared_from,
+                current,
+            } => write!(
+                f,
+                "stale candidate: prepared from revision {prepared_from:?} but the active \
+                 revision is now {current:?}"
+            ),
+            Self::Busy => write!(
+                f,
+                "a capability commit is rejected while an attempt capability lease is active"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CapabilityCommitError {}

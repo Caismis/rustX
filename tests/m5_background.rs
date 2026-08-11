@@ -39,7 +39,6 @@ use rustx::tools::background::{
     BackgroundDispatchOutcome, BackgroundExecutionSnapshot, BackgroundLifecycle,
     BackgroundResources, ConversationBackgroundRegistry,
 };
-use rustx::tools::environment::ToolEnvironment;
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::runtime::ConversationToolRuntime;
 use rustx::tools::types::{
@@ -187,7 +186,6 @@ fn background_fixture_with_sink(conversation_id: &str, with_sink: bool) -> Backg
         mailbox: mailbox.clone(),
         workspace: Workspace::new(&workspace_root).expect("workspace"),
         artifacts: ArtifactStore::new(conversation.clone(), &artifacts).expect("artifacts"),
-        environment: ToolEnvironment::new(),
         clock: Arc::new(FixedRuntimeClock(utc("2026-08-09T12:00:00Z"))),
         event_sink: sink
             .clone()
@@ -234,6 +232,7 @@ async fn dispatch_to_terminal(fixture: &BackgroundFixture) -> ToolExecutionId {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -270,6 +269,7 @@ async fn runner_cannot_begin_before_commit_gate() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     // The runner is parked behind the gate: no execution work has begun.
@@ -300,6 +300,7 @@ async fn cancellation_before_ownership_commit_rolls_back() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
@@ -338,6 +339,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
@@ -403,6 +405,7 @@ async fn cancel_before_completion_wins_settlement() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -432,6 +435,7 @@ async fn repeated_cancel_is_idempotent() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -463,6 +467,7 @@ async fn starting_can_be_cancelled() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -525,6 +530,7 @@ async fn background_progress_updates_the_latest_snapshot() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -698,14 +704,15 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 /// owns the canonical conversation mailbox the loop drains.
 async fn run_with_mailbox(
     model: &FakeModel,
-    tools: &ToolRegistry,
+    tools: ToolRegistry,
     cancellation: &AgentCancellation,
     tool_runtime: &ConversationToolRuntime,
 ) -> AgentExecutionResult {
+    let capability = common::capability_lease(tools, tool_runtime).await;
     AgentExecution::new(
         request(),
         model,
-        tools,
+        capability.into_lease(),
         cancellation,
         runtime(),
         tool_runtime,
@@ -787,7 +794,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
+        run_with_mailbox(&model, tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("attempt terminates without the detached terminal");
@@ -943,7 +950,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
+        run_with_mailbox(&model, tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -987,6 +994,7 @@ async fn background_task_status_and_cancel() {
         .prepare_dispatch(
             &background_invocation("bash"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -1187,6 +1195,7 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
         .prepare_dispatch(
             &background_invocation("grep"),
             &(Arc::new(executor) as Arc<dyn rustx::tools::executor::ToolExecutor>),
+            rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
     let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
@@ -1322,7 +1331,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     });
     let result = tokio::time::timeout(
         Duration::from_secs(15),
-        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
+        run_with_mailbox(&model, tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -1412,7 +1421,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let _result = tokio::time::timeout(
         Duration::from_secs(10),
-        run_with_mailbox(&model, &tools, &cancellation, &tool_runtime),
+        run_with_mailbox(&model, tools, &cancellation, &tool_runtime),
     )
     .await
     .expect("run terminates");
@@ -1476,10 +1485,10 @@ fn background_status_accounting() {
         }),
     };
     let with_status = engine
-        .build_projection(&[], None, &[], None, Some(&attachment))
+        .build_projection(&[], None, &[], None, Some(&attachment), None)
         .expect("projection with status");
     let without_status = engine
-        .build_projection(&[], None, &[], None, None)
+        .build_projection(&[], None, &[], None, None, None)
         .expect("projection without status");
     assert_ne!(
         with_status.fingerprint(),
@@ -1502,6 +1511,7 @@ fn background_status_accounting() {
     let projection = ContextProjection {
         items: Vec::new(),
         agent_status: Some(attachment),
+        skill_catalog: None,
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,

@@ -5,6 +5,7 @@
 //! agent kernel.
 
 pub mod agent;
+pub mod capabilities;
 pub mod context;
 pub mod events;
 pub mod message;

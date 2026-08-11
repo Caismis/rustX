@@ -849,6 +849,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -857,7 +858,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
             Some(Tz::Asia__Tokyo),
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -915,6 +916,7 @@ async fn runtime_originated_inbound_triggers_status() {
     );
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-runtime-1")]).expect("turn");
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -923,7 +925,7 @@ async fn runtime_originated_inbound_triggers_status() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -968,10 +970,11 @@ async fn no_role_heuristic_triggers_status() {
         historical_user("msg-old-1", "old message"),
     ];
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1013,10 +1016,11 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
         FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn"),
     );
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![initial], trigger, None),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1076,6 +1080,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
         })
         .expect("enqueue B");
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1084,7 +1089,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1179,6 +1184,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
         })
         .expect("enqueue B");
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1187,7 +1193,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1252,6 +1258,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
         })
         .expect("enqueue B");
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1260,7 +1267,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1342,6 +1349,7 @@ async fn foreground_tool_continuation_has_no_status() {
     let initial = fresh_user("msg-inbound-1", "run it", UserSource::Human, inbound_time);
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1350,7 +1358,7 @@ async fn foreground_tool_continuation_has_no_status() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             10_000_000,
@@ -1406,6 +1414,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
     ];
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let tool_runtime = common::tool_runtime("conv-status-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1414,7 +1423,7 @@ async fn fresh_inbound_is_protected_from_compaction() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             250,
@@ -1493,7 +1502,7 @@ fn unobservable_fresh_inbound_yields_cannot_fit_not_summary() {
         utc("2026-08-07T12:00:00Z"),
     )];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let error = engine
@@ -1529,7 +1538,7 @@ fn status_snapshot_changes_the_compaction_decision() {
         Some(utc("2026-08-07T12:00:00Z")),
     )];
     let without_status = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     // Soft limit with max_output_tokens = 10: 100 - 0 - 10 = 90.
     assert!(
@@ -1550,6 +1559,7 @@ fn status_snapshot_changes_the_compaction_decision() {
                 target_message_id: MessageId::new("msg-u1"),
                 rendered: "x".repeat(318),
             }),
+            None,
         )
         .expect("projection with status");
     assert_eq!(
@@ -1588,20 +1598,34 @@ fn status_snapshot_changes_fingerprint_and_observed_measurement_scope() {
     };
     let observed = ProviderObservedInput {
         fingerprint: engine
-            .build_projection(&history, None, &[], None, Some(&snapshot_one))
+            .build_projection(&history, None, &[], None, Some(&snapshot_one), None)
             .expect("projection one")
             .fingerprint(),
         input_tokens: 42,
     };
     let with_one = engine
-        .build_projection(&history, None, &[], Some(&observed), Some(&snapshot_one))
+        .build_projection(
+            &history,
+            None,
+            &[],
+            Some(&observed),
+            Some(&snapshot_one),
+            None,
+        )
         .expect("projection one measured");
     assert_eq!(
         with_one.estimated_input.source,
         TokenMeasurementSource::ProviderReported
     );
     let with_two = engine
-        .build_projection(&history, None, &[], Some(&observed), Some(&snapshot_two))
+        .build_projection(
+            &history,
+            None,
+            &[],
+            Some(&observed),
+            Some(&snapshot_two),
+            None,
+        )
         .expect("projection two");
     assert_eq!(
         with_two.estimated_input.source,
@@ -1682,6 +1706,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
     // Window 400: the turn-2 projection (u0 + agent-1 + A + B + status =
     // 338) fits, but the provider overflows anyway; the retry compacts.
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request(
             "attempt-1",
@@ -1690,7 +1715,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             None,
         ),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime(
             400,
@@ -1801,6 +1826,7 @@ fn status_request(protocol: ModelProtocol, messages: Vec<MessageBlock>) -> Model
             target_message_id: MessageId::new("msg-b"),
             rendered: STATUS_TEXT.to_owned(),
         }),
+        skill_catalog: None,
         reasoning: ReasoningEffort::Medium,
         max_output_tokens: 64,
         continuation: None,

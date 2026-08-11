@@ -251,8 +251,6 @@ pub struct BackgroundResources {
     pub workspace: Workspace,
     /// The conversation artifact store for detached executors.
     pub artifacts: ArtifactStore,
-    /// The explicit authorized tool environment.
-    pub environment: ToolEnvironment,
     /// The runtime clock stamping terminal inbound messages.
     pub clock: Arc<dyn RuntimeClock>,
     /// The narrow non-durable execution-fact sink, when attached.
@@ -315,6 +313,7 @@ pub struct ConversationBackgroundRegistry {
     conversation_id: ConversationId,
     inner: Arc<Mutex<BackgroundRegistryState>>,
     resources: BackgroundResources,
+    state_version: tokio::sync::watch::Sender<u64>,
 }
 
 impl Clone for ConversationBackgroundRegistry {
@@ -323,6 +322,7 @@ impl Clone for ConversationBackgroundRegistry {
             conversation_id: self.conversation_id.clone(),
             inner: self.inner.clone(),
             resources: self.resources.clone(),
+            state_version: self.state_version.clone(),
         }
     }
 }
@@ -339,6 +339,7 @@ impl ConversationBackgroundRegistry {
     /// Creates the background registry of one conversation.
     #[must_use]
     pub fn new(conversation_id: ConversationId, resources: BackgroundResources) -> Self {
+        let (state_version, _) = tokio::sync::watch::channel(0);
         Self {
             conversation_id,
             inner: Arc::new(Mutex::new(BackgroundRegistryState {
@@ -350,7 +351,14 @@ impl ConversationBackgroundRegistry {
                 commit_hook: None,
             })),
             resources,
+            state_version,
         }
+    }
+
+    fn notify_state_change(&self) {
+        self.state_version.send_modify(|version| {
+            *version = version.saturating_add(1);
+        });
     }
 
     /// Installs the test-only synchronization hook at the dispatch
@@ -393,6 +401,7 @@ impl ConversationBackgroundRegistry {
         &self,
         invocation: &ToolInvocation,
         executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
     ) -> Result<PreparedBackgroundDispatch, BackgroundDispatchError> {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
@@ -406,12 +415,18 @@ impl ConversationBackgroundRegistry {
         let execution_id = ToolExecutionId::new(format!("exec_{next}"));
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
+        // The effective attempt environment is captured here, at prepare
+        // time — strictly before the background ownership commit — and the
+        // detached runner retains exactly this captured environment for its
+        // whole lifetime. It never queries the conversation's current
+        // capability state later.
         let runner = self.spawn_runner(
             execution_id.clone(),
             invocation.clone(),
             executor.clone(),
             cancellation.clone(),
             gate.clone(),
+            environment,
         );
         let prepared = PreparedRecord {
             record: BackgroundRecord {
@@ -430,6 +445,8 @@ impl ConversationBackgroundRegistry {
             runner,
         };
         state.prepared.insert(execution_id.clone(), prepared);
+        drop(state);
+        self.notify_state_change();
         Ok(PreparedBackgroundDispatch {
             registry: self.clone(),
             execution_id,
@@ -485,6 +502,7 @@ impl ConversationBackgroundRegistry {
         state.index.insert(execution_id.clone(), next_index);
         state.records.push(prepared_record.record);
         drop(state);
+        self.notify_state_change();
         prepared.committed = true;
         prepared_record.gate.notify_one();
         BackgroundDispatchOutcome::Accepted {
@@ -521,6 +539,8 @@ impl ConversationBackgroundRegistry {
             | BackgroundLifecycle::Cancelled => {}
         }
         let snapshot = snapshot_of(record);
+        drop(state);
+        self.notify_state_change();
         Some(snapshot)
     }
 
@@ -629,6 +649,8 @@ impl ConversationBackgroundRegistry {
                 record.notification = NotificationState::Failed;
             }
         }
+        drop(state);
+        self.notify_state_change();
     }
 
     /// Updates the latest bounded progress snapshot of one execution and
@@ -661,6 +683,7 @@ impl ConversationBackgroundRegistry {
         if let Some(sink) = &self.resources.event_sink {
             sink.emit(event);
         }
+        self.notify_state_change();
     }
 
     /// The synchronized registry state.
@@ -686,6 +709,25 @@ impl ConversationBackgroundRegistry {
         let record = &mut state.records[index];
         if record.lifecycle == BackgroundLifecycle::Starting {
             record.lifecycle = BackgroundLifecycle::Running;
+            drop(state);
+            self.notify_state_change();
+        }
+    }
+
+    /// Waits for one execution to reach an absorbing terminal state using the
+    /// registry's exact state-change notification, not scheduler polling.
+    pub async fn wait_until_terminal(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        let mut version = self.state_version.subscribe();
+        loop {
+            if let Some(snapshot) = self.snapshot(execution_id)
+                && snapshot.state.is_terminal()
+            {
+                return Some(snapshot);
+            }
+            version.changed().await.ok()?;
         }
     }
 
@@ -706,6 +748,7 @@ impl ConversationBackgroundRegistry {
         executor: Arc<dyn ToolExecutor>,
         cancellation: CancellationSignal,
         gate: Arc<Notify>,
+        environment: ToolEnvironment,
     ) -> tokio::task::JoinHandle<()> {
         let registry = self.clone();
         tokio::spawn(async move {
@@ -723,7 +766,7 @@ impl ConversationBackgroundRegistry {
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
-                environment: &resources.environment,
+                environment: &environment,
             };
             let result = executor.execute(invocation, context).await;
             registry.finish(&execution_id, &result);
@@ -932,7 +975,6 @@ mod tests {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
                 artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
-                environment: ToolEnvironment::new(),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: None,
             },
@@ -990,7 +1032,11 @@ mod tests {
     ) -> super::PreparedBackgroundDispatch {
         fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), executor)
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                executor,
+                ToolEnvironment::new(),
+            )
             .expect("prepare")
     }
 
@@ -1183,7 +1229,6 @@ mod tests {
                 mailbox: mailbox.clone(),
                 workspace: Workspace::new(&workspace_root).expect("workspace"),
                 artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
-                environment: ToolEnvironment::new(),
                 clock: Arc::new(crate::runtime::SystemClock),
                 event_sink: Some(sink_dyn),
             },
@@ -1196,7 +1241,11 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> = Arc::new(ProgressThenDone);
         let prepared = fixture
             .registry
-            .prepare_dispatch(&background_invocation("bash"), &executor)
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
             .expect("prepare");
         let outcome = fixture.registry.commit_dispatch(
             prepared,
@@ -1237,16 +1286,11 @@ mod tests {
         fixture: &TestRegistry,
         execution_id: &ToolExecutionId,
     ) -> super::BackgroundExecutionSnapshot {
-        // Polls the authoritative registry state itself (the very state
-        // under test) with a strict deadlock guard.
-        for _ in 0..400 {
-            let snapshot = fixture.registry.snapshot(execution_id).expect("snapshot");
-            if snapshot.state.is_terminal() {
-                return snapshot;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("execution never reached a terminal state");
+        fixture
+            .registry
+            .wait_until_terminal(execution_id)
+            .await
+            .expect("execution record")
     }
 
     /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the

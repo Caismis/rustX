@@ -128,7 +128,12 @@ impl DefaultTokenEstimator {
                 .expect("canonical agent status attachment serializes")
                 .len()
         });
-        (items + tools + status) as u64
+        let catalog = projection.skill_catalog.as_ref().map_or(0, |catalog| {
+            serde_json::to_vec(catalog)
+                .expect("canonical skill catalog attachment serializes")
+                .len()
+        });
+        (items + tools + status + catalog) as u64
     }
 
     /// The deterministic serialized bytes of the projection items only,
@@ -222,10 +227,11 @@ mod tests {
     /// counts tool definitions as part of the input.
     #[test]
     fn default_estimator_is_deterministic_and_includes_tools() {
-        use crate::model::types::AgentStatusAttachment;
+        use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
         let projection = crate::context::projection::ContextProjection {
             items: Vec::new(),
             agent_status: None,
+            skill_catalog: None,
             estimated_input: crate::context::tokens::TokenMeasurement {
                 input_tokens: 0,
                 source: crate::context::tokens::TokenMeasurementSource::Estimated,
@@ -269,6 +275,25 @@ mod tests {
             estimator.estimate_conversation_input(&with_status),
             estimator.estimate_conversation_input(&projection),
             "the Agent Status attachment must never satisfy keep_recent_tokens"
+        );
+        // The exact Skill catalog attachment is actual model input: it
+        // contributes to the full request estimate but never to the
+        // recent-conversation estimate.
+        let with_catalog = crate::context::projection::ContextProjection {
+            skill_catalog: Some(SkillCatalogAttachment {
+                rendered: "## Skills\n\n- pdf: Create PDF documents.\n".to_owned(),
+            }),
+            ..projection.clone()
+        };
+        assert!(
+            estimator.estimate_input(&with_catalog, &[])
+                > estimator.estimate_input(&projection, &[]),
+            "the Skill catalog attachment must contribute to the full request estimate"
+        );
+        assert_eq!(
+            estimator.estimate_conversation_input(&with_catalog),
+            estimator.estimate_conversation_input(&projection),
+            "the Skill catalog attachment must never satisfy keep_recent_tokens"
         );
     }
 }

@@ -46,6 +46,7 @@
 
 use futures_util::StreamExt;
 
+use crate::capabilities::AttemptCapabilityLease;
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
@@ -59,6 +60,7 @@ use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::{
     AgentStatusAttachment, ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort,
+    SkillCatalogAttachment,
 };
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
@@ -158,15 +160,15 @@ pub struct AgentExecutionResult {
 /// One agent attempt execution.
 ///
 /// The loop borrows the model adapter, the immutable tool registry, the
-/// attempt cancellation signal, and owns the mandatory M4 context runtime,
-/// the conversation tool runtime (whose canonical mailbox the loop drains),
-/// the execution state machine, the committed history, the retained
-/// continuation state, the pending fresh inbound trigger, and the runtime
-/// event trace.
+/// attempt cancellation signal, and owns the attempt capability lease, the
+/// mandatory M4 context runtime, the conversation tool runtime (whose
+/// canonical mailbox the loop drains), the execution state machine, the
+/// committed history, the retained continuation state, the pending fresh
+/// inbound trigger, and the runtime event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     adapter: &'a dyn ModelAdapter,
-    tools: &'a ToolRegistry,
+    capability: AttemptCapabilityLease,
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
     state: ExecutionStateMachine,
@@ -225,9 +227,19 @@ enum Terminal {
 }
 
 impl<'a> AgentExecution<'a> {
-    /// Creates an attempt execution over the given adapter, tool registry,
-    /// cancellation signal, the mandatory M4 context runtime, and the
-    /// conversation tool runtime.
+    /// Creates an attempt execution over the given adapter, the owned attempt
+    /// capability lease, the cancellation signal, the mandatory M4 context
+    /// runtime, and the conversation tool runtime.
+    ///
+    /// The attempt capability lease is moved into the execution and pins the
+    /// immutable capability snapshot (revision, `ToolRegistry` handle, Skill
+    /// catalog, environment identities, and the effective `ToolEnvironment`)
+    /// for the complete lifetime of this attempt: every model/tool cycle
+    /// inside the attempt uses exactly that snapshot and never re-discovers
+    /// Skills. Constructor failure drops the owned lease, and successful
+    /// execution settlement drops it with the consumed execution. The
+    /// execution cannot be constructed without a lease — there is no
+    /// capability-free constructor.
     ///
     /// The conversation tool runtime binds the conversation identity, the
     /// canonical inbound mailbox, and the background registry together:
@@ -251,7 +263,7 @@ impl<'a> AgentExecution<'a> {
     pub fn new(
         request: AgentExecutionRequest,
         adapter: &'a dyn ModelAdapter,
-        tools: &'a ToolRegistry,
+        capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime<'a>,
         tool_runtime: &'a ConversationToolRuntime,
@@ -262,11 +274,22 @@ impl<'a> AgentExecution<'a> {
                 actual: tool_runtime.conversation_id().clone(),
             });
         }
+        let snapshot = capability.snapshot();
+        if snapshot.conversation_id() != tool_runtime.conversation_id()
+            || snapshot.workspace_root() != tool_runtime.workspace().root()
+        {
+            return Err(MailboxError::CapabilityOwnershipMismatch {
+                capability_conversation: snapshot.conversation_id().clone(),
+                runtime_conversation: tool_runtime.conversation_id().clone(),
+                capability_workspace: snapshot.workspace_root().to_path_buf(),
+                runtime_workspace: tool_runtime.workspace().root().to_path_buf(),
+            });
+        }
         Ok(Self {
             history: request.initial_messages.clone(),
             request,
             adapter,
-            tools,
+            capability,
             cancellation,
             tool_runtime,
             state: ExecutionStateMachine::new(),
@@ -577,7 +600,7 @@ impl<'a> AgentExecution<'a> {
     ) -> Result<Vec<PreflightOutcome>, RuntimeError> {
         let mut outcomes = Vec::with_capacity(calls.len());
         for call in calls {
-            match self.tools.preflight(call) {
+            match self.tool_registry().preflight(call) {
                 Ok(outcome) => outcomes.push(outcome),
                 Err(error) => {
                     return Err(match error {
@@ -788,11 +811,25 @@ impl<'a> AgentExecution<'a> {
             .build_projection(
                 &self.history,
                 checkpoint.as_ref(),
-                &self.tools.model_definitions(),
+                &self.tool_registry().model_definitions(),
                 self.observed.as_ref(),
                 agent_status,
+                self.capability.snapshot().skill_catalog_attachment(),
             )
             .map_err(|error| Self::context_failure_terminal(&error))
+    }
+
+    /// The exact Skill catalog attachment of the pinned capability
+    /// snapshot. The catalog is immutable for the attempt, so the exact
+    /// attachment participates on both sides of every compaction progress
+    /// comparison.
+    fn skill_catalog(&self) -> Option<&SkillCatalogAttachment> {
+        self.capability.snapshot().skill_catalog_attachment()
+    }
+
+    /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
+    fn tool_registry(&self) -> &ToolRegistry {
+        self.capability.snapshot().tool_registry()
     }
 
     /// The `AttemptFailed` terminal of a context-plane failure that occurred
@@ -884,7 +921,7 @@ impl<'a> AgentExecution<'a> {
                 "compaction cancelled before it began",
             ));
         }
-        let tools = self.tools.model_definitions();
+        let tools = self.tool_registry().model_definitions();
         let checkpoint = self
             .context_runtime
             .checkpoint_store
@@ -895,6 +932,7 @@ impl<'a> AgentExecution<'a> {
             &tools,
             self.observed.as_ref(),
             agent_status,
+            self.skill_catalog(),
         )?;
         let plan = self.context_runtime.engine.plan_compaction(
             &self.history,
@@ -1374,7 +1412,7 @@ impl<'a> AgentExecution<'a> {
         &self,
         invocation: &ToolInvocation,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
-        let executor = self.tools.executor(&invocation.tool_id);
+        let executor = self.tool_registry().executor(&invocation.tool_id);
         let buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let reporter = BufferProgressReporter {
@@ -1389,7 +1427,7 @@ impl<'a> AgentExecution<'a> {
             workspace: self.tool_runtime.workspace(),
             progress: &reporter,
             artifacts: self.tool_runtime.artifacts(),
-            environment: self.tool_runtime.environment(),
+            environment: self.capability.snapshot().effective_environment(),
         };
         let future = executor.execute(invocation.clone(), context);
         tokio::pin!(future);
@@ -1419,11 +1457,17 @@ impl<'a> AgentExecution<'a> {
     /// rolled-back dispatch produces a cancelled result slot for the
     /// originating attempt, never a detached execution.
     fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
-        let executor = self.tools.executor(&invocation.tool_id);
+        let executor = self.tool_registry().executor(&invocation.tool_id);
+        // The attempt's effective ToolEnvironment is captured at prepare
+        // time, before the background ownership commit: the detached
+        // execution retains exactly this immutable environment for its
+        // whole lifetime, even after this attempt terminates and later
+        // revisions activate.
+        let environment = self.capability.snapshot().effective_environment().clone();
         match self
             .tool_runtime
             .background()
-            .prepare_dispatch(invocation, &executor)
+            .prepare_dispatch(invocation, &executor, environment)
         {
             Ok(prepared) => {
                 match self
@@ -1454,8 +1498,9 @@ impl<'a> AgentExecution<'a> {
             model: self.request.model.clone(),
             protocol: self.request.protocol,
             messages: compiled.messages,
-            tools: self.tools.model_definitions(),
+            tools: self.tool_registry().model_definitions(),
             agent_status: compiled.agent_status,
+            skill_catalog: compiled.skill_catalog,
             reasoning: self.request.reasoning,
             max_output_tokens: self.request.max_output_tokens,
             continuation: self.pending_continuation.clone(),
@@ -2057,6 +2102,137 @@ mod tests {
         })
     }
 
+    /// Builds the attempt capability lease over the given tool registry and
+    /// conversation tool runtime: empty Skill set, base environment, and a
+    /// private environment store. Returns the store guard, the coordinator,
+    /// and the pinned lease.
+    async fn capability_lease(
+        tools: ToolRegistry,
+        tool_runtime: &crate::tools::runtime::ConversationToolRuntime,
+    ) -> (
+        tempfile::TempDir,
+        crate::capabilities::CapabilityCoordinator,
+        crate::capabilities::AttemptCapabilityLease,
+    ) {
+        let tools = std::sync::Arc::new(tools);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: tool_runtime.conversation_id().clone(),
+                workspace: tool_runtime.workspace().clone(),
+                tool_registry: tools,
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("env-store"),
+            },
+        )
+        .expect("capability coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let lease = coordinator.acquire_attempt_lease();
+        (dir, coordinator, lease)
+    }
+
+    #[tokio::test]
+    async fn capability_lease_owner_matches_runtime_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let tool_runtime = tool_runtime();
+        let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
+
+        let execution = AgentExecution::new(
+            request(),
+            &adapter,
+            lease,
+            &cancellation,
+            runtime(),
+            &tool_runtime,
+        )
+        .expect("matching capability owner is accepted");
+
+        assert_eq!(adapter.request_count(), 0, "construction is pre-execution");
+        drop(execution);
+        assert_eq!(coordinator.active_attempts(), 0);
+    }
+
+    #[tokio::test]
+    async fn capability_lease_rejects_different_conversation_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner_runtime = tool_runtime();
+        let (_dir, coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
+        let other_dir = tempfile::tempdir().expect("other runtime directory");
+        std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
+        let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new("conv-2"),
+            other_dir.path().join("workspace"),
+            other_dir.path().join("artifacts"),
+        )
+        .expect("other tool runtime");
+        let mut other_request = request();
+        other_request.conversation_id = ConversationId::new("conv-2");
+
+        let result = AgentExecution::new(
+            other_request,
+            &adapter,
+            lease,
+            &cancellation,
+            runtime(),
+            &other_runtime,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::runtime::inbound::MailboxError::CapabilityOwnershipMismatch { .. })
+        ));
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "rejection precedes model requests"
+        );
+        assert_eq!(coordinator.active_attempts(), 0);
+    }
+
+    #[tokio::test]
+    async fn capability_lease_rejects_different_workspace_before_execution() {
+        let adapter = ScriptedAdapter::new(Vec::new());
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let owner_runtime = tool_runtime();
+        let (_dir, coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &owner_runtime).await;
+        assert_eq!(coordinator.active_attempts(), 1);
+        let other_dir = tempfile::tempdir().expect("other workspace directory");
+        std::fs::create_dir_all(other_dir.path().join("workspace")).expect("other workspace");
+        let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new("conv-1"),
+            other_dir.path().join("workspace"),
+            other_dir.path().join("artifacts"),
+        )
+        .expect("other tool runtime");
+
+        let result = AgentExecution::new(
+            request(),
+            &adapter,
+            lease,
+            &cancellation,
+            runtime(),
+            &other_runtime,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::runtime::inbound::MailboxError::CapabilityOwnershipMismatch { .. })
+        ));
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "rejection precedes model requests"
+        );
+        assert_eq!(coordinator.active_attempts(), 0);
+    }
+
     /// The generic turn-boundary invariant with no mailbox attached: turn 1
     /// completes with a tool call and its result, the test control point
     /// makes cancellation observable after the turn (and all of its work)
@@ -2084,10 +2260,11 @@ mod tests {
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
         let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let mut execution = AgentExecution::new(
             request(),
             &adapter,
-            &tools,
+            lease,
             &cancellation,
             runtime(),
             &tool_runtime,
@@ -2170,10 +2347,11 @@ mod tests {
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
         let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let mut execution = AgentExecution::new(
             request(),
             &adapter,
-            &tools,
+            lease,
             &cancellation,
             runtime(),
             &tool_runtime,
@@ -2388,12 +2566,13 @@ mod tests {
             release_tx.send(()).expect("release the second drain");
             let _ = controller_registry;
         });
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let _result = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             AgentExecution::new(
                 request(),
                 &adapter,
-                &tools,
+                lease,
                 &cancellation,
                 runtime(),
                 &tool_runtime,

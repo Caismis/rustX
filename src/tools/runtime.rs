@@ -253,7 +253,6 @@ impl ConversationToolRuntime {
                 mailbox: mailbox.clone(),
                 workspace: workspace.clone(),
                 artifacts: artifacts.clone(),
-                environment: environment.clone(),
                 clock,
                 event_sink: config.event_sink,
             },
@@ -285,7 +284,14 @@ impl ConversationToolRuntime {
         &self.artifacts
     }
 
-    /// The explicit authorized tool environment.
+    /// The base authorized tool environment of the conversation.
+    ///
+    /// M6: this is the construction-time base authorized environment. It is
+    /// **no longer the effective environment directly supplied to
+    /// executions**: foreground executions and background dispatches use
+    /// the attempt capability snapshot's immutable effective `ToolEnvironment`
+    /// (base authorized environment plus the deterministic Skill
+    /// environment overlay).
     #[must_use]
     pub fn environment(&self) -> &ToolEnvironment {
         &self.environment

@@ -53,7 +53,7 @@ async fn live_step(
     attempt: &str,
     model: &str,
     adapter: &dyn ModelAdapter,
-    tools: &ToolRegistry,
+    tools: ToolRegistry,
     store: Arc<InMemoryCheckpointStore>,
     window: u64,
 ) -> AgentExecutionResult {
@@ -88,10 +88,11 @@ async fn live_step(
     )
     .expect("live context runtime");
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request,
         adapter,
-        tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -118,7 +119,6 @@ async fn live_repeated_compaction() {
     let model =
         std::env::var("RUSTX_OPENAI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_owned());
     let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
-    let tools = ToolRegistry::new();
     let store = InMemoryCheckpointStore::new().shared();
 
     // A small window relative to the history guarantees compaction: the
@@ -145,7 +145,7 @@ async fn live_repeated_compaction() {
             &attempt,
             &model,
             &adapter,
-            &tools,
+            ToolRegistry::new(),
             store.clone(),
             window,
         )

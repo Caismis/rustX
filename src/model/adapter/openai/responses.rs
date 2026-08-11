@@ -864,6 +864,13 @@ fn translate_inputs(
             }
         }
     }
+    // The Skill catalog is trusted system context: it is combined
+    // deterministically with the canonical system instructions on every
+    // request, so a continuation that slices canonical history away never
+    // loses the catalog.
+    if let Some(catalog) = &request.skill_catalog {
+        instructions.push(catalog.rendered.clone());
+    }
     Ok((input_items, instructions, previous_response_id))
 }
 

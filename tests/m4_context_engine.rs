@@ -376,7 +376,7 @@ fn short_history_requires_no_compaction() {
     let engine = engine(100, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi"), user("u2", "bye")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     assert!(
         !engine
@@ -409,10 +409,10 @@ fn projection_ordering_is_deterministic() {
         },
     );
     let first = engine
-        .build_projection(&history, Some(&checkpoint), &[], None, None)
+        .build_projection(&history, Some(&checkpoint), &[], None, None, None)
         .expect("projection");
     let second = engine
-        .build_projection(&history, Some(&checkpoint), &[], None, None)
+        .build_projection(&history, Some(&checkpoint), &[], None, None, None)
         .expect("projection again");
     assert_eq!(first, second, "projection must be a pure function");
     let kinds: Vec<&str> = first
@@ -439,10 +439,10 @@ fn same_context_produces_same_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi"), agent("a1", vec![text_block("ok")])];
     let first = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let second = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection again");
     assert_eq!(first.estimated_input, second.estimated_input);
     assert_eq!(
@@ -461,10 +461,10 @@ fn tool_definitions_contribute_to_the_request_estimate() {
         common::model_tool("beta", "tool-beta"),
     ];
     let without_tools = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection without tools");
     let with_tools = engine
-        .build_projection(&history, None, &tools, None, None)
+        .build_projection(&history, None, &tools, None, None, None)
         .expect("projection with tools");
     assert_eq!(with_tools.estimated_input.input_tokens, 30);
     assert_eq!(without_tools.estimated_input.input_tokens, 10);
@@ -488,10 +488,10 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
     let cheap = engine(10_000_000, 0, 20, weighted(10, 10, 0));
     let expensive = engine(10_000_000, 0, 20, weighted(10, 10, 1_000_000));
     let projection_cheap = cheap
-        .build_projection(&history, None, &tools, None, None)
+        .build_projection(&history, None, &tools, None, None, None)
         .expect("projection");
     let projection_expensive = expensive
-        .build_projection(&history, None, &tools, None, None)
+        .build_projection(&history, None, &tools, None, None, None)
         .expect("projection");
     let plan_cheap = cheap
         .plan_compaction(
@@ -541,14 +541,14 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: projection.fingerprint(),
         input_tokens: 42,
     };
     let measured = engine
-        .build_projection(&history, None, &[], Some(&observed), None)
+        .build_projection(&history, None, &[], Some(&observed), None, None)
         .expect("projection with observed usage");
     assert_eq!(measured.estimated_input.input_tokens, 42);
     assert_eq!(
@@ -560,7 +560,7 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     // measurement does not apply, and the estimate is used instead.
     let grown = vec![user("u1", "hi"), user("u2", "more")];
     let estimated = engine
-        .build_projection(&grown, None, &[], Some(&observed), None)
+        .build_projection(&grown, None, &[], Some(&observed), None, None)
         .expect("projection with stale observation");
     assert_eq!(estimated.estimated_input.input_tokens, 20);
     assert_eq!(
@@ -576,7 +576,7 @@ fn missing_usage_falls_back_to_the_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 10);
     assert_eq!(
@@ -593,7 +593,7 @@ fn estimates_never_become_model_usage() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     assert_eq!(
         projection.estimated_input.source,
@@ -617,7 +617,7 @@ fn default_estimator_formula_is_frozen() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = vec![user("u1", "hi")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let expected = rustx::context::bytes_to_tokens(
         serde_json::to_vec(&projection.items)
@@ -637,7 +637,7 @@ fn default_estimator_formula_is_frozen() {
 fn threshold_equality_compacts() {
     let engine = engine(100, 0, 5, weighted(20, 20, 20));
     let at = engine
-        .build_projection(&vec![user("u1", ""); 5], None, &[], None, None)
+        .build_projection(&vec![user("u1", ""); 5], None, &[], None, None, None)
         .expect("projection");
     assert_eq!(at.estimated_input.input_tokens, 100);
     assert!(
@@ -647,7 +647,7 @@ fn threshold_equality_compacts() {
     );
 
     let below = engine
-        .build_projection(&vec![user("u1", ""); 4], None, &[], None, None)
+        .build_projection(&vec![user("u1", ""); 4], None, &[], None, None, None)
         .expect("projection");
     assert_eq!(below.estimated_input.input_tokens, 80);
     assert!(
@@ -657,7 +657,7 @@ fn threshold_equality_compacts() {
     );
 
     let above = engine
-        .build_projection(&vec![user("u1", ""); 6], None, &[], None, None)
+        .build_projection(&vec![user("u1", ""); 6], None, &[], None, None, None)
         .expect("projection");
     assert_eq!(above.estimated_input.input_tokens, 120);
     assert!(engine.should_compact(&above, 0).expect("above threshold"));
@@ -739,7 +739,7 @@ fn simple_complete_turn_boundary() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -774,7 +774,7 @@ fn multiple_tool_calls_stay_with_their_results() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -823,7 +823,7 @@ fn orphan_tool_message_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = vec![user("u1", ""), tool_message("t1", "ghost")];
     let error = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect_err("malformed history");
     assert_eq!(error.kind, ContextErrorKind::MalformedHistory);
 }
@@ -842,7 +842,7 @@ fn no_edge_crosses_the_chosen_cut() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -887,7 +887,7 @@ fn candidate_selection_is_deterministic() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -920,7 +920,7 @@ fn message_count_alone_does_not_control_the_cut() {
     let engine = engine(1_000, 0, 25, scripted(10, 10, 10, &[("huge", 500)]));
     let history = vec![user("huge", ""), user("small1", ""), user("small2", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -955,7 +955,7 @@ fn retained_suffix_approximates_the_recent_target() {
         user("u4", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -989,7 +989,7 @@ fn structural_rule_may_force_extra_retention() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1024,7 +1024,7 @@ fn token_target_may_retain_fewer_messages_than_recent() {
         user("m3", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1063,7 +1063,7 @@ fn system_messages_are_pinned_and_never_summarized() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 310);
     let plan = engine
@@ -1129,7 +1129,7 @@ fn absorbed_after_message_checkpoint_does_not_inject_its_summary() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None, None)
+        .build_projection(&history, Some(&previous), &[], None, None, None)
         .expect("projection");
     let ids: Vec<String> = projection
         .items
@@ -1175,7 +1175,7 @@ fn absorbed_inside_agent_checkpoint_does_not_inject_its_summary() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None, None)
+        .build_projection(&history, Some(&previous), &[], None, None, None)
         .expect("projection");
     let ids: Vec<String> = projection
         .items
@@ -1218,7 +1218,7 @@ fn fresh_checkpoint_is_established_after_absorption() {
         },
     );
     let projection = engine
-        .build_projection(&history, Some(&previous), &[], None, None)
+        .build_projection(&history, Some(&previous), &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1304,10 +1304,11 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
         user("u4", ""),
     ];
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -1417,10 +1418,11 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
         user("u3", ""),
     ];
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", history, 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -1486,7 +1488,7 @@ fn pinned_context_alone_cannot_fit_fails_explicitly() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let error = engine
         .plan_compaction(
@@ -1527,7 +1529,7 @@ fn oversized_turn_splits_inside_the_agent_message() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1613,7 +1615,7 @@ fn whole_turn_preference_wins_over_splitting_the_latest_turn() {
         ),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1651,7 +1653,7 @@ fn no_safe_split_falls_back_to_a_whole_turn_cut() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1698,7 +1700,7 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -1730,7 +1732,7 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
         tool_message("t3", "c3"),
     ];
     let projection2 = engine
-        .build_projection(&grown, Some(&checkpoint1), &[], None, None)
+        .build_projection(&grown, Some(&checkpoint1), &[], None, None, None)
         .expect("second projection");
     let second = engine
         .plan_compaction(
@@ -1790,7 +1792,7 @@ fn first_checkpoint_is_committed_with_full_metadata() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1841,7 +1843,7 @@ fn incremental_second_checkpoint_receives_only_new_material() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -1864,7 +1866,7 @@ fn incremental_second_checkpoint_receives_only_new_material() {
         .expect("first apply");
 
     let projection2 = engine
-        .build_projection(&history, Some(&checkpoint1), &[], None, None)
+        .build_projection(&history, Some(&checkpoint1), &[], None, None, None)
         .expect("second projection");
     let second = engine
         .plan_compaction(
@@ -1915,7 +1917,7 @@ fn no_progress_compaction_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = vec![user("u1", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1953,14 +1955,14 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
     // Provider-reported before = 1000; the deterministic estimate of the
     // same projection is 20.
     let plain_projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 1_000,
     };
     let projection = engine
-        .build_projection(&history, None, &[], Some(&observed), None)
+        .build_projection(&history, None, &[], Some(&observed), None, None)
         .expect("provider-reported projection");
     assert_eq!(
         projection.estimated_input.source,
@@ -2016,14 +2018,14 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
     // Provider-reported before = 50; the deterministic estimate of the same
     // projection is 60.
     let plain_projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 50,
     };
     let projection = engine
-        .build_projection(&history, None, &[], Some(&observed), None)
+        .build_projection(&history, None, &[], Some(&observed), None, None)
         .expect("provider-reported projection");
     let plan = engine
         .plan_compaction(
@@ -2069,7 +2071,7 @@ fn empty_and_whitespace_summaries_are_rejected() {
     let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
     let history = vec![user("u1", ""), user("u2", "")];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2104,7 +2106,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
         tool_message("t1", "c1"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2153,7 +2155,7 @@ fn continuation_owner_is_never_split() {
         tool_message("t2", "c2"),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     // Without the constraint this turn would split (see the split test);
     // with the constraint it must be retired whole.
@@ -2193,7 +2195,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&history, None, &[], None, None)
+        .build_projection(&history, None, &[], None, None, None)
         .expect("projection");
     let error = engine
         .plan_compaction(
@@ -2222,7 +2224,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
         user("u2", ""),
     ];
     let projection = engine
-        .build_projection(&unpinned, None, &[], None, None)
+        .build_projection(&unpinned, None, &[], None, None, None)
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2277,10 +2279,11 @@ async fn proactive_compaction_before_the_next_turn() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2455,10 +2458,11 @@ async fn below_threshold_runs_without_compaction() {
         store.clone(),
     );
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2513,10 +2517,11 @@ async fn overflow_compact_and_retry_succeeds() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2626,10 +2631,11 @@ async fn overflow_retry_exhausted_after_one_retry() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2699,10 +2705,11 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2774,10 +2781,11 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2850,10 +2858,11 @@ async fn overflow_retry_budget_is_per_model_turn() {
     ]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -2917,10 +2926,11 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
             FakeContextSummarizer::new(vec![FakeSummaryStep::Return(bad_summary.to_owned())]);
         let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
         let tool_runtime = common::tool_runtime("conv-1");
+        let capability = common::capability_lease(tools, &tool_runtime).await;
         let result = AgentExecution::new(
             request("attempt-1", vec![user("msg-user-1", "hi")], 0),
             &model,
-            &tools,
+            capability.into_lease(),
             &cancellation,
             runtime,
             &tool_runtime,
@@ -2989,10 +2999,11 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     ))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3128,10 +3139,11 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         .register(Arc::new(FailingStatusProvider))
         .expect("register");
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         rustx::context::ContextRuntime::with_status_composer(
             engine(10_000_000, 0, 0, weighted(10, 10, 10)),
@@ -3220,10 +3232,11 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         fresh_user("msg-inbound-1", "fresh instruction"),
     ];
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         fresh_request("attempt-1", initial),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
         &tool_runtime,
@@ -3294,10 +3307,11 @@ async fn no_progress_compaction_fails_without_retry() {
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("x".repeat(400))]);
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3366,10 +3380,11 @@ async fn cancel_before_proactive_compaction() {
     // never starts because cancellation settles the attempt first.
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3424,10 +3439,11 @@ async fn cancel_while_summary_generation_is_pending() {
     let parked = summarizer.parked();
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer, store.clone());
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3523,10 +3539,11 @@ async fn run_continuation_case(
         InMemoryCheckpointStore::new().shared(),
     );
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -3925,10 +3942,11 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     )
     .expect("runtime");
     let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-user-1", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4104,10 +4122,11 @@ async fn m4_projection_contains_drained_batch_before_request() {
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4179,10 +4198,11 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,
@@ -4341,10 +4361,11 @@ async fn m4_drain_retains_continuation_without_compaction() {
         release.send(true).expect("release turn 1");
     });
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
+    let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "hi")], 0),
         &model,
-        &tools,
+        capability.into_lease(),
         &cancellation,
         runtime,
         &tool_runtime,

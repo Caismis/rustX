@@ -652,6 +652,45 @@ Agent Status is actual model input:
   invalidates old `ProviderObservedInput` observations;
 - compaction candidate hard-fit estimates include the exact same snapshot.
 
+## 18.5 Skill catalog (M6 mandatory capability projection)
+
+The Skill catalog follows the Agent Status attachment architecture exactly:
+
+```text
+attempt capability snapshot (immutable for the attempt)
+    ↓
+SkillCatalogAttachment { rendered }   (Layer 0, src/model/types.rs)
+    ↓
+ContextEngine::build_projection(..., skill_catalog)
+    ↓
+ContextProjection.skill_catalog
+    ↓
+projection compiler (CompiledContext.skill_catalog)
+    ↓
+ModelRequest.skill_catalog
+    ↓
+provider adapter → trusted system context
+```
+
+Semantics:
+
+- the attachment is produced once per attempt from the pinned immutable
+  Skill snapshot and is identical on every turn of the attempt; the same
+  exact attachment is used on both sides of every compaction progress
+  comparison (`CompactionPlan.skill_catalog`);
+- it participates in the deterministic projection fingerprint, the full
+  request estimate (`DefaultTokenEstimator::serialized_bytes`), the soft
+  compaction threshold, the hard-fit calculation, and `CannotFit` — a
+  large catalog can make an otherwise compactable projection fail;
+- it is excluded from the recent-conversation estimate
+  (`estimate_conversation_input`) and can never satisfy
+  `keep_recent_tokens`;
+- it is projection-only capability context: never canonical history,
+  never checkpoint history, never returned in
+  `AgentExecutionResult.messages`, and never emitted as a committed-message
+  event; `SystemAuthority::Skill` is not used for it;
+- when no Skill is active the attachment is absent entirely.
+
 ## 19. AgentExecution integration
 
 The M4 integration point is immediately before construction of every agent
@@ -664,24 +703,25 @@ compose Agent Status (one snapshot per request preparation)
     ↓
 ContextEngine
     ↓
-ContextProjection (+ agent_status attachment)
+ContextProjection (+ agent_status attachment, + skill_catalog attachment)
     ↓
 projection compiler (CompiledContext)
     ↓
-ModelRequest.messages + ModelRequest.agent_status
+ModelRequest.messages + ModelRequest.agent_status + ModelRequest.skill_catalog
 ```
 
 The M4 context path is **mandatory**: there is exactly one normal execution
-model, and every `AgentExecution` is constructed with a `ContextRuntime`:
+model, and every `AgentExecution` is constructed with a `ContextRuntime`
+and an attempt capability lease:
 
 ```rust
-AgentExecution::new(request, adapter, tools, cancellation, context_runtime)
+AgentExecution::new(request, adapter, capability, cancellation, context_runtime, tool_runtime)
 ```
 
-The obsolete no-context compatibility path and `with_context_runtime` are
-gone; there is no Agent Status disable flag and no legacy execution mode.
-`AgentExecutionRequest` carries the explicit `initial_turn_trigger`
-(`InitialTurnTrigger::FreshInbound(fresh)` or
+The obsolete no-context compatibility path, `with_context_runtime`, and any
+capability-free constructor are gone; there is no Agent Status disable flag
+and no legacy execution mode. `AgentExecutionRequest` carries the explicit
+`initial_turn_trigger` (`InitialTurnTrigger::FreshInbound(fresh)` or
 `InitialTurnTrigger::Continuation`) and the per-execution/conversation IANA
 `timezone` metadata.
 
@@ -712,6 +752,18 @@ message. Adapters append the rendered status as one final content unit of
 the target fresh user message (Chat Completions text part, Responses
 `input_text` unit, Anthropic text block) and fail explicitly when a stored
 continuation would slice the target out of the transmitted tail.
+
+The Skill catalog is placed by adapters in **trusted system context**:
+OpenAI Responses combines it deterministically with the canonical system
+instructions in the top-level `instructions` channel on every request
+(including stored continuations, whose sliced canonical history never
+carries the catalog), Anthropic Messages pushes it into the top-level
+`system` content after the canonical system blocks, and OpenAI Chat
+Completions emits one deterministic system message in the trusted system
+prefix after the canonical system messages and before the conversational
+transcript. It is never attached to a user message. The catalog is
+carried by the Layer 0 `SkillCatalogAttachment` (`src/model/types.rs`);
+`src/model` never references context or capability modules.
 
 The `AgentStatusAttachment` itself is a Layer 0 contract in
 `src/model/types.rs`, mirroring the existing `model → message, tools,

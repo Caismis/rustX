@@ -120,12 +120,47 @@ id_type! {
 
 id_type! {
     /// Identifies a skill bound to the runtime.
+    ///
+    /// M6 makes the standard Agent Skills `name` the logical skill identity:
+    /// a `SkillId` is the validated standard skill name, not an externally
+    /// assigned opaque string.
     SkillId
 }
 
 id_type! {
     /// Identifies an immutable skill version.
+    ///
+    /// M6 derives `SkillVersionId` deterministically from the complete
+    /// accepted Skill package content (SHA-256 over the stable textual form
+    /// `sha256:<64 lowercase hex characters>`). Any package-content change
+    /// yields a new version id.
     SkillVersionId
+}
+
+id_type! {
+    /// Identifies the immutable shared Python environment of one active
+    /// Skill capability set.
+    ///
+    /// M6 derives `PythonEnvironmentDigest` deterministically from the
+    /// environment-relevant inputs: format/version domain, OS, architecture,
+    /// resolved Python runtime identity, resolved pip identity, and the
+    /// sorted normalized direct dependency map. It is distinct from
+    /// [`SkillVersionId`]: a description-only Skill change can produce a new
+    /// Skill version without changing the Python environment identity.
+    PythonEnvironmentDigest
+}
+
+id_type! {
+    /// Identifies the immutable shared Node environment of one active Skill
+    /// capability set.
+    ///
+    /// M6 derives `NodeEnvironmentDigest` deterministically from the
+    /// environment-relevant inputs: format/version domain, OS, architecture,
+    /// resolved Node runtime identity, resolved npm identity, and the sorted
+    /// normalized direct dependency map. It is distinct from
+    /// [`SkillVersionId`]: a description-only Skill change can produce a new
+    /// Skill version without changing the Node environment identity.
+    NodeEnvironmentDigest
 }
 
 id_type! {
@@ -172,8 +207,8 @@ impl Default for CapabilityRevision {
 mod tests {
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
-        EventId, McpServerId, MessageId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId,
-        ToolId, ToolVersionId, TurnId,
+        EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
+        SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
     };
 
     /// Strong identifiers serialize as plain strings, not as structs.
@@ -211,7 +246,15 @@ mod tests {
         let _ = round_trip(&ToolVersionId::new("tool-v2"));
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));
-        let _ = round_trip(&SkillVersionId::new("skill-v3"));
+        let _ = round_trip(&SkillVersionId::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
+        let _ = round_trip(&PythonEnvironmentDigest::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
+        let _ = round_trip(&NodeEnvironmentDigest::new(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ));
         let _ = round_trip(&ArtifactId::new("artifact-1"));
         let _ = round_trip(&CapabilityRevision::new(42));
     }

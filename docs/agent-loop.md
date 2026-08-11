@@ -239,10 +239,33 @@ settles directly because no next model turn is being started.
 Given identical model events, identical tools, and identical input, the
 loop produces an identical ordered `RuntimeEvent` stream and an identical
 terminal outcome: the trace is a pure function of the attempt request, the
-model stream, the tool results, the cancellation signal, and the mailbox
-state observed at each safe boundary. Tool calls of one turn execute in
-block order; there is no hidden concurrency, no hidden retry, and no hidden
-state.
+model stream, the tool results, the cancellation signal, the pinned
+capability snapshot, and the mailbox state observed at each safe boundary.
+Tool calls of one turn execute in block order; there is no hidden
+concurrency, no hidden retry, and no hidden state.
+
+### 8.1 Attempt capability lease (M6)
+
+One `AgentExecution` structurally holds one RAII attempt capability lease
+for its complete lifetime (`AgentExecution::new(..., capability, ...)`);
+there is no capability-free constructor. Every model/tool cycle inside the
+attempt uses exactly the pinned immutable `CapabilitySnapshot`:
+
+- the ToolRegistry handle (preflight, executor resolution, model
+  definitions);
+- the Skill catalog attachment on every `ModelRequest` (identical on
+  every turn);
+- the effective `ToolEnvironment` for foreground executions;
+- the effective environment captured into every background dispatch at
+  `prepare_dispatch`, before the background ownership commit.
+
+No model turn re-discovers Skills or re-queries the conversation capability
+pointer. A capability commit while the attempt lease is active is rejected
+as busy; the lease is moved into `AgentExecution` and releases when the
+consumed execution is dropped after settlement (or when construction fails).
+The lease owner is structurally bound to the `ConversationId` and canonical
+Workspace root of the corresponding `ConversationToolRuntime`; a mismatch is
+rejected before any model request or tool execution begins.
 
 ## 9. Conversation inbound mailbox (Issue #22)
 

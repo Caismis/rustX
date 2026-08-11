@@ -38,6 +38,8 @@ globset = "0.4.19"
 walkdir = "2.5.0"
 nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 libc = "0.2"
+serde_yaml = "0.9"
+sha2 = "0.10"
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

@@ -32,6 +32,7 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
@@ -158,6 +159,18 @@ pub enum MailboxError {
         /// The conversation the mailbox actually belongs to.
         actual: ConversationId,
     },
+    /// The capability lease and tool runtime do not share the same
+    /// conversation/workspace ownership domain.
+    CapabilityOwnershipMismatch {
+        /// The capability lease's conversation owner.
+        capability_conversation: ConversationId,
+        /// The request/runtime conversation owner.
+        runtime_conversation: ConversationId,
+        /// The capability lease's canonical Workspace.
+        capability_workspace: PathBuf,
+        /// The tool runtime's canonical Workspace.
+        runtime_workspace: PathBuf,
+    },
 }
 
 impl fmt::Display for MailboxError {
@@ -176,6 +189,17 @@ impl fmt::Display for MailboxError {
             Self::ConversationMismatch { expected, actual } => write!(
                 f,
                 "mailbox belongs to conversation {actual}, expected {expected}"
+            ),
+            Self::CapabilityOwnershipMismatch {
+                capability_conversation,
+                runtime_conversation,
+                capability_workspace,
+                runtime_workspace,
+            } => write!(
+                f,
+                "capability owner ({capability_conversation}, {}) does not match tool runtime owner ({runtime_conversation}, {})",
+                capability_workspace.display(),
+                runtime_workspace.display(),
             ),
         }
     }

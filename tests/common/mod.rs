@@ -306,6 +306,7 @@ pub fn simple_request(
         })],
         tools: Vec::new(),
         agent_status: None,
+        skill_catalog: None,
         reasoning: ReasoningEffort::Medium,
         max_output_tokens: 512,
         continuation: None,
@@ -611,4 +612,332 @@ pub fn replay_execution_states(events: &[RuntimeEvent]) -> Result<Vec<ExecutionS
         }
     }
     Ok(phases)
+}
+
+/// The attempt capability fixture of one conversation: a coordinator with
+/// an empty Skill set over the given immutable tool registry, the
+/// conversation's base environment, and a private environment store, with
+/// one pinned attempt lease. The temporary directory is kept alive for the
+/// fixture lifetime.
+pub struct CapabilityFixture {
+    /// The temporary directory kept alive for the fixture lifetime.
+    #[allow(clippy::used_underscore_binding)]
+    _dir: tempfile::TempDir,
+    /// The capability coordinator of the conversation.
+    pub coordinator: rustx::capabilities::CapabilityCoordinator,
+    lease: rustx::capabilities::AttemptCapabilityLease,
+}
+
+impl CapabilityFixture {
+    /// Moves the pinned attempt capability lease out of the fixture.
+    #[must_use]
+    pub fn into_lease(self) -> rustx::capabilities::AttemptCapabilityLease {
+        self.lease
+    }
+
+    /// Moves the lease and coordinator out together when a test must keep the
+    /// registered executor handles alive after the attempt settles.
+    #[must_use]
+    pub fn into_lease_and_coordinator(
+        self,
+    ) -> (
+        rustx::capabilities::AttemptCapabilityLease,
+        rustx::capabilities::CapabilityCoordinator,
+    ) {
+        (self.lease, self.coordinator)
+    }
+}
+
+/// Builds the attempt capability lease over the given tool registry and
+/// conversation tool runtime: an empty Skill set (no discovery, no
+/// environment materialization), the base authorized environment, and a
+/// private environment store disjoint from the Workspace. The candidate is
+/// prepared and committed so the lease pins the established revision.
+pub async fn capability_lease(
+    tools: rustx::tools::executor::ToolRegistry,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
+) -> CapabilityFixture {
+    let dir = tempfile::tempdir().expect("capability temp dir");
+    let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+        rustx::capabilities::CapabilityCoordinatorConfig {
+            conversation_id: tool_runtime.conversation_id().clone(),
+            workspace: tool_runtime.workspace().clone(),
+            tool_registry: std::sync::Arc::new(tools),
+            base_environment: tool_runtime.environment().clone(),
+            environment_store_root: dir.path().join("skill-env"),
+        },
+    )
+    .expect("capability coordinator");
+    let candidate = coordinator
+        .prepare_candidate()
+        .await
+        .expect("candidate preparation");
+    coordinator.commit(candidate).expect("candidate commit");
+    let lease = coordinator.acquire_attempt_lease();
+    CapabilityFixture {
+        _dir: dir,
+        coordinator,
+        lease,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// M6: fake Skill environment backend
+// ---------------------------------------------------------------------------
+
+/// One recorded backend call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendCall {
+    /// A runtime version resolution.
+    ResolvePython,
+    /// A runtime version resolution.
+    ResolveNode,
+    /// A Python environment materialization directly into its final digest directory.
+    MaterializePython,
+    /// A Node environment materialization into a staging directory.
+    MaterializeNode,
+}
+
+/// The deterministic fake Skill environment backend: scripted runtime
+/// versions, scripted materialization failures, a deterministic
+/// materialization gate (for atomic-publication tests), and a complete
+/// call record. No test ever touches a public package registry.
+#[derive(Clone)]
+pub struct FakeSkillEnvironmentBackend {
+    inner: std::sync::Arc<FakeBackendInner>,
+}
+
+struct FakeBackendInner {
+    python_runtime: std::sync::Mutex<String>,
+    python_package_manager: std::sync::Mutex<String>,
+    node_runtime: std::sync::Mutex<String>,
+    node_package_manager: std::sync::Mutex<String>,
+    python_failure: std::sync::Mutex<Option<String>>,
+    node_failure: std::sync::Mutex<Option<String>>,
+    calls: std::sync::Mutex<Vec<BackendCall>>,
+    materialize_gate: std::sync::Mutex<Option<MaterializeGate>>,
+}
+
+/// The deterministic materialization gate: the fake signals `entered` when
+/// materialization begins and blocks until `release` is sent, so a test can
+/// observe the store state between materialization and publication.
+pub struct MaterializeGate {
+    entered_tx: tokio::sync::watch::Sender<bool>,
+    entered_rx: tokio::sync::watch::Receiver<bool>,
+    release_tx: tokio::sync::watch::Sender<bool>,
+    release_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+impl MaterializeGate {
+    /// Test side: waits until the fake's materialization provably began.
+    pub async fn await_entered(&self) {
+        let mut rx = self.entered_rx.clone();
+        if !*rx.borrow() {
+            let _ = rx.changed().await;
+        }
+    }
+
+    /// Test side: releases the blocked materialization.
+    pub fn release(&self) {
+        let _ = self.release_tx.send(true);
+    }
+}
+
+impl FakeSkillEnvironmentBackend {
+    /// A deterministic fake backend with fixed scripted runtime versions.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(FakeBackendInner {
+                python_runtime: std::sync::Mutex::new("Python 3.12.3".to_owned()),
+                python_package_manager: std::sync::Mutex::new(
+                    "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.12)".to_owned(),
+                ),
+                node_runtime: std::sync::Mutex::new("v22.1.0".to_owned()),
+                node_package_manager: std::sync::Mutex::new("10.2.3".to_owned()),
+                python_failure: std::sync::Mutex::new(None),
+                node_failure: std::sync::Mutex::new(None),
+                calls: std::sync::Mutex::new(Vec::new()),
+                materialize_gate: std::sync::Mutex::new(None),
+            }),
+        }
+    }
+
+    /// Scripts the Python runtime identity (a runtime-version change
+    /// changes the environment digest).
+    pub fn set_python_runtime(&self, version: &str) {
+        version.clone_into(&mut *self.inner.python_runtime.lock().expect("fake lock"));
+    }
+
+    /// Scripts the Node runtime identity.
+    pub fn set_node_runtime(&self, version: &str) {
+        version.clone_into(&mut *self.inner.node_runtime.lock().expect("fake lock"));
+    }
+
+    /// Scripts a Python materialization failure (the next Python
+    /// materialization fails with this message).
+    pub fn fail_python_materialization(&self, message: &str) {
+        *self.inner.python_failure.lock().expect("fake lock") = Some(message.to_owned());
+    }
+
+    /// Scripts a Node materialization failure.
+    pub fn fail_node_materialization(&self, message: &str) {
+        *self.inner.node_failure.lock().expect("fake lock") = Some(message.to_owned());
+    }
+
+    /// Installs the deterministic materialization gate.
+    pub fn install_materialize_gate(&self) -> MaterializeGate {
+        let (entered_tx, entered_rx) = tokio::sync::watch::channel(false);
+        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
+        let gate = MaterializeGate {
+            entered_tx,
+            entered_rx,
+            release_tx,
+            release_rx,
+        };
+        *self.inner.materialize_gate.lock().expect("fake lock") = Some(gate.clone_for_test());
+        gate
+    }
+
+    /// The recorded backend calls in order.
+    pub fn calls(&self) -> Vec<BackendCall> {
+        self.inner.calls.lock().expect("fake lock").clone()
+    }
+
+    /// The number of materialization calls of one ecosystem.
+    pub fn materialization_count(&self, ecosystem: rustx::skills::Ecosystem) -> usize {
+        let call = match ecosystem {
+            rustx::skills::Ecosystem::Python => BackendCall::MaterializePython,
+            rustx::skills::Ecosystem::Node => BackendCall::MaterializeNode,
+        };
+        self.calls().into_iter().filter(|c| *c == call).count()
+    }
+
+    fn record(&self, call: BackendCall) {
+        self.inner.calls.lock().expect("fake lock").push(call);
+    }
+
+    async fn gate(&self) {
+        let gate = self
+            .inner
+            .materialize_gate
+            .lock()
+            .expect("fake lock")
+            .clone();
+        if let Some(gate) = gate {
+            let _ = gate.entered_tx.send(true);
+            let mut release = gate.release_rx.clone();
+            if !*release.borrow() {
+                let _ = release.changed().await;
+            }
+        }
+    }
+}
+
+impl Clone for MaterializeGate {
+    fn clone(&self) -> Self {
+        Self {
+            entered_tx: self.entered_tx.clone(),
+            entered_rx: self.entered_rx.clone(),
+            release_tx: self.release_tx.clone(),
+            release_rx: self.release_rx.clone(),
+        }
+    }
+}
+
+impl MaterializeGate {
+    fn clone_for_test(&self) -> Self {
+        self.clone()
+    }
+}
+
+impl Default for FakeSkillEnvironmentBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
+    fn resolve_runtime_versions(
+        &self,
+        ecosystem: rustx::skills::Ecosystem,
+    ) -> futures_util::future::BoxFuture<'_, Result<rustx::skills::RuntimeVersions, String>> {
+        Box::pin(async move {
+            self.record(match ecosystem {
+                rustx::skills::Ecosystem::Python => BackendCall::ResolvePython,
+                rustx::skills::Ecosystem::Node => BackendCall::ResolveNode,
+            });
+            match ecosystem {
+                rustx::skills::Ecosystem::Python => Ok(rustx::skills::RuntimeVersions {
+                    runtime: self.inner.python_runtime.lock().expect("fake lock").clone(),
+                    package_manager: self
+                        .inner
+                        .python_package_manager
+                        .lock()
+                        .expect("fake lock")
+                        .clone(),
+                }),
+                rustx::skills::Ecosystem::Node => Ok(rustx::skills::RuntimeVersions {
+                    runtime: self.inner.node_runtime.lock().expect("fake lock").clone(),
+                    package_manager: self
+                        .inner
+                        .node_package_manager
+                        .lock()
+                        .expect("fake lock")
+                        .clone(),
+                }),
+            }
+        })
+    }
+
+    fn materialize_python<'a>(
+        &'a self,
+        environment_dir: &'a std::path::Path,
+        _dependencies: &'a std::collections::BTreeMap<String, String>,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.record(BackendCall::MaterializePython);
+            self.gate().await;
+            if let Some(message) = self.inner.python_failure.lock().expect("fake lock").take() {
+                return Err(message);
+            }
+            std::fs::create_dir_all(environment_dir.join("bin"))
+                .map_err(|error| error.to_string())?;
+            std::fs::write(
+                environment_dir.join("bin").join("python"),
+                b"#!fake python\n",
+            )
+            .map_err(|error| error.to_string())?;
+            std::fs::write(
+                environment_dir.join("bin").join("fake-tool"),
+                format!("#!{}\n", environment_dir.join("bin/python").display()),
+            )
+            .map_err(|error| error.to_string())?;
+            std::fs::create_dir_all(environment_dir.join("lib/python3.12/site-packages"))
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }
+
+    fn materialize_node<'a>(
+        &'a self,
+        staging: &'a std::path::Path,
+        _dependencies: &'a std::collections::BTreeMap<String, String>,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.record(BackendCall::MaterializeNode);
+            self.gate().await;
+            if let Some(message) = self.inner.node_failure.lock().expect("fake lock").take() {
+                return Err(message);
+            }
+            std::fs::create_dir_all(staging.join("node_modules/.bin"))
+                .map_err(|error| error.to_string())?;
+            std::fs::write(
+                staging.join("node_modules").join(".bin").join("tool"),
+                b"#!fake tool\n",
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(())
+        })
+    }
 }
