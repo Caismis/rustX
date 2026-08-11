@@ -48,7 +48,7 @@ message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
 tools/types.rs             ToolDefinition (id, name, description, canonical
-                           input schema, ToolExecutionPolicy, ToolConcurrencyPolicy,
+                           input schema, ToolInvocationPolicy,
                            ToolReplayPolicy, ToolOrigin), ModelToolDefinition
                            (the compiled model-facing definition), ToolCall,
                            ToolCallStart, ToolInvocation (stripped/validated
@@ -78,6 +78,12 @@ tools/runtime.rs           ConversationToolRuntime: the per-conversation
 tools/native/             the native tool plane: read, write, edit, glob,
                            grep, bash executors and the background_task
                            runtime intrinsic
+tools/mcp/                MCP 2026-07-28 adapter: configured server runtime,
+                           paginated discovery, list-change invalidation,
+                           canonical calls, progress, cancellation
+tools/python.rs           immutable ToolVersion discovery/publication,
+                           PythonToolEnvironment materialization, and the
+                           canonical Python executor
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
                            ReasoningEffort, AgentStatusAttachment (the
                            cross-layer model-request attachment contract of
@@ -839,6 +845,50 @@ The tool plane exposes a single runtime-owned execution contract and multiple ex
 
 Execution implementations may depend on `rmcp`, process APIs, `uv`, or other libraries. The agent kernel may not.
 
+#### M7 implementation (one external-capability tool plane)
+
+Every model-visible tool is one canonical `ToolDefinition` paired with one
+`Arc<dyn ToolExecutor>`. Native, MCP, and custom Python tools use the same
+registry preflight, reserved `__rustx_*` stripping, JSON Schema validation,
+execution policy, concurrency policy, progress event, cancellation signal,
+foreground/background ownership, and result types. The Agent Loop has no
+origin-specific dispatch path.
+
+The base/native/runtime registry is immutable input to capability preparation.
+Each candidate composes it with MCP definitions sorted by `McpServerId` and
+remote name, then Python definitions sorted by canonical model-facing name.
+The candidate owns a new `ToolRegistry`; a committed `CapabilitySnapshot`
+owns that exact registry. A duplicate model-facing name rejects the complete
+candidate.
+
+`McpServerRuntime` owns one configured server's rmcp peer, transport, progress
+dispatcher, list-change subscription, and supervised stdio owner when used.
+Executors capture an `Arc` to that runtime. The observed remote tool surface
+and binding are immutable for a capability revision, but rustX does not claim
+to snapshot the implementation behavior of the independent remote server.
+`tools/list_changed` increments a monotonic invalidation epoch and wakes a
+narrow refresh seam; it never mutates an active registry. Preparation rejects
+a catalog that changes during discovery, and commit rejects a candidate whose
+epoch changed before the protected snapshot swap.
+
+MCP stdio uses the runtime-owned interactive supervisor, whose control socket
+is separate from the server's stdin/stdout protocol pair. The supervisor owns
+the process group, bounded stderr diagnostics, TERM/grace/KILL shutdown,
+descendant reaping, and direct-child settlement. Streamable HTTP uses the
+current rmcp client transport with explicit static headers and no
+`Mcp-Session-Id` compatibility state.
+
+Custom Python packages are discovered only from
+`<workspace>/.agents/tools/<tool-name>/`. Candidate preparation reads a finite
+package snapshot, computes `ToolVersionId`, publishes it immutably, validates
+the existing `uv.lock`, and materializes a distinct immutable
+`PythonToolEnvironmentDigest` environment. ToolVersion identity and
+environment identity are separate: source/description/schema changes can
+change the former without changing the latter. The environment isolates
+dependencies, not filesystem, network, or security permissions. A harness
+uses a private input file and one bounded JSON result envelope; the Python
+subprocess uses the shared supervised short-lived runner.
+
 ### Layer 5: Skill plane
 
 Skills are filesystem/workflow packages. A skill may include:
@@ -977,6 +1027,22 @@ generic runtime supervisor:
   captured at background dispatch prepare time (before the ownership
   commit) and retained by the detached execution; later revision
   activations never mutate it.
+
+#### M7 capability additions
+
+Capability preparation now owns the full composition transaction:
+
+```text
+base/native/runtime tools + prepared MCP + prepared Python
+    -> candidate ToolRegistry -> candidate CapabilitySnapshot -> commit
+```
+
+There is no mutable process-global active registry. An attempt lease captures
+one snapshot and its exact registry for all turns. Detached background work
+captures the exact executor before ownership transfer; an old MCP call keeps
+its `McpServerRuntime`, and an old Python call keeps its published source and
+environment, across later capability revisions. Environment GC metadata is
+written deterministically for future ownership, but M7 implements no GC.
 
 The shared supervised process runner (`src/runtime/process_runner`) is the
 M5 Bash process-group lifecycle extracted so native Bash and Skill

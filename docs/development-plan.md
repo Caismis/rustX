@@ -186,7 +186,7 @@ Implemented in the M5 tool plane PR (Issue #8):
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
   boundary, artifact store, and explicit tool environment
 - The concrete bounded `NativeToolPolicies` configuration: each ordinary
-  native tool independently selects its `NativeToolPolicy` (execution +
+  native tool independently selects its `ToolInvocationPolicy` (execution +
   concurrency axes; foreground-only sequential by default), with
   `background_task` fixed foreground-only sequential outside the
   configurable set
@@ -332,34 +332,46 @@ Exit criteria:
 - A capability commit is rejected while an attempt lease is active; failed preparation/commit leaves the current revision authoritative.
 - Detached background executions retain the environment of the revision that dispatched them.
 
-## Milestone 7 — External tool plane
+## Milestone 7 — External tool plane (implemented)
 
 ### MCP
 
-Use the Rust MCP SDK behind a rustX-owned executor boundary.
+Use `rmcp` 3.1.2 and the MCP 2026-07-28 `Discover` lifecycle behind a
+rustX-owned executor boundary.
 
 Implement:
 
-- Server connection lifecycle
-- Tool discovery
-- Tool execution
-- Progress
-- Cancellation
-- Deferred application of `tools/list_changed` until the runtime is quiescent
+- Typed stdio and Streamable HTTP configuration with explicit credentials and
+  no legacy session fallback
+- Paginated discovery and deterministic canonical ToolId/name ordering
+- Shared `McpServerRuntime` ownership for transport, subscriptions, progress,
+  cancellation, and supervised stdio process settlement
+- Fractional provider-neutral progress, canonical result conversion, and
+  response-vs-cancellation linearization
+- Monotonic `tools/list_changed` invalidation epochs; refresh preparation and
+  quiescent commit, never active-registry mutation
 
 ### Custom Python tools
 
 Implement:
 
-- Immutable tool version manifest
-- One `uv` virtual environment per tool version digest
-- Schema validation
-- Process execution
-- Result normalization
+- Immutable one-level packages at `<workspace>/.agents/tools/`
+- Content-derived `ToolVersionId` plus separate
+  `PythonToolEnvironmentDigest`
+- Immutable source publication, checked `uv.lock`, and store-owned coalesced
+  frozen `uv` materialization with ready metadata
+- Canonical schema preflight, private-file invocation harness, supervised
+  process execution, and bounded JSON result normalization
 
 Exit criteria:
 
 - MCP and Python tools are indistinguishable from native tools to the agent kernel.
+- A capability revision owns one immutable composed registry. Background
+  executions retain exact MCP runtimes or Python source/environment handles
+  across later revisions.
+- M7 raises rustX's MSRV to Rust 1.88 for the current rmcp release. Python
+  environments isolate dependencies but are not security sandboxes; metadata
+  for future GC is written, but no GC runs.
 
 ## Milestone 8 — Runtime events and durability
 

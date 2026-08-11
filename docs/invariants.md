@@ -186,8 +186,8 @@ hold attempt leases and never block a capability commit.
   Skill change yields a new Skill version and a new capability revision
   without changing environment identities when dependency inputs are
   unchanged.
-- Skill, tool, and MCP capability mutations (MCP remains future work) may
-  occur only while the conversation runtime is quiescent in the M6 sense;
+- Skill, native-tool, MCP, and Python capability mutations may occur only
+  while the conversation runtime is quiescent in the M6 sense;
   broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
@@ -214,6 +214,47 @@ identities are snapshotted, but lazy Skill source files
 content: M6 does not mount them through an immutable filesystem snapshot,
 and an external rewrite of `.agents/skills/...` after preparation is
 observed only at the next quiescent re-discovery.
+
+### M7 external tool invariants
+
+- One immutable `ToolRegistry` belongs to one `CapabilitySnapshot`. Candidate
+  preparation composes a new registry from the deterministic base/native
+  registry, sorted MCP catalogs, and sorted Python definitions; active
+  registries are never mutated in place. Global model-facing name collisions
+  reject the whole candidate.
+- `ToolOrigin` identifies provenance only. Execution ownership and batch
+  scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
+  all origins use the canonical Agent Loop, progress, cancellation, and
+  background paths.
+- MCP uses rmcp's MCP 2026-07-28 `Discover` lifecycle. A revision freezes
+  rustX's observed name, description, schema, policy, id, server identity,
+  and executor binding; it cannot byte-snapshot or make deterministic the
+  external server behavior behind that binding.
+- A `tools/list_changed` notification increments a server invalidation epoch
+  and wakes refresh-only coordination. It never changes an active registry or
+  an attempt's snapshot. Preparation rejects an unstable catalog, and commit
+  linearizes against the epoch immediately before the snapshot swap. Several
+  notifications may coalesce, and an unchanged rediscovery is `NoChange`.
+- Each MCP executor captures an `Arc<McpServerRuntime>`. Stdio runtime control
+  is separate from the MCP protocol streams and owns the server process group,
+  bounded diagnostics, TERM/grace/KILL shutdown, descendant reaping, and
+  direct supervisor settlement. HTTP uses explicit static headers only.
+- MCP cancellation is linearized against the response: a response that
+  commits first remains terminal; cancellation that commits first sends the
+  rmcp cancellation notification and returns `Cancelled` only after local
+  request settlement. A transport/control failure returns `Failed`. Remote
+  cancellation is advisory: rustX cannot prove an arbitrary server stopped
+  all physical side effects.
+- Python candidate preparation snapshots every package-owned byte before
+  commit, publishes the snapshot immutably, and binds the executor to that
+  `ToolVersionId`. Background calls never resolve source through the current
+  capability pointer and never execute mutable workspace source.
+- `ToolVersionId` and `PythonToolEnvironmentDigest` are distinct. Published
+  environments have an exact ready manifest and are never mutated or synced
+  in place; same-digest in-flight builds coalesce behind store-owned work.
+  The environment is a dependency-isolation boundary, not a security
+  sandbox. Deterministic GC metadata exists; no collector or retention task
+  exists in M7.
 
 ## Tool ordering
 
