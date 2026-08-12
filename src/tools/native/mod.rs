@@ -4,7 +4,7 @@
 //! Read, Write, Edit, Glob, Grep, and Bash are all ordinary registrations;
 //! their executor implementations and their execution-ownership policies are
 //! independent, so each tool is configured with its own
-//! [`NativeToolPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
+//! [`ToolInvocationPolicy`] (`ForegroundOnly`, `BackgroundOnly`, or
 //! `ModelSelectable`) through the concrete bounded
 //! [`NativeToolPolicies`] configuration. The only intentionally fixed
 //! policy is the runtime intrinsic `background_task` (foreground-only,
@@ -37,9 +37,7 @@ use std::sync::Arc;
 
 use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::executor::{ToolExecutor, ToolRegistry, ToolRegistryError};
-use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy};
 
 /// The conversation-owned resources native tools need beyond their
 /// execution context.
@@ -48,42 +46,6 @@ pub struct NativeToolResources {
     /// The conversation background registry used by the `background_task`
     /// intrinsic.
     pub background: ConversationBackgroundRegistry,
-}
-
-/// The M5-specific execution-policy configuration of one ordinary native
-/// tool.
-///
-/// This is the one explicit configuration seam Issue #8 requires: the same
-/// native executor implementation is registerable under any legal
-/// execution/ownership policy. It deliberately models only the two real M5
-/// policy axes; there is no generic plugin/strategy/global configuration
-/// framework behind it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeToolPolicy {
-    /// The execution ownership policy of the tool.
-    pub execution: ToolExecutionPolicy,
-    /// The batch scheduling policy of the tool.
-    pub concurrency: ToolConcurrencyPolicy,
-}
-
-impl Default for NativeToolPolicy {
-    fn default() -> Self {
-        Self {
-            execution: ToolExecutionPolicy::ForegroundOnly,
-            concurrency: ToolConcurrencyPolicy::Sequential,
-        }
-    }
-}
-
-impl NativeToolPolicy {
-    /// A foreground-only sequential tool (the default).
-    #[must_use]
-    pub const fn foreground_only() -> Self {
-        Self {
-            execution: ToolExecutionPolicy::ForegroundOnly,
-            concurrency: ToolConcurrencyPolicy::Sequential,
-        }
-    }
 }
 
 /// The concrete, bounded per-tool execution-policy configuration of the six
@@ -98,29 +60,29 @@ impl NativeToolPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeToolPolicies {
     /// The policy of the native Read tool.
-    pub read: NativeToolPolicy,
+    pub read: ToolInvocationPolicy,
     /// The policy of the native Write tool.
-    pub write: NativeToolPolicy,
+    pub write: ToolInvocationPolicy,
     /// The policy of the native Edit tool.
-    pub edit: NativeToolPolicy,
+    pub edit: ToolInvocationPolicy,
     /// The policy of the native Glob tool.
-    pub glob: NativeToolPolicy,
+    pub glob: ToolInvocationPolicy,
     /// The policy of the native Grep tool.
-    pub grep: NativeToolPolicy,
+    pub grep: ToolInvocationPolicy,
     /// The policy of the native Bash tool.
-    pub bash: NativeToolPolicy,
+    pub bash: ToolInvocationPolicy,
 }
 
 impl Default for NativeToolPolicies {
     fn default() -> Self {
-        Self::uniform(NativeToolPolicy::default())
+        Self::uniform(ToolInvocationPolicy::default())
     }
 }
 
 impl NativeToolPolicies {
     /// Applies one policy to every ordinary native tool.
     #[must_use]
-    pub const fn uniform(policy: NativeToolPolicy) -> Self {
+    pub const fn uniform(policy: ToolInvocationPolicy) -> Self {
         Self {
             read: policy,
             write: policy,
@@ -197,7 +159,7 @@ fn native_definition(
     name: &str,
     description: &str,
     schema: serde_json::Value,
-    policy: NativeToolPolicy,
+    policy: ToolInvocationPolicy,
 ) -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new(id),

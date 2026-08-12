@@ -1,0 +1,2183 @@
+//! Immutable custom Python `ToolVersion`s and their canonical executor.
+//!
+//! A package is discovered from exactly one Workspace-local root. Discovery
+//! reads every package-owned byte before capability commit, publishes that
+//! finite snapshot into the private runtime store, and only then constructs
+//! the executor. Workspace edits therefore cannot change an old foreground or
+//! detached background call.
+//!
+//! # Store shape and ownership
+//!
+//! ```text
+//! <store-root>/
+//! ├── tool-versions/<ToolVersionId>/
+//! │   ├── source/                     # executor source root (immutable)
+//! │   │   ├── TOOL.toml
+//! │   │   ├── input.schema.json
+//! │   │   ├── pyproject.toml
+//! │   │   ├── uv.lock
+//! │   │   └── ...
+//! │   └── RUSTX_TOOL_VERSION.json     # format + claimed ToolVersionId
+//! ├── python-tool-envs/<PythonToolEnvironmentDigest>/
+//! │   └── RUSTX_ENV_MANIFEST.json     # exact deterministic input lock
+//! └── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
+//! ```
+//!
+//! On reuse a published `ToolVersion` is validated by recomputing the
+//! deterministic content digest over its `source/` files and comparing it
+//! against the claimed identity — never by trusting a marker string alone.
+//! A corrupt published `ToolVersion` fails preparation explicitly and is
+//! never mutated. The environment marker records every deterministic input that
+//! derives the environment identity (format, OS, architecture, digest, lock
+//! digest, Python runtime identity, uv identity); each `ToolVersion ->
+//! environment digest` binding is recorded deterministically outside the
+//! environment's immutable dependency identity, so a reusable environment
+//! never claims one `ToolVersion` as complete GC reference metadata. No GC
+//! exists in M7.
+
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
+
+use crate::runtime::identity::{PythonToolEnvironmentDigest, ToolVersionId};
+use crate::runtime::process_runner::{
+    CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec,
+    SupervisedProcessRunner,
+};
+use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIMEOUT};
+use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
+use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::types::{
+    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationPolicy, ToolResultContent,
+};
+use crate::tools::workspace::Workspace;
+
+/// The fixed custom tool root below a Workspace.
+pub const TOOLS_DIRECTORY: &str = ".agents";
+pub const TOOLS_ROOT: &str = "tools";
+pub const TOOL_MANIFEST_FILE: &str = "TOOL.toml";
+pub const INPUT_SCHEMA_FILE: &str = "input.schema.json";
+pub const PYPROJECT_FILE: &str = "pyproject.toml";
+pub const UV_LOCK_FILE: &str = "uv.lock";
+const TOOL_VERSION_MARKER: &str = "RUSTX_TOOL_VERSION.json";
+const TOOL_SOURCE_DIRECTORY: &str = "source";
+const ENVIRONMENT_MARKER: &str = "RUSTX_ENV_MANIFEST.json";
+const ENVIRONMENT_MARKER_FORMAT: &str = "rustx-python-tool-environment-v1";
+const TOOL_VERSION_MARKER_FORMAT: u32 = 1;
+const BINDING_FORMAT: u32 = 1;
+/// The finite deadline of one runtime identity probe (mirrors the M6
+/// `RUNTIME_PROBE_TIMEOUT`).
+const PYTHON_TOOL_PROBE_TIMEOUT: Duration = RUNTIME_PROBE_TIMEOUT;
+/// The finite deadline of one uv lock/materialization command (mirrors the
+/// M6 `ENVIRONMENT_COMMAND_TIMEOUT`).
+const PYTHON_TOOL_UV_TIMEOUT: Duration = ENVIRONMENT_COMMAND_TIMEOUT;
+
+const PYTHON_HARNESS: &str = r#"import contextlib
+import importlib
+import json
+import pathlib
+import sys
+
+source_root = pathlib.Path(sys.argv[1]).resolve()
+entrypoint = sys.argv[2]
+input_path = pathlib.Path(sys.argv[3]).resolve()
+sys.path.insert(0, str(source_root))
+
+def emit(value):
+    sys.__stdout__.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
+    sys.__stdout__.flush()
+
+try:
+    module_name, function_name = entrypoint.split(":", 1)
+    arguments = json.loads(input_path.read_text(encoding="utf-8"))
+    with contextlib.redirect_stdout(sys.stderr):
+        module = importlib.import_module(module_name)
+        function = getattr(module, function_name)
+        value = function(arguments)
+    emit({"ok": True, "value": value})
+except BaseException as error:
+    emit({"ok": False, "error": f"{type(error).__name__}: {error}"})
+"#;
+
+/// A package discovery/publication failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PythonToolError {
+    /// The package is malformed.
+    InvalidPackage(String),
+    /// A source snapshot could not be read or published.
+    Storage(String),
+    /// The dependency environment could not be checked or materialized.
+    Environment(String),
+}
+
+impl std::fmt::Display for PythonToolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPackage(message) => {
+                write!(formatter, "invalid Python tool package: {message}")
+            }
+            Self::Storage(message) => write!(formatter, "Python tool storage failed: {message}"),
+            Self::Environment(message) => {
+                write!(formatter, "Python tool environment failed: {message}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PythonToolError {}
+
+/// The manifest accepted by M7.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolManifest {
+    schema_version: u32,
+    name: String,
+    description: String,
+    entrypoint: String,
+    execution: String,
+    concurrency: String,
+}
+
+/// An immutable finite package snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonToolPackage {
+    /// Logical model-facing name.
+    pub name: String,
+    /// Model-facing description.
+    pub description: String,
+    /// Python module/function entrypoint.
+    pub entrypoint: String,
+    /// Canonical invocation policy.
+    pub policy: ToolInvocationPolicy,
+    /// Content identity of the complete package snapshot.
+    pub tool_version_id: ToolVersionId,
+    /// Sorted package-relative files and exact bytes.
+    pub files: Vec<(PathBuf, Vec<u8>)>,
+    /// Canonical model-call input schema from `input.schema.json`.
+    pub input_schema: serde_json::Value,
+    /// Dependency-relevant project and lock inputs.
+    pyproject: Vec<u8>,
+    uv_lock: Vec<u8>,
+}
+
+/// Discovers one-level packages under `<workspace>/.agents/tools/`.
+#[derive(Debug, Clone)]
+pub struct PythonToolDiscovery {
+    workspace: Workspace,
+}
+
+impl PythonToolDiscovery {
+    /// Creates Workspace-anchored discovery.
+    #[must_use]
+    pub fn new(workspace: &Workspace) -> Self {
+        Self {
+            workspace: workspace.clone(),
+        }
+    }
+
+    /// Reads and validates every candidate atomically as a complete result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tools root, any package, or any package-owned
+    /// file is malformed, symlinked, or unreadable.
+    pub fn discover(&self) -> Result<Vec<PythonToolPackage>, PythonToolError> {
+        let root = self.workspace.root().join(TOOLS_DIRECTORY).join(TOOLS_ROOT);
+        if !root.exists() {
+            return Ok(Vec::new());
+        }
+        if !root.is_dir() {
+            return Err(PythonToolError::InvalidPackage(
+                "the tools root is not a directory".to_owned(),
+            ));
+        }
+        let mut candidates = Vec::new();
+        for entry in std::fs::read_dir(&root).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(io_error)?;
+            if metadata.file_type().is_symlink() {
+                return Err(PythonToolError::InvalidPackage(format!(
+                    "symlinked tool package is rejected: {}",
+                    entry.path().display()
+                )));
+            }
+            if metadata.is_dir() {
+                candidates.push((
+                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.path(),
+                ));
+            }
+        }
+        candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut packages = candidates
+            .into_iter()
+            .map(|(directory, root)| discover_package(&directory, &root))
+            .collect::<Result<Vec<_>, _>>()?;
+        packages.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut names = std::collections::BTreeSet::new();
+        for package in &packages {
+            if !names.insert(package.name.clone()) {
+                return Err(PythonToolError::InvalidPackage(format!(
+                    "duplicate Python model-facing name {:?}",
+                    package.name
+                )));
+            }
+        }
+        Ok(packages)
+    }
+}
+
+fn discover_package(directory: &str, root: &Path) -> Result<PythonToolPackage, PythonToolError> {
+    validate_identifier(directory)?;
+    let manifest_bytes = regular_file(root, TOOL_MANIFEST_FILE)?;
+    let input_schema = regular_file(root, INPUT_SCHEMA_FILE)?;
+    let pyproject = regular_file(root, PYPROJECT_FILE)?;
+    let uv_lock = regular_file(root, UV_LOCK_FILE)?;
+    let manifest: ToolManifest =
+        toml::from_str(std::str::from_utf8(&manifest_bytes).map_err(|error| {
+            PythonToolError::InvalidPackage(format!("TOOL.toml is not UTF-8: {error}"))
+        })?)
+        .map_err(|error| PythonToolError::InvalidPackage(format!("TOOL.toml: {error}")))?;
+    if manifest.schema_version != 1 || manifest.name != directory {
+        return Err(PythonToolError::InvalidPackage(
+            "TOOL.toml schema_version/name does not match the package".to_owned(),
+        ));
+    }
+    if manifest.description.trim().is_empty() {
+        return Err(PythonToolError::InvalidPackage(
+            "description must be non-empty".to_owned(),
+        ));
+    }
+    validate_entrypoint(root, &manifest.entrypoint)?;
+    let policy = ToolInvocationPolicy::new(
+        parse_execution(&manifest.execution)?,
+        parse_concurrency(&manifest.concurrency)?,
+    );
+    let schema: serde_json::Value = serde_json::from_slice(&input_schema)
+        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
+    crate::tools::schema::validate_canonical_schema(&schema)
+        .map_err(|error| PythonToolError::InvalidPackage(format!("input.schema.json: {error}")))?;
+    let files = collect_files(root)?;
+    let tool_version_id = tool_version_id(&files);
+    Ok(PythonToolPackage {
+        name: manifest.name,
+        description: manifest.description,
+        entrypoint: manifest.entrypoint,
+        policy,
+        tool_version_id,
+        files,
+        input_schema: schema,
+        pyproject,
+        uv_lock,
+    })
+}
+
+fn regular_file(root: &Path, name: &str) -> Result<Vec<u8>, PythonToolError> {
+    let path = root.join(name);
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| PythonToolError::InvalidPackage(format!("missing {name}: {error}")))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(PythonToolError::InvalidPackage(format!(
+            "{name} must be a regular non-symlink file"
+        )));
+    }
+    std::fs::read(&path).map_err(io_error)
+}
+
+fn collect_files(root: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>, PythonToolError> {
+    fn walk(
+        root: &Path,
+        current: &Path,
+        output: &mut Vec<(PathBuf, Vec<u8>)>,
+    ) -> Result<(), PythonToolError> {
+        let mut entries = std::fs::read_dir(current)
+            .map_err(io_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io_error)?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(io_error)?;
+            if metadata.file_type().is_symlink() {
+                return Err(PythonToolError::InvalidPackage(format!(
+                    "package symlink is rejected: {}",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                walk(root, &path, output)?;
+            } else if metadata.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|_| {
+                        PythonToolError::Storage("cannot relativize package file".to_owned())
+                    })?
+                    .to_path_buf();
+                if relative.to_str().is_none() {
+                    return Err(PythonToolError::InvalidPackage(
+                        "package paths must be valid UTF-8".to_owned(),
+                    ));
+                }
+                output.push((relative, std::fs::read(&path).map_err(io_error)?));
+            }
+        }
+        Ok(())
+    }
+    let mut output = Vec::new();
+    walk(root, root, &mut output)?;
+    output.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(output)
+}
+
+fn validate_entrypoint(root: &Path, entrypoint: &str) -> Result<(), PythonToolError> {
+    let Some((module, function)) = entrypoint.split_once(':') else {
+        return Err(PythonToolError::InvalidPackage(
+            "entrypoint must be module:function".to_owned(),
+        ));
+    };
+    if module.is_empty()
+        || function.is_empty()
+        || !function
+            .chars()
+            .all(|character| character == '_' || character.is_ascii_alphanumeric())
+        || module.split('.').any(|part| {
+            part.is_empty()
+                || !part
+                    .chars()
+                    .all(|character| character == '_' || character.is_ascii_alphanumeric())
+        })
+    {
+        return Err(PythonToolError::InvalidPackage(
+            "entrypoint contains an invalid Python identifier".to_owned(),
+        ));
+    }
+    let module_path = root.join(module.replace('.', "/") + ".py");
+    if !module_path.is_file() {
+        return Err(PythonToolError::InvalidPackage(format!(
+            "entrypoint module is not present: {module}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
+    if identifier.is_empty()
+        || identifier.starts_with('-')
+        || identifier.ends_with('-')
+        || identifier.contains("--")
+        || !identifier.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+    {
+        return Err(PythonToolError::InvalidPackage(format!(
+            "invalid package name {identifier:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_execution(value: &str) -> Result<ToolExecutionPolicy, PythonToolError> {
+    match value {
+        "foreground_only" => Ok(ToolExecutionPolicy::ForegroundOnly),
+        "background_only" => Ok(ToolExecutionPolicy::BackgroundOnly),
+        "model_selectable" => Ok(ToolExecutionPolicy::ModelSelectable),
+        _ => Err(PythonToolError::InvalidPackage(format!(
+            "invalid execution policy {value:?}"
+        ))),
+    }
+}
+
+fn parse_concurrency(value: &str) -> Result<ToolConcurrencyPolicy, PythonToolError> {
+    match value {
+        "sequential" => Ok(ToolConcurrencyPolicy::Sequential),
+        "parallel" => Ok(ToolConcurrencyPolicy::Parallel),
+        _ => Err(PythonToolError::InvalidPackage(format!(
+            "invalid concurrency policy {value:?}"
+        ))),
+    }
+}
+
+fn tool_version_id(files: &[(PathBuf, Vec<u8>)]) -> ToolVersionId {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(b"rustx:python-tool-version:v1\0");
+    for (path, bytes) in files {
+        append_bytes(&mut canonical, path.to_string_lossy().as_bytes());
+        append_bytes(&mut canonical, bytes);
+    }
+    ToolVersionId::new(format!(
+        "sha256:{}",
+        hex_digest(&sha2::Sha256::digest(canonical))
+    ))
+}
+
+/// Generates the logical Python tool identity independently of its version.
+#[must_use]
+pub fn python_tool_id(name: &str) -> String {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(b"rustx:python-tool-id:v1\0");
+    append_bytes(&mut canonical, name.as_bytes());
+    format!(
+        "python:sha256:{}",
+        hex_digest(&sha2::Sha256::digest(canonical))
+    )
+}
+
+/// Computes the dependency environment identity from only material inputs.
+#[must_use]
+pub fn python_tool_environment_digest(
+    os: &str,
+    architecture: &str,
+    python_identity: &str,
+    uv_identity: &str,
+    pyproject: &[u8],
+    uv_lock: &[u8],
+) -> PythonToolEnvironmentDigest {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(b"rustx:python-tool-environment:v1\0");
+    for value in [
+        os.as_bytes(),
+        architecture.as_bytes(),
+        python_identity.as_bytes(),
+        uv_identity.as_bytes(),
+        pyproject,
+        uv_lock,
+    ] {
+        append_bytes(&mut canonical, value);
+    }
+    PythonToolEnvironmentDigest::new(format!(
+        "sha256:{}",
+        hex_digest(&sha2::Sha256::digest(canonical))
+    ))
+}
+
+fn append_bytes(target: &mut Vec<u8>, bytes: &[u8]) {
+    target.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    target.extend_from_slice(bytes);
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(result, "{byte:02x}");
+    }
+    result
+}
+
+fn io_error(error: impl std::fmt::Display) -> PythonToolError {
+    PythonToolError::Storage(error.to_string())
+}
+
+/// A published immutable `ToolVersion` source snapshot.
+#[derive(Debug, Clone)]
+pub struct PublishedPythonTool {
+    /// Original package metadata and identity.
+    pub package: PythonToolPackage,
+    /// Private immutable source root (`tool-versions/<id>/source/`), the
+    /// exact directory the executor and every uv command use as their root.
+    pub root: PathBuf,
+}
+
+/// A published immutable Python environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonToolEnvironment {
+    /// Environment identity.
+    pub digest: PythonToolEnvironmentDigest,
+    /// Final immutable environment path.
+    pub root: PathBuf,
+}
+
+/// The shared in-flight build state of one environment digest.
+#[derive(Debug)]
+struct BuildState {
+    result: Mutex<Option<Result<PythonToolEnvironment, PythonToolError>>>,
+    notify: tokio::sync::Notify,
+}
+
+/// Completes a process-local build entry if its store-owned task exits
+/// unexpectedly. The guard lives inside that detached owner task, never in a
+/// candidate preparation caller, so caller cancellation cannot release an
+/// in-flight build while its physical materialization is running.
+struct BuildOwnerGuard {
+    in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
+    key: String,
+    state: Arc<BuildState>,
+    completed: bool,
+}
+
+impl BuildOwnerGuard {
+    fn finish(&mut self, result: Result<PythonToolEnvironment, PythonToolError>) {
+        *self.state.result.lock().expect("Python build result lock") = Some(result);
+        let mut in_flight = self.in_flight.lock().expect("Python build lock");
+        if in_flight
+            .get(&self.key)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
+        {
+            in_flight.remove(&self.key);
+        }
+        self.completed = true;
+        drop(in_flight);
+        self.state.notify.notify_waiters();
+    }
+}
+
+impl Drop for BuildOwnerGuard {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        self.finish(Err(PythonToolError::Environment(
+            "the Python build owner exited before terminal publication".to_owned(),
+        )));
+    }
+}
+
+#[derive(Clone)]
+struct PythonToolStoreInner {
+    root: PathBuf,
+    runner: Arc<dyn SupervisedProcessRunner>,
+    uv_binary: PathBuf,
+    python_binary: PathBuf,
+    in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>>,
+    next_invocation: Arc<AtomicU64>,
+}
+
+/// Runtime-private source/environment store for custom Python tools.
+#[derive(Clone)]
+pub struct PythonToolStore {
+    inner: Arc<PythonToolStoreInner>,
+}
+
+impl std::fmt::Debug for PythonToolStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PythonToolStore")
+            .field("root", &self.inner.root)
+            .finish()
+    }
+}
+
+impl PythonToolStore {
+    /// Creates the production store below a runtime-private root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store directories cannot be created.
+    pub fn new(root: PathBuf) -> Result<Self, PythonToolError> {
+        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
+        Ok(Self {
+            inner: Arc::new(PythonToolStoreInner {
+                root,
+                runner: Arc::new(RunnerBackedProcessRunner::default()),
+                uv_binary: resolve_executable("uv"),
+                python_binary: resolve_executable("python3"),
+                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                next_invocation: Arc::new(AtomicU64::new(0)),
+            }),
+        })
+    }
+
+    /// Test constructor for deterministic recorded process backends.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_runner(
+        root: PathBuf,
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> Result<Self, PythonToolError> {
+        std::fs::create_dir_all(root.join("tool-versions")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-tool-envs")).map_err(io_error)?;
+        std::fs::create_dir_all(root.join("python-tool-bindings")).map_err(io_error)?;
+        Ok(Self {
+            inner: Arc::new(PythonToolStoreInner {
+                root,
+                runner,
+                uv_binary: resolve_executable("uv"),
+                python_binary: resolve_executable("python3"),
+                in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+                next_invocation: Arc::new(AtomicU64::new(0)),
+            }),
+        })
+    }
+
+    /// Publishes exact package bytes by content identity.
+    ///
+    /// The published shape is `tool-versions/<ToolVersionId>/source/...`
+    /// plus the version marker; the executor's source root is exactly
+    /// `.../source/`. On reuse the published `source/` content digest is
+    /// recomputed and compared against the claimed identity, so a marker
+    /// string alone never validates a `ToolVersion`; a corrupt publication
+    /// fails preparation explicitly and is never mutated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the immutable snapshot cannot be staged, written,
+    /// validated, or atomically installed.
+    pub fn publish(
+        &self,
+        package: &PythonToolPackage,
+    ) -> Result<PublishedPythonTool, PythonToolError> {
+        static NEXT_STAGING: AtomicU64 = AtomicU64::new(0);
+        let destination = self
+            .inner
+            .root
+            .join("tool-versions")
+            .join(package.tool_version_id.as_str());
+        let source_root = destination.join(TOOL_SOURCE_DIRECTORY);
+        if destination.exists() {
+            let marker = destination.join(TOOL_VERSION_MARKER);
+            let marker_value = serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(&marker).map_err(io_error)?,
+            )
+            .map_err(|error| {
+                PythonToolError::Storage(format!(
+                    "published ToolVersion marker is invalid: {error}"
+                ))
+            })?;
+            let valid = marker_value.get("format")
+                == Some(&serde_json::json!(TOOL_VERSION_MARKER_FORMAT))
+                && marker_value
+                    .get("tool_version_id")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(package.tool_version_id.as_str());
+            if !valid {
+                return Err(PythonToolError::Storage(
+                    "published ToolVersion marker is invalid".to_owned(),
+                ));
+            }
+            let published_digest = published_source_digest(&source_root)?;
+            if published_digest != package.tool_version_id {
+                return Err(PythonToolError::Storage(format!(
+                    "published ToolVersion source does not match its claimed identity: \
+                     marker claims {}, published source digest is {}",
+                    package.tool_version_id.as_str(),
+                    published_digest.as_str(),
+                )));
+            }
+            return Ok(PublishedPythonTool {
+                package: package.clone(),
+                root: source_root,
+            });
+        }
+        let staging = self.inner.root.join(format!(
+            ".tool-version-{}-{}-{}",
+            package.tool_version_id.as_str(),
+            std::process::id(),
+            NEXT_STAGING.fetch_add(1, Ordering::Relaxed)
+        ));
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging).map_err(io_error)?;
+        }
+        let staging_source = staging.join(TOOL_SOURCE_DIRECTORY);
+        std::fs::create_dir_all(&staging_source).map_err(io_error)?;
+        for (relative, bytes) in &package.files {
+            let path = staging_source.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(io_error)?;
+            }
+            std::fs::write(path, bytes).map_err(io_error)?;
+        }
+        let marker = serde_json::json!({
+            "format": TOOL_VERSION_MARKER_FORMAT,
+            "tool_version_id": package.tool_version_id,
+        });
+        let marker_bytes = serde_json::to_vec(&marker).map_err(io_error)?;
+        std::fs::write(staging.join(TOOL_VERSION_MARKER), marker_bytes).map_err(io_error)?;
+        match std::fs::rename(&staging, &destination) {
+            Ok(()) => {}
+            Err(_error) if destination.exists() => {
+                std::fs::remove_dir_all(&staging).map_err(io_error)?;
+                if !destination.join(TOOL_VERSION_MARKER).is_file() {
+                    return Err(PythonToolError::Storage(
+                        "concurrent ToolVersion publication produced an invalid marker".to_owned(),
+                    ));
+                }
+            }
+            Err(error) => return Err(io_error(error)),
+        }
+        Ok(PublishedPythonTool {
+            package: package.clone(),
+            root: source_root,
+        })
+    }
+
+    /// Ensures one immutable environment, coalescing concurrent same-digest
+    /// builds behind one store-owned task.
+    ///
+    /// Exactly one store-owned logical build owns a digest until terminal
+    /// publication. Candidate callers only wait for the result; dropping a
+    /// waiter never releases ownership, and owner failure always publishes a
+    /// terminal error and removes the in-flight entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if runtime probes, lock validation, frozen
+    /// materialization, validation, or publication fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the store's internal synchronization lock is poisoned.
+    #[allow(clippy::too_many_lines)] // one coherent probe/coalesce/wait/publish pipeline
+    pub async fn ensure_environment(
+        &self,
+        tool: &PublishedPythonTool,
+    ) -> Result<PythonToolEnvironment, PythonToolError> {
+        let (python_runtime, uv_identity) = probe_runtime_identity(&self.inner, tool).await?;
+        let digest = python_tool_environment_digest(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            &python_runtime,
+            &uv_identity,
+            &tool.package.pyproject,
+            &tool.package.uv_lock,
+        );
+        let final_root = self
+            .inner
+            .root
+            .join("python-tool-envs")
+            .join(digest.as_str());
+        if let Some(environment) = Self::read_published_environment(
+            &final_root,
+            &digest,
+            &python_runtime,
+            &uv_identity,
+            &tool.package.uv_lock,
+        )? {
+            Self::record_tool_version_binding(&self.inner, tool, &digest)?;
+            return Ok(environment);
+        }
+        let key = digest.as_str().to_owned();
+        let (state, owner) = {
+            let mut builds = self.inner.in_flight.lock().expect("Python build lock");
+            if let Some(state) = builds.get(&key) {
+                (state.clone(), false)
+            } else {
+                let state = Arc::new(BuildState {
+                    result: Mutex::new(None),
+                    notify: tokio::sync::Notify::new(),
+                });
+                builds.insert(key.clone(), state.clone());
+                (state, true)
+            }
+        };
+        if owner {
+            let owner_guard = BuildOwnerGuard {
+                in_flight: self.inner.in_flight.clone(),
+                key,
+                state: state.clone(),
+                completed: false,
+            };
+            let inner = self.inner.clone();
+            let tool = tool.clone();
+            let build_digest = digest.clone();
+            let build_root = final_root.clone();
+            let build_python = python_runtime.clone();
+            let build_uv = uv_identity.clone();
+            // Dropping a JoinHandle detaches the task; it does not abort it.
+            // The caller therefore cannot become the physical materialization
+            // owner merely by being cancelled while waiting below.
+            std::mem::drop(tokio::spawn(async move {
+                let mut owner_guard = owner_guard;
+                let result = materialize_environment(
+                    &inner,
+                    &tool,
+                    &build_root,
+                    &build_digest,
+                    &build_python,
+                    &build_uv,
+                )
+                .await;
+                let result = match result {
+                    Ok(environment) => {
+                        if let Err(error) =
+                            Self::record_tool_version_binding(&inner, &tool, &build_digest)
+                        {
+                            Err(error)
+                        } else {
+                            Ok(environment)
+                        }
+                    }
+                    Err(error) => Err(error),
+                };
+                owner_guard.finish(result);
+            }));
+        }
+        // The no-lost-wakeup wait: the notified future is registered before
+        // the result check, so a result published between the check and the
+        // registration is observed by the next iteration.
+        let mut notified = Box::pin(state.notify.notified());
+        loop {
+            if let Some(result) = state
+                .result
+                .lock()
+                .expect("Python build result lock")
+                .clone()
+            {
+                return result;
+            }
+            notified.as_mut().enable();
+            if state
+                .result
+                .lock()
+                .expect("Python build result lock")
+                .is_some()
+            {
+                continue;
+            }
+            notified.await;
+            notified = Box::pin(state.notify.notified());
+        }
+    }
+
+    /// Records the deterministic `ToolVersion -> environment digest` binding
+    /// outside the environment's immutable dependency identity. The write is
+    /// idempotent (same inputs produce the same record); a conflicting record
+    /// is an explicit storage failure.
+    fn record_tool_version_binding(
+        inner: &PythonToolStoreInner,
+        tool: &PublishedPythonTool,
+        digest: &PythonToolEnvironmentDigest,
+    ) -> Result<(), PythonToolError> {
+        let directory = inner
+            .root
+            .join("python-tool-bindings")
+            .join(tool.package.tool_version_id.as_str());
+        std::fs::create_dir_all(&directory).map_err(io_error)?;
+        let record = serde_json::json!({
+            "format": BINDING_FORMAT,
+            "tool_version_id": tool.package.tool_version_id,
+            "environment_digest": digest,
+        });
+        let bytes = serde_json::to_vec(&record).map_err(io_error)?;
+        let path = directory.join(format!("{}.json", digest.as_str()));
+        if path.exists() {
+            let existing = std::fs::read(&path).map_err(io_error)?;
+            if existing != bytes {
+                return Err(PythonToolError::Storage(format!(
+                    "conflicting ToolVersion binding record for {}",
+                    digest.as_str()
+                )));
+            }
+            return Ok(());
+        }
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, &bytes).map_err(io_error)?;
+        std::fs::rename(&temporary, &path).map_err(|error| {
+            let _ = std::fs::remove_file(&temporary);
+            io_error(error)
+        })?;
+        Ok(())
+    }
+
+    /// Validates a published environment marker against the exact
+    /// deterministic inputs that derive the environment identity, and
+    /// returns the environment handle. A marker that does not match every
+    /// input is an explicit preparation failure, never a silent reuse.
+    #[allow(clippy::too_many_arguments)] // one deterministic marker boundary
+    fn read_published_environment(
+        root: &Path,
+        digest: &PythonToolEnvironmentDigest,
+        python_runtime: &str,
+        uv_identity: &str,
+        lock_bytes: &[u8],
+    ) -> Result<Option<PythonToolEnvironment>, PythonToolError> {
+        let marker = root.join(ENVIRONMENT_MARKER);
+        if !marker.exists() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&marker).map_err(io_error)?;
+        let value: EnvironmentMarker = serde_json::from_slice(&bytes).map_err(|error| {
+            PythonToolError::Environment(format!("invalid environment marker: {error}"))
+        })?;
+        let valid = value.format == ENVIRONMENT_MARKER_FORMAT
+            && value.ready
+            && value.os == std::env::consts::OS
+            && value.arch == std::env::consts::ARCH
+            && value.digest == digest.as_str()
+            && value.lock_digest == lock_digest_bytes(lock_bytes)
+            && value.python_runtime == python_runtime
+            && value.uv == uv_identity;
+        if !valid {
+            return Err(PythonToolError::Environment(
+                "published environment marker does not match the expected digest inputs".to_owned(),
+            ));
+        }
+        if !root.join("bin/python").is_file() {
+            return Err(PythonToolError::Environment(
+                "published environment marker has no Python interpreter".to_owned(),
+            ));
+        }
+        Ok(Some(PythonToolEnvironment {
+            digest: digest.clone(),
+            root: root.to_path_buf(),
+        }))
+    }
+}
+
+async fn probe_runtime_identity(
+    inner: &PythonToolStoreInner,
+    tool: &PublishedPythonTool,
+) -> Result<(String, String), PythonToolError> {
+    let environment = ToolEnvironment::new();
+    let child_environment = environment.child_environment(&tool.root);
+    let uv_command = format!("{} --version", shell_quote(&inner.uv_binary));
+    let python_command = format!("{} --version", shell_quote(&inner.python_binary));
+    let run = |command: String| {
+        let runner = inner.runner.clone();
+        let cwd = tool.root.clone();
+        let environment = child_environment.clone();
+        async move {
+            runner
+                .run(
+                    SupervisedCommandSpec {
+                        command: command.clone(),
+                        cwd,
+                        environment,
+                        timeout: Some(PYTHON_TOOL_PROBE_TIMEOUT),
+                        cancellation: crate::runtime::CancellationSignal::new(),
+                    },
+                    None,
+                )
+                .await
+                .map_err(PythonToolError::Environment)
+        }
+    };
+    let uv = run(uv_command.clone()).await?;
+    let python = run(python_command.clone()).await?;
+    for (command, result) in [(uv_command, &uv), (python_command, &python)] {
+        let failure = match &result.intent {
+            ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => Some(format!(
+                "{command} exited with code {:?}: {}",
+                result.exit_code,
+                bounded_output(&result.stderr)
+            )),
+            ProcessOutcomeIntent::Completed => None,
+            ProcessOutcomeIntent::Cancelled => Some(format!(
+                "{command} was cancelled during the runtime identity probe"
+            )),
+            ProcessOutcomeIntent::TimedOut => Some(format!(
+                "{command} timed out after {PYTHON_TOOL_PROBE_TIMEOUT:?}"
+            )),
+            ProcessOutcomeIntent::ProcessControlFailed(error) => {
+                Some(format!("{command} failed: {error}"))
+            }
+        };
+        if let Some(failure) = failure {
+            return Err(PythonToolError::Environment(failure));
+        }
+    }
+    let uv_identity = bounded_output(&uv.stdout).trim().to_owned();
+    let python_identity = bounded_output(&python.stdout).trim().to_owned();
+    if uv_identity.is_empty() || python_identity.is_empty() {
+        return Err(PythonToolError::Environment(
+            "runtime identity probe returned empty output".to_owned(),
+        ));
+    }
+    Ok((python_identity, uv_identity))
+}
+
+async fn materialize_environment(
+    inner: &PythonToolStoreInner,
+    tool: &PublishedPythonTool,
+    final_root: &Path,
+    digest: &PythonToolEnvironmentDigest,
+    python_runtime: &str,
+    uv_identity: &str,
+) -> Result<PythonToolEnvironment, PythonToolError> {
+    if final_root.exists() {
+        std::fs::remove_dir_all(final_root).map_err(io_error)?;
+    }
+    let environment = ToolEnvironment::new();
+    let child_environment = environment.child_environment(&tool.root);
+    let commands = [
+        format!("{} lock --check --no-config", shell_quote(&inner.uv_binary)),
+        format!(
+            "{} sync --frozen --no-install-project --no-default-groups --no-config",
+            shell_quote(&inner.uv_binary)
+        ),
+    ];
+    for command in commands {
+        let mut environment_entries = child_environment.clone();
+        environment_entries.push((
+            "UV_PROJECT_ENVIRONMENT".to_owned(),
+            final_root.display().to_string(),
+        ));
+        // The exact interpreter selection: uv must materialize with the same
+        // runtime whose identity entered the environment digest. Project-local
+        // interpreter selection and uv heuristics are never permitted to pick
+        // another Python while retaining the probed identity in the digest.
+        environment_entries.push((
+            "UV_PYTHON".to_owned(),
+            inner.python_binary.display().to_string(),
+        ));
+        environment_entries.push(("UV_NO_PYTHON_DOWNLOADS".to_owned(), "1".to_owned()));
+        environment_entries.push(("UV_PYTHON_DOWNLOADS".to_owned(), "0".to_owned()));
+        environment_entries.push(("UV_NO_PROGRESS".to_owned(), "1".to_owned()));
+        let result = inner
+            .runner
+            .run(
+                SupervisedCommandSpec {
+                    command: command.clone(),
+                    cwd: tool.root.clone(),
+                    environment: environment_entries,
+                    timeout: Some(PYTHON_TOOL_UV_TIMEOUT),
+                    cancellation: crate::runtime::CancellationSignal::new(),
+                },
+                None,
+            )
+            .await
+            .map_err(PythonToolError::Environment)?;
+        let failure = match result.intent {
+            ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => Some(format!(
+                "{command} exited with code {:?}: {}",
+                result.exit_code,
+                bounded_output(&result.stderr)
+            )),
+            ProcessOutcomeIntent::Completed => None,
+            ProcessOutcomeIntent::Cancelled => {
+                Some(format!("{command} was cancelled during materialization"))
+            }
+            ProcessOutcomeIntent::TimedOut => Some(format!(
+                "{command} timed out after {PYTHON_TOOL_UV_TIMEOUT:?}"
+            )),
+            ProcessOutcomeIntent::ProcessControlFailed(error) => {
+                Some(format!("{command} failed: {error}"))
+            }
+        };
+        if let Some(failure) = failure {
+            return Err(PythonToolError::Environment(failure));
+        }
+    }
+    let marker = EnvironmentMarker {
+        format: ENVIRONMENT_MARKER_FORMAT.to_owned(),
+        ready: true,
+        os: std::env::consts::OS.to_owned(),
+        arch: std::env::consts::ARCH.to_owned(),
+        digest: digest.as_str().to_owned(),
+        lock_digest: lock_digest_bytes(&tool.package.uv_lock),
+        python_runtime: python_runtime.to_owned(),
+        uv: uv_identity.to_owned(),
+    };
+    std::fs::create_dir_all(final_root).map_err(io_error)?;
+    let temporary = final_root.with_extension("incomplete");
+    if temporary.exists() {
+        std::fs::remove_dir_all(&temporary).map_err(io_error)?;
+    }
+    std::fs::create_dir_all(&temporary).map_err(io_error)?;
+    std::fs::write(
+        temporary.join(ENVIRONMENT_MARKER),
+        serde_json::to_vec(&marker).map_err(io_error)?,
+    )
+    .map_err(io_error)?;
+    std::fs::rename(
+        temporary.join(ENVIRONMENT_MARKER),
+        final_root.join(ENVIRONMENT_MARKER),
+    )
+    .map_err(io_error)?;
+    std::fs::remove_dir_all(temporary).map_err(io_error)?;
+    Ok(PythonToolEnvironment {
+        digest: digest.clone(),
+        root: final_root.to_path_buf(),
+    })
+}
+
+/// The deterministic environment marker: every input that derives the
+/// environment identity, plus the `ready` publication gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct EnvironmentMarker {
+    format: String,
+    ready: bool,
+    os: String,
+    arch: String,
+    digest: String,
+    lock_digest: String,
+    python_runtime: String,
+    uv: String,
+}
+
+/// Recomputes the `ToolVersion` identity over a published `source/` directory:
+/// sorted relative paths, lengths, and raw bytes — the same canonical input
+/// as [`tool_version_id`].
+fn published_source_digest(source_root: &Path) -> Result<ToolVersionId, PythonToolError> {
+    let files = collect_files(source_root)?;
+    Ok(tool_version_id(&files))
+}
+
+fn lock_digest_bytes(lock: &[u8]) -> String {
+    format!("sha256:{}", hex_digest(&sha2::Sha256::digest(lock)))
+}
+
+/// Canonical Python executor using the immutable `ToolVersion` source and
+/// environment handles captured at candidate preparation.
+pub struct PythonToolExecutor {
+    tool: PublishedPythonTool,
+    environment: PythonToolEnvironment,
+    runner: Arc<dyn SupervisedProcessRunner>,
+    harness: PathBuf,
+    invocation_root: PathBuf,
+    next_invocation: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for PythonToolExecutor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PythonToolExecutor")
+            .field("tool_version_id", &self.tool.package.tool_version_id)
+            .field("environment_digest", &self.environment.digest)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PythonToolExecutor {
+    /// Creates an executor from published immutable handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the harness or invocation directory cannot be
+    /// installed.
+    pub fn new(
+        store: &PythonToolStore,
+        tool: PublishedPythonTool,
+        environment: PythonToolEnvironment,
+    ) -> Result<Self, PythonToolError> {
+        let harness = store.inner.root.join("python-tool-harness.py");
+        if !harness.exists() {
+            std::fs::write(&harness, PYTHON_HARNESS).map_err(io_error)?;
+        }
+        let invocation_root = store.inner.root.join("python-invocations");
+        std::fs::create_dir_all(&invocation_root).map_err(io_error)?;
+        Ok(Self {
+            tool,
+            environment,
+            runner: store.inner.runner.clone(),
+            harness,
+            invocation_root,
+            next_invocation: store.inner.next_invocation.clone(),
+        })
+    }
+}
+
+impl ToolExecutor for PythonToolExecutor {
+    fn execute<'a>(
+        &'a self,
+        invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> BoxFuture<'a, ToolExecutionResult> {
+        Box::pin(async move {
+            let started = Instant::now();
+            let number = self.next_invocation.fetch_add(1, Ordering::Relaxed);
+            let input_path = self.invocation_root.join(format!("input-{number}.json"));
+            if let Err(error) = write_private_input(&input_path, &invocation.arguments) {
+                return failed_python(&error.to_string(), started);
+            }
+            let python = self.environment.root.join("bin/python");
+            let command = format!(
+                "{} {} {} {}",
+                shell_quote(&python),
+                shell_quote(&self.harness),
+                shell_quote(&self.tool.root),
+                shell_quote_str(&self.tool.package.entrypoint),
+            ) + &format!(" {}", shell_quote(&input_path));
+            let runtime_environment = context
+                .environment
+                .with_replacement_overlay(&ToolEnvironmentOverlay::python(&self.environment.root));
+            let result = self
+                .runner
+                .run(
+                    SupervisedCommandSpec {
+                        command,
+                        cwd: self.tool.root.clone(),
+                        environment: runtime_environment
+                            .child_environment(context.workspace.root()),
+                        timeout: None,
+                        cancellation: context.cancellation.clone(),
+                    },
+                    None,
+                )
+                .await;
+            let _ = std::fs::remove_file(&input_path);
+            match result {
+                Ok(result) => translate_python_result(result, started),
+                Err(error) => failed_python(&error, started),
+            }
+        })
+    }
+}
+
+fn write_private_input(path: &Path, arguments: &serde_json::Value) -> Result<(), PythonToolError> {
+    let bytes = serde_json::to_vec(arguments)
+        .map_err(|error| PythonToolError::Storage(error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = std::fs::OpenOptions::new();
+        options.create_new(true).write(true).mode(0o600);
+        let mut file = options.open(path).map_err(io_error)?;
+        file.write_all(&bytes).map_err(io_error)?;
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, bytes).map_err(io_error)?;
+    Ok(())
+}
+
+fn translate_python_result(result: CapturedProcessResult, started: Instant) -> ToolExecutionResult {
+    let status = match result.intent {
+        ProcessOutcomeIntent::Cancelled => ToolExecutionStatus::Cancelled {
+            reason: crate::runtime::types::CancellationReason::UserRequested,
+        },
+        ProcessOutcomeIntent::TimedOut => ToolExecutionStatus::TimedOut,
+        ProcessOutcomeIntent::ProcessControlFailed(error) => ToolExecutionStatus::Failed { error },
+        ProcessOutcomeIntent::Completed if result.exit_code != Some(0) => {
+            ToolExecutionStatus::Failed {
+                error: bounded_output(&result.stderr),
+            }
+        }
+        ProcessOutcomeIntent::Completed => {
+            let envelope: Result<serde_json::Value, _> = serde_json::from_slice(&result.stdout);
+            match envelope {
+                Ok(value) if value.get("ok") == Some(&serde_json::Value::Bool(true)) => {
+                    return ToolExecutionResult {
+                        status: ToolExecutionStatus::Success,
+                        content: vec![ToolResultContent::Json {
+                            value: value
+                                .get("value")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null),
+                        }],
+                        duration_ms: duration_ms(started),
+                        exit_code: result.exit_code,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                    };
+                }
+                Ok(value) => ToolExecutionStatus::Failed {
+                    error: value
+                        .get("error")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("Python tool failed")
+                        .to_owned(),
+                },
+                Err(error) => ToolExecutionStatus::Failed {
+                    error: format!("invalid Python result envelope: {error}"),
+                },
+            }
+        }
+    };
+    ToolExecutionResult {
+        status,
+        content: Vec::new(),
+        duration_ms: duration_ms(started),
+        exit_code: result.exit_code,
+        artifacts: Vec::new(),
+        truncation: None,
+    }
+}
+
+fn failed_python(message: &str, started: Instant) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Failed {
+            error: bounded_output(message.as_bytes()),
+        },
+        content: Vec::new(),
+        duration_ms: duration_ms(started),
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+    }
+}
+
+fn duration_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn bounded_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned()
+}
+
+fn shell_quote(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    shell_quote_str(&value)
+}
+
+fn resolve_executable(name: &str) -> PathBuf {
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    // The child environment uses the fixed runtime-approved PATH; resolve
+    // there so the probed identity and the `UV_PYTHON` pin always name the
+    // exact same binary.
+    for directory in ["/usr/local/bin", "/usr/bin", "/bin"] {
+        let candidate = std::path::Path::new(directory).join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from(name)
+}
+
+fn shell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::{
+        BuildOwnerGuard, BuildState, PublishedPythonTool, PythonToolPackage, PythonToolStore,
+        PythonToolStoreInner, python_tool_environment_digest,
+    };
+    use crate::runtime::identity::ToolVersionId;
+    use crate::runtime::process_runner::{
+        CapturedProcessResult, ProcessOutcomeIntent, SupervisedCommandSpec, SupervisedProcessRunner,
+    };
+    use crate::tools::types::ToolInvocationPolicy;
+    use futures_util::future::BoxFuture;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    #[test]
+    fn environment_identity_excludes_source_description() {
+        let first = python_tool_environment_digest(
+            "linux",
+            "x86_64",
+            "Python 3.13",
+            "uv 0.9",
+            b"deps",
+            b"lock",
+        );
+        let second = python_tool_environment_digest(
+            "linux",
+            "x86_64",
+            "Python 3.13",
+            "uv 0.9",
+            b"deps",
+            b"lock",
+        );
+        assert_eq!(first, second);
+        assert_ne!(
+            first,
+            python_tool_environment_digest(
+                "linux",
+                "x86_64",
+                "Python 3.13",
+                "uv 0.9",
+                b"other",
+                b"lock"
+            )
+        );
+        assert_ne!(
+            first,
+            python_tool_environment_digest(
+                "linux",
+                "aarch64",
+                "Python 3.13",
+                "uv 0.9",
+                b"deps",
+                b"lock"
+            )
+        );
+    }
+
+    /// A scripted runner that deterministically dispatches results by
+    /// command, parks materialization commands behind a gate the test
+    /// controls, records every invocation with its finite deadline, and
+    /// materializes the `bin/python` fixture for successful sync results so
+    /// the reuse path observes a real published environment. Result dispatch
+    /// by command makes concurrent callers deterministic: probes always
+    /// resolve the same identities regardless of interleaving.
+    /// One recorded invocation: the program, its explicit environment, and
+    /// the finite deadline it was given.
+    type RecordedCommand = (String, Vec<(String, String)>, Option<Duration>);
+
+    #[derive(Clone)]
+    struct ScriptedRunner {
+        materialization_results: Arc<Mutex<VecDeque<Result<CapturedProcessResult, String>>>>,
+        fail_probes: Arc<std::sync::atomic::AtomicBool>,
+        started: Arc<tokio::sync::Notify>,
+        started_count: Arc<std::sync::atomic::AtomicUsize>,
+        materialization_count: Arc<std::sync::atomic::AtomicUsize>,
+        gate_tx: tokio::sync::watch::Sender<bool>,
+        gate_rx: tokio::sync::watch::Receiver<bool>,
+        commands: Arc<Mutex<Vec<RecordedCommand>>>,
+    }
+
+    impl ScriptedRunner {
+        fn new(materialization_results: Vec<Result<CapturedProcessResult, String>>) -> Self {
+            let (gate_tx, gate_rx) = tokio::sync::watch::channel(false);
+            Self {
+                materialization_results: Arc::new(Mutex::new(VecDeque::from(
+                    materialization_results,
+                ))),
+                fail_probes: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                started: Arc::new(tokio::sync::Notify::new()),
+                started_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                materialization_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                gate_tx,
+                gate_rx,
+                commands: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn set_probe_timeout(&self) {
+            self.fail_probes
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+
+        fn release_gate(&self) {
+            let _ = self.gate_tx.send(true);
+        }
+
+        fn wait_for_runs(&self, count: usize) {
+            tokio::task::block_in_place(|| {
+                loop {
+                    if self
+                        .started_count
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        >= count
+                    {
+                        return;
+                    }
+                    let notified = self.started.notified();
+                    tokio::runtime::Handle::current().block_on(async {
+                        tokio::time::timeout(std::time::Duration::from_secs(15), notified)
+                            .await
+                            .expect("the scripted runner must progress");
+                    });
+                }
+            });
+        }
+
+        fn wait_for_materializations(&self, count: usize) {
+            tokio::task::block_in_place(|| {
+                loop {
+                    if self
+                        .materialization_count
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        >= count
+                    {
+                        return;
+                    }
+                    let notified = self.started.notified();
+                    tokio::runtime::Handle::current().block_on(async {
+                        tokio::time::timeout(std::time::Duration::from_secs(15), notified)
+                            .await
+                            .expect("the scripted runner must progress");
+                    });
+                }
+            });
+        }
+
+        fn materialization_count(&self) -> usize {
+            self.materialization_count
+                .load(std::sync::atomic::Ordering::Acquire)
+        }
+
+        /// The full environment of the first recorded `sync` invocation.
+        fn sync_environment(&self) -> Option<Vec<(String, String)>> {
+            self.commands
+                .lock()
+                .expect("recorded commands lock")
+                .iter()
+                .find(|(command, _, _)| command.contains(" sync --frozen "))
+                .map(|(_, environment, _)| environment.clone())
+        }
+    }
+
+    impl SupervisedProcessRunner for ScriptedRunner {
+        fn run(
+            &self,
+            spec: SupervisedCommandSpec,
+            _control: Option<crate::runtime::process_runner::RunnerTestControl>,
+        ) -> BoxFuture<'_, Result<CapturedProcessResult, String>> {
+            let is_materialization =
+                spec.command.contains(" lock --check ") || spec.command.contains(" sync --frozen ");
+            self.commands.lock().expect("recorded commands lock").push((
+                spec.command.clone(),
+                spec.environment.clone(),
+                spec.timeout,
+            ));
+            let started_count = self.started_count.clone();
+            let materialization_count = self.materialization_count.clone();
+            let started = self.started.clone();
+            let gate_rx = self.gate_rx.clone();
+            let fail_probes = self.fail_probes.clone();
+            let result = if is_materialization {
+                self.materialization_results
+                    .lock()
+                    .expect("scripted result lock")
+                    .pop_front()
+                    .expect("scripted materialization result")
+            } else if fail_probes.load(std::sync::atomic::Ordering::Acquire) {
+                Ok(CapturedProcessResult {
+                    exit_code: None,
+                    intent: ProcessOutcomeIntent::TimedOut,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            } else if spec.command.contains("python") {
+                Ok(ok_output("Python 3.12.3\n"))
+            } else {
+                Ok(ok_output("uv 0.8.22\n"))
+            };
+            Box::pin(async move {
+                let _ = started_count.fetch_add(1, std::sync::atomic::Ordering::Release);
+                started.notify_waiters();
+                if is_materialization {
+                    let _ =
+                        materialization_count.fetch_add(1, std::sync::atomic::Ordering::Release);
+                    started.notify_waiters();
+                    // Park every materialization command until the test
+                    // releases the gate; probes pass through immediately.
+                    let mut gate_rx = gate_rx;
+                    if !*gate_rx.borrow() {
+                        let _ = gate_rx.changed().await;
+                    }
+                    if spec.command.contains(" sync --frozen ") && result.as_ref().is_ok() {
+                        // Materialize the environment fixture so the reuse
+                        // path observes a real published environment.
+                        let final_root = spec
+                            .environment
+                            .iter()
+                            .find(|(key, _)| key == "UV_PROJECT_ENVIRONMENT")
+                            .map(|(_, value)| std::path::PathBuf::from(value));
+                        if let Some(final_root) = final_root {
+                            let _ = std::fs::create_dir_all(final_root.join("bin"));
+                            let _ = std::fs::write(final_root.join("bin/python"), b"#!/bin/sh\n");
+                        }
+                    }
+                }
+                result
+            })
+        }
+    }
+
+    fn ok_output(stdout: &str) -> CapturedProcessResult {
+        CapturedProcessResult {
+            exit_code: Some(0),
+            intent: ProcessOutcomeIntent::Completed,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
+        }
+    }
+
+    fn test_package() -> PythonToolPackage {
+        let files = vec![
+            (
+                PathBuf::from("TOOL.toml"),
+                b"schema_version = 1\nname = \"alpha\"\ndescription = \"Alpha\"\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
+                    .to_vec(),
+            ),
+            (
+                PathBuf::from("input.schema.json"),
+                br#"{"type":"object","properties":{},"additionalProperties":false}"#.to_vec(),
+            ),
+            (
+                PathBuf::from("pyproject.toml"),
+                b"[project]\nname = \"alpha\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
+                    .to_vec(),
+            ),
+            (
+                PathBuf::from("tool.py"),
+                b"def main(arguments):\n    return arguments\n".to_vec(),
+            ),
+            (PathBuf::from("uv.lock"), b"version = 1\nrevision = 1\n".to_vec()),
+        ];
+        PythonToolPackage {
+            name: "alpha".to_owned(),
+            description: "Alpha".to_owned(),
+            entrypoint: "tool:main".to_owned(),
+            policy: ToolInvocationPolicy::default(),
+            tool_version_id: super::tool_version_id(&files),
+            files,
+            input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            pyproject: b"[project]\nname = \"alpha\"\nversion = \"0.1.0\"\n".to_vec(),
+            uv_lock: b"version = 1\nrevision = 1\n".to_vec(),
+        }
+    }
+
+    fn store_with(
+        runner: Arc<dyn SupervisedProcessRunner>,
+    ) -> (tempfile::TempDir, PythonToolStore) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::with_runner(dir.path().join("store"), runner).expect("store");
+        (dir, store)
+    }
+
+    /// Concurrent same-digest callers coalesce behind exactly one
+    /// store-owned owner: while the first materialization is parked, a
+    /// second caller waits on the same build and never starts a second
+    /// materialization sequence.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn same_digest_concurrent_callers_coalesce_behind_one_owner() {
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        let (_dir, store) = store_with(scripted.clone());
+        let published = store.publish(&test_package()).expect("publish");
+
+        let first_store = store.clone();
+        let first_published = published.clone();
+        let first =
+            tokio::spawn(async move { first_store.ensure_environment(&first_published).await });
+        // The owner is inside the materialization while the gate is closed.
+        scripted.wait_for_materializations(1);
+
+        let second_store = store.clone();
+        let second_published = published.clone();
+        let second =
+            tokio::spawn(async move { second_store.ensure_environment(&second_published).await });
+        // Let the second caller finish its probes and reach the in-flight
+        // coordination point, then assert it did not start a second
+        // materialization sequence.
+        // Runs: owner probes (2) + parked lock --check (1) + waiter probes
+        // (2) = 5; the gated sync never starts before the release.
+        scripted.wait_for_runs(5);
+        assert_eq!(
+            scripted.materialization_count(),
+            1,
+            "a second owner must never overlap an in-flight build"
+        );
+
+        scripted.release_gate();
+        let first_result = first.await.expect("first caller task").expect("first env");
+        let second_result = second
+            .await
+            .expect("second caller task")
+            .expect("second env");
+        assert_eq!(first_result.digest, second_result.digest);
+        assert_eq!(first_result.root, second_result.root);
+        assert_eq!(
+            scripted.materialization_count(),
+            2,
+            "exactly one materialization sequence ran"
+        );
+    }
+
+    /// Dropping a waiter while the build continues never releases the
+    /// in-flight entry: the owner completes, publishes, and a later call
+    /// observes the published environment without any new build.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropped_waiter_does_not_release_ownership_while_build_continues() {
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        let (_dir, store) = store_with(scripted.clone());
+        let published = store.publish(&test_package()).expect("publish");
+
+        let waiter_store = store.clone();
+        let waiter_published = published.clone();
+        let waiter =
+            tokio::spawn(async move { waiter_store.ensure_environment(&waiter_published).await });
+        scripted.wait_for_materializations(1);
+        waiter.abort();
+        let _ = waiter.await;
+
+        scripted.release_gate();
+        scripted.wait_for_materializations(2);
+
+        // The dropped waiter never released the in-flight entry: a retry
+        // must coalesce with the still-published result instead of starting
+        // a second build.
+        let retry_store = store.clone();
+        let retry_published = published.clone();
+        let environment = retry_store
+            .ensure_environment(&retry_published)
+            .await
+            .expect("the owner's result is still observed");
+        assert_eq!(environment.digest.as_str().len(), 7 + 64);
+        assert_eq!(
+            scripted.materialization_count(),
+            2,
+            "no second build after waiter drop"
+        );
+    }
+
+    /// An owner failure publishes a terminal error to every waiting caller
+    /// and removes the in-flight entry, so a retry can acquire ownership
+    /// without overlapping the failed owner.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_error_wakes_all_waiters_and_retry_does_not_overlap() {
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Err("injected sync failure".to_owned()),
+        ]));
+        let (_dir, store) = store_with(scripted.clone());
+        let published = store.publish(&test_package()).expect("publish");
+
+        let first_store = store.clone();
+        let first_published = published.clone();
+        let first =
+            tokio::spawn(async move { first_store.ensure_environment(&first_published).await });
+        scripted.wait_for_materializations(1);
+        let second_store = store.clone();
+        let second_published = published.clone();
+        let second =
+            tokio::spawn(async move { second_store.ensure_environment(&second_published).await });
+        scripted.wait_for_runs(5);
+        assert_eq!(
+            scripted.materialization_count(),
+            1,
+            "the waiter must not start a second owner"
+        );
+        scripted.release_gate();
+        scripted.wait_for_materializations(2);
+
+        let first_error = first
+            .await
+            .expect("first caller task")
+            .expect_err("first fails");
+        let second_error = second
+            .await
+            .expect("second caller task")
+            .expect_err("second fails");
+        assert!(first_error.to_string().contains("injected sync failure"));
+        assert_eq!(
+            first_error, second_error,
+            "both waiters observe the same terminal error"
+        );
+
+        // The failed owner removed its in-flight entry; the retry starts a
+        // fresh, non-overlapping materialization sequence.
+        *scripted
+            .materialization_results
+            .lock()
+            .expect("scripted results lock") = VecDeque::from(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]);
+        let retry_store = store.clone();
+        let retry_published = published.clone();
+        let retry =
+            tokio::spawn(async move { retry_store.ensure_environment(&retry_published).await });
+        scripted.wait_for_materializations(4);
+        assert!(
+            retry.await.expect("retry task").is_ok(),
+            "the retry can acquire ownership after the failed owner published"
+        );
+        assert_eq!(
+            scripted.materialization_count(),
+            4,
+            "the retry started only after the previous owner finished"
+        );
+    }
+
+    /// The RAII owner guard: if the detached owner task exits before
+    /// terminal publication, the in-flight entry is removed by
+    /// pointer identity and every waiter receives a terminal error.
+    #[test]
+    fn owner_guard_early_exit_cannot_strand_an_in_flight_entry() {
+        let in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+        let state = Arc::new(BuildState {
+            result: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+        });
+        let key = "digest-key".to_owned();
+        in_flight
+            .lock()
+            .expect("in-flight lock")
+            .insert(key.clone(), state.clone());
+        {
+            let guard = BuildOwnerGuard {
+                in_flight: in_flight.clone(),
+                key: key.clone(),
+                state: state.clone(),
+                completed: false,
+            };
+            drop(guard);
+        }
+        assert!(
+            in_flight.lock().expect("in-flight lock").is_empty(),
+            "the early-exited owner must remove its in-flight entry"
+        );
+        let result = state
+            .result
+            .lock()
+            .expect("result lock")
+            .clone()
+            .expect("terminal result");
+        assert!(result.is_err());
+    }
+
+    /// A foreign state for the same key is never removed by another owner's
+    /// guard: removal is pointer-identity safe.
+    #[test]
+    fn owner_guard_removal_is_pointer_identity_safe() {
+        let in_flight: Arc<Mutex<BTreeMap<String, Arc<BuildState>>>> =
+            Arc::new(Mutex::new(BTreeMap::new()));
+        let foreign = Arc::new(BuildState {
+            result: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+        });
+        let key = "digest-key".to_owned();
+        in_flight
+            .lock()
+            .expect("in-flight lock")
+            .insert(key.clone(), foreign.clone());
+        let own = Arc::new(BuildState {
+            result: Mutex::new(None),
+            notify: tokio::sync::Notify::new(),
+        });
+        {
+            let mut guard = BuildOwnerGuard {
+                in_flight: in_flight.clone(),
+                key: key.clone(),
+                state: own.clone(),
+                completed: false,
+            };
+            guard.finish(Ok(crate::tools::python::PythonToolEnvironment {
+                digest: crate::runtime::identity::PythonToolEnvironmentDigest::new(
+                    "sha256:deadbeef".to_owned(),
+                ),
+                root: PathBuf::from("/unused"),
+            }));
+        }
+        assert_eq!(
+            in_flight.lock().expect("in-flight lock").len(),
+            1,
+            "a stale guard must never remove a newer owner's entry"
+        );
+        assert!(
+            in_flight
+                .lock()
+                .expect("in-flight lock")
+                .get(&key)
+                .is_some_and(|current| Arc::ptr_eq(current, &foreign))
+        );
+    }
+
+    /// The timeout of every materialization/probe command is finite, so a
+    /// stuck package manager surfaces as an explicit preparation failure.
+    #[tokio::test]
+    async fn environment_commands_have_finite_deadlines() {
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        scripted.release_gate();
+        let (_dir, store) = store_with(scripted.clone());
+        let published = store.publish(&test_package()).expect("publish");
+        let _ = store.ensure_environment(&published).await;
+        let recorded = scripted
+            .commands
+            .lock()
+            .expect("recorded commands lock")
+            .clone();
+        assert_eq!(recorded.len(), 4, "two probes plus two uv commands");
+        for (command, _, timeout) in &recorded {
+            assert!(
+                timeout.is_some(),
+                "every M7 preparation command needs a finite deadline: {command}"
+            );
+        }
+    }
+
+    /// The exact interpreter whose identity enters the environment digest is
+    /// pinned to uv via `UV_PYTHON`, so uv cannot silently select another
+    /// interpreter while the digest claims the probed identity.
+    #[tokio::test]
+    async fn uv_is_pinned_to_the_probed_interpreter() {
+        let scripted = Arc::new(ScriptedRunner::new(vec![
+            Ok(ok_output("resolved 2 packages")),
+            Ok(ok_output("installed 1 package")),
+        ]));
+        scripted.release_gate();
+        let (_dir, store) = store_with(scripted.clone());
+        let published = store.publish(&test_package()).expect("publish");
+        let _ = store.ensure_environment(&published).await;
+
+        let sync_env = scripted
+            .sync_environment()
+            .expect("sync command environment");
+        let uv_python = sync_env
+            .iter()
+            .find(|(key, _)| key == "UV_PYTHON")
+            .map(|(_, value)| value.clone())
+            .expect("UV_PYTHON must pin the interpreter selection");
+        let probes = sync_env
+            .iter()
+            .filter(|(key, _)| key == "UV_NO_PYTHON_DOWNLOADS" || key == "UV_PYTHON_DOWNLOADS")
+            .collect::<Vec<_>>();
+        assert!(
+            probes
+                .iter()
+                .any(|(key, value)| { key == "UV_NO_PYTHON_DOWNLOADS" && value == "1" })
+                && probes
+                    .iter()
+                    .any(|(key, value)| { key == "UV_PYTHON_DOWNLOADS" && value == "0" }),
+            "managed Python downloads stay disabled"
+        );
+        assert!(
+            !uv_python.is_empty() && !uv_python.contains(' '),
+            "UV_PYTHON must name one exact executable"
+        );
+        assert!(
+            std::path::Path::new(&uv_python).is_absolute(),
+            "UV_PYTHON must be an absolute executable path"
+        );
+    }
+
+    /// A different interpreter-selection input cannot alias to the same
+    /// environment identity: the digest includes the probed Python identity,
+    /// so a runtime selection change produces a different digest.
+    #[test]
+    fn different_interpreter_selection_cannot_alias_the_environment_identity() {
+        let v1 = python_tool_environment_digest(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            "Python 3.12.3",
+            "uv 0.8.22",
+            b"pyproject",
+            b"lock",
+        );
+        let v2 = python_tool_environment_digest(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            "Python 3.13.1",
+            "uv 0.8.22",
+            b"pyproject",
+            b"lock",
+        );
+        assert_ne!(v1, v2);
+    }
+
+    /// The published `ToolVersion` shape is `tool-versions/<id>/source/` plus
+    /// the version marker; the executor source root is exactly the
+    /// `source/` directory.
+    #[test]
+    fn published_tool_version_uses_the_source_directory_shape() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let package = test_package();
+        let published = store.publish(&package).expect("publish");
+        assert_eq!(
+            published.root,
+            dir.path()
+                .join("store/tool-versions")
+                .join(package.tool_version_id.as_str())
+                .join("source")
+        );
+        assert!(published.root.join("TOOL.toml").is_file());
+        assert!(published.root.join("uv.lock").is_file());
+        let marker = dir
+            .path()
+            .join("store/tool-versions")
+            .join(package.tool_version_id.as_str())
+            .join("RUSTX_TOOL_VERSION.json");
+        assert!(
+            marker.is_file(),
+            "the marker sits beside source/, never inside"
+        );
+    }
+
+    /// A corrupt published `ToolVersion` — source mutated after publication —
+    /// fails the reuse preparation explicitly instead of being trusted by
+    /// its marker string.
+    #[test]
+    fn corrupt_published_tool_version_fails_reuse_explicitly() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let package = test_package();
+        let _ = store.publish(&package).expect("publish");
+        let published_source = dir
+            .path()
+            .join("store/tool-versions")
+            .join(package.tool_version_id.as_str())
+            .join("source");
+        std::fs::write(
+            published_source.join("tool.py"),
+            b"def main(arguments):\n    return \"tampered\"\n",
+        )
+        .expect("tamper with the published source");
+        let error = store
+            .publish(&package)
+            .expect_err("corrupt reuse must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match its claimed identity"),
+            "unexpected error: {error}"
+        );
+        // The corrupt publication is never mutated into validity.
+        let tampered = std::fs::read_to_string(published_source.join("tool.py")).expect("read");
+        assert!(tampered.contains("tampered"));
+    }
+
+    /// A valid published `ToolVersion` is reused without mutation and without
+    /// re-staging.
+    #[test]
+    fn valid_published_tool_version_is_reused_unchanged() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let package = test_package();
+        let first = store.publish(&package).expect("first publish");
+        let second = store.publish(&package).expect("second publish");
+        assert_eq!(first.root, second.root);
+        let source_files = std::fs::read_dir(&first.root).expect("source dir").count();
+        assert_eq!(source_files, 5, "all package files published");
+    }
+
+    /// The environment ready marker locks every deterministic input of the
+    /// environment identity; a marker that was written for a different
+    /// Python runtime is rejected on reuse.
+    #[test]
+    fn environment_marker_locks_all_digest_inputs() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let package = test_package();
+        let published = store.publish(&package).expect("publish");
+        let digest = python_tool_environment_digest(
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            "Python 3.12.3",
+            "uv 0.8.22",
+            &published.package.pyproject,
+            &published.package.uv_lock,
+        );
+        let root = dir
+            .path()
+            .join("store/python-tool-envs")
+            .join(digest.as_str());
+        std::fs::create_dir_all(root.join("bin")).expect("bin dir");
+        std::fs::write(root.join("bin/python"), b"#!/bin/sh\n").expect("python");
+        let marker = super::EnvironmentMarker {
+            format: super::ENVIRONMENT_MARKER_FORMAT.to_owned(),
+            ready: true,
+            os: std::env::consts::OS.to_owned(),
+            arch: std::env::consts::ARCH.to_owned(),
+            digest: digest.as_str().to_owned(),
+            lock_digest: super::lock_digest_bytes(&package.uv_lock),
+            python_runtime: "Python 9.9.9".to_owned(),
+            uv: "uv 0.8.22".to_owned(),
+        };
+        std::fs::write(
+            root.join(super::ENVIRONMENT_MARKER),
+            serde_json::to_vec(&marker).expect("marker"),
+        )
+        .expect("marker write");
+        let error = PythonToolStore::read_published_environment(
+            &root,
+            &digest,
+            "Python 3.12.3",
+            "uv 0.8.22",
+            &package.uv_lock,
+        )
+        .expect_err("a marker with a different Python runtime must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the expected digest inputs")
+        );
+    }
+
+    /// Each `ToolVersion` -> environment binding is recorded deterministically
+    /// outside the environment's immutable identity; a second `ToolVersion`
+    /// reusing the same digest records its own binding.
+    #[test]
+    fn tool_version_environment_bindings_are_recorded_per_tool_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        let package = test_package();
+        let digest = crate::runtime::identity::PythonToolEnvironmentDigest::new(
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_owned(),
+        );
+        PythonToolStore::record_tool_version_binding(
+            &store.inner,
+            &PublishedPythonTool {
+                package: package.clone(),
+                root: PathBuf::from("/unused"),
+            },
+            &digest,
+        )
+        .expect("first binding");
+        let other = PythonToolPackage {
+            name: "beta".to_owned(),
+            tool_version_id: ToolVersionId::new("sha256:other".to_owned()),
+            ..package.clone()
+        };
+        PythonToolStore::record_tool_version_binding(
+            &store.inner,
+            &PublishedPythonTool {
+                package: other.clone(),
+                root: PathBuf::from("/unused"),
+            },
+            &digest,
+        )
+        .expect("second binding");
+        let first_record = dir
+            .path()
+            .join("store/python-tool-bindings")
+            .join(package.tool_version_id.as_str())
+            .join(format!("{}.json", digest.as_str()));
+        let second_record = dir
+            .path()
+            .join("store/python-tool-bindings")
+            .join(other.tool_version_id.as_str())
+            .join(format!("{}.json", digest.as_str()));
+        assert!(first_record.is_file(), "first binding recorded");
+        assert!(second_record.is_file(), "second binding recorded");
+        assert_ne!(first_record, second_record);
+        let environment_marker = dir
+            .path()
+            .join("store/python-tool-envs")
+            .join(digest.as_str())
+            .join(super::ENVIRONMENT_MARKER);
+        assert!(
+            !environment_marker.exists(),
+            "the environment's immutable identity never claims a ToolVersion"
+        );
+    }
+
+    /// The `PythonToolStoreInner` construction keeps all coordination handles.
+    #[test]
+    fn store_inner_is_constructible() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = PythonToolStore::new(dir.path().join("store")).expect("store");
+        assert!(store.inner.root.join("tool-versions").is_dir());
+        assert!(store.inner.root.join("python-tool-envs").is_dir());
+        assert!(store.inner.root.join("python-tool-bindings").is_dir());
+        let _ = PythonToolStoreInner {
+            root: dir.path().join("other"),
+            runner: Arc::new(ScriptedRunner::new(Vec::new())),
+            uv_binary: PathBuf::from("uv"),
+            python_binary: PathBuf::from("python3"),
+            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+            next_invocation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        };
+    }
+
+    /// A timeout on a package-manager command is an explicit preparation
+    /// failure.
+    #[tokio::test]
+    async fn timed_out_probe_is_an_explicit_preparation_failure() {
+        let scripted = Arc::new(ScriptedRunner::new(Vec::new()));
+        scripted.set_probe_timeout();
+        scripted.release_gate();
+        let (_dir, store) = store_with(scripted);
+        let published = store.publish(&test_package()).expect("publish");
+        let error = store
+            .ensure_environment(&published)
+            .await
+            .expect_err("a timed-out probe must fail preparation");
+        assert!(error.to_string().contains("timed out"));
+    }
+}

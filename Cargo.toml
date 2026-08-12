@@ -2,11 +2,14 @@
 name = "rustx"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 description = "A standalone Rust execution runtime for durable, tool-using LLM agents."
 repository = "https://github.com/Caismis/rustX"
 publish = false
+
+[features]
+mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 
 [lib]
 name = "rustx"
@@ -19,6 +22,10 @@ path = "src/main.rs"
 [[bin]]
 name = "bash-supervisor"
 path = "src/bin/bash_supervisor.rs"
+
+[[bin]]
+name = "interactive-supervisor"
+path = "src/bin/interactive_supervisor.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -39,7 +46,16 @@ walkdir = "2.5.0"
 nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 libc = "0.2"
 serde_yaml = "0.9"
+toml = "0.8"
 sha2 = "0.10"
+base64 = "0.22"
+http = "1"
+rmcp = { version = "3.1.2", default-features = false, features = [
+    "client",
+    "transport-async-rw",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash
@@ -56,5 +72,6 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+axum = "0.8"
 tempfile = "3.27.0"
 nix = { version = "0.31.3", features = ["signal", "process", "fs"] }

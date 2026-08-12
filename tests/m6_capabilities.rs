@@ -94,7 +94,8 @@ fn conversation() -> Conversation {
         CapabilityCoordinatorConfig {
             conversation_id: conversation_id.clone(),
             workspace: workspace.clone(),
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
         },
@@ -315,7 +316,8 @@ async fn absolute_store_path_does_not_change_the_digest() {
             CapabilityCoordinatorConfig {
                 conversation_id: conversation_id.clone(),
                 workspace: workspace.clone(),
-                tool_registry: Arc::new(ToolRegistry::new()),
+                base_tool_registry: Arc::new(ToolRegistry::new()),
+                mcp_servers: Vec::new(),
                 base_environment: ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),
             },
@@ -770,7 +772,8 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
         },
@@ -796,7 +799,8 @@ fn workspace_inside_environment_store_is_rejected() {
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store,
         },
@@ -821,7 +825,8 @@ fn external_environment_store_is_accepted() {
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: store.clone(),
         },
@@ -854,7 +859,8 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-isolation"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: configured,
         },
@@ -1405,7 +1411,8 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         CapabilityCoordinatorConfig {
             conversation_id: ConversationId::new("conv-m6"),
             workspace: conversation.workspace.clone(),
-            tool_registry: tools.clone(),
+            base_tool_registry: tools.clone(),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: conversation.dir.path().join("skill-env-2"),
         },

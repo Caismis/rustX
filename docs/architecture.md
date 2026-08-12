@@ -48,7 +48,7 @@ message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
                            instant; absent for derived compaction summaries),
                            ContentBlockIndex, content enums per role
 tools/types.rs             ToolDefinition (id, name, description, canonical
-                           input schema, ToolExecutionPolicy, ToolConcurrencyPolicy,
+                           input schema, ToolInvocationPolicy,
                            ToolReplayPolicy, ToolOrigin), ModelToolDefinition
                            (the compiled model-facing definition), ToolCall,
                            ToolCallStart, ToolInvocation (stripped/validated
@@ -78,6 +78,12 @@ tools/runtime.rs           ConversationToolRuntime: the per-conversation
 tools/native/             the native tool plane: read, write, edit, glob,
                            grep, bash executors and the background_task
                            runtime intrinsic
+tools/mcp/                MCP 2026-07-28 adapter: configured server runtime,
+                           paginated discovery, list-change invalidation,
+                           canonical calls, progress, cancellation
+tools/python.rs           immutable ToolVersion discovery/publication,
+                           PythonToolEnvironment materialization, and the
+                           canonical Python executor
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
                            ReasoningEffort, AgentStatusAttachment (the
                            cross-layer model-request attachment contract of
@@ -637,7 +643,13 @@ state makes this explicit: the inner reports `AnchorReady`, rustX retains the
 possible ownership identity and replies `Start`, then the inner reports
 `OwnershipEstablished` after spawning Bash. If communication fails after
 `Start`, rustX conservatively assumes ownership may exist. Pre-gate setup
-failure reports `NoOwnership` and may settle without a Bash domain.
+failure reports `NoOwnership` and may settle without a Bash domain. The
+`Start` gate is a recognition point, not a reader boundary: the inner's
+rustX-facing control direction owns one `FrameReader` for the whole
+invocation, shared by the gate and the owned control loop, so a `Terminate`
+that the kernel delivered in the same `read()` as `Start` still drives the
+ordinary `TERM` -> grace -> `KILL` path (the shared control-frame ownership
+invariant, identical to the interactive unit's gates).
 Catastrophic fallback authority is a pre-ownership prerequisite: the runtime
 child-subreaper primitive is consulted (once per process, idempotently)
 before the supervisor unit spawns, so `START` — which authorizes the Bash
@@ -839,6 +851,105 @@ The tool plane exposes a single runtime-owned execution contract and multiple ex
 
 Execution implementations may depend on `rmcp`, process APIs, `uv`, or other libraries. The agent kernel may not.
 
+#### M7 implementation (one external-capability tool plane)
+
+Every model-visible tool is one canonical `ToolDefinition` paired with one
+`Arc<dyn ToolExecutor>`. Native, MCP, and custom Python tools use the same
+registry preflight, reserved `__rustx_*` stripping, JSON Schema validation,
+execution policy, concurrency policy, progress event, cancellation signal,
+foreground/background ownership, and result types. The Agent Loop has no
+origin-specific dispatch path.
+
+The base/native/runtime registry is immutable input to capability preparation.
+Each candidate composes it with MCP definitions sorted by `McpServerId` and
+remote name, then Python definitions sorted by canonical model-facing name.
+The candidate owns a new `ToolRegistry`; a committed `CapabilitySnapshot`
+owns that exact registry. A duplicate model-facing name rejects the complete
+candidate.
+
+`McpServerRuntime` owns one configured server's rmcp peer, transport, progress
+dispatcher, list-change subscription, and supervised stdio owner when used.
+Executors capture an `Arc` to that runtime. The observed remote tool surface
+and binding are immutable for a capability revision, but rustX does not claim
+to snapshot the implementation behavior of the independent remote server.
+`tools/list_changed` epoch mutation and capability snapshot activation share
+exactly one synchronization boundary — the mutex-protected MCP invalidation
+state: notification epoch advancement, preparation epoch snapshots, and the
+commit's final epoch validation plus snapshot swap all serialize through the
+same guard. If the notification wins first, the prepared candidate cannot
+commit and the active snapshot is unchanged; if the commit wins first, the
+notification belongs to a future refresh and can never retroactively
+invalidate the already-committed snapshot. Lock ordering is explicit and
+documented (capability state lock -> MCP invalidation guard; the notification
+path holds only the guard), so no cycle exists. Preparation rejects a catalog
+that changes during discovery, and commit rejects a candidate whose epoch
+changed before the protected snapshot swap.
+
+MCP stdio uses the runtime-owned interactive supervisor unit, whose control
+sockets are separate from the server's stdin/stdout protocol pair. The unit
+is the M5 Bash supervisor shape applied to a long-lived server, composed
+from the same shared structural ownership core
+(`src/runtime/supervised_unit`): an inner supervisor calls `setsid()`,
+installs the fixed-membership seccomp restriction, and issues
+`TERM -> grace -> KILL` with `killpg` against its own process group; an
+outer supervisor is the reaper of last resort with the single-owner anchor
+discipline and the authoritative terminal report. The kernel-mediated
+terminal proof is the group-scoped wait (`waitid(Id::PGid)` returning
+`ECHILD`) — never a `/proc` scan or a `killpg(0)` probe. rustX's detached
+driver task owns physical settlement from the moment the supervisor spawn
+succeeds, drains the server's stderr until EOF (bounded preview), reaps the
+direct supervisor child before publishing settlement, and runs the shared
+adopted-anchor emergency containment when the unit is lost. Startup is
+ownership-gated in both directions: the outer supervisor may create the unit
+hierarchy only after rustX accepted and retained its control connection
+(`MSG_OWNER_ATTACHED`), and the outer attaches its inner supervisor with a
+bounded pre-ownership state machine (inner connection, inner exit, upstream
+loss) instead of a blocking accept. `MSG_ANCHOR_READY` is then the anchor
+commit point: only a unique, positive, pid-matching announcement gives the
+inner pid its second meaning as the owned process-group id. Before it the
+outer owns the inner strictly as a direct child pid — no group-scoped wait
+may run against that pid — and reports `NoOwnership` only after proving
+that direct child reaped; an unprovable pre-anchor reap reports a
+process-control failure and no `NoOwnership`. After the startup gate has
+opened, bare pre-ownership plus control loss is therefore never a terminal
+proof. Both gates are pure recognition points, not reader boundaries: each
+stream direction has exactly one buffered control-frame reader for the whole
+connection lifetime (rustX -> outer across the startup gate, the pre-inner
+drain, inner attachment, the pre-anchor phase and the anchored relay loop;
+outer -> inner across the START gate and the owned inner control loop), and
+every phase drains what is already buffered before it waits for another
+read. `NoOwnership` itself is parsed by one strict, fail-closed grammar
+(empty payload, or a four-byte positive reaped pid; anything else is a
+protocol error). Physical settlement is published only
+with proven terminality; an unproven terminal state is returned as an
+explicit error from `wait_for_settlement`/`McpServerRuntime::close`, never as
+a successful settlement. Streamable HTTP
+uses the current rmcp client transport with explicit static headers and no
+`Mcp-Session-Id` compatibility state.
+
+Custom Python packages are discovered only from
+`<workspace>/.agents/tools/<tool-name>/`. Candidate preparation reads a finite
+package snapshot, computes `ToolVersionId`, publishes it immutably as
+`tool-versions/<ToolVersionId>/source/` plus a version marker (the executor
+and every uv command use exactly the `source/` root; reuse validates the
+published source content digest against the claimed identity), validates
+the existing `uv.lock`, and materializes a distinct immutable
+`PythonToolEnvironmentDigest` environment whose ready marker locks every
+deterministic identity input (format, OS, architecture, digest, lock digest,
+Python runtime identity, uv identity). ToolVersion identity and environment
+identity are separate: source/description/schema changes can change the
+former without changing the latter, and each ToolVersion -> environment
+binding is recorded deterministically outside the environment's immutable
+dependency identity. The environment isolates dependencies, not filesystem,
+network, or security permissions. The interpreter whose identity enters the
+digest is pinned to uv via `UV_PYTHON`, managed Python downloads stay
+disabled, and every preparation command has a finite deadline (a timeout is
+an explicit preparation failure). A harness uses a private input file and
+one bounded JSON result envelope; the Python subprocess uses the shared
+supervised short-lived runner. Same-digest in-flight builds coalesce behind
+one store-owned owner task (callers only wait; owner failure publishes a
+terminal error and removes the in-flight entry).
+
 ### Layer 5: Skill plane
 
 Skills are filesystem/workflow packages. A skill may include:
@@ -977,6 +1088,22 @@ generic runtime supervisor:
   captured at background dispatch prepare time (before the ownership
   commit) and retained by the detached execution; later revision
   activations never mutate it.
+
+#### M7 capability additions
+
+Capability preparation now owns the full composition transaction:
+
+```text
+base/native/runtime tools + prepared MCP + prepared Python
+    -> candidate ToolRegistry -> candidate CapabilitySnapshot -> commit
+```
+
+There is no mutable process-global active registry. An attempt lease captures
+one snapshot and its exact registry for all turns. Detached background work
+captures the exact executor before ownership transfer; an old MCP call keeps
+its `McpServerRuntime`, and an old Python call keeps its published source and
+environment, across later capability revisions. Environment GC metadata is
+written deterministically for future ownership, but M7 implements no GC.
 
 The shared supervised process runner (`src/runtime/process_runner`) is the
 M5 Bash process-group lifecycle extracted so native Bash and Skill

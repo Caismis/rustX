@@ -146,8 +146,9 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
 };
+use crate::tools::native::native_definition;
 use crate::tools::native::support::failed_result;
-use crate::tools::native::{NativeToolPolicy, native_definition};
+use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{
     ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
     ToolResultContent, TruncationState,
@@ -158,7 +159,7 @@ pub const NAME: &str = "bash";
 
 /// The canonical business schema of the tool.
 #[must_use]
-pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
+pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
     native_definition(
         "tool-bash",
         NAME,
@@ -1847,14 +1848,21 @@ mod tests {
             workspace,
             None,
         ));
-        // The owned tree provably exists before the owner disappears.
+        // The owned tree provably exists before the owner disappears. The
+        // descendant pid file is part of the readiness condition: the shell
+        // writes it strictly after its own pid file, so waiting only for the
+        // latter would race the descendant's `echo $!`.
         for _ in 0..1000 {
-            if shell_pid_file.exists() && anchor_pid_file.exists() {
+            if shell_pid_file.exists() && anchor_pid_file.exists() && desc_pid_file.exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(shell_pid_file.exists(), "the shell pid file never appeared");
+        assert!(
+            desc_pid_file.exists(),
+            "the descendant pid file never appeared"
+        );
         let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
             .expect("anchor pid file")
             .trim()

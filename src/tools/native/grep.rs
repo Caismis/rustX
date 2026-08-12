@@ -12,8 +12,9 @@ use regex::RegexBuilder;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_GREP_MATCHES, MAX_MODEL_TOOL_RESULT_BYTES};
+use crate::tools::native::native_definition;
 use crate::tools::native::support::{failed_result, success_json_with};
-use crate::tools::native::{NativeToolPolicy, native_definition};
+use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation, TruncationState};
 
 /// The canonical model-facing name of the tool.
@@ -21,7 +22,7 @@ pub const NAME: &str = "grep";
 
 /// The canonical business schema of the tool.
 #[must_use]
-pub fn definition(policy: NativeToolPolicy) -> ToolDefinition {
+pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
     native_definition(
         "tool-grep",
         NAME,

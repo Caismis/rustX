@@ -46,6 +46,11 @@ pub fn bounded_preview(data: &[u8], limit: usize) -> (Vec<u8>, bool) {
         return (data.to_vec(), false);
     }
     let marker = format!("\n...[truncated {} bytes]...\n", data.len() - limit);
+    if marker.len() >= limit {
+        let mut marker = marker.into_bytes();
+        marker.truncate(limit);
+        return (marker, true);
+    }
     let content = limit.saturating_sub(marker.len());
     let head = content / 2;
     let tail = content - head;
@@ -71,13 +76,16 @@ pub fn bounded_text_preview(data: &[u8], limit: usize) -> (String, bool) {
     (String::from_utf8_lossy(&bytes).into_owned(), truncated)
 }
 
-/// Bounds one progress notification through the canonical UTF-8-safe
-/// normalization shared by the foreground and background paths.
+/// Bounds one progress notification through the canonical normalization
+/// shared by the foreground, background, and every origin executor path.
 ///
-/// `completed` and `total` are preserved; `message` is bounded to
-/// [`MAX_PROGRESS_MESSAGE_BYTES`] and never panics on UTF-8: the bound is
-/// cut at a character boundary, so the result is always valid UTF-8 and the
-/// output is deterministic for a given input.
+/// This is the canonical finite-value invariant boundary: `completed` and
+/// `total` that are not finite (`NaN`, `+inf`, `-inf`) are dropped, so a
+/// canonical serialization can never fail because an executor produced a
+/// non-finite value. Finite fractional values are preserved exactly.
+/// `message` is bounded to [`MAX_PROGRESS_MESSAGE_BYTES`] and never panics
+/// on UTF-8: the bound is cut at a character boundary, so the result is
+/// always valid UTF-8 and the output is deterministic for a given input.
 #[must_use]
 pub fn bound_tool_progress(
     progress: crate::tools::types::ToolProgress,
@@ -89,8 +97,8 @@ pub fn bound_tool_progress(
     } = progress;
     crate::tools::types::ToolProgress {
         message: message.map(|text| bound_utf8_message(text, MAX_PROGRESS_MESSAGE_BYTES)),
-        completed,
-        total,
+        completed: completed.filter(|value| value.is_finite()),
+        total: total.filter(|value| value.is_finite()),
     }
 }
 
@@ -119,8 +127,8 @@ mod tests {
     fn ascii_at_the_boundary_is_preserved() {
         let progress = ToolProgress {
             message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES)),
-            completed: Some(1),
-            total: Some(2),
+            completed: Some(1.0),
+            total: Some(2.0),
         };
         let bounded = bound_tool_progress(progress.clone());
         assert_eq!(
@@ -128,8 +136,8 @@ mod tests {
             MAX_PROGRESS_MESSAGE_BYTES
         );
         assert_eq!(bounded.message, progress.message);
-        assert_eq!(bounded.completed, Some(1));
-        assert_eq!(bounded.total, Some(2));
+        assert_eq!(bounded.completed, Some(1.0));
+        assert_eq!(bounded.total, Some(2.0));
     }
 
     /// ASCII crossing the boundary is truncated to the bound.
@@ -182,21 +190,68 @@ mod tests {
     fn normalization_is_deterministic_and_preserves_counts() {
         let progress = ToolProgress {
             message: Some("y".repeat(MAX_PROGRESS_MESSAGE_BYTES + 5)),
-            completed: Some(7),
-            total: Some(9),
+            completed: Some(7.0),
+            total: Some(9.0),
         };
         let first = bound_tool_progress(progress.clone());
         let second = bound_tool_progress(progress);
         assert_eq!(first, second);
-        assert_eq!(first.completed, Some(7));
-        assert_eq!(first.total, Some(9));
+        assert_eq!(first.completed, Some(7.0));
+        assert_eq!(first.total, Some(9.0));
         let none_message = bound_tool_progress(ToolProgress {
             message: None,
-            completed: Some(3),
-            total: Some(4),
+            completed: Some(3.0),
+            total: Some(4.0),
         });
         assert_eq!(none_message.message, None);
-        assert_eq!(none_message.completed, Some(3));
-        assert_eq!(none_message.total, Some(4));
+        assert_eq!(none_message.completed, Some(3.0));
+        assert_eq!(none_message.total, Some(4.0));
+    }
+
+    /// The canonical finite-value invariant: non-finite `completed`/`total`
+    /// values are dropped at the shared normalization boundary, so no later
+    /// canonical serialization can fail on them.
+    #[test]
+    fn non_finite_values_are_dropped_at_the_canonical_boundary() {
+        for non_finite in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let bounded = bound_tool_progress(ToolProgress {
+                message: Some("bad".to_owned()),
+                completed: Some(non_finite),
+                total: Some(non_finite),
+            });
+            assert_eq!(
+                bounded.completed, None,
+                "non-finite completed must never reach canonical progress"
+            );
+            assert_eq!(
+                bounded.total, None,
+                "non-finite total must never reach canonical progress"
+            );
+            assert_eq!(bounded.message.as_deref(), Some("bad"));
+        }
+    }
+
+    /// A non-finite value in one field does not drop the other, finite field.
+    #[test]
+    fn a_non_finite_value_only_drops_its_own_field() {
+        let bounded = bound_tool_progress(ToolProgress {
+            message: None,
+            completed: Some(f64::NAN),
+            total: Some(2.5),
+        });
+        assert_eq!(bounded.completed, None);
+        assert_eq!(bounded.total, Some(2.5));
+    }
+
+    /// Fractional finite progress survives the canonical boundary.
+    #[test]
+    fn fractional_progress_survives_the_canonical_boundary() {
+        let bounded = bound_tool_progress(ToolProgress {
+            message: Some("fractional".to_owned()),
+            completed: Some(0.5),
+            total: Some(3.5),
+        });
+        assert_eq!(bounded.completed, Some(0.5));
+        assert_eq!(bounded.total, Some(3.5));
     }
 }

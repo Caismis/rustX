@@ -813,21 +813,20 @@ impl AnthropicStreamNormalizer {
             provider_error("provider stream reached message_stop without a stop reason".to_owned())
         })?;
         let mut events = Vec::new();
-        if is_refusal(Some(&stop_reason)) {
-            if let Some(explanation) = self
+        if is_refusal(Some(&stop_reason))
+            && let Some(explanation) = self
                 .stop_details
                 .as_ref()
                 .and_then(|details| details.explanation.clone())
                 .filter(|explanation| !explanation.is_empty())
-            {
-                let block_index = *self
-                    .refusal_block
-                    .get_or_insert_with(|| self.blocks.allocate(AnthropicBlockKey::Refusal));
-                events.push(ModelEvent::RefusalDelta {
-                    block_index,
-                    text: explanation,
-                });
-            }
+        {
+            let block_index = *self
+                .refusal_block
+                .get_or_insert_with(|| self.blocks.allocate(AnthropicBlockKey::Refusal));
+            events.push(ModelEvent::RefusalDelta {
+                block_index,
+                text: explanation,
+            });
         }
         events.push(ModelEvent::Completed {
             finish_reason: map_finish_reason(Some(&stop_reason)),

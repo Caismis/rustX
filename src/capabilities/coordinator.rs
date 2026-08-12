@@ -1,6 +1,7 @@
 //! The capability coordinator: preparation, quiescent commit, and attempt
 //! leases (M6).
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicU64;
@@ -8,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
-use crate::runtime::identity::{CapabilityRevision, ConversationId};
+use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
@@ -16,6 +17,8 @@ use crate::skills::environments::{
 use crate::skills::{SkillDiscovery, SkillSnapshot, merge_dependency_manifests};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::ToolRegistry;
+use crate::tools::mcp::{McpInvalidationState, McpServerConfig, McpServerRuntime};
+use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
 
 /// The coordinator configuration of one conversation/capability owner.
@@ -25,8 +28,10 @@ pub struct CapabilityCoordinatorConfig {
     pub conversation_id: ConversationId,
     /// The canonical conversation Workspace (the Skill root anchor).
     pub workspace: Workspace,
-    /// The immutable `ToolRegistry` handle of the capability set.
-    pub tool_registry: Arc<ToolRegistry>,
+    /// The deterministic native/runtime registry used as the composition base.
+    pub base_tool_registry: Arc<ToolRegistry>,
+    /// The immutable configured MCP server set for this coordinator.
+    pub mcp_servers: Vec<McpServerConfig>,
     /// The base authorized `ToolEnvironment` (without Skill overlays).
     pub base_environment: ToolEnvironment,
     /// The caller-configured runtime-private environment store root,
@@ -48,7 +53,14 @@ struct CoordinatorState {
 struct CoordinatorInner {
     conversation_id: ConversationId,
     workspace: Workspace,
-    tool_registry: Arc<ToolRegistry>,
+    base_tool_registry: Arc<ToolRegistry>,
+    mcp_servers: Vec<McpServerConfig>,
+    mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
+    /// The one shared MCP invalidation synchronization boundary: epoch
+    /// mutation (`tools/list_changed`) and epoch validation + snapshot swap
+    /// (commit) serialize through the same guard.
+    mcp_invalidation: Arc<McpInvalidationState>,
+    python_store: PythonToolStore,
     base_environment: ToolEnvironment,
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
@@ -88,6 +100,8 @@ pub struct PreparedCapabilityCandidate {
     python: Option<crate::skills::environments::PythonEnvironment>,
     node: Option<crate::skills::environments::NodeEnvironment>,
     effective_environment: ToolEnvironment,
+    candidate_registry: Arc<ToolRegistry>,
+    mcp_epochs: BTreeMap<McpServerId, u64>,
 }
 
 impl PreparedCapabilityCandidate {
@@ -165,12 +179,25 @@ impl CapabilityCoordinator {
                 },
             );
         }
+        let mut server_ids = std::collections::BTreeSet::new();
+        for server in &config.mcp_servers {
+            if server.server_id.as_str().is_empty() || !server_ids.insert(server.server_id.clone())
+            {
+                return Err(CapabilityPreparationError::Mcp(
+                    "MCP server ids must be non-empty and unique".to_owned(),
+                ));
+            }
+        }
+        let mut mcp_servers = config.mcp_servers;
+        mcp_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+        let python_store = PythonToolStore::new(environment_store.root().join("m7-tools"))
+            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
         let initial_snapshot = Arc::new(CapabilitySnapshot::new(
             config.conversation_id.clone(),
             config.workspace.root().to_path_buf(),
             CapabilityRevision::default(),
-            config.tool_registry.clone(),
+            config.base_tool_registry.clone(),
             initial_skills,
             None,
             None,
@@ -180,7 +207,11 @@ impl CapabilityCoordinator {
             inner: Arc::new(CoordinatorInner {
                 conversation_id: config.conversation_id,
                 workspace: config.workspace,
-                tool_registry: config.tool_registry,
+                base_tool_registry: config.base_tool_registry,
+                mcp_servers,
+                mcp_runtimes: tokio::sync::Mutex::new(BTreeMap::new()),
+                mcp_invalidation: Arc::new(McpInvalidationState::new()),
+                python_store,
                 base_environment: config.base_environment,
                 environment_store,
                 state: Mutex::new(CoordinatorState {
@@ -229,6 +260,7 @@ impl CapabilityCoordinator {
     ///
     /// Panics only if the capability state lock is poisoned, which would
     /// mean a previous operation panicked while holding the lock.
+    #[allow(clippy::too_many_lines)]
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
@@ -261,12 +293,98 @@ impl CapabilityCoordinator {
         let skills = Arc::new(SkillSnapshot::new(
             packages.into_iter().map(Arc::new).collect(),
         ));
+        let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
+            .discover()
+            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+        let mut python_tools = Vec::new();
+        for package in python_packages {
+            let published = self
+                .inner
+                .python_store
+                .publish(&package)
+                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+            let environment = self
+                .inner
+                .python_store
+                .ensure_environment(&published)
+                .await
+                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+            let executor = Arc::new(
+                PythonToolExecutor::new(&self.inner.python_store, published, environment)
+                    .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?,
+            );
+            python_tools.push((
+                crate::tools::types::ToolDefinition {
+                    id: crate::runtime::identity::ToolId::new(
+                        crate::tools::python::python_tool_id(&package.name),
+                    ),
+                    name: package.name,
+                    description: package.description,
+                    input_schema: package.input_schema,
+                    execution_policy: package.policy.execution,
+                    concurrency_policy: package.policy.concurrency,
+                    replay_policy: crate::tools::types::ToolReplayPolicy::Never,
+                    origin: crate::tools::types::ToolOrigin::Python {
+                        tool_version_id: package.tool_version_id,
+                    },
+                },
+                executor as Arc<dyn crate::tools::executor::ToolExecutor>,
+            ));
+        }
+        let mut mcp_tools = Vec::new();
+        let mut mcp_epochs = BTreeMap::new();
+        for server in &self.inner.mcp_servers {
+            let mut runtimes = self.inner.mcp_runtimes.lock().await;
+            let runtime = if let Some(runtime) = runtimes.get(&server.server_id) {
+                runtime.clone()
+            } else {
+                let runtime = McpServerRuntime::connect(
+                    server,
+                    &self.inner.workspace,
+                    self.inner.mcp_invalidation.clone(),
+                )
+                .await
+                .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+                runtimes.insert(server.server_id.clone(), runtime.clone());
+                runtime
+            };
+            drop(runtimes);
+            // The epoch snapshot is taken under the shared invalidation
+            // guard; the pagination itself never holds it.
+            let epoch_before = self.inner.mcp_invalidation.epoch(&server.server_id);
+            let tools = runtime
+                .list_tools()
+                .await
+                .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
+            let epoch_after = self.inner.mcp_invalidation.epoch(&server.server_id);
+            if epoch_before != epoch_after {
+                return Err(CapabilityPreparationError::Mcp(
+                    "MCP tool catalog changed during discovery".to_owned(),
+                ));
+            }
+            mcp_epochs.insert(server.server_id.clone(), epoch_after);
+            mcp_tools.extend(crate::tools::mcp::definitions(
+                &server.server_id,
+                server.policy,
+                &runtime,
+                tools,
+            ));
+        }
+        mcp_tools.extend(python_tools);
+        let candidate_registry = Arc::new(
+            self.inner
+                .base_tool_registry
+                .compose(mcp_tools)
+                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
+        );
         Ok(PreparedCapabilityCandidate {
             base_revision,
             skills,
             python,
             node,
             effective_environment,
+            candidate_registry,
+            mcp_epochs,
         })
     }
 
@@ -278,6 +396,28 @@ impl CapabilityCoordinator {
     /// the swap. A candidate prepared from an obsolete base revision is
     /// rejected as stale; an identical candidate is a no-op that returns
     /// the current snapshot without fabricating a new revision.
+    ///
+    /// # MCP invalidation linearization
+    ///
+    /// The final epoch validation and the snapshot swap happen under the
+    /// shared MCP invalidation guard (the same guard a `tools/list_changed`
+    /// notification holds when advancing its epoch). The synchronization
+    /// order is therefore:
+    ///
+    /// ```text
+    /// notification wins  → epoch advanced before the commit's validation
+    ///                      → candidate is stale → active snapshot unchanged
+    /// commit wins        → epoch validated and snapshot swapped first
+    ///                      → the notification belongs to a future refresh
+    ///                      and can never retroactively invalidate the
+    ///                      committed snapshot
+    /// ```
+    ///
+    /// # Lock ordering
+    ///
+    /// The capability state lock is always acquired before the MCP
+    /// invalidation guard; the notification path acquires only the
+    /// invalidation guard, so no cycle exists.
     ///
     /// # Errors
     ///
@@ -319,6 +459,17 @@ impl CapabilityCoordinator {
         if state.active_attempts > 0 {
             return Err(CapabilityCommitError::Busy);
         }
+        // The MCP invalidation guard: final epoch validation and the
+        // snapshot swap are one atomic step against notification epoch
+        // mutation. Lock order: capability state lock -> invalidation guard.
+        let invalidation = self.inner.mcp_invalidation.lock();
+        for (server_id, candidate_epoch) in &candidate.mcp_epochs {
+            if invalidation.epoch(server_id) != *candidate_epoch {
+                return Err(CapabilityCommitError::StaleMcpCandidate {
+                    server_id: server_id.clone(),
+                });
+            }
+        }
         if candidate_is_noop(&candidate, &state.snapshot) {
             return Ok(state.snapshot.clone());
         }
@@ -327,7 +478,7 @@ impl CapabilityCoordinator {
             self.inner.conversation_id.clone(),
             self.inner.workspace.root().to_path_buf(),
             revision,
-            self.inner.tool_registry.clone(),
+            candidate.candidate_registry,
             candidate.skills,
             candidate.python,
             candidate.node,
@@ -335,6 +486,7 @@ impl CapabilityCoordinator {
         ));
         state.revision = revision;
         state.snapshot = snapshot.clone();
+        drop(invalidation);
         self.inner.condvar.notify_all();
         Ok(snapshot)
     }
@@ -387,6 +539,13 @@ impl CapabilityCoordinator {
     #[cfg(test)]
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
+    }
+
+    /// The shared MCP invalidation state (test observability). Only
+    /// available under `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn mcp_invalidation(&self) -> Arc<McpInvalidationState> {
+        self.inner.mcp_invalidation.clone()
     }
 }
 
@@ -470,6 +629,7 @@ fn candidate_is_noop(
     current: &CapabilitySnapshot,
 ) -> bool {
     candidate.skills.bindings() == current.skills().bindings()
+        && candidate.candidate_registry.definitions() == current.tool_registry().definitions()
         && candidate.python.as_ref().map(|env| env.digest.clone())
             == current.python_environment().map(|env| env.digest.clone())
         && candidate.node.as_ref().map(|env| env.digest.clone())
@@ -611,7 +771,8 @@ body
         let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace,
-            tool_registry: Arc::new(ToolRegistry::new()),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: Vec::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
         })
@@ -726,5 +887,368 @@ body
             coordinator.commit(candidate).expect("commit").revision(),
             CapabilityRevision::new(1)
         );
+    }
+}
+
+/// Coordinator-level MCP invalidation-vs-commit linearization regressions
+/// (Issue #10). These drive the exact section-1 interleavings through
+/// `CapabilityCoordinator` against the official-rmcp local fixture server,
+/// with deterministic synchronization hooks — never sleeps.
+///
+/// The fixture server runs as a self-spawned stdio process (the test binary
+/// re-executes itself in fixture mode when `RUSTX_M7_MCP_FIXTURE` is set),
+/// the same pattern the `m7_mcp` integration tests use.
+#[cfg(all(test, feature = "mcp-fixture"))]
+mod mcp_race_tests {
+    use std::sync::Arc;
+
+    use super::test_sync::CommitBoundaryHook;
+    use super::{CapabilityCommitError, CapabilityCoordinator, CapabilityCoordinatorConfig};
+    use crate::runtime::identity::{ConversationId, McpServerId};
+    use crate::tools::environment::ToolEnvironment;
+    use crate::tools::executor::ToolRegistry;
+    use crate::tools::mcp::fixture::{FixtureServer, fixture_spawn_args, serve_if_fixture_mode};
+    use crate::tools::mcp::{McpInvalidationState, McpTransportConfig};
+    use crate::tools::workspace::Workspace;
+
+    fn coordinator_with_fixture(
+        dir: &tempfile::TempDir,
+        server_id: &str,
+        test_name: &str,
+    ) -> (CapabilityCoordinator, McpServerId) {
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let server_id = McpServerId::new(server_id);
+        let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("mcp-race"),
+            workspace,
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: vec![crate::tools::mcp::McpServerConfig {
+                server_id: server_id.clone(),
+                transport: McpTransportConfig::Stdio {
+                    program: std::env::current_exe()
+                        .expect("test executable")
+                        .display()
+                        .to_string(),
+                    args: fixture_spawn_args(test_name),
+                    cwd: None,
+                    environment: std::collections::BTreeMap::from([(
+                        crate::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                        "1".to_owned(),
+                    )]),
+                },
+                policy: crate::tools::types::ToolInvocationPolicy::default(),
+            }],
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: dir.path().join("skill-env"),
+        })
+        .expect("coordinator");
+        (coordinator, server_id)
+    }
+
+    /// The invalidation "notification" hook: the exact mutation the
+    /// `tools/list_changed` notification performs, under the shared guard.
+    fn advance_notification(coordinator: &CapabilityCoordinator, server_id: &McpServerId) {
+        coordinator.mcp_invalidation().lock().advance(server_id);
+    }
+
+    /// Notification wins first: the commit is parked inside its critical
+    /// section (the deciding quiescence observation is next), the
+    /// notification advances the shared epoch, and the released commit must
+    /// observe the stale epoch — the prepared candidate cannot commit and
+    /// the active snapshot is unchanged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_notification_wins_prepared_candidate_is_stale_and_active_snapshot_unchanged() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::mcp_notification_wins_prepared_candidate_is_stale_and_active_snapshot_unchanged",
+        );
+        let hook = Arc::new(CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(hook.clone());
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare with the fixture catalog");
+
+        let coordinator_for_task = coordinator.clone();
+        let commit_task = std::thread::spawn(move || coordinator_for_task.commit(candidate));
+        hook.wait_entered();
+        // The notification wins while the commit is parked before its
+        // deciding observations: the epoch mutation serializes against the
+        // commit's epoch validation through the shared guard.
+        advance_notification(&coordinator, &server_id);
+        hook.proceed();
+        let result = commit_task.join().expect("commit task");
+        assert!(
+            matches!(
+                &result,
+                Err(CapabilityCommitError::StaleMcpCandidate { server_id: id })
+                    if *id == server_id
+            ),
+            "the notification-winning interleaving must reject the candidate: {result:?}"
+        );
+        assert_eq!(
+            coordinator.current_snapshot().revision().get(),
+            0,
+            "the active snapshot is unchanged when the notification wins"
+        );
+        coordinator
+            .inner
+            .mcp_runtimes
+            .lock()
+            .await
+            .get(&server_id)
+            .expect("runtime")
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    /// Commit wins first: the candidate activates, a later notification
+    /// advances the epoch, the already-committed snapshot is never
+    /// retroactively invalidated (the old candidate is stale), and the next
+    /// refresh — prepared against the new epoch — commits normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_commit_wins_later_notification_belongs_to_the_next_refresh() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::mcp_commit_wins_later_notification_belongs_to_the_next_refresh",
+        );
+        let first = coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare with the fixture catalog");
+        let snapshot = coordinator
+            .commit(first)
+            .expect("the commit wins with no active lease and a stable epoch");
+        assert_eq!(snapshot.revision().get(), 1);
+
+        // A candidate prepared before the notification, while the commit
+        // already won.
+        let pre_notification = coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare before the notification");
+
+        // The notification arrives after the commit: it advances the epoch
+        // and can never touch the committed snapshot.
+        advance_notification(&coordinator, &server_id);
+        assert!(
+            matches!(
+                coordinator.commit(pre_notification),
+                Err(CapabilityCommitError::StaleMcpCandidate { .. })
+            ),
+            "a candidate prepared before the notification is stale after it"
+        );
+
+        // The next refresh observes the advanced epoch — its candidate
+        // carries the post-notification epoch — and commits (an unchanged
+        // rediscovery is the M6 no-op that returns the active snapshot).
+        let refresh = coordinator
+            .prepare_candidate()
+            .await
+            .expect("refresh prepare");
+        assert_eq!(
+            refresh.mcp_epochs.get(&server_id),
+            Some(&1),
+            "the next refresh must observe the advanced epoch"
+        );
+        let refreshed = coordinator
+            .commit(refresh)
+            .expect("the refreshed candidate commits");
+        assert_eq!(
+            refreshed.revision().get(),
+            1,
+            "an unchanged rediscovery is a no-op, never a new revision"
+        );
+        coordinator
+            .inner
+            .mcp_runtimes
+            .lock()
+            .await
+            .get(&server_id)
+            .expect("runtime")
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    /// A real `tools/list_changed` notification from the fixture server
+    /// advances the shared epoch, and a candidate prepared before it can no
+    /// longer commit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_real_list_changed_notification_rejects_the_prepared_candidate() {
+        struct NoProgress;
+        impl crate::tools::executor::ProgressReporter for NoProgress {
+            fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+        }
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::mcp_real_list_changed_notification_rejects_the_prepared_candidate",
+        );
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare with the fixture catalog");
+        let runtime = coordinator
+            .inner
+            .mcp_runtimes
+            .lock()
+            .await
+            .get(&server_id)
+            .expect("runtime")
+            .clone();
+        drop(coordinator.inner.mcp_runtimes.lock().await);
+        let initial_epoch = runtime.change_epoch();
+        assert_eq!(initial_epoch, 0);
+
+        // Drive the fixture's mutate tool: it emits a real
+        // tools/list_changed notification.
+        let tools = runtime.list_tools().await.expect("tools/list");
+        let definitions = crate::tools::mcp::definitions(
+            &server_id,
+            crate::tools::types::ToolInvocationPolicy::default(),
+            &runtime,
+            tools,
+        );
+        let mutate_index = definitions
+            .iter()
+            .position(|(definition, _)| definition.name == "mutate")
+            .expect("mutate definition");
+        let executor = definitions[mutate_index].1.clone();
+        let artifacts_dir = dir.path().join("mcp-race-artifacts");
+        let runtime_bundle = crate::tools::runtime::ConversationToolRuntime::new(
+            ConversationId::new("mcp-race"),
+            dir.path().join("workspace"),
+            &artifacts_dir,
+        )
+        .expect("tool runtime");
+        let progress = NoProgress;
+        let result = crate::tools::executor::ToolExecutor::execute(
+            executor.as_ref(),
+            crate::tools::types::ToolInvocation {
+                call_id: crate::runtime::identity::ToolCallId::new("mutate"),
+                tool_id: definitions[mutate_index].0.id.clone(),
+                tool_name: "mutate".to_owned(),
+                mode: crate::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({}),
+            },
+            crate::tools::executor::ToolExecutionContext {
+                conversation_id: runtime_bundle.conversation_id(),
+                execution_id: None,
+                cancellation: crate::runtime::CancellationSignal::new(),
+                workspace: runtime_bundle.workspace(),
+                progress: &progress,
+                artifacts: runtime_bundle.artifacts(),
+                environment: runtime_bundle.environment(),
+            },
+        )
+        .await;
+        assert!(matches!(
+            result.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        ));
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            runtime.wait_for_change(initial_epoch),
+        )
+        .await
+        .expect("the real notification must advance the shared epoch");
+
+        // The candidate prepared before the notification is stale.
+        assert!(matches!(
+            coordinator.commit(candidate),
+            Err(CapabilityCommitError::StaleMcpCandidate { .. })
+        ));
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    /// The active-attempt lease contract holds with MCP servers configured:
+    /// a commit while the lease is active is Busy, and the in-flight attempt
+    /// keeps using its old registry after a later commit activates a new
+    /// revision.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mcp_active_attempt_lease_keeps_commit_busy_and_pins_the_old_registry() {
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, server_id) = coordinator_with_fixture(
+            &dir,
+            "fixture",
+            "capabilities::coordinator::mcp_race_tests::mcp_active_attempt_lease_keeps_commit_busy_and_pins_the_old_registry",
+        );
+        let lease = coordinator.acquire_attempt_lease();
+        let old_registry = lease.snapshot().tool_registry().clone();
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare with the fixture catalog");
+        assert_eq!(
+            coordinator.commit(candidate),
+            Err(CapabilityCommitError::Busy),
+            "an active attempt lease keeps the commit busy"
+        );
+        drop(lease);
+        let candidate = coordinator
+            .prepare_candidate()
+            .await
+            .expect("re-prepare after release");
+        let new_snapshot = coordinator.commit(candidate).expect("commit");
+        assert_eq!(new_snapshot.revision().get(), 1);
+        // The in-flight attempt that held the old lease continues using its
+        // old registry; the commit never mutated it in place.
+        assert_ne!(
+            Arc::as_ptr(&old_registry),
+            Arc::as_ptr(new_snapshot.tool_registry()),
+            "the committed snapshot owns a fresh immutable registry"
+        );
+        assert!(old_registry.definitions().is_empty());
+        assert!(!new_snapshot.tool_registry().definitions().is_empty());
+        coordinator
+            .inner
+            .mcp_runtimes
+            .lock()
+            .await
+            .get(&server_id)
+            .expect("runtime")
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
+    }
+
+    /// The invalidation state itself is constructible and its epoch
+    /// mutation is monotonic under the guard.
+    #[test]
+    fn mcp_invalidation_epochs_are_monotonic_under_the_shared_guard() {
+        let state = Arc::new(McpInvalidationState::new());
+        let server = McpServerId::new("s");
+        assert_eq!(state.epoch(&server), 0);
+        {
+            let mut guard = state.lock();
+            guard.advance(&server);
+            guard.advance(&server);
+            assert_eq!(guard.epoch(&server), 2);
+        }
+        assert_eq!(state.epoch(&server), 2);
     }
 }

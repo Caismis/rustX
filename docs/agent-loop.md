@@ -46,7 +46,8 @@ canonical boundary in `src/tools/executor.rs`:
 
 - The validating [`ToolRegistry`] pairs one canonical `ToolDefinition` with
   one `Arc<dyn ToolExecutor>`; an executor object does not own its
-  definition, so one implementation may serve many registrations.
+  definition, so one implementation may serve many registrations. Native,
+  MCP, and custom Python executors all enter through this same boundary.
 - A `ToolExecutor` executes an already-resolved, already-validated
   `ToolInvocation` (call id, tool id, model-facing name, resolved
   foreground/background mode, and the stripped business arguments) inside a
@@ -71,6 +72,12 @@ native foreground work observes the attempt's `CancellationSignal` in its
 context and physically settles (for example Bash terminates its owned
 process group); the loop never drops a pending tool future and leaves
 external work running.
+
+The loop does not branch on `ToolOrigin`: MCP transport ownership,
+Python-version publication, and native process details terminate behind the
+executor/subsystem boundary. Background dispatch clones the exact executor
+before ownership transfer, so later capability revisions cannot redirect an
+old execution to a current registry.
 
 ## 4. Continuation
 
@@ -266,6 +273,12 @@ consumed execution is dropped after settlement (or when construction fails).
 The lease owner is structurally bound to the `ConversationId` and canonical
 Workspace root of the corresponding `ConversationToolRuntime`; a mismatch is
 rejected before any model request or tool execution begins.
+
+For M7 the pinned snapshot also owns the exact composed registry. Its MCP
+executors retain their `McpServerRuntime`; its Python executors retain their
+published ToolVersion source and PythonToolEnvironment. `tools/list_changed`
+only invalidates future preparation and never changes the tools visible to an
+active attempt.
 
 ## 9. Conversation inbound mailbox (Issue #22)
 

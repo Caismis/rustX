@@ -410,15 +410,14 @@ fn translate_agent_content(
                 let is_boundary = is_last_agent && Some(position) == last_reasoning_position;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
-                        if is_boundary {
-                            if let Some(continuation) = continuation {
-                                if continuation.opaque != state.opaque {
-                                    return Err(invalid_request(
-                                        "request continuation state contradicts the provider \
-                                         state of the boundary reasoning block",
-                                    ));
-                                }
-                            }
+                        if is_boundary
+                            && let Some(continuation) = continuation
+                            && continuation.opaque != state.opaque
+                        {
+                            return Err(invalid_request(
+                                "request continuation state contradicts the provider \
+                                 state of the boundary reasoning block",
+                            ));
                         }
                         state
                     }

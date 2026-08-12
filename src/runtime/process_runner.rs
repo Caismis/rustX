@@ -69,6 +69,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::runtime::cancellation::CancellationSignal;
 #[cfg(unix)]
+use crate::runtime::supervised_unit::{EmergencyContainment, emergency_contain_group};
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
@@ -286,7 +288,13 @@ pub(crate) enum SupervisorEvent {
     /// group.
     OwnershipEstablished,
     /// Setup ended without ever spawning an owned execution domain.
-    NoOwnership,
+    ///
+    /// This frame is proof-carrying: a supervisor may emit it only after it
+    /// has proven that every pre-anchor child it created is gone and
+    /// reaped. `reaped_child` names that direct child pid when one existed;
+    /// `None` means no pre-anchor child was ever created (the setup failed
+    /// before the spawn), which proves the same thing vacuously.
+    NoOwnership { reaped_child: Option<i32> },
     /// The shell exited; `status` is its canonical exit status.
     ShellExited { status: ExitStatus },
     /// The supervisor's wait loop observed `ECHILD`: no owned child
@@ -584,30 +592,17 @@ async fn wait_for_terminal_release(_control: Option<&RunnerTestControl>) {
     std::future::pending::<()>().await;
 }
 
-/// The `TERMINATE` control-message kind (mirrors
-/// `bash_supervisor::MSG_TERMINATE`).
+// The frame protocol constants come from the shared supervisor-unit core
+// (`crate::runtime::supervised_unit`), so the runner and both supervisor
+// units share one wire protocol.
 #[cfg(unix)]
-const MSG_TERMINATE: u8 = 0x10;
+pub(crate) use crate::runtime::supervised_unit::MSG_ALL_CHILDREN_REAPED;
 #[cfg(unix)]
-const MSG_START: u8 = 0x11;
-#[cfg(unix)]
-const MSG_TERMINAL_ACK: u8 = 0x12;
-
-/// The supervisor event kinds (mirror `bash_supervisor`).
-#[cfg(unix)]
-const MSG_SHELL_EXITED: u8 = 0x02;
-#[cfg(unix)]
-pub(crate) const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
-#[cfg(unix)]
-const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
-#[cfg(unix)]
-const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
-#[cfg(unix)]
-const MSG_ANCHOR_READY: u8 = 0x06;
-#[cfg(unix)]
-const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
-#[cfg(unix)]
-const MSG_NO_OWNERSHIP: u8 = 0x08;
+pub(crate) use crate::runtime::supervised_unit::{
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,
+    MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
+    MSG_TERMINATE,
+};
 
 /// The test-only control seams of one owned invocation.
 ///
@@ -753,12 +748,12 @@ impl SupervisedCommandRunner {
         #[cfg(not(test))]
         let _ = control;
         #[cfg(test)]
-        if let Some(control) = &control {
-            if control.fail_subreaper_init {
-                return Err(RunnerSpawnError::Subreaper(
-                    "injected child-subreaper initialization failure".to_owned(),
-                ));
-            }
+        if let Some(control) = &control
+            && control.fail_subreaper_init
+        {
+            return Err(RunnerSpawnError::Subreaper(
+                "injected child-subreaper initialization failure".to_owned(),
+            ));
         }
         if let Err(error) = crate::runtime::process_supervision::ensure_child_subreaper() {
             return Err(RunnerSpawnError::Subreaper(error));
@@ -813,10 +808,10 @@ impl SupervisedCommandRunner {
         supervisor.stdout(Stdio::piped());
         supervisor.stderr(Stdio::piped());
         #[cfg(test)]
-        if let Some(control) = &control {
-            if control.fail_supervisor_spawn {
-                return Err(RunnerSpawnError::InjectedSupervisorSpawn);
-            }
+        if let Some(control) = &control
+            && control.fail_supervisor_spawn
+        {
+            return Err(RunnerSpawnError::InjectedSupervisorSpawn);
         }
         let mut child = match supervisor.spawn() {
             Ok(child) => child,
@@ -928,7 +923,7 @@ impl SupervisedCommandRunner {
                             self.failure = Some("invalid Bash ownership commit transition".to_owned());
                         }
                     }
-                    Ok(Some(SupervisorEvent::NoOwnership)) => {
+                    Ok(Some(SupervisorEvent::NoOwnership { .. })) => {
                         if matches!(self.lifecycle, ProcessLifecycle::PreOwnership | ProcessLifecycle::OwnershipPossible { .. }) {
                             self.lifecycle = ProcessLifecycle::Terminal;
                         } else {
@@ -938,10 +933,12 @@ impl SupervisedCommandRunner {
                     Ok(Some(SupervisorEvent::ShellExited { status })) => {
                         self.exit_status = Some(status);
                         #[cfg(test)]
-                        if let Some(control) = self.control.as_ref() {
-                            if control.pause_at_shell_exit && self.settled.is_none() && !self.terminate_sent {
-                                control.lifecycle.pause_after_shell_exit().await;
-                            }
+                        if let Some(control) = self.control.as_ref()
+                            && control.pause_at_shell_exit
+                            && self.settled.is_none()
+                            && !self.terminate_sent
+                        {
+                            control.lifecycle.pause_after_shell_exit().await;
                         }
                     }
                     Ok(Some(SupervisorEvent::AllChildrenReaped)) => {
@@ -1151,120 +1148,6 @@ impl SupervisedCommandRunner {
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The explicit outcome of catastrophic emergency containment.
-///
-/// `Ok(())` alone would be ambiguous (contained-and-terminal vs. no anchor
-/// vs. normal path already completed), so the result distinguishes the
-/// terminal proof from the unavailable-anchor state:
-///
-/// - [`EmergencyContainment::TerminalProven`]: the anchor was retained,
-///   the fallback signal was issued while retained, the group-scoped wait
-///   reached `ECHILD`, and the anchor was released — the owned invocation
-///   group is terminal.
-/// - [`EmergencyContainment::AnchorUnavailable`]: the anchor is not a
-///   waitable child of rustX without a prior authoritative terminal event.
-///   This is **not** a terminal proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmergencyContainment {
-    /// The anchor was retained, the fallback signal was issued while that
-    /// identity was retained, the group-scoped wait reached `ECHILD`, and
-    /// the anchor was then released.
-    TerminalProven,
-    /// The invocation anchor is unavailable without a prior authoritative
-    /// terminal proof. Never a terminal result.
-    AnchorUnavailable,
-}
-
-/// Catastrophic fallback after the outer supervisor has been reaped.
-///
-/// rustX is a subreaper, so the dead outer's invocation descendants are now
-/// rustX children. The inner leader is retained with `WNOWAIT` before its
-/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
-/// used by the normal outer path. Only after the group-scoped child wait
-/// reaches `ECHILD` is the anchor identity released and terminality proven.
-///
-/// The anchor is matched only by pid; the invocation group only by its
-/// retained pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists
-/// here, so unrelated adopted children are never consumed.
-#[cfg(target_os = "linux")]
-fn emergency_contain_group(
-    pgid: i32,
-    anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    use nix::errno::Errno;
-    use nix::sys::signal::{Signal, killpg};
-    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
-    use nix::unistd::Pid;
-    #[cfg(not(test))]
-    let _ = anchor_unavailable;
-
-    #[cfg(test)]
-    if anchor_unavailable {
-        // The regression seam: the anchor reads as not waitable without a
-        // prior authoritative terminal event. The semantic state is what
-        // matters — never an actual pid reuse.
-        return Ok(EmergencyContainment::AnchorUnavailable);
-    }
-    let anchor = Pid::from_raw(pgid);
-    loop {
-        // Anchor retention: observe the adopted inner leader's terminal
-        // state without consuming its identity (`WNOWAIT`). The numeric
-        // group id stays provably allocated while this returns Exited or
-        // Signaled.
-        match waitid(
-            Id::Pid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => break,
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => {
-                // The anchor is not a waitable child of rustX: the owned
-                // group may still exist. ECHILD from the anchor wait is
-                // never a terminal process-group proof, and the cached
-                // numeric pgid is never signaled after anchor loss.
-                return Ok(EmergencyContainment::AnchorUnavailable);
-            }
-            Err(error) => {
-                return Err(format!("cannot retain the lost invocation anchor: {error}"));
-            }
-        }
-    }
-
-    match killpg(anchor, Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => {}
-        Err(error) => {
-            return Err(format!("cannot contain the lost invocation group: {error}"));
-        }
-    }
-    loop {
-        // The group-scoped terminal proof: no adopted child of rustX
-        // remains in the invocation group. The anchor itself is released
-        // (reaped) by this same wait, strictly after the fallback signal.
-        match waitid(
-            Id::PGid(anchor),
-            WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
-        ) {
-            Ok(WaitStatus::StillAlive) => std::thread::sleep(Duration::from_millis(20)),
-            Ok(_) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return Ok(EmergencyContainment::TerminalProven),
-            Err(error) => {
-                return Err(format!(
-                    "cannot prove the lost invocation group terminal: {error}"
-                ));
-            }
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn emergency_contain_group(
-    _pgid: i32,
-    _anchor_unavailable: bool,
-) -> Result<EmergencyContainment, String> {
-    Err("fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
-}
-
 /// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
 /// (integration tests), otherwise the `bash-supervisor` sibling of the
 /// current executable (production), otherwise the binary-directory sibling
@@ -1289,19 +1172,42 @@ pub(crate) fn supervisor_binary() -> PathBuf {
         .join("bash-supervisor")
 }
 
+/// Locates the long-lived interactive supervisor beside the current binary.
+#[cfg(unix)]
+pub(crate) fn interactive_supervisor_binary() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_interactive-supervisor") {
+        return PathBuf::from(path);
+    }
+    let exe = std::env::current_exe().expect("current executable");
+    let sibling = exe
+        .parent()
+        .expect("current executable directory")
+        .join("interactive-supervisor");
+    if sibling.exists() {
+        return sibling;
+    }
+    exe.parent()
+        .expect("current executable directory")
+        .parent()
+        .expect("binary directory")
+        .join("interactive-supervisor")
+}
+
 /// Sends the one termination request to the invocation supervisor.
 ///
 /// A write failure means the supervisor is already gone, which implies its
 /// terminal child-set events are already in flight or were received; the
 /// supervision loop's read side remains authoritative.
 #[cfg(unix)]
-async fn send_terminate(stream: &mut tokio::net::UnixStream) {
+pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
     let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
     let _ = stream.write_all(&frame).await;
 }
 
 #[cfg(unix)]
-async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
+pub(crate) async fn send_start<W: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut W,
+) -> Result<(), String> {
     let frame = [1u8, 0, 0, 0, MSG_START];
     stream
         .write_all(&frame)
@@ -1309,8 +1215,22 @@ async fn send_start(stream: &mut tokio::net::UnixStream) -> Result<(), String> {
         .map_err(|error| format!("cannot acknowledge the ownership gate: {error}"))
 }
 
+/// Opens the runtime->outer startup gate: the owner accepted and retained
+/// the outer control connection, so the outer may create the unit
+/// hierarchy. Until this frame is written the outer owns nothing.
 #[cfg(unix)]
-async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
+pub(crate) async fn send_owner_attached<W: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut W,
+) -> Result<(), String> {
+    let frame = [1u8, 0, 0, 0, MSG_OWNER_ATTACHED];
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| format!("cannot open the interactive startup gate: {error}"))
+}
+
+#[cfg(unix)]
+pub(crate) async fn send_terminal_ack<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
     let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
     let _ = stream.write_all(&frame).await;
 }
@@ -1320,8 +1240,8 @@ async fn send_terminal_ack(stream: &mut tokio::net::UnixStream) {
 ///
 /// `Ok(None)` means the control channel reached EOF: the supervisor exited.
 #[cfg(unix)]
-pub(crate) async fn read_supervisor_event(
-    stream: &mut tokio::net::UnixStream,
+pub(crate) async fn read_supervisor_event<R: tokio::io::AsyncRead + Unpin>(
+    stream: &mut R,
 ) -> Result<Option<SupervisorEvent>, String> {
     let mut header = [0u8; 4];
     match stream.read_exact(&mut header).await {
@@ -1352,7 +1272,39 @@ pub(crate) async fn read_supervisor_event(
             }))
         }
         MSG_OWNERSHIP_ESTABLISHED => Ok(Some(SupervisorEvent::OwnershipEstablished)),
-        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership)),
+        MSG_NO_OWNERSHIP => {
+            // `NoOwnership` is terminal evidence, so its grammar is strict
+            // and fails closed:
+            //
+            //   payload length 0             -> no pre-anchor child was
+            //                                   ever created;
+            //   payload length 4, pid > 0    -> that direct child pid was
+            //                                   provably reaped;
+            //   anything else                -> protocol error.
+            //
+            // A malformed length or a non-positive pid is never silently
+            // mapped to `None`: that would manufacture a vacuous terminal
+            // proof ("no child existed") out of an unparseable frame.
+            match payload.len() {
+                0 => Ok(Some(SupervisorEvent::NoOwnership { reaped_child: None })),
+                4 => {
+                    let pid = i32::from_le_bytes(payload.try_into().expect("four bytes"));
+                    if pid > 0 {
+                        Ok(Some(SupervisorEvent::NoOwnership {
+                            reaped_child: Some(pid),
+                        }))
+                    } else {
+                        Err(format!(
+                            "the supervisor no-ownership frame carries the non-positive reaped \
+                             child pid {pid}"
+                        ))
+                    }
+                }
+                length => Err(format!(
+                    "malformed supervisor no-ownership frame: {length} payload bytes"
+                )),
+            }
+        }
         MSG_SHELL_EXITED => {
             // { exit_code: i32 LE, signaled: u8, signal: i32 LE }
             if payload.len() != 9 {
@@ -1618,5 +1570,97 @@ mod tests {
         assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
         assert_eq!(result.stdout, b"runner-result");
         assert!(result.stderr.is_empty());
+    }
+
+    /// The strict, fail-closed `NoOwnership` payload grammar.
+    ///
+    /// `NoOwnership` is terminal evidence — rustX publishes physical
+    /// settlement on it — so exactly two payload shapes are valid: an empty
+    /// payload (no pre-anchor child was ever created) and a four-byte
+    /// positive pid (that direct child was provably reaped). Every other
+    /// shape is a protocol error and must never be downgraded to the
+    /// vacuous `None` proof.
+    #[cfg(unix)]
+    mod strict_no_ownership {
+        use tokio::io::AsyncWriteExt;
+
+        use crate::runtime::process_runner::{
+            MSG_NO_OWNERSHIP, SupervisorEvent, read_supervisor_event,
+        };
+
+        /// Parses one hand-written `MSG_NO_OWNERSHIP` frame with the given
+        /// payload: `[u32 LE length][kind][payload]`.
+        async fn parse(payload: &[u8]) -> Result<Option<SupervisorEvent>, String> {
+            let (mut writer, mut reader) = tokio::net::UnixStream::pair().expect("socket pair");
+            let length = u32::try_from(1 + payload.len()).expect("frame length fits u32");
+            let mut frame = length.to_le_bytes().to_vec();
+            frame.push(MSG_NO_OWNERSHIP);
+            frame.extend_from_slice(payload);
+            writer.write_all(&frame).await.expect("no-ownership frame");
+            drop(writer);
+            read_supervisor_event(&mut reader).await
+        }
+
+        /// The M5 Bash contract: an empty payload is the vacuous proof that
+        /// no pre-anchor child was ever created.
+        #[tokio::test]
+        async fn empty_payload_is_accepted_as_no_child_created() {
+            assert_eq!(
+                parse(&[]).await,
+                Ok(Some(SupervisorEvent::NoOwnership { reaped_child: None }))
+            );
+        }
+
+        /// A four-byte positive pid is the proof-carrying form.
+        #[tokio::test]
+        async fn positive_four_byte_pid_is_accepted_as_the_reaped_child() {
+            assert_eq!(
+                parse(&4321i32.to_le_bytes()).await,
+                Ok(Some(SupervisorEvent::NoOwnership {
+                    reaped_child: Some(4321)
+                }))
+            );
+        }
+
+        /// A truncated pid is a protocol error, never `None`: a short
+        /// payload must not be read as "no child ever existed".
+        #[tokio::test]
+        async fn truncated_pid_payloads_are_rejected() {
+            for length in 1..4usize {
+                let payload = vec![1u8; length];
+                let parsed = parse(&payload).await;
+                assert!(
+                    parsed.is_err(),
+                    "a {length}-byte no-ownership payload must be a protocol error: {parsed:?}"
+                );
+            }
+        }
+
+        /// A payload longer than the four-byte pid is a protocol error: the
+        /// grammar admits exactly length 0 and length 4.
+        #[tokio::test]
+        async fn overlong_payloads_are_rejected() {
+            for length in 5..8usize {
+                let payload = vec![1u8; length];
+                let parsed = parse(&payload).await;
+                assert!(
+                    parsed.is_err(),
+                    "a {length}-byte no-ownership payload must be a protocol error: {parsed:?}"
+                );
+            }
+        }
+
+        /// A four-byte payload whose pid is not positive is a protocol
+        /// error: no pid was proven reaped, so no terminal evidence exists.
+        #[tokio::test]
+        async fn zero_and_negative_pids_are_rejected() {
+            for pid in [0i32, -1, i32::MIN] {
+                let parsed = parse(&pid.to_le_bytes()).await;
+                assert!(
+                    parsed.is_err(),
+                    "the non-positive reaped pid {pid} must be a protocol error: {parsed:?}"
+                );
+            }
+        }
     }
 }

@@ -521,8 +521,8 @@ async fn background_progress_updates_the_latest_snapshot() {
         },
         ToolProgress {
             message: Some("linking".to_owned()),
-            completed: Some(2),
-            total: Some(3),
+            completed: Some(2.0),
+            total: Some(3.0),
         },
     ]);
     let registry = fixture.registry.clone();
@@ -546,8 +546,8 @@ async fn background_progress_updates_the_latest_snapshot() {
         snapshot.progress,
         Some(ToolProgress {
             message: Some("linking".to_owned()),
-            completed: Some(2),
-            total: Some(3),
+            completed: Some(2.0),
+            total: Some(3.0),
         }),
         "only the latest bounded progress snapshot is retained"
     );

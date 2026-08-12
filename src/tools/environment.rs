@@ -211,6 +211,28 @@ impl ToolEnvironment {
         combined
     }
 
+    /// Returns the authorized base environment without any runtime overlay.
+    ///
+    /// This is used when an executor owns a replacement runtime such as a
+    /// custom Python `ToolVersion` environment. It prevents an M6 Skill
+    /// overlay from leaking in front of that executor's immutable runtime.
+    #[must_use]
+    pub fn without_overlay(&self) -> Self {
+        Self {
+            authorized: self.authorized.clone(),
+            overlay: ToolEnvironmentOverlay::default(),
+        }
+    }
+
+    /// Replaces the runtime overlay while retaining only explicitly
+    /// authorized entries.
+    #[must_use]
+    pub fn with_replacement_overlay(&self, overlay: &ToolEnvironmentOverlay) -> Self {
+        let mut replacement = self.without_overlay();
+        replacement.overlay = overlay.clone();
+        replacement
+    }
+
     /// The complete deterministic child environment for a workspace-rooted
     /// subprocess: the runtime-approved basics, the Skill environment
     /// overlay, and the authorized entries.

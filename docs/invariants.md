@@ -186,8 +186,8 @@ hold attempt leases and never block a capability commit.
   Skill change yields a new Skill version and a new capability revision
   without changing environment identities when dependency inputs are
   unchanged.
-- Skill, tool, and MCP capability mutations (MCP remains future work) may
-  occur only while the conversation runtime is quiescent in the M6 sense;
+- Skill, native-tool, MCP, and Python capability mutations may occur only
+  while the conversation runtime is quiescent in the M6 sense;
   broader runtime-wide busy semantics (active tool calls, foreground or
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
@@ -214,6 +214,204 @@ identities are snapshotted, but lazy Skill source files
 content: M6 does not mount them through an immutable filesystem snapshot,
 and an external rewrite of `.agents/skills/...` after preparation is
 observed only at the next quiescent re-discovery.
+
+### M7 external tool invariants
+
+- One immutable `ToolRegistry` belongs to one `CapabilitySnapshot`. Candidate
+  preparation composes a new registry from the deterministic base/native
+  registry, sorted MCP catalogs, and sorted Python definitions; active
+  registries are never mutated in place. Global model-facing name collisions
+  reject the whole candidate.
+- `ToolOrigin` identifies provenance only. Execution ownership and batch
+  scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
+  all origins use the canonical Agent Loop, progress, cancellation, and
+  background paths.
+- MCP uses rmcp's MCP 2026-07-28 `Discover` lifecycle. A revision freezes
+  rustX's observed name, description, schema, policy, id, server identity,
+  and executor binding; it cannot byte-snapshot or make deterministic the
+  external server behavior behind that binding.
+- **MCP invalidation linearization.** `tools/list_changed` epoch mutation and
+  capability snapshot activation share exactly one synchronization boundary:
+  the mutex-protected MCP invalidation state. A notification increments the
+  epoch under that guard; preparation snapshots the epoch under it (never
+  across network discovery); commit performs the final epoch validation and
+  the snapshot swap under it. If the notification wins first, the prepared
+  candidate cannot commit (`StaleMcpCandidate`) and the active snapshot is
+  unchanged; if the commit wins first, the notification belongs to a future
+  refresh and can never retroactively invalidate the already-committed
+  snapshot. Lock ordering is explicit: the capability state lock is always
+  acquired before the MCP invalidation guard, and the notification path
+  acquires only the invalidation guard, so no cycle exists. Several
+  notifications may coalesce, and an unchanged rediscovery is `NoChange`.
+- Each MCP executor captures an `Arc<McpServerRuntime>`. Stdio runtime control
+  is separate from the MCP protocol streams and owns the server process group,
+  bounded diagnostics, TERM/grace/KILL shutdown, descendant reaping, and
+  direct supervisor settlement. HTTP uses explicit static headers only.
+- MCP cancellation is linearized against the response: a response that
+  commits first remains terminal; cancellation that commits first sends the
+  rmcp cancellation notification and returns `Cancelled` only after local
+  request settlement. A transport/control failure returns `Failed`. Remote
+  cancellation is advisory: rustX cannot prove an arbitrary server stopped
+  all physical side effects.
+- Python candidate preparation snapshots every package-owned byte before
+  commit, publishes the snapshot immutably, and binds the executor to that
+  `ToolVersionId`. Background calls never resolve source through the current
+  capability pointer and never execute mutable workspace source.
+- `ToolVersionId` and `PythonToolEnvironmentDigest` are distinct. Published
+  environments have an exact ready manifest and are never mutated or synced
+  in place; same-digest in-flight builds coalesce behind store-owned work
+  (one store-owned logical build owns a digest until terminal publication;
+  candidate callers only wait, dropping a waiter never releases ownership,
+  and owner failure always publishes a terminal error and removes the
+  in-flight entry). The environment is a dependency-isolation boundary, not
+  a security sandbox. Deterministic GC metadata exists; no collector or
+  retention task exists in M7.
+- **Python ToolVersion publication.** The published shape is
+  `tool-versions/<ToolVersionId>/source/` plus
+  `RUSTX_TOOL_VERSION.json`; the executor and every uv command use exactly
+  `.../source/` as their root. On reuse the published `source/` content
+  digest is recomputed and compared against the claimed identity — a marker
+  string alone never validates a ToolVersion — and a corrupt publication
+  fails preparation explicitly; a valid published ToolVersion is never
+  mutated.
+- **Environment identity input lock.** A published Python environment is
+  reusable only when its ready marker matches every deterministic input that
+  derives the identity: format domain, OS, architecture, digest, lock
+  digest, Python runtime identity, and uv identity. Each
+  `ToolVersion -> environment digest` binding is recorded deterministically
+  outside the environment's immutable dependency identity, so a reusable
+  environment never claims one ToolVersion as complete GC reference
+  metadata.
+- **Runtime selection pinning.** The interpreter whose identity enters the
+  environment digest is the exact executable passed to uv (`UV_PYTHON`), so
+  project-local interpreter selection or uv heuristics can never silently
+  choose another Python while the digest claims the probed identity.
+  Managed Python downloads stay disabled (`UV_NO_PYTHON_DOWNLOADS=1`,
+  `UV_PYTHON_DOWNLOADS=0`). Every M7 preparation command (runtime identity
+  probes, `uv lock --check`, `uv sync`, post-materialization validation) has
+  a finite deadline; a timeout is an explicit preparation failure that
+  leaves the active capability unchanged, and no retries are added.
+- **Canonical progress finite-value invariant.** Every origin's progress
+  passes through the shared normalization boundary (`bound_tool_progress`),
+  which drops non-finite `completed`/`total` values (`NaN`, `±inf`) so a
+  canonical serialization can never fail on them; finite fractional values
+  are preserved.
+- **M7 interactive MCP stdio supervision.** The interactive supervisor unit
+  is the M5 Bash supervisor shape applied to a long-lived server, composed
+  from the same shared structural ownership core
+  (`src/runtime/supervised_unit`): the inner calls `setsid()`, installs the
+  fixed-membership seccomp restriction (a `setsid`/`setpgid` escape attempt
+  fails with `EPERM`), ignores the group `TERM`, and issues
+  `TERM -> grace -> KILL` with `killpg` against its own process group
+  (provably allocated while signaling is legal); the kernel-mediated
+  terminal proof is the group-scoped wait (`waitid(Id::PGid)` returning
+  `ECHILD`) at the inner (normal) and at the outer (release gate) — never a
+  `/proc` membership scan and never a `killpg(..., 0)` probe. The inner
+  supervisor pid is the unit's structural ownership anchor with exactly one
+  reaping owner; the outer reports the authoritative terminal event only
+  after its gate reaches `ECHILD`, and only after it released the anchor.
+  When the inner terminates abnormally with possibly-live owned work, the
+  outer issues the one fallback containment `SIGKILL` while the anchor is
+  retained; when the outer itself is lost, rustX (already the child-subreaper
+  prerequisite, established before the supervisor unit spawns) runs the
+  shared adopted-anchor emergency containment. rustX's driver task owns
+  physical settlement from the moment the supervisor spawn succeeds — a
+  later handshake/control setup error can never strand a raw child — and
+  the direct supervisor child is reaped before physical settlement is
+  published.
+- **`AnchorReady` is the anchor commit point.** It is the exact
+  linearization point at which the inner supervisor's pid acquires the
+  meaning `inner pid == owned process-group id == structural ownership
+  anchor`. The inner connects its control socket *before* it runs `setsid`,
+  the subreaper/signal setup, the fixed-membership seccomp install, and the
+  anchor announcement, so a connected inner may still fail any of them.
+  Before the commit point the inner is only a direct pre-ownership child of
+  the outer: the outer owns and settles it **by pid** and must never run a
+  group-scoped wait against `inner_pid`, because
+  `waitid(Id::PGid(inner_pid))` can return `ECHILD` without reaping an
+  inner whose `setsid` failed — such an `ECHILD` is never a terminal proof
+  and can never produce `AllChildrenReaped`. A valid `AnchorReady` occurs
+  exactly once, carries a positive pgid, and equals the direct inner
+  child's pid; it is the only transition into the group-scoped ownership
+  core.
+- **A control frame that has been read is owned until it is processed or
+  explicitly rejected.** This holds for every supervisor control-stream
+  direction in both domains (M5 Bash and M7 interactive). Changing
+  lifecycle phase never discards already-read bytes: Unix stream reads do
+  not preserve the writer's frame boundaries, so gate recognition consumes
+  exactly the gate frame and every valid frame that followed it in the same
+  read stays owned by the next phase. One stream direction therefore has
+  exactly one logical buffered reader (`FrameReader`, fed and drained as
+  separate steps) across all its phases — for the interactive unit, rustX
+  -> outer across `await_owner_attached` -> the pre-inner drain ->
+  `attach_inner_control` -> `await_anchor_commit` -> the anchored relay
+  loop, and outer -> inner across `await_start` -> the owned inner control
+  loop; for the Bash unit, rustX -> inner across `await_start` -> the owned
+  invocation control loop — never a gate-local one. Every phase drains what
+  is already buffered before it waits for another read, so a pending
+  `MSG_TERMINATE` is observed even when no further byte ever arrives.
+  Correctness never depends on separate writes producing separate reads,
+  and no ACK protocol or timing assumption is used to prevent coalescing.
+- **`NoOwnership` is parsed by one strict, fail-closed grammar.** Because
+  the frame is terminal evidence, its payload is exactly `length 0` (no
+  pre-anchor child was ever created) or `length 4` carrying a **positive**
+  reaped pid. Every other length, and any non-positive pid, is a protocol
+  error: a malformed frame is never downgraded to the vacuous "no child
+  existed" proof. There is one parser for both supervisor domains; the M5
+  Bash supervisor's empty `MSG_NO_OWNERSHIP` remains valid under it.
+- **`NoOwnership` is proof-carrying.** rustX may treat it as successful
+  pre-ownership settlement only because a supervisor emits it only after it
+  has proven that every pre-anchor child it created is gone and reaped (the
+  frame's payload names that reaped pid; an empty payload means no
+  pre-anchor child was ever created). The outer therefore never relays the
+  inner's own pre-anchor `NoOwnership`: it records the setup failure, reaps
+  the direct inner by pid, and only then reports `NoOwnership` itself. If
+  that direct reap cannot be proven, the outer reports
+  `ProcessControlFailure` and deliberately emits **no** `NoOwnership`, so
+  terminality stays explicitly unproven. After the commit point
+  `NoOwnership` is never terminality: a post-anchor inner failure (a failed
+  server spawn, say) leaves the anchor with the outer, whose group-scoped
+  wait reaches `ECHILD` and reports the authoritative `AllChildrenReaped`.
+- **Bare pre-ownership control loss is not a terminal proof.** Once
+  `MSG_OWNER_ATTACHED` opened the outer gate, the outer may already have
+  spawned an inner whose identity rustX never received, so
+  `PreOwnership` + control EOF/error settles as `TerminalityUnproven`. Only
+  an explicit proof-carrying `NoOwnership` settles a pre-anchor unit
+  physically. The two startup cases that still settle physically do so
+  because the startup gate proves no inner could ever have been created:
+  an outer that exited before rustX attached it, and a gated outer
+  explicitly killed and reaped after an accept failure.
+- An interactive subprocess unit may publish physical settlement **iff**
+  the authoritative supervisor terminal event was received and the direct
+  supervisor was reaped, or emergency containment returned
+  `TerminalProven`, or an explicit proof-carrying `NoOwnership` was
+  received, or the unit provably never passed the startup gate.
+  `AnchorUnavailable`, a containment failure, a containment-task failure,
+  and an unproven pre-anchor state are process-control outcomes without a
+  terminal proof: they are published as an explicit unproven-terminality
+  settlement (`wait_for_settlement` and `McpServerRuntime::close` return an
+  error) and are never represented as successful physical settlement. No
+  timeout ever converts unknown terminality into terminality.
+- Interactive startup is ownership-gated in both directions, so every
+  post-spawn setup outcome is physically owned. rustX writes the
+  runtime->outer startup gate (`MSG_OWNER_ATTACHED`) only after it accepted
+  and retained the outer control connection; a failed accept therefore
+  finds a gated outer that provably owns nothing and transfers into an
+  explicit containment/reap path, never a claim that the child was reaped.
+  The outer attaches its inner supervisor with a bounded pre-ownership
+  ownership state machine — inner control connection, inner direct-child
+  exit, upstream termination/control loss — never a blocking one-shot
+  accept, and then holds it in the explicit pre-anchor phase (inner control
+  frames, inner direct-child exit, upstream termination/control loss) until
+  the anchor commit point. Before the inner control/start gate completes no
+  server-owned process tree can exist; an inner that exits, fails its
+  setup, or is terminated before the anchor commit is reaped **by pid** and
+  reported (`ProcessControlFailure` + proof-carrying `NoOwnership`), and
+  the outer exits cleanly.
+- The server's stderr is drained until EOF (only a bounded
+  preview is retained; reading never stops merely because the preview limit
+  was reached), and dropping the business-facing handle requests shutdown
+  but never abandons the physical process owner.
 
 ## Tool ordering
 
@@ -374,6 +572,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   distinct syscall-number namespace. This restriction is what makes the
   supervisor's kernel child-wait terminal proof complete: an in-domain
   descendant cannot remain hidden behind an ancestor that left the domain.
+- **The `START` gate consumes only `START`.** The Bash inner supervisor's
+  rustX-facing control direction has one `FrameReader` for the whole
+  invocation: `await_start` drains what is already buffered before it reads
+  again, consumes exactly its gate frame, and hands the same reader to the
+  owned control loop, which drains it before every further read. A
+  `MSG_TERMINATE` that the kernel delivered in the same `read()` as
+  `MSG_START` therefore still drives the ordinary `TERM` -> grace -> `KILL`
+  path — cancellation and timeout stay authoritative until physical
+  settlement, and the runtime never depends on two writes becoming two
+  peer reads. This is the shared control-frame ownership invariant stated
+  above, applied to the M5 unit.
 - **The inner supervisor PID is an ownership anchor with exactly one
   reaping owner; generic child-reaping paths can never consume it.** A
   process used as a lifecycle identity anchor has one dedicated reaping
@@ -448,22 +657,23 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - **Runtime child-subreaper capability is a process-level kernel
   coordination primitive, not a Bash-local setting and not a generic
   reaper.** rustX activates `PR_SET_CHILD_SUBREAPER` as a runtime-level
-  prerequisite for catastrophic Bash supervisor-loss recovery: the
+  prerequisite for catastrophic supervisor-loss recovery: the
   capability is owned by the runtime coordination layer
   (`src/runtime/process_supervision.rs`), activated lazily once per
   process, idempotently and sticky (a failed activation fails every later
-  consultation), before any Bash ownership exists — `START` (which
-  authorizes the Bash spawn) is never sent before catastrophic fallback
-  authority exists. Kernel adoption does **not** by itself assign
-  arbitrary adopted children to Bash lifecycle ownership: in M5, Bash
-  supervisor units are the only production subprocess hierarchy relying
-  on orphan adoption, Bash containment remains invocation-scoped (anchor
-  pid and invocation process group only — never `waitpid(-1)` or
-  `waitid(P_ALL)`), and M5 implements no generic unknown-child reaper.
-  Introducing another production subprocess hierarchy is an architecture
-  change: its direct-child waiting, orphan adoption, and reaping
-  ownership must be reconciled with runtime process supervision before it
-  is merged.
+  consultation), before any supervised ownership exists — `START` (which
+  authorizes the owned-child spawn) is never sent before catastrophic
+  fallback authority exists. Kernel adoption does **not** by itself assign
+  arbitrary adopted children to lifecycle ownership: in M5 and M7, the
+  Bash supervisor units and the interactive MCP stdio supervisor units are
+  the only production subprocess hierarchies relying on orphan adoption,
+  both composed from the one shared structural ownership core
+  (`src/runtime/supervised_unit`), containment remains unit-scoped (anchor
+  pid and unit process group only — never `waitpid(-1)` or
+  `waitid(P_ALL)`), and no generic unknown-child reaper exists. Any
+  further production subprocess hierarchy is an architecture change: its
+  direct-child waiting, orphan adoption, and reaping ownership must be
+  reconciled with runtime process supervision before it is merged.
 - Bash signal ownership is reuse-safe by construction: `TERM`/`KILL` are
   issued by the inner supervisor with `killpg` against its own process
   group, whose numeric id is its own pid — provably allocated exactly while
