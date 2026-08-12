@@ -446,6 +446,26 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   metadata, strip metadata, validate business arguments against the
   canonical schema, dispatch executor. A business validation failure is a
   normal failed result slot; the executor never runs.
+- One native capability owns one module boundary: a native tool module owns
+  its name, description, typed input contract, generated schema, executor,
+  and private helpers, and constructs itself through its own
+  `registration(...)` function returning a `NativeToolRegistration`. The
+  native plane module only composes the known native tools — there is no
+  discovery, plugin loading, registration macro, or generic tool factory,
+  and the Bash supervisor is an implementation detail of Bash execution
+  ownership, never a separate tool.
+- A native tool's canonical schema is generated from its typed input
+  contract, which is the single source of truth for its model-facing
+  arguments. Executors never inspect raw JSON: arguments reach execution
+  only as the typed input. Required fields, type correctness, and schema
+  constraints belong to the input contract; workspace permission,
+  filesystem existence, pattern compilation, and process lifecycle rules
+  remain execution concerns. A rejected input is a normal failed result and
+  never reaches the tool's work. MCP and Python schemas keep arriving
+  externally; all sources converge on the same `ToolDefinition`.
+- Tool outputs stay untyped: `ToolExecutionResult` is the only tool result
+  contract, so no tool-specific output type or generic result parameter
+  ever reaches the agent loop.
 - Every valid committed tool-call batch settles structurally exactly once:
   each logical call receives exactly one attempt-facing result slot
   (success, failure, cancellation, timeout, validation rejection, or

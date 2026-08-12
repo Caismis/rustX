@@ -75,9 +75,21 @@ tools/background.rs        ConversationBackgroundRegistry: conversation-owned
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
                            bundle of workspace, artifacts, environment, and
                            background registry handed to AgentExecution
-tools/native/             the native tool plane: read, write, edit, glob,
-                           grep, bash executors and the background_task
-                           runtime intrinsic
+tools/native/             the native tool plane: one module per native
+                           capability (read/, write/, edit/, glob/, grep/,
+                           bash/, background_task/), each owning its name,
+                           description, typed input contract, generated
+                           schema, executor, and private helpers;
+                           registration.rs owns the NativeToolRegistration
+                           pair and schema generation, input.rs the typed
+                           input boundary, and mod.rs only composes the
+                           known native tools
+tools/native/bash/        the Bash subsystem: registration (mod.rs), the
+                           invocation lifecycle executor (executor.rs), the
+                           output capture half (capture.rs), and the
+                           per-invocation process supervisor
+                           (supervisor.rs) — the supervisor is not a
+                           separate tool
 tools/mcp/                MCP 2026-07-28 adapter: configured server runtime,
                            paginated discovery, list-change invalidation,
                            canonical calls, progress, cancellation
@@ -551,7 +563,35 @@ configuration: each ordinary native tool independently selects its
 execution and concurrency policy (foreground-only sequential by default,
 with `BackgroundOnly` and `ModelSelectable` as legal per-tool choices).
 The only intentionally fixed policy remains the runtime intrinsic
-`background_task`. Bash treats one invocation as one complete lifecycle:
+`background_task`.
+
+One native capability owns one module boundary. A native tool module owns
+its name, description, typed input contract, generated schema, executor,
+and private helpers, and constructs itself through its own
+`registration(policy)` function returning a `NativeToolRegistration`
+(definition + executor); `tools/native/mod.rs` only composes the known
+native tools. Composition stays explicit and deterministic: no discovery,
+no plugin loading, no registration macros, no generic tool factory.
+
+Native tool input schemas are generated from tool-owned Rust input types,
+so the typed contract is the single source of truth for the model-facing
+arguments:
+
+```text
+native:   Rust input type -> generated schema -> ToolDefinition
+MCP:      MCP schema                          -> ToolDefinition
+Python:   package schema                      -> ToolDefinition
+```
+
+All three converge at the same registry boundary, and the runtime keeps
+validating every invocation against the stored canonical schema before
+dispatch. Inside an executor, arguments exist only as the tool's typed
+input: required fields, type correctness, and schema constraints belong to
+the input contract, while workspace permission, filesystem existence,
+pattern compilation, and process lifecycle rules remain execution
+concerns. Outputs are deliberately untyped: the canonical
+`ToolExecutionResult` stays the only tool result contract, so the agent
+loop never learns tool-specific result types. Bash treats one invocation as one complete lifecycle:
 spawn one per-invocation supervisor, capture stdout/stderr/combined, let
 the supervisor own the invocation's process group to its kernel-mediated
 terminal state, and settle only when the shell's terminal status is
