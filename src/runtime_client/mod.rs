@@ -35,6 +35,10 @@
 //!
 //! # Ownership summary
 //!
+//! - [`RuntimeClientEndpoint`](endpoint::RuntimeClientEndpoint) is the
+//!   semantic protocol entry point: it dispatches every v1 request,
+//!   `initialize` included, so a transport stays a framing adapter and
+//!   never owns negotiation or attachment admission.
 //! - [`RuntimeClientHost`](host::RuntimeClientHost) coordinates
 //!   admission and the current-attempt handle; `AgentExecution` remains
 //!   the attempt settlement authority.
@@ -60,6 +64,7 @@
 //!   implementation.
 
 pub mod attachment;
+pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
@@ -70,10 +75,11 @@ pub mod types;
 mod test_sync;
 
 pub use attachment::RuntimeAttachment;
+pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{
-    EventSubscription, HostConstructionError, RuntimeClientContextConfig, RuntimeClientHost,
-    RuntimeClientHostConfig,
+    EventDelivery, EventSubscription, HostConstructionError, RuntimeClientContextConfig,
+    RuntimeClientHost, RuntimeClientHostConfig,
 };
 pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,

@@ -34,13 +34,37 @@
 //! > published Runtime Client event in that stream, or fails explicitly
 //! > with `resync_required`.
 //!
-//! # Pre-M8 replay strategy
+//! # Pre-M8 replay strategy and the one retained backlog
 //!
 //! Replay is a bounded in-memory ring (`cursor -> RuntimeClientEvent`)
-//! with an explicit retention limit. A resume after a serviceable cursor
-//! replays the retained gap and then switches to live delivery; a resume
-//! after an expired cursor fails explicitly with `resync_required`. There
-//! is no persistence, no Event Journal, and no crash-safe replay claim.
+//! with an explicit retention limit. That ring is the **sole** retained
+//! Runtime Client event backlog: a subscription is a consumed cursor into
+//! it, never a second queue.
+//!
+//! ```text
+//! publish  -> allocate cursor -> push into the bounded ring
+//!                             -> evict beyond the retention limit
+//!                             -> wake every subscriber (edge-triggered)
+//!
+//! consume  -> subscriber reads the next retained entry after its cursor
+//!          -> advances its own cursor
+//!          -> falling behind retention yields resync_required
+//! ```
+//!
+//! Consequences, which Issue #38 transport backpressure depends on:
+//!
+//! - a slow consumer costs one `RuntimeClientCursor`, never buffered
+//!   events, so subscriber memory is O(1) and total retained memory is
+//!   bounded by `replay_limit`;
+//! - a consumer that falls behind retention can never silently skip
+//!   events while still looking cursor-contiguous — the next poll is the
+//!   explicit [`RuntimeClientError::ResyncRequired`] terminal result;
+//! - wakeups are edge-triggered notifications only and carry no payload,
+//!   so notification can never grow without bound and never blocks the
+//!   publisher.
+//!
+//! There is no persistence, no Event Journal, and no crash-safe replay
+//! claim.
 //!
 //! # `RuntimeEvent` mapping policy
 //!
@@ -60,8 +84,9 @@
 //! v1.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 
 use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
@@ -129,11 +154,46 @@ pub(crate) enum Observation {
 }
 
 /// One registered subscriber of the observation stream.
+///
+/// A subscriber owns **no** event storage: it is a consumed cursor into
+/// the one bounded replay ring plus an edge-triggered wakeup handle. A
+/// stalled subscriber therefore cannot grow memory and cannot make the
+/// publisher block.
 struct Subscriber {
     /// The opaque registration identity (attachment-scoped).
     id: u64,
-    /// The delivery channel of this subscriber.
-    sender: mpsc::UnboundedSender<RuntimeClientProtocolEvent>,
+    /// The cursor through which this subscriber already consumed events.
+    consumed: RuntimeClientCursor,
+    /// The edge-triggered wakeup handle. Carries no payload.
+    notify: Arc<Notify>,
+}
+
+/// The result of one subscriber poll against the bounded replay ring.
+// The event variant is the overwhelmingly common one and is produced once
+// per delivered event; boxing it would add an allocation to every delivery
+// to shrink a short-lived stack value.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum SubscriberPoll {
+    /// The next retained event after the subscriber's consumed cursor.
+    /// The subscriber's cursor advanced to this event's cursor.
+    Event(RuntimeClientProtocolEvent),
+    /// The subscriber is caught up: nothing published after its cursor.
+    Pending,
+    /// The subscription is no longer registered (detach, re-subscribe, or
+    /// a dropped handle).
+    Closed,
+    /// The subscriber fell behind the bounded retention: the events it
+    /// still needs were evicted. This is terminal for the subscription and
+    /// is reported explicitly instead of silently skipping the gap.
+    Lagged {
+        /// The cursor the subscriber consumed through.
+        after_cursor: RuntimeClientCursor,
+        /// The oldest cursor the runtime can still serve.
+        earliest_serviceable: RuntimeClientCursor,
+    },
+    /// The cursor space is exhausted; the observation stream is over.
+    Exhausted,
 }
 
 /// The projection state guarded by the owning host's one synchronization
@@ -748,35 +808,56 @@ impl RuntimeClientProjection {
     }
 
     /// Publishes one folded client event: allocate the next cursor,
-    /// retain the bounded replay entry, and deliver to every subscriber.
-    #[allow(clippy::needless_pass_by_value)] // the owned event is retained and delivered
+    /// retain the bounded replay entry, and wake every subscriber.
+    ///
+    /// Waking is edge-triggered and payload-free: no event copy is queued
+    /// per subscriber, so publication is O(subscribers) pointer work with
+    /// no per-subscriber memory and no possibility of blocking on a slow
+    /// consumer.
+    #[allow(clippy::needless_pass_by_value)] // the owned event is retained in the ring
     fn publish(&mut self, event: RuntimeClientEvent) {
         let next = self.cursor.get().checked_add(1);
         let Some(next_value) = next else {
+            // Explicit exhaustion: the cursor never wraps, publication
+            // stops, and every read path fails with `projection_exhausted`
+            // instead of silently dropping the observation.
             self.exhausted = true;
+            self.wake_subscribers();
             return;
         };
         self.cursor = RuntimeClientCursor::new(next_value);
-        self.replay.push_back((self.cursor, event.clone()));
+        self.replay.push_back((self.cursor, event));
         while self.replay.len() > self.replay_limit {
             self.replay.pop_front();
         }
-        self.subscribers.retain(|subscriber| {
-            subscriber
-                .sender
-                .send(RuntimeClientProtocolEvent {
-                    cursor: self.cursor,
-                    event: event.clone(),
-                })
-                .is_ok()
-        });
+        self.wake_subscribers();
+    }
+
+    /// Wakes every registered subscriber. Notification carries no payload
+    /// and never blocks the publisher.
+    fn wake_subscribers(&self) {
+        for subscriber in &self.subscribers {
+            subscriber.notify.notify_one();
+        }
     }
 
     /// The snapshot and its cursor, linearized together.
-    pub(crate) fn snapshot(&self) -> (RuntimeClientSnapshot, RuntimeClientCursor) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::ProjectionExhausted`] once the cursor
+    /// space is exhausted: after that point the projection can no longer
+    /// fold authoritative transitions, so returning a stale read model
+    /// would silently hide dropped observations.
+    pub(crate) fn snapshot(
+        &self,
+    ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError> {
         #[cfg(test)]
         self.probe_snapshot_enter();
-        (self.snapshot.clone(), self.cursor)
+        if self.exhausted {
+            return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        Ok((self.snapshot.clone(), self.cursor))
     }
 
     /// The oldest cursor a subscription can still serve: one before the
@@ -789,18 +870,19 @@ impl RuntimeClientProjection {
         }
     }
 
-    /// Registers a subscriber resuming after `after_cursor` and returns
-    /// its delivery channel.
+    /// Registers a subscriber consuming from `after_cursor` and returns its
+    /// registration identity and wakeup handle.
     ///
-    /// Serviceability is exact: the retained gap is replayed under the
-    /// caller's synchronization boundary before the subscriber is
-    /// registered, so a resume after a serviceable cursor has no gap and
-    /// an expired cursor fails explicitly with `resync_required`.
+    /// No events are copied into the subscriber: the bounded replay ring is
+    /// the one retained backlog and the subscriber is a cursor into it.
+    /// Serviceability is checked at registration under the caller's
+    /// synchronization boundary, so a resume after a serviceable cursor has
+    /// no gap and an expired cursor fails explicitly with
+    /// `resync_required`.
     pub(crate) fn subscribe(
         &mut self,
         after_cursor: RuntimeClientCursor,
-    ) -> Result<(u64, mpsc::UnboundedReceiver<RuntimeClientProtocolEvent>), RuntimeClientError>
-    {
+    ) -> Result<(u64, Arc<Notify>), RuntimeClientError> {
         if self.exhausted {
             return Err(RuntimeClientError::ProjectionExhausted);
         }
@@ -811,28 +893,84 @@ impl RuntimeClientProjection {
                 earliest_serviceable: earliest,
             });
         }
-        let (sender, receiver) = mpsc::unbounded_channel();
-        for (cursor, event) in &self.replay {
-            if *cursor > after_cursor {
-                let _ = sender.send(RuntimeClientProtocolEvent {
-                    cursor: *cursor,
-                    event: event.clone(),
-                });
-            }
-        }
         let subscriber_id = self.next_subscriber_id;
         self.next_subscriber_id = self.next_subscriber_id.saturating_add(1);
+        let notify = Arc::new(Notify::new());
         self.subscribers.push(Subscriber {
             id: subscriber_id,
-            sender,
+            consumed: after_cursor,
+            notify: notify.clone(),
         });
-        Ok((subscriber_id, receiver))
+        // A subscriber registered behind the current cursor already has
+        // retained work: arm its first wakeup so a parked consumer never
+        // waits for the next publication to observe the existing gap.
+        if after_cursor < self.cursor {
+            notify.notify_one();
+        }
+        Ok((subscriber_id, notify))
     }
 
-    /// Removes one registered subscriber (attachment detach).
+    /// Polls one registered subscriber for the next retained event after
+    /// its consumed cursor, advancing that cursor on delivery.
+    ///
+    /// This is the one delivery path: exactly one retained ring entry is
+    /// handed out per call, so a consumer can never observe a
+    /// non-contiguous cursor sequence. If the events the subscriber still
+    /// needs were evicted, the poll reports [`SubscriberPoll::Lagged`]
+    /// without advancing the cursor — the condition is stable and terminal
+    /// until the client re-subscribes.
+    pub(crate) fn poll_subscriber(&mut self, subscriber_id: u64) -> SubscriberPoll {
+        if self.exhausted {
+            return SubscriberPoll::Exhausted;
+        }
+        let earliest = self.earliest_serviceable();
+        let Some(subscriber) = self
+            .subscribers
+            .iter_mut()
+            .find(|subscriber| subscriber.id == subscriber_id)
+        else {
+            return SubscriberPoll::Closed;
+        };
+        let consumed = subscriber.consumed;
+        if consumed >= self.cursor {
+            return SubscriberPoll::Pending;
+        }
+        if consumed < earliest {
+            return SubscriberPoll::Lagged {
+                after_cursor: consumed,
+                earliest_serviceable: earliest,
+            };
+        }
+        let Some((cursor, event)) = self
+            .replay
+            .iter()
+            .find(|(cursor, _)| *cursor > consumed)
+            .map(|(cursor, event)| (*cursor, event.clone()))
+        else {
+            // Unreachable while `consumed < self.cursor` and
+            // `consumed >= earliest_serviceable`; treated as lag rather
+            // than as a silent skip.
+            return SubscriberPoll::Lagged {
+                after_cursor: consumed,
+                earliest_serviceable: earliest,
+            };
+        };
+        subscriber.consumed = cursor;
+        SubscriberPoll::Event(RuntimeClientProtocolEvent { cursor, event })
+    }
+
+    /// Removes one registered subscriber (attachment detach, re-subscribe,
+    /// or a dropped subscription handle) and wakes it so a parked consumer
+    /// observes the closure instead of waiting forever.
     pub(crate) fn remove_subscriber(&mut self, subscriber_id: u64) {
-        self.subscribers
-            .retain(|subscriber| subscriber.id != subscriber_id);
+        if let Some(index) = self
+            .subscribers
+            .iter()
+            .position(|subscriber| subscriber.id == subscriber_id)
+        {
+            let subscriber = self.subscribers.remove(index);
+            subscriber.notify.notify_one();
+        }
     }
 
     /// The current cursor (host observability/tests).
@@ -850,6 +988,17 @@ impl RuntimeClientProjection {
     /// The current snapshot read model reference (host/tests).
     pub(crate) fn snapshot_ref(&self) -> &RuntimeClientSnapshot {
         &self.snapshot
+    }
+
+    /// The current snapshot read model reference, failing explicitly once
+    /// the observation stream is exhausted.
+    pub(crate) fn snapshot_ref_checked(
+        &self,
+    ) -> Result<&RuntimeClientSnapshot, RuntimeClientError> {
+        if self.exhausted {
+            return Err(RuntimeClientError::ProjectionExhausted);
+        }
+        Ok(&self.snapshot)
     }
 
     /// The retained replay ring (tests).
@@ -1061,7 +1210,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 
 #[cfg(test)]
 mod tests {
-    use super::{Observation, RuntimeClientProjection};
+    use super::{Observation, RuntimeClientProjection, SubscriberPoll};
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1111,11 +1260,16 @@ mod tests {
         projection: &mut RuntimeClientProjection,
         after: RuntimeClientCursor,
     ) -> Vec<crate::runtime_client::types::RuntimeClientProtocolEvent> {
-        let (_id, mut receiver) = projection.subscribe(after).expect("serviceable cursor");
+        let (id, _notify) = projection.subscribe(after).expect("serviceable cursor");
         let mut events = Vec::new();
-        while let Ok(event) = receiver.try_recv() {
-            events.push(event);
+        loop {
+            match projection.poll_subscriber(id) {
+                SubscriberPoll::Event(event) => events.push(event),
+                SubscriberPoll::Pending => break,
+                other => panic!("unexpected subscriber poll: {other:?}"),
+            }
         }
+        projection.remove_subscriber(id);
         events
     }
 
@@ -1227,8 +1381,8 @@ mod tests {
         let second_events = collect(&mut second, RuntimeClientCursor::new(0));
         assert_eq!(first_events, second_events);
         assert!(!first_events.is_empty(), "the sequence publishes events");
-        let (first_snapshot, first_cursor) = first.snapshot();
-        let (second_snapshot, second_cursor) = second.snapshot();
+        let (first_snapshot, first_cursor) = first.snapshot().expect("snapshot");
+        let (second_snapshot, second_cursor) = second.snapshot().expect("snapshot");
         assert_eq!(first_snapshot, second_snapshot);
         assert_eq!(first_cursor, second_cursor);
     }
@@ -1267,7 +1421,7 @@ mod tests {
             collect(&mut projection, RuntimeClientCursor::new(0)).is_empty(),
             "internal events produce no client events"
         );
-        let (snapshot, cursor) = projection.snapshot();
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert!(snapshot.attempt.is_none());
     }
@@ -1299,7 +1453,7 @@ mod tests {
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
         assert!(events.is_empty(), "fold-only events publish nothing");
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         let attempt_view = snapshot.attempt.expect("attempt view exists");
         assert_eq!(attempt_view.turn, 1);
         assert_eq!(
@@ -1347,7 +1501,7 @@ mod tests {
                 },
             }
         );
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
@@ -1424,7 +1578,7 @@ mod tests {
                 delta: "hello ".to_owned(),
             },
         );
-        let (snapshot, cursor) = projection.snapshot();
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         let in_flight = snapshot
             .attempt
             .as_ref()
@@ -1464,7 +1618,7 @@ mod tests {
             attempt_id: Some(attempt()),
             block: committed.clone(),
         });
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.messages, vec![committed]);
         assert!(
             snapshot
@@ -1538,7 +1692,7 @@ mod tests {
                 result: success_result(),
             },
         );
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         let foreground = &snapshot.attempt.expect("attempt view").foreground;
         assert_eq!(foreground.len(), 2);
         assert_eq!(foreground[0].call_id, ToolCallId::new("call_a"));
@@ -1574,7 +1728,7 @@ mod tests {
                 },
             );
         }
-        let (_, cursor) = projection.snapshot();
+        let (_, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(11));
         let events = collect(&mut projection, RuntimeClientCursor::new(3));
         let cursors: Vec<u64> = events.iter().map(|event| event.cursor.get()).collect();
@@ -1638,7 +1792,7 @@ mod tests {
             crate::runtime_client::types::RuntimeClientError::ResyncRequired { .. }
         ));
         // A fresh snapshot repairs every externally visible fact.
-        let (snapshot, cursor) = projection.snapshot();
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(21));
         let in_flight = snapshot
             .attempt
@@ -1651,8 +1805,105 @@ mod tests {
         ));
     }
 
-    /// Cursor overflow fails explicitly and never wraps: publishing stops
-    /// and subscriptions fail with a typed error.
+    /// A stalled subscriber introduces no second backlog: the bounded
+    /// replay ring is the only retained storage, its size never exceeds the
+    /// retention limit no matter how far behind the consumer is, and the
+    /// consumer is told explicitly that it fell behind rather than being
+    /// handed a silently non-contiguous stream.
+    #[test]
+    fn a_stalled_subscriber_is_bounded_and_never_silently_skips() {
+        let limit = 4;
+        let mut projection = RuntimeClientProjection::new(
+            ConversationId::new("conv-1"),
+            Vec::new(),
+            crate::runtime_client::snapshot::CapabilityView {
+                revision: crate::runtime::identity::CapabilityRevision::new(1),
+                tools: Vec::new(),
+                skills: Vec::new(),
+            },
+            limit,
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::AgentMessageStarted {
+                message_id: MessageId::new("msg-1"),
+            },
+        );
+        let (stalled, _notify) = projection
+            .subscribe(RuntimeClientCursor::new(1))
+            .expect("the current cursor is serviceable");
+
+        // The subscriber never polls while 200 events are published.
+        for index in 0..200 {
+            apply_event(
+                &mut projection,
+                RuntimeEvent::AgentTextDelta {
+                    message_id: MessageId::new("msg-1"),
+                    block_index: ContentBlockIndex::new(0),
+                    delta: format!("{index}"),
+                },
+            );
+            assert!(
+                projection.replay_len() <= limit,
+                "the one retained backlog stays within its bound at every publication"
+            );
+        }
+        assert_eq!(
+            projection.replay_len(),
+            limit,
+            "retention is the only storage that grew, and only to its bound"
+        );
+
+        // Publication cost per subscriber is one wakeup, so the stalled
+        // subscriber holds nothing: it is still sitting at its original
+        // cursor.
+        let poll = projection.poll_subscriber(stalled);
+        let SubscriberPoll::Lagged {
+            after_cursor,
+            earliest_serviceable,
+        } = poll
+        else {
+            panic!("a subscriber past retention must lag explicitly, got {poll:?}");
+        };
+        assert_eq!(after_cursor, RuntimeClientCursor::new(1));
+        assert_eq!(earliest_serviceable, RuntimeClientCursor::new(197));
+        assert_eq!(
+            projection.poll_subscriber(stalled),
+            poll,
+            "the lag verdict is stable and never partially advances the cursor"
+        );
+
+        // A consumer that keeps up observes strictly contiguous cursors,
+        // one event per poll, and then parks.
+        let (live, _notify) = projection
+            .subscribe(projection.cursor())
+            .expect("the current cursor is serviceable");
+        let base = projection.cursor().get();
+        for step in 1..=3 {
+            apply_event(
+                &mut projection,
+                RuntimeEvent::AgentTextDelta {
+                    message_id: MessageId::new("msg-1"),
+                    block_index: ContentBlockIndex::new(0),
+                    delta: "x".to_owned(),
+                },
+            );
+            let poll = projection.poll_subscriber(live);
+            let SubscriberPoll::Event(event) = poll else {
+                panic!("the live subscriber must receive, got {poll:?}");
+            };
+            assert_eq!(event.cursor.get(), base + step);
+        }
+        assert_eq!(projection.poll_subscriber(live), SubscriberPoll::Pending);
+
+        // Removal is observable, never an indefinite park.
+        projection.remove_subscriber(live);
+        assert_eq!(projection.poll_subscriber(live), SubscriberPoll::Closed);
+    }
+
+    /// Cursor overflow fails explicitly and never wraps: publishing stops,
+    /// subscriptions fail with a typed error, and reads no longer hand back
+    /// a read model that silently stopped folding transitions.
     #[test]
     fn cursor_overflow_fails_explicitly() {
         let mut projection = projection();
@@ -1680,6 +1931,17 @@ mod tests {
         );
         assert!(matches!(
             projection.subscribe(RuntimeClientCursor::new(0)),
+            Err(crate::runtime_client::types::RuntimeClientError::ProjectionExhausted)
+        ));
+        // Reads fail explicitly too: after exhaustion the projection can no
+        // longer fold authoritative transitions, and returning the stale
+        // read model would hide exactly that.
+        assert!(matches!(
+            projection.snapshot(),
+            Err(crate::runtime_client::types::RuntimeClientError::ProjectionExhausted)
+        ));
+        assert!(matches!(
+            projection.snapshot_ref_checked(),
             Err(crate::runtime_client::types::RuntimeClientError::ProjectionExhausted)
         ));
     }
@@ -1713,7 +1975,7 @@ mod tests {
         for entry in drained.items() {
             projection.apply(Observation::InboundEnqueued(entry.clone()));
         }
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.inbound.pending.len(), 2);
         assert_eq!(
             snapshot.inbound.pending[0].sequence.get(),
@@ -1725,7 +1987,7 @@ mod tests {
         // The finite drain of the same batch clears the pending view and
         // records the watermark.
         projection.apply(Observation::InboundDrained(drained));
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert!(snapshot.inbound.pending.is_empty());
         let last_drain = snapshot.inbound.last_drain.expect("drain recorded");
         assert_eq!(last_drain.watermark.get(), 2);
@@ -1737,7 +1999,7 @@ mod tests {
     #[test]
     fn snapshot_and_cursor_are_linearized() {
         let mut projection = projection();
-        let (snapshot, cursor) = projection.snapshot();
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert!(snapshot.messages.is_empty());
         apply_event(
@@ -1746,7 +2008,7 @@ mod tests {
                 attempt_id: attempt(),
             },
         );
-        let (snapshot, cursor) = projection.snapshot();
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(cursor, RuntimeClientCursor::new(1));
         assert!(snapshot.attempt.is_some());
     }
@@ -1781,7 +2043,7 @@ mod tests {
             progress: None,
             result: None,
         }));
-        let (snapshot, _) = projection.snapshot();
+        let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.background.len(), 2);
         assert_eq!(snapshot.background[0].execution_id.as_str(), "exec_1");
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Succeeded);

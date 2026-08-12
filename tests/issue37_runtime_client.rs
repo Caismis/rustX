@@ -66,6 +66,51 @@ fn composer() -> AgentStatusComposer {
     AgentStatusComposer::new(Arc::new(FixedStatusClock))
 }
 
+/// A status clock that counts compositions.
+///
+/// The composer samples its clock exactly once per `compose` invocation, so
+/// this counter *is* the number of Agent Status compositions — regardless of
+/// how many clones of the composer exist.
+#[derive(Debug, Clone, Default)]
+struct CountingStatusClock {
+    compositions: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AgentStatusClock for CountingStatusClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.compositions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+            .expect("fixed clock")
+            .with_timezone(&chrono::Utc)
+    }
+}
+
+/// An extension provider that counts its invocations: an independent
+/// witness of how many compositions ran.
+struct CountingProvider {
+    invocations: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl AgentStatusSectionProvider for CountingProvider {
+    fn section_id(&self) -> AgentStatusSectionId {
+        AgentStatusSectionId::new("counting")
+    }
+
+    fn section(
+        &self,
+        _context: &AgentStatusRenderContext,
+    ) -> Result<Option<Vec<AgentStatusFact>>, ContextError> {
+        let seen = self
+            .invocations
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(Some(vec![AgentStatusFact {
+            label: "composition".to_owned(),
+            value: seen.to_string(),
+        }]))
+    }
+}
+
 /// Builds a host over one conversation with the given model scripts and
 /// tool registry. The returned model handle records the requests the host
 /// sent.
@@ -134,15 +179,18 @@ async fn host(
 
 /// Subscribes an attachment and receives until the predicate matches.
 async fn receive_until(
-    subscription: &mut rustx::runtime_client::EventSubscription,
+    subscription: &rustx::runtime_client::EventSubscription,
     mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
 ) -> Vec<RuntimeClientProtocolEvent> {
     let mut seen = Vec::new();
     loop {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
-            .await
-            .expect("event stream must not stall")
-            .expect("subscription must stay open");
+        let delivery =
+            tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
+                .await
+                .expect("event stream must not stall");
+        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
+            panic!("subscription must stay open and contiguous, got {delivery:?}");
+        };
         let matched = predicate(&event);
         seen.push(event);
         if matched {
@@ -190,7 +238,7 @@ async fn submit_idle_admits_and_settles_asynchronously() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
 
@@ -208,7 +256,7 @@ async fn submit_idle_admits_and_settles_asynchronously() {
     assert_eq!(inbound_sequence.get(), 1);
     assert_eq!(message_id.as_str(), "conv-37-idle-inbound-1");
 
-    let events = receive_until(&mut subscription, |event| {
+    let events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -230,7 +278,7 @@ async fn submit_idle_admits_and_settles_asynchronously() {
     );
     assert!(requests[0].agent_status.is_some());
 
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(snapshot.messages.len(), 2);
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
@@ -263,7 +311,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
 
@@ -271,7 +319,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("first"),
     });
-    receive_until(&mut subscription, |event| {
+    receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })
     })
     .await;
@@ -292,7 +340,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     else {
         panic!("accepted");
     };
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
         snapshot.inbound.pending.len(),
         1,
@@ -301,7 +349,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     assert_eq!(snapshot.inbound.pending[0].message.id, second_id);
 
     release_tx.send(true).expect("release");
-    receive_until(&mut subscription, |event| {
+    receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -313,7 +361,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
             .iter()
             .any(|message| matches!(message, MessageBlock::User(user) if user.id == second_id))
     );
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     assert!(snapshot.inbound.pending.is_empty());
 }
 
@@ -336,14 +384,14 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("go"),
     });
-    receive_until(&mut subscription, |event| {
+    receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
     })
     .await;
@@ -362,7 +410,7 @@ async fn cancel_current_attempt_is_acceptance_not_settlement() {
         Some(RuntimeClientResult::AttemptCancellationAccepted { .. })
     ));
 
-    let events = receive_until(&mut subscription, |event| {
+    let events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -428,7 +476,7 @@ async fn foreground_tools_project_with_stable_identities() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
 
@@ -453,7 +501,7 @@ async fn foreground_tools_project_with_stable_identities() {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("run tools"),
     });
-    let events = receive_until(&mut subscription, |event| {
+    let events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -482,7 +530,7 @@ async fn foreground_tools_project_with_stable_identities() {
         .collect();
     assert_eq!(started_calls, vec!["call-a", "call-b"]);
 
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     let foreground = &snapshot.attempt.expect("attempt").foreground;
     assert_eq!(foreground.len(), 2);
     assert_eq!(foreground[0].call_id.as_str(), "call-a");
@@ -526,20 +574,20 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("go"),
     });
-    receive_until(&mut subscription, |event| {
+    receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })
     })
     .await;
 
     // Snapshot while the message is parked mid-stream.
-    let (snapshot, _cursor) = host.snapshot();
+    let (snapshot, _cursor) = host.snapshot().expect("snapshot");
     let in_flight = snapshot
         .attempt
         .as_ref()
@@ -556,7 +604,7 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
     // Release and resume after C: exactly the remaining delta arrives, so
     // the client reconstructs "hello world" with no duplicate output.
     release_tx.send(true).expect("release");
-    let resumed = receive_until(&mut subscription, |event| {
+    let resumed = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -573,7 +621,7 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         "no duplicated output after resume"
     );
 
-    let (final_snapshot, _) = host.snapshot();
+    let (final_snapshot, _) = host.snapshot().expect("snapshot");
     let committed_text = final_snapshot
         .messages
         .iter()
@@ -599,9 +647,24 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
 /// expired cursor fails with `resync_required` and a fresh snapshot
 /// repairs state; a serviceable cursor resumes without gaps.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn bounded_replay_and_resync_through_the_public_surface() {
-    let model = FakeModel::new(vec![one_turn_stop()]);
-    let (_, host) = host(
+async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
+    // The model parks on its first step, so the exact set of publications
+    // that happen before the test polls is deterministic: the attempt
+    // cannot advance past the park.
+    let (release, release_rx) = common::fake::model_release();
+    let model = FakeModel::new(vec![vec![
+        FakeStep::ParkUntilReleased(release_rx),
+        FakeStep::Emit(ModelEvent::Started),
+        FakeStep::Emit(ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "done".to_owned(),
+        }),
+        FakeStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }),
+    ]]);
+    let (model_handle, host) = host(
         "conv-37-replay",
         model,
         ToolRegistry::new(),
@@ -609,56 +672,90 @@ async fn bounded_replay_and_resync_through_the_public_surface() {
         Some(2),
     )
     .await;
+    let mut parked = model_handle.parked();
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    // Registered but deliberately never polled: this is the stalled
+    // consumer.
+    let stalled = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("go"),
     });
-    let events = receive_until(&mut subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
-    })
-    .await;
-    let terminal_cursor = events.last().expect("terminal").cursor;
+    // Barrier, not a sleep: the model parked, so every publication of the
+    // admission burst has happened and no further one can.
+    parked
+        .wait_for(|parked| *parked)
+        .await
+        .expect("model parks before the release");
 
-    // The tiny replay ring has already evicted early events: resuming
-    // from cursor 0 fails explicitly instead of silently jumping.
+    // The admission burst published more events than the two-entry ring
+    // retains. The stalled subscriber is told so explicitly; it never
+    // receives a silently non-contiguous cursor.
+    let delivery = stalled.try_next();
+    let rustx::runtime_client::EventDelivery::ResyncRequired {
+        after_cursor,
+        earliest_serviceable,
+    } = delivery
+    else {
+        panic!("a subscriber behind the retention must resync, got {delivery:?}");
+    };
+    assert_eq!(after_cursor.get(), 0);
+    assert!(earliest_serviceable.get() > 0);
+    assert_eq!(
+        stalled.try_next(),
+        rustx::runtime_client::EventDelivery::ResyncRequired {
+            after_cursor,
+            earliest_serviceable,
+        },
+        "the lag verdict is stable, never a partial catch-up"
+    );
+
+    // Registering a fresh subscription at the expired cursor fails with the
+    // same explicit category.
     let error = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect_err("evicted cursor is unserviceable");
-    match error {
+    assert!(matches!(
+        error,
         rustx::runtime_client::RuntimeClientError::ResyncRequired {
             after_cursor,
-            earliest_serviceable,
-        } => {
-            assert_eq!(after_cursor.get(), 0);
-            assert!(earliest_serviceable > rustx::runtime_client::RuntimeClientCursor::new(0));
-        }
-        other => panic!("expected resync_required, got {other:?}"),
-    }
-
-    // A fresh snapshot repairs every externally visible fact.
-    let (snapshot, cursor) = host.snapshot();
-    assert_eq!(cursor, terminal_cursor);
-    assert_eq!(snapshot.messages.len(), 2);
-    assert!(matches!(
-        snapshot.attempt.expect("attempt").phase,
-        rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
+            ..
+        } if after_cursor.get() == 0
     ));
 
-    // A serviceable resume replays the retained tail without gaps.
-    let mut resumed = attachment
-        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(
-            terminal_cursor.get() - 1,
-        ))
-        .expect("the tail is still retained");
-    let tail = receive_until(&mut resumed, |event| event.cursor == terminal_cursor).await;
-    assert_eq!(tail.len(), 1);
-    assert_eq!(tail[0].cursor, terminal_cursor);
+    // A fresh snapshot repairs every externally visible fact, and resuming
+    // at its cursor delivers the rest of the stream contiguously.
+    let (snapshot, cursor) = host.snapshot().expect("snapshot");
+    assert_eq!(snapshot.messages.len(), 1, "the inbound message committed");
+    let resumed = attachment
+        .subscribe_events(cursor)
+        .expect("the snapshot cursor is always serviceable");
+    release.send_replace(true);
+    let tail = receive_until(&resumed, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    let mut expected = cursor.get();
+    for event in &tail {
+        expected += 1;
+        assert_eq!(
+            event.cursor.get(),
+            expected,
+            "a resumed subscription observes strictly contiguous cursors"
+        );
+    }
+
+    let (final_snapshot, final_cursor) = host.snapshot().expect("snapshot");
+    assert_eq!(final_cursor, tail.last().expect("terminal").cursor);
+    assert_eq!(final_snapshot.messages.len(), 2);
+    assert!(matches!(
+        final_snapshot.attempt.expect("attempt").phase,
+        rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
+    ));
 }
 
 /// Agent Status is projected from the exact same composition the model
@@ -675,14 +772,14 @@ async fn agent_status_shares_one_composition() {
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
-    let mut subscription = attachment
+    let subscription = attachment
         .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
         .expect("subscribe");
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
         id: rustx::runtime_client::RequestId::new(1),
         content: text("go"),
     });
-    let events = receive_until(&mut subscription, |event| {
+    let events = receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. })
     })
     .await;
@@ -693,7 +790,7 @@ async fn agent_status_shares_one_composition() {
             _ => None,
         })
         .expect("status event");
-    receive_until(&mut subscription, |event| {
+    receive_until(&subscription, |event| {
         matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
     })
     .await;
@@ -714,10 +811,127 @@ async fn agent_status_shares_one_composition() {
         rustx::runtime_client::RuntimeClientStatusSection::Facts { facts }
             if facts.iter().any(|fact| fact.label == "extension" && fact.value == "fact")
     )));
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
         snapshot.status.expect("status view").rendered,
         model_rendered
+    );
+}
+
+/// Agent Status is composed **exactly once** per model request that
+/// receives it, and both destinations consume that one composition.
+///
+/// The proof is counting, not structural similarity: the composer samples
+/// its clock once per `compose`, and the registered extension provider is
+/// invoked once per `compose`. Both counters must equal the number of model
+/// requests that carried an Agent Status attachment. If the Runtime Client
+/// path recomposed — even through a cloned composer with the same clock and
+/// providers — the counters would exceed that number.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_status_is_composed_exactly_once_per_request() {
+    let clock = CountingStatusClock::default();
+    let compositions = clock.compositions.clone();
+    let invocations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut composer = AgentStatusComposer::new(Arc::new(clock));
+    composer
+        .register(Arc::new(CountingProvider {
+            invocations: invocations.clone(),
+        }))
+        .expect("register");
+
+    // Two model requests in one attempt: a tool-calling turn followed by a
+    // stopping turn, so "one composition per request that receives status"
+    // is a real constraint rather than a coincidence of a single request.
+    let call = scripted("call-a", "tool-alpha", "alpha", serde_json::json!({"n": 1}));
+    let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
+    for event in tool_call_events(0, &call) {
+        first.push(FakeStep::Emit(event));
+    }
+    first.push(FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    let model = FakeModel::new(vec![first, one_turn_stop()]);
+    let tool = FakeTool::new(
+        common::tool_policies(
+            "alpha",
+            "tool-alpha",
+            ToolExecutionPolicy::ForegroundOnly,
+            ToolConcurrencyPolicy::Sequential,
+        ),
+        success_result("a"),
+    );
+    let mut tools = ToolRegistry::new();
+    tool.register(&mut tools);
+
+    let (model_handle, host) = host("conv-37-compose-once", model, tools, composer, None).await;
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let subscription = attachment
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .expect("subscribe");
+    attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+        id: rustx::runtime_client::RequestId::new(1),
+        content: text("go"),
+    });
+    let events = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+
+    let composition_count = compositions.load(std::sync::atomic::Ordering::SeqCst);
+    let invoked = invocations.load(std::sync::atomic::Ordering::SeqCst);
+    let requests = model_handle.requests();
+    let with_status: Vec<_> = requests
+        .iter()
+        .filter_map(|request| request.agent_status.as_ref())
+        .collect();
+    assert!(
+        !with_status.is_empty(),
+        "the model path received Agent Status at least once"
+    );
+    assert_eq!(
+        composition_count,
+        with_status.len(),
+        "exactly one composition per model request that receives Agent Status"
+    );
+    assert_eq!(
+        invoked, composition_count,
+        "the extension providers ran once per composition, never a second time"
+    );
+
+    // The client observed each composition exactly once, and observing it
+    // caused no further composition.
+    let status_events: Vec<_> = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            RuntimeClientEvent::AgentStatusComposed { status, .. } => Some(status),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        status_events.len(),
+        composition_count,
+        "one Runtime Client status event per composition"
+    );
+    for (client, model) in status_events.iter().zip(with_status.iter()) {
+        assert_eq!(
+            client.rendered, model.rendered,
+            "the canonical rendered attachment and the client projection are the same composition"
+        );
+    }
+
+    // Reading the projection is not a composition either.
+    let (snapshot, _) = host.snapshot().expect("snapshot");
+    assert_eq!(
+        snapshot.status.expect("status view").rendered,
+        with_status.last().expect("status").rendered
+    );
+    assert_eq!(
+        compositions.load(std::sync::atomic::Ordering::SeqCst),
+        composition_count,
+        "reading the snapshot never composes"
     );
 }
 
@@ -777,6 +991,6 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
 
     // The snapshot carries the same semantic projection (one
     // implementation, not two).
-    let (snapshot, _) = host.snapshot();
+    let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(snapshot.capabilities, capabilities);
 }

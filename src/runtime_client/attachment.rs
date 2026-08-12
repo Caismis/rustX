@@ -22,10 +22,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::host::{EventSubscription, HostInner};
+use super::host::{EventDelivery, EventSubscription, HostInner};
 use super::types::{
-    AttachmentId, RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest,
-    RuntimeClientResponse, RuntimeClientResult,
+    AttachmentId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
+    RuntimeClientResult,
 };
 
 /// One admitted Runtime Client attachment.
@@ -85,10 +85,9 @@ impl RuntimeAttachment {
             }),
             RuntimeClientRequest::SubmitInbound { content, .. } => host.submit_inbound(content),
             RuntimeClientRequest::CancelCurrentAttempt { .. } => host.cancel_current_attempt(),
-            RuntimeClientRequest::SnapshotGet { .. } => {
-                let (snapshot, cursor) = host.snapshot();
-                Ok(RuntimeClientResult::Snapshot { snapshot, cursor })
-            }
+            RuntimeClientRequest::SnapshotGet { .. } => host
+                .snapshot()
+                .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
             RuntimeClientRequest::SubscribeEvents { after_cursor, .. } => {
                 match host.subscribe_events(&self.attachment_id, after_cursor) {
                     Ok((subscription, result)) => {
@@ -98,7 +97,7 @@ impl RuntimeAttachment {
                     Err(error) => Err(error),
                 }
             }
-            RuntimeClientRequest::CapabilityGet { .. } => Ok(host.capability()),
+            RuntimeClientRequest::CapabilityGet { .. } => host.capability(),
             RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
                 host.background_status(&execution_id)
             }
@@ -148,56 +147,58 @@ impl RuntimeAttachment {
         };
         match host.subscribe_events(&self.attachment_id, after_cursor) {
             Ok((subscription, _result)) => {
-                self.store_subscription(subscription);
-                let subscription = self
-                    .subscription
-                    .lock()
-                    .expect("attachment subscription lock poisoned")
-                    .take()
-                    .expect("the subscription was just stored");
+                self.store_subscription(subscription.clone());
                 Ok(subscription)
             }
             Err(error) => Err(error),
         }
     }
 
-    /// Receives the next event of the active subscription.
+    /// The delivery handle of the active subscription, when one exists.
     ///
-    /// Returns `None` when no subscription is active or the subscription
-    /// channel closed (detach or re-subscription).
-    ///
-    /// # Panics
-    ///
-    /// Panics only if the attachment subscription lock is poisoned, which
-    /// would mean a previous operation panicked while holding the lock.
-    pub async fn next_event(&mut self) -> Option<RuntimeClientProtocolEvent> {
-        let mut subscription = self
-            .subscription
-            .lock()
-            .expect("attachment subscription lock poisoned")
-            .take()?;
-        let event = subscription.next().await;
-        self.subscription
-            .lock()
-            .expect("attachment subscription lock poisoned")
-            .replace(subscription);
-        event
-    }
-
-    /// Attempts to receive the next event of the active subscription
-    /// without waiting.
+    /// The handle shares the one registration; it exists so a transport can
+    /// pump events without holding any attachment lock across an await.
     ///
     /// # Panics
     ///
     /// Panics only if the attachment subscription lock is poisoned, which
     /// would mean a previous operation panicked while holding the lock.
     #[must_use]
-    pub fn try_next_event(&mut self) -> Option<RuntimeClientProtocolEvent> {
-        let mut guard = self
-            .subscription
+    pub fn subscription(&self) -> Option<EventSubscription> {
+        self.subscription
             .lock()
-            .expect("attachment subscription lock poisoned");
-        guard.as_mut().and_then(EventSubscription::try_next)
+            .expect("attachment subscription lock poisoned")
+            .clone()
+    }
+
+    /// Waits for the next delivery of the active subscription.
+    ///
+    /// Returns [`EventDelivery::Closed`] when no subscription is active or
+    /// the subscription was released (detach or re-subscription).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the attachment subscription lock is poisoned, which
+    /// would mean a previous operation panicked while holding the lock.
+    pub async fn next_event(&self) -> EventDelivery {
+        let Some(subscription) = self.subscription() else {
+            return EventDelivery::Closed;
+        };
+        subscription.next().await
+    }
+
+    /// Polls the active subscription without waiting.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the attachment subscription lock is poisoned, which
+    /// would mean a previous operation panicked while holding the lock.
+    #[must_use]
+    pub fn try_next_event(&self) -> EventDelivery {
+        match self.subscription() {
+            Some(subscription) => subscription.try_next(),
+            None => EventDelivery::Closed,
+        }
     }
 
     /// Releases the attachment explicitly. Idempotent: a second detach
@@ -215,18 +216,27 @@ impl RuntimeAttachment {
             inner: self.inner.clone(),
         }
         .detach(&self.attachment_id);
-        *self
+        // Take the handle out under the attachment lock and drop it after
+        // releasing that lock: dropping a subscription acquires the host
+        // lock, and no path may hold the attachment lock across it.
+        let previous = self
             .subscription
             .lock()
-            .expect("attachment subscription lock poisoned") = None;
+            .expect("attachment subscription lock poisoned")
+            .take();
+        drop(previous);
     }
 
-    /// Stores the delivery handle of a fresh subscription.
+    /// Stores the delivery handle of a fresh subscription, releasing any
+    /// previous one outside the attachment lock (dropping a subscription
+    /// acquires the host lock).
     fn store_subscription(&self, subscription: EventSubscription) {
-        *self
+        let previous = self
             .subscription
             .lock()
-            .expect("attachment subscription lock poisoned") = Some(subscription);
+            .expect("attachment subscription lock poisoned")
+            .replace(subscription);
+        drop(previous);
     }
 
     /// Builds the correlated response of a failed request.

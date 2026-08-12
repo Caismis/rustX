@@ -33,6 +33,55 @@
 //! cursor, subscription, admission, cancellation, and terminal settlement
 //! linearize against each other by synchronization, never by timing.
 //!
+//! # The lock-order graph
+//!
+//! ```text
+//!   HostState ──────────────► ConversationInboundMailbox
+//!       │                              │
+//!       │                              │
+//!       ▼                              ▼
+//!   PendingObservations ◄──────────────┘
+//!       ▲          ▲
+//!       │          └────────────── CapabilityCoordinator (state lock)
+//!       └─────────────────────────  ConversationBackgroundRegistry
+//! ```
+//!
+//! Exactly three rules make the graph acyclic, and each is structural
+//! rather than conventional:
+//!
+//! 1. **`PendingObservations` is a leaf.** It owns one mutex over a
+//!    `VecDeque` plus a `Notify`, and it calls nothing. No lock can be
+//!    acquired beneath it.
+//! 2. **No authoritative subsystem ever acquires `HostState`.** The
+//!    mailbox, the background registry, and the capability coordinator all
+//!    fire their observers *while their own lock is held*, so
+//!    [`HostObserver`] converts each of those callbacks into a
+//!    `PendingObservations::push` — an immutable append plus a wakeup.
+//!    There is therefore no `subsystem -> HostState` edge to pair with the
+//!    `HostState -> mailbox` edge below. This also means subscriber
+//!    notification can never block authoritative runtime state: publishing
+//!    happens under `HostState`, which no authoritative commit path ever
+//!    waits on.
+//! 3. **`HostState -> mailbox` is the only downward edge.** It exists in
+//!    exactly one place, [`HostInner::admit_next_attempt`], which drains
+//!    the mailbox under the host lock so the drain fact, the canonical
+//!    history commits, and the attempt publication linearize together. The
+//!    drain fires `on_drained` into the leaf queue, never back into the
+//!    host lock.
+//!
+//! The [`AgentExecutionObserver`] callbacks are the one seam that applies
+//! directly under `HostState`. That is sound and is *not* an exception to
+//! rule 2: `AgentExecution` is owned exclusively by its attempt task and
+//! holds no lock of its own when it observes, so the callback introduces
+//! no incoming edge. Applying directly keeps streaming deltas on the
+//! caller's thread instead of behind a task hop.
+//!
+//! Every host lock acquisition goes through [`HostInner::lock_state`],
+//! which drains `PendingObservations` first. Queued observations therefore
+//! fold in enqueue order, ahead of whatever the acquiring caller is about
+//! to do, so the total order of externally visible transitions is the
+//! order in which authoritative subsystems committed them.
+//!
 //! # Canonical history ownership
 //!
 //! Between attempts the host owns the canonical conversation history (the
@@ -54,9 +103,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono_tz::Tz;
-use tokio::sync::mpsc;
 
-use super::projection::{Observation, RuntimeClientProjection, background_view, capability_view};
+use super::projection::{
+    Observation, RuntimeClientProjection, SubscriberPoll, background_view, capability_view,
+};
 use super::snapshot::{RuntimeClientAttemptPhase, RuntimeClientSnapshot};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
@@ -220,13 +270,18 @@ impl HostState {
     }
 }
 
-/// The bounded pending-observation queue of the mailbox seam.
+/// The tiny synchronization boundary between authoritative subsystems and
+/// the host.
 ///
-/// The mailbox observer fires while the mailbox lock is held and can
-/// therefore never take the host lock directly (the host drains the
-/// mailbox under its own lock). It queues here instead; the worker task
-/// and every host lock acquisition apply the queue under the host lock,
-/// preserving total order (the queue preserves push order).
+/// The mailbox, the background registry, and the capability coordinator all
+/// fire their observers while their own lock is held. None of them may take
+/// the host lock from there (see the lock-order graph in the module
+/// documentation), so each appends an immutable observation here and wakes
+/// the host worker. Every host lock acquisition drains this queue first, so
+/// queued observations fold in enqueue order.
+///
+/// This type is the leaf of the lock graph: it owns one mutex over a
+/// `VecDeque` plus a `Notify` and calls nothing.
 struct PendingObservations {
     /// The FIFO observation queue.
     queue: Mutex<VecDeque<Observation>>,
@@ -304,11 +359,24 @@ impl HostInner {
         )
     }
 
-    /// Spawns the projection worker: applies queued mailbox observations
-    /// promptly so subscribed clients observe enqueue/drain facts without
-    /// sending requests. The worker holds a weak handle and exits when the
-    /// host is dropped.
+    /// Spawns the projection worker: folds queued subsystem observations
+    /// promptly so subscribed clients observe mailbox, background, and
+    /// capability facts without sending requests.
+    ///
+    /// The worker exists because authoritative subsystems only *enqueue*
+    /// (see the lock-order graph): something must take the host lock to
+    /// fold what they enqueued. Correctness never depends on the worker —
+    /// every host lock acquisition drains the queue first, so a request
+    /// path always observes queued facts — only promptness for an idle
+    /// subscriber does.
+    ///
+    /// The worker holds a weak handle and exits when the host is dropped.
     fn ensure_worker(self: &Arc<Self>) {
+        // Construction may happen outside a runtime; a later call from a
+        // request path spawns the worker instead.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
         if self.worker_started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -559,6 +627,7 @@ impl RuntimeClientHost {
             .background()
             .install_observer(observer.clone());
         inner.capability.install_observer(observer);
+        inner.ensure_worker();
         Ok(Self { inner })
     }
 
@@ -586,7 +655,28 @@ impl RuntimeClientHost {
         &self.inner.conversation_id
     }
 
-    /// Admits one attachment (the `initialize` semantic operation).
+    /// Creates the transport-neutral semantic endpoint of this runtime.
+    ///
+    /// The endpoint is the boundary a transport (Issue #38 stdio/JSONL,
+    /// Issue #36 WebSocket) wraps: it accepts every
+    /// [`RuntimeClientRequest`](super::types::RuntimeClientRequest),
+    /// including `initialize`, and returns the correlated
+    /// [`RuntimeClientResponse`](super::types::RuntimeClientResponse). A
+    /// transport therefore never performs protocol negotiation, attachment
+    /// admission, identity allocation, or replacement/rejection semantics
+    /// itself.
+    #[must_use]
+    pub fn endpoint(&self) -> super::endpoint::RuntimeClientEndpoint {
+        super::endpoint::RuntimeClientEndpoint::new(self.clone())
+    }
+
+    /// Admits one attachment: the internal primitive behind the
+    /// `initialize` protocol method.
+    ///
+    /// This is an internal-shaped primitive, not the semantic protocol
+    /// entry point. Transports must go through
+    /// [`RuntimeClientEndpoint::handle_request`](super::endpoint::RuntimeClientEndpoint::handle_request)
+    /// with an `initialize` request, which owns the orchestration below.
     ///
     /// Protocol v1 allows at most one active attachment; a second
     /// simultaneous attach fails deterministically and never evicts the
@@ -596,8 +686,10 @@ impl RuntimeClientHost {
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::UnsupportedProtocolVersion`] for an
-    /// unsupported version and [`RuntimeClientError::AttachmentInUse`]
-    /// when an attachment is active.
+    /// unsupported version, [`RuntimeClientError::AttachmentInUse`] when an
+    /// attachment is active, and
+    /// [`RuntimeClientError::ProjectionExhausted`] once the observation
+    /// stream is over.
     pub fn attach(
         &self,
         protocol_version: u16,
@@ -616,9 +708,9 @@ impl RuntimeClientHost {
                 existing_attachment_id: existing.attachment_id.clone(),
             });
         }
+        let (snapshot, cursor) = state.projection.snapshot()?;
         state.next_attachment_seq = state.next_attachment_seq.saturating_add(1);
         let attachment_id = AttachmentId::new(format!("attachment-{}", state.next_attachment_seq));
-        let (snapshot, cursor) = state.projection.snapshot();
         state.attachment = Some(AttachmentState {
             attachment_id: attachment_id.clone(),
             subscriber_id: None,
@@ -765,8 +857,17 @@ impl RuntimeClientHost {
 
     /// Reads the authoritative snapshot and its cursor, linearized
     /// together.
-    #[must_use]
-    pub fn snapshot(&self) -> (RuntimeClientSnapshot, RuntimeClientCursor) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::ProjectionExhausted`] once the cursor
+    /// space is exhausted. After that point the projection can no longer
+    /// fold authoritative transitions, so the failure is reported
+    /// explicitly rather than by handing back a read model that silently
+    /// stopped tracking the runtime.
+    pub fn snapshot(
+        &self,
+    ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError> {
         let state = self.inner.lock_state();
         state.projection.snapshot()
     }
@@ -793,6 +894,7 @@ impl RuntimeClientHost {
         attachment_id: &AttachmentId,
         after_cursor: RuntimeClientCursor,
     ) -> Result<(EventSubscription, RuntimeClientResult), RuntimeClientError> {
+        self.inner.ensure_worker();
         let mut state = self.inner.lock_state();
         let previous_subscriber = match &state.attachment {
             Some(attachment) if attachment.attachment_id == *attachment_id => {
@@ -803,26 +905,38 @@ impl RuntimeClientHost {
         if let Some(subscriber_id) = previous_subscriber {
             state.projection.remove_subscriber(subscriber_id);
         }
-        let (subscriber_id, receiver) = state.projection.subscribe(after_cursor)?;
+        let (subscriber_id, notify) = state.projection.subscribe(after_cursor)?;
         state
             .attachment
             .as_mut()
             .expect("the attachment identity was just checked")
             .subscriber_id = Some(subscriber_id);
+        drop(state);
         Ok((
-            EventSubscription { receiver },
+            EventSubscription {
+                inner: Arc::new(SubscriptionInner {
+                    host: self.inner.clone(),
+                    subscriber_id,
+                    notify,
+                }),
+            },
             RuntimeClientResult::Subscribed { after_cursor },
         ))
     }
 
     /// Reads the active capability projection (the one semantic
     /// implementation shared with the snapshot).
-    #[must_use]
-    pub fn capability(&self) -> RuntimeClientResult {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::ProjectionExhausted`] once the
+    /// observation stream is over.
+    pub fn capability(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         let state = self.inner.lock_state();
-        RuntimeClientResult::Capability {
-            capabilities: state.projection.snapshot_ref().capabilities.clone(),
-        }
+        let snapshot = state.projection.snapshot_ref_checked()?;
+        Ok(RuntimeClientResult::Capability {
+            capabilities: snapshot.capabilities.clone(),
+        })
     }
 
     /// Inspects one background execution through the authoritative
@@ -886,6 +1000,17 @@ impl RuntimeClientHost {
 
 /// The observation seam implementations bridging the authoritative
 /// runtime owners into the one projection boundary.
+///
+/// Two shapes exist, and which one a callback uses is decided purely by
+/// whether the calling subsystem holds its own lock (see the lock-order
+/// graph in the module documentation):
+///
+/// - [`HostObserver::enqueue`] — for the mailbox, the background registry,
+///   and the capability coordinator, all of which fire while holding their
+///   authoritative lock. The observation is appended to the leaf queue and
+///   the host worker is woken. These paths never acquire `HostState`.
+/// - [`HostObserver::apply_direct`] — for `AgentExecution`, which holds no
+///   lock when it observes.
 pub(crate) struct HostObserver {
     inner: Arc<HostInner>,
 }
@@ -893,9 +1018,21 @@ pub(crate) struct HostObserver {
 impl HostObserver {
     /// Applies one observation directly under the host lock, applying
     /// queued pending observations first so total order is preserved.
+    ///
+    /// Only legal from a caller that holds no authoritative subsystem
+    /// lock.
     fn apply_direct(&self, observation: Observation) {
         let mut state = self.inner.lock_state();
         state.projection.apply(observation);
+    }
+
+    /// Appends one observation to the leaf queue and wakes the host
+    /// worker, without acquiring the host lock.
+    ///
+    /// This is the only shape legal from a subsystem observer that fires
+    /// while its authoritative lock is held.
+    fn enqueue(&self, observation: Observation) {
+        self.inner.pending.push(observation);
     }
 }
 
@@ -919,60 +1056,157 @@ impl AgentExecutionObserver for HostObserver {
     }
 }
 
+// The mailbox fires `on_enqueued`/`on_drained` while the mailbox lock is
+// held, and `admit_next_attempt` drains the mailbox under the host lock:
+// taking the host lock here would close the cycle. Enqueue only.
 impl InboundObserver for HostObserver {
     fn on_enqueued(&self, item: &InboundItem) {
-        self.inner
-            .pending
-            .push(Observation::InboundEnqueued(item.clone()));
+        self.enqueue(Observation::InboundEnqueued(item.clone()));
     }
 
     fn on_drained(&self, batch: &InboundBatch) {
-        self.inner
-            .pending
-            .push(Observation::InboundDrained(batch.clone()));
+        self.enqueue(Observation::InboundDrained(batch.clone()));
     }
 }
 
+// The registry fires `on_snapshot` while the registry lock is held, and
+// `background_status`/`background_cancel` call into the registry from the
+// host surface. Enqueue only, so no `HostState -> registry` ordering
+// discipline is ever required of a caller.
 impl BackgroundObserver for HostObserver {
     fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot) {
-        self.apply_direct(Observation::Background(snapshot.clone()));
+        self.enqueue(Observation::Background(snapshot.clone()));
     }
 }
 
+// The coordinator fires `on_snapshot` while the capability state lock is
+// held, with an attempt commit blocked behind it. Enqueue only, so an
+// authoritative capability commit never waits on the host lock.
 impl CapabilityObserver for HostObserver {
     fn on_snapshot(&self, snapshot: &crate::capabilities::CapabilitySnapshot) {
-        self.apply_direct(Observation::Capability(capability_view(snapshot)));
+        self.enqueue(Observation::Capability(capability_view(snapshot)));
+    }
+}
+
+/// One delivery of the Runtime Client observation stream.
+///
+/// Delivery is explicit in all four terminal shapes: a client can never
+/// confuse "nothing yet" with "the stream ended" or, critically, with
+/// "events were skipped".
+// The event variant is the overwhelmingly common one and is produced once
+// per delivered event; boxing it would add an allocation to every delivery
+// to shrink a short-lived stack value.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum EventDelivery {
+    /// The next event, at its published cursor. Cursors delivered to one
+    /// subscription are strictly contiguous within the retained stream.
+    Event(RuntimeClientProtocolEvent),
+    /// Nothing has been published after the subscription's cursor yet.
+    /// Only [`EventSubscription::try_next`] returns this.
+    Pending,
+    /// The subscription was released (detach, re-subscription, or a
+    /// dropped handle). The stream is over.
+    Closed,
+    /// The subscriber fell behind the bounded retention: the events it
+    /// still needed were evicted from the replay ring. This is reported
+    /// explicitly instead of skipping the gap, and it is stable — the
+    /// client must re-subscribe (or take a fresh snapshot) to continue.
+    ResyncRequired {
+        /// The cursor the subscription consumed through.
+        after_cursor: RuntimeClientCursor,
+        /// The oldest cursor the runtime can still serve.
+        earliest_serviceable: RuntimeClientCursor,
+    },
+    /// The cursor space is exhausted; nothing further will be published.
+    Exhausted,
+}
+
+/// The shared registration of one event subscription.
+///
+/// Dropping the last handle removes the registration from the projection,
+/// which is the same release an explicit detach performs.
+struct SubscriptionInner {
+    /// The host whose projection owns the registration.
+    host: Arc<HostInner>,
+    /// The opaque registration identity.
+    subscriber_id: u64,
+    /// The edge-triggered wakeup handle of this subscriber.
+    notify: Arc<tokio::sync::Notify>,
+}
+
+impl Drop for SubscriptionInner {
+    fn drop(&mut self) {
+        let mut state = self.host.lock_state();
+        state.projection.remove_subscriber(self.subscriber_id);
     }
 }
 
 /// The live delivery handle of one event subscription.
 ///
-/// The subscription observes the retained replay gap followed by every
-/// subsequently published event. When the owning attachment detaches (or
-/// re-subscribes), the delivery channel closes: `next` returns `None`.
+/// The handle owns **no** event buffer. It is a registration identity plus
+/// a wakeup handle over the projection's one bounded replay ring: reads
+/// pull the next retained event by cursor under the host lock. A stalled
+/// consumer therefore costs one cursor, never a growing queue, and can
+/// never make the runtime drop events silently — falling behind retention
+/// surfaces as [`EventDelivery::ResyncRequired`].
+///
+/// Cloning shares one registration; the registration is released when the
+/// last clone drops.
+#[derive(Clone)]
 pub struct EventSubscription {
-    receiver: mpsc::UnboundedReceiver<RuntimeClientProtocolEvent>,
+    inner: Arc<SubscriptionInner>,
 }
 
 impl core::fmt::Debug for EventSubscription {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("EventSubscription").finish()
+        f.debug_struct("EventSubscription")
+            .field("subscriber_id", &self.inner.subscriber_id)
+            .finish()
     }
 }
 
 impl EventSubscription {
-    /// Receives the next event of the observation stream.
-    ///
-    /// Returns `None` when the owning attachment detached or replaced the
-    /// subscription.
-    pub async fn next(&mut self) -> Option<RuntimeClientProtocolEvent> {
-        self.receiver.recv().await
+    /// Polls the projection once for the next retained event.
+    fn poll(&self) -> EventDelivery {
+        let mut state = self.inner.host.lock_state();
+        match state.projection.poll_subscriber(self.inner.subscriber_id) {
+            SubscriberPoll::Event(event) => EventDelivery::Event(event),
+            SubscriberPoll::Pending => EventDelivery::Pending,
+            SubscriberPoll::Closed => EventDelivery::Closed,
+            SubscriberPoll::Lagged {
+                after_cursor,
+                earliest_serviceable,
+            } => EventDelivery::ResyncRequired {
+                after_cursor,
+                earliest_serviceable,
+            },
+            SubscriberPoll::Exhausted => EventDelivery::Exhausted,
+        }
     }
 
-    /// Attempts to receive the next event without waiting.
+    /// Waits for the next delivery of the observation stream.
+    ///
+    /// Never returns [`EventDelivery::Pending`]: it parks on the
+    /// subscriber's wakeup handle until an event, a closure, a lag, or
+    /// exhaustion is observable. Parking holds no lock.
+    pub async fn next(&self) -> EventDelivery {
+        loop {
+            match self.poll() {
+                EventDelivery::Pending => {}
+                delivery => return delivery,
+            }
+            // `Notify::notify_one` stores one permit even with no waiter,
+            // so a publication between the poll above and this await is
+            // never missed.
+            self.inner.notify.notified().await;
+        }
+    }
+
+    /// Polls for the next delivery without waiting.
     #[must_use]
-    pub fn try_next(&mut self) -> Option<RuntimeClientProtocolEvent> {
-        self.receiver.try_recv().ok()
+    pub fn try_next(&self) -> EventDelivery {
+        self.poll()
     }
 }
 
@@ -1008,8 +1242,8 @@ mod tests {
     use tokio::sync::watch;
 
     use super::{
-        EventSubscription, HostConstructionError, RuntimeClientContextConfig, RuntimeClientHost,
-        RuntimeClientHostConfig,
+        EventDelivery, EventSubscription, HostConstructionError, RuntimeClientContextConfig,
+        RuntimeClientHost, RuntimeClientHostConfig,
     };
     use crate::context::{
         AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
@@ -1375,16 +1609,18 @@ mod tests {
 
     /// Receives events until the predicate matches, with a bounded count.
     async fn receive_until(
-        subscription: &mut EventSubscription,
+        subscription: &EventSubscription,
         mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
     ) -> Vec<RuntimeClientProtocolEvent> {
         let mut seen = Vec::new();
         loop {
-            let event =
+            let delivery =
                 tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
                     .await
-                    .expect("event stream must not stall")
-                    .expect("subscription must stay open");
+                    .expect("event stream must not stall");
+            let EventDelivery::Event(event) = delivery else {
+                panic!("subscription must stay open and contiguous, got {delivery:?}");
+            };
             let matched = predicate(&event);
             seen.push(event);
             if matched {
@@ -1522,7 +1758,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
 
@@ -1543,7 +1779,7 @@ mod tests {
         // The attempt settles asynchronously; the subscription observes the
         // terminal settlement exactly once.
         let mut settled = 0;
-        let events = receive_until(&mut subscription, |event| {
+        let events = receive_until(&subscription, |event| {
             if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
                 settled += 1;
                 return true;
@@ -1569,7 +1805,7 @@ mod tests {
 
         // The snapshot carries the committed canonical history and the
         // settled attempt.
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.messages.len(), 2, "user message + agent message");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
@@ -1615,7 +1851,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
 
@@ -1630,7 +1866,7 @@ mod tests {
 
         // Wait until the first request is in flight (the adapter has been
         // asked) so the second submit provably arrives while busy.
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AssistantTextDelta { .. })
         })
         .await;
@@ -1651,7 +1887,7 @@ mod tests {
 
         // While the attempt is parked, the second message remains pending
         // in the authoritative mailbox diagnostics.
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.inbound.pending.len(), 1);
         assert_eq!(snapshot.inbound.pending[0].message.id, second_id);
         assert_eq!(adapter.requests().len(), 1, "no new turn yet");
@@ -1659,7 +1895,7 @@ mod tests {
         // Release the parked turn: the safe boundary drains the queued
         // message and a second turn observes it.
         release_tx.send(true).expect("release");
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -1671,7 +1907,7 @@ mod tests {
                 .iter()
                 .any(|message| matches!(message, MessageBlock::User(user) if user.id == second_id))
         );
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(
             snapshot.inbound.pending.is_empty(),
             "the queued message was drained exactly once"
@@ -1707,7 +1943,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
 
@@ -1715,7 +1951,7 @@ mod tests {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
         })
         .await;
@@ -1729,7 +1965,7 @@ mod tests {
             response.result,
             Some(RuntimeClientResult::AttemptCancellationAccepted { .. })
         ));
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Running
@@ -1745,7 +1981,7 @@ mod tests {
         // Release the parked model: the adapter observes the attempt
         // cancellation and the loop settles cancelled — exactly once.
         release_tx.send(true).expect("release");
-        let events = receive_until(&mut subscription, |event| {
+        let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -1766,7 +2002,7 @@ mod tests {
             1,
             "terminal cancellation observed exactly once"
         );
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled {
@@ -1822,7 +2058,7 @@ mod tests {
         });
         // Wait for the attempt to be running.
         loop {
-            let (snapshot, _) = fixture.host.snapshot();
+            let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
             if snapshot
                 .attempt
                 .as_ref()
@@ -1839,7 +2075,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("reattach");
-        let (snapshot, cursor) = fixture.host.snapshot();
+        let (snapshot, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(
             matches!(
                 snapshot.attempt.expect("attempt view").phase,
@@ -1849,10 +2085,10 @@ mod tests {
         );
         // The attempt completes normally after release.
         release_tx.send(true).expect("release");
-        let mut subscription = second
+        let subscription = second
             .subscribe_events(cursor)
             .expect("resume from the retained cursor");
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(
                 event.event,
                 RuntimeClientEvent::AttemptSettled {
@@ -1915,7 +2151,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let (before, _) = fixture.host.snapshot();
+        let (before, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(before.background.len(), 1);
         assert!(matches!(
             before.background[0].state,
@@ -1926,7 +2162,7 @@ mod tests {
 
         // After detach the background execution still runs and the mailbox
         // item still pends.
-        let (after, _) = fixture.host.snapshot();
+        let (after, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(after.background.len(), 1);
         assert!(
             matches!(after.background[0].state, BackgroundLifecycle::Running),
@@ -1948,11 +2184,431 @@ mod tests {
             .wait_until_terminal(&execution_id)
             .await
             .expect("terminal");
-        let (final_snapshot, _) = fixture.host.snapshot();
+        let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             final_snapshot.background[0].state,
             BackgroundLifecycle::Succeeded
         ));
+    }
+
+    /// There is exactly one authoritative mutable canonical history owner
+    /// at a time, and ownership transfers at the attempt boundaries.
+    ///
+    /// This test inspects the host's own `canonical_history` — the thing
+    /// that would be the second authority if one existed — at each phase:
+    ///
+    /// ```text
+    /// idle        host history == []                     (host owns)
+    /// admission   host history == [user]  -> moved into AgentExecution
+    /// running     host history UNCHANGED  while the loop commits more
+    /// settlement  host history == the execution's final messages
+    /// ```
+    ///
+    /// The "running" step is the load-bearing one: the loop commits an
+    /// agent message and the projection mirrors it, while the host's copy
+    /// provably does not move. The host is therefore not a competing
+    /// mutable authority whose agreement happens to be checked at the end.
+    // One ownership lifecycle observed end to end: splitting it would lose
+    // the phase-to-phase continuity that is the whole point.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn canonical_history_has_one_owner_at_a_time() {
+        // Turn 1 calls a tool that parks. The loop therefore commits the
+        // agent message (the model stream ended) and then blocks in tool
+        // execution: exactly the "running, history already grown" window.
+        let (tool, mut tool_started, release) = ParkingBackgroundTool::new();
+        let definition = ToolDefinition {
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            ..tool.definition.clone()
+        };
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(definition.clone(), Arc::new(tool))
+            .expect("register the parking tool");
+        let call_id = ToolCallId::new("call-park");
+        let script = vec![
+            GatedStep::Emit(ModelEvent::Started),
+            GatedStep::Emit(ModelEvent::ToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call_id.clone(),
+                arguments_delta: "{}".to_owned(),
+            }),
+            GatedStep::Emit(ModelEvent::ToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCall {
+                    id: call_id,
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                    arguments: serde_json::json!({}),
+                },
+            }),
+            GatedStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ];
+        let (adapter, fixture) = host_fixture(
+            vec![script, one_turn_stop(), one_turn_stop()],
+            tools,
+            composer(),
+        )
+        .await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe");
+
+        // Idle: the host owns canonical history, and it is the projection's
+        // only source.
+        assert!(fixture.host.canonical_history().is_empty());
+        assert!(
+            fixture
+                .host
+                .snapshot()
+                .expect("snapshot")
+                .0
+                .messages
+                .is_empty()
+        );
+
+        attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(1),
+            content: submit_content("first"),
+        });
+
+        // Running: the loop committed the agent message (observable on the
+        // stream) and is now parked inside tool execution, so the attempt
+        // provably has not settled.
+        receive_until(&subscription, |event| {
+            matches!(
+                &event.event,
+                RuntimeClientEvent::MessageCommitted { message, .. }
+                    if matches!(message, MessageBlock::Agent(_))
+            )
+        })
+        .await;
+        tool_started
+            .wait_for(|started| *started)
+            .await
+            .expect("the parking tool started");
+        let during = fixture.host.canonical_history();
+        assert_eq!(
+            during.len(),
+            1,
+            "the host's history holds only the admitted turn: the attempt owns the rest"
+        );
+        assert!(matches!(during[0], MessageBlock::User(_)));
+        let (mirror, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(
+            mirror.messages.len(),
+            2,
+            "the projection mirrors the attempt's committed history"
+        );
+        assert!(fixture.host.has_current_attempt());
+
+        // An inbound message arriving now stays mailbox-owned: the host
+        // does not append it to a competing history.
+        attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(2),
+            content: submit_content("second"),
+        });
+        assert_eq!(
+            fixture.host.canonical_history().len(),
+            1,
+            "a busy-path submission never mutates canonical history"
+        );
+
+        // Releasing the tool lets the attempt finish its tool turn and then
+        // drain the mailbox at its safe boundary. The drained message joins
+        // the *execution's* history — the loop commits it — and the attempt
+        // continues rather than settling.
+        release.notify_one();
+        let settlement = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        let committed_during_attempt: Vec<&MessageBlock> = settlement
+            .iter()
+            .filter_map(|event| match &event.event {
+                RuntimeClientEvent::MessageCommitted { message, .. } => Some(message),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            committed_during_attempt
+                .iter()
+                .any(|message| matches!(message, MessageBlock::Tool(_))),
+            "the loop committed the tool message"
+        );
+        assert!(
+            committed_during_attempt
+                .iter()
+                .any(|message| matches!(message, MessageBlock::User(_))),
+            "the safe-boundary drain committed the queued inbound message into the attempt"
+        );
+        // (The host's copy is deliberately not read here: settlement has
+        // begun, so the ownership transfer may already have happened. The
+        // "frozen while running" assertion above is the load-bearing proof
+        // that the host never mutated a competing copy during the attempt.)
+
+        // A third submission while idle: its admission is the deterministic
+        // proof that settlement transferred the execution's final history
+        // back to the host — admission only happens once `finish_attempt`
+        // cleared the attempt slot, and it starts from `canonical_history`.
+        attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(3),
+            content: submit_content("third"),
+        });
+        receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+
+        // The next attempt's first request began from exactly the previous
+        // attempt's committed history.
+        let requests = adapter.requests();
+        assert_eq!(
+            requests.len(),
+            3,
+            "two turns in the first attempt, one in the second"
+        );
+        let previous_committed = requests[1].messages.len();
+        assert!(
+            requests[2].messages.len() > previous_committed,
+            "the next attempt started from the previous committed history \
+             ({} vs {previous_committed} messages)",
+            requests[2].messages.len()
+        );
+
+        // The externally visible history is one coherent sequence across
+        // the tool turn, the safe-boundary drain, and both attempts. The
+        // `debug_assert_eq!` in `finish_attempt` additionally verified, at
+        // each of the two settlements above, that the projection mirror
+        // equals the authoritative `AgentExecutionResult.messages`.
+        let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        let roles: Vec<&str> = final_snapshot
+            .messages
+            .iter()
+            .map(|message| match message {
+                MessageBlock::User(_) => "user",
+                MessageBlock::Agent(_) => "agent",
+                MessageBlock::Tool(_) => "tool",
+                MessageBlock::System(_) => "system",
+            })
+            .collect();
+        assert_eq!(
+            roles,
+            vec!["user", "agent", "tool", "user", "agent", "user", "agent"],
+            "one authoritative history, extended across the tool turn, the \
+             safe-boundary drain, and both attempts"
+        );
+    }
+
+    /// The lock-order invariant, made structurally testable: an
+    /// authoritative background registry transition **completes** while the
+    /// host lock is held by someone else.
+    ///
+    /// The interleaving is established with barriers, not timing:
+    ///
+    /// ```text
+    /// T1: snapshot()  -> takes HostState -> parks on the armed probe gate
+    /// T2: registry.cancel(id)
+    ///       -> takes the registry lock
+    ///       -> fires on_snapshot (registry lock still held)
+    ///       -> returns
+    /// test: recv() the completion token   <-- asserted BEFORE releasing T1
+    /// test: release the gate; T1 finishes
+    /// ```
+    ///
+    /// The token arriving before the release is the proof: the observer
+    /// never acquired `HostState`, so there is no `registry -> HostState`
+    /// edge to pair with any `HostState -> registry` call on the host
+    /// surface (`background_status`, `background_cancel`). If the observer
+    /// took the host lock instead, T2 could not have completed here.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_background_transition_completes_while_the_host_lock_is_held() {
+        let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
+        let (_, fixture) = host_fixture_probe(probe.clone(), Vec::new()).await;
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = fixture
+            .host
+            .inner
+            .tool_runtime
+            .background()
+            .prepare_dispatch(
+                &ToolInvocation {
+                    call_id: ToolCallId::new("call-bg"),
+                    tool_id: ToolId::new("tool-bg"),
+                    tool_name: "bg".to_owned(),
+                    mode: ToolInvocationMode::Background,
+                    arguments: serde_json::json!({}),
+                },
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+            .host
+            .inner
+            .tool_runtime
+            .background()
+            .commit_dispatch(prepared, &CancellationSignal::new())
+        else {
+            panic!("accepted dispatch");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("background runner started");
+
+        // T1 takes the host lock and parks inside it.
+        probe.arm_snapshot();
+        let parked_host = fixture.host.clone();
+        let snapshot_task = tokio::task::spawn_blocking(move || parked_host.snapshot());
+        probe.wait_snapshot_entered();
+
+        // T2 commits an authoritative registry transition and reports
+        // completion.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let registry = fixture.host.inner.tool_runtime.background().clone();
+        let cancel_id = execution_id.clone();
+        let transition = tokio::task::spawn_blocking(move || {
+            let snapshot = registry.cancel(&cancel_id).expect("known execution");
+            done_tx.send(()).expect("the test still listens");
+            snapshot
+        });
+
+        // The proof: completion is observable while T1 still holds the host
+        // lock.
+        done_rx
+            .recv()
+            .expect("an authoritative registry transition never waits on the host lock");
+        let cancelled = transition.await.expect("transition task");
+        assert!(matches!(cancelled.state, BackgroundLifecycle::Cancelling));
+
+        probe.release_snapshot();
+        snapshot_task
+            .await
+            .expect("snapshot task")
+            .expect("snapshot");
+
+        // The observation was not lost by being enqueued: the next host
+        // lock acquisition folds it.
+        release.notify_one();
+        fixture
+            .host
+            .inner
+            .tool_runtime
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(snapshot.background.len(), 1);
+        assert_eq!(snapshot.background[0].execution_id, execution_id);
+    }
+
+    /// The same lock-order invariant for the capability coordinator, with a
+    /// stronger barrier: the coordinator is parked *inside* `commit`, with
+    /// its state lock held, and the host lock is taken from another thread
+    /// while it is parked.
+    ///
+    /// ```text
+    /// T1: coordinator.commit(candidate)
+    ///       -> takes the capability state lock
+    ///       -> parks on the commit-boundary hook (lock still held)
+    /// test: snapshot() from this thread -> takes HostState, returns
+    /// test: release the hook; commit fires on_snapshot and completes
+    /// ```
+    ///
+    /// The host lock being acquirable while the capability lock is held
+    /// rules out `HostState -> capability`; the commit completing without
+    /// the host lock (asserted below while nothing holds it, and by the
+    /// background test's mirror interleaving) rules out the reverse edge.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_capability_commit_never_waits_on_the_host_lock() {
+        let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
+        let (_, fixture) = host_fixture_probe(probe.clone(), Vec::new()).await;
+        let (before, _) = fixture.host.snapshot().expect("snapshot");
+
+        // A non-noop candidate: one discoverable Skill package.
+        let workspace = fixture
+            .host
+            .inner
+            .tool_runtime
+            .workspace()
+            .root()
+            .to_path_buf();
+        let skill = workspace.join(".agents").join("skills").join("probe-skill");
+        std::fs::create_dir_all(&skill).expect("skill dir");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: probe-skill\ndescription: \"a probe skill\"\n---\nbody\n",
+        )
+        .expect("SKILL.md");
+        let candidate = fixture
+            .coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare candidate");
+
+        // T1 parks inside commit while holding the capability state lock.
+        let hook = Arc::new(crate::capabilities::test_sync::CommitBoundaryHook::default());
+        fixture
+            .coordinator
+            .install_commit_boundary_hook(hook.clone());
+        let committing = fixture.coordinator.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            let snapshot = committing.commit(candidate);
+            done_tx.send(()).expect("the test still listens");
+            snapshot
+        });
+        hook.wait_entered();
+
+        // The host lock is acquirable while the capability state lock is
+        // held: there is no `HostState -> capability` edge.
+        let (during, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(
+            during.capabilities.revision, before.capabilities.revision,
+            "the uncommitted candidate is not observable"
+        );
+
+        // Release: the commit fires its observer with the capability lock
+        // still held and completes without ever taking the host lock.
+        hook.proceed();
+        done_rx
+            .recv()
+            .expect("an authoritative capability commit never waits on the host lock");
+        let committed = commit_task
+            .await
+            .expect("commit task")
+            .expect("commit succeeds");
+        assert!(committed.revision() > before.capabilities.revision);
+
+        // The enqueued observation folds at the next host lock acquisition.
+        let (after, _) = fixture.host.snapshot().expect("snapshot");
+        assert_eq!(after.capabilities.revision, committed.revision());
+        assert!(
+            after
+                .capabilities
+                .skills
+                .iter()
+                .any(|entry| entry.name == "probe-skill"),
+            "the capability projection folded the committed activation"
+        );
     }
 
     /// The exact snapshot/cursor race: a transition concurrent with a
@@ -1982,7 +2638,10 @@ mod tests {
         // The submit's enqueue pushed its observation and its admission is
         // blocked on the host lock the snapshot holds.
         snapshot_probe.release_snapshot();
-        let (snapshot, cursor) = snapshot_task.await.expect("snapshot task");
+        let (snapshot, cursor) = snapshot_task
+            .await
+            .expect("snapshot task")
+            .expect("snapshot");
         let accepted = submit_task.await.expect("submit task");
         assert!(matches!(
             accepted,
@@ -1995,10 +2654,10 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(cursor)
             .expect("resume after the snapshot cursor");
-        let events = receive_until(&mut subscription, |event| {
+        let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::InboundEnqueued { .. })
         })
         .await;
@@ -2012,7 +2671,7 @@ mod tests {
                 .any(|event| matches!(event.event, RuntimeClientEvent::InboundEnqueued { .. }))
         );
         // Drain the attempt so the fixture settles cleanly.
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -2026,7 +2685,7 @@ mod tests {
         let probe = Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default());
         let (_, fixture) = host_fixture_probe(probe.clone(), vec![one_turn_stop()]).await;
         // Baseline: an idle host at some cursor C.
-        let (before, cursor) = fixture.host.snapshot();
+        let (before, cursor) = fixture.host.snapshot().expect("snapshot");
         assert!(before.inbound.pending.is_empty());
 
         probe.arm_publish();
@@ -2046,7 +2705,10 @@ mod tests {
         // Release the publication; the snapshot then acquires the lock.
         probe_snapshot.release_publish();
         let _accepted = submit_task.await.expect("submit task");
-        let (after_snapshot, after_cursor) = snapshot_task.await.expect("snapshot task");
+        let (after_snapshot, after_cursor) = snapshot_task
+            .await
+            .expect("snapshot task")
+            .expect("snapshot");
         // The transition is already reflected: the cursor advanced and the
         // events are either in the snapshot's state or replayable before
         // it — never lost.
@@ -2055,16 +2717,18 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(cursor)
             .expect("resume from the pre-transition cursor");
         let mut saw_inbound = false;
         loop {
-            let event =
+            let delivery =
                 tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
                     .await
-                    .expect("stream must not stall")
-                    .expect("subscription stays open");
+                    .expect("stream must not stall");
+            let EventDelivery::Event(event) = delivery else {
+                panic!("subscription stays open and contiguous, got {delivery:?}");
+            };
             if matches!(event.event, RuntimeClientEvent::InboundEnqueued { .. }) {
                 saw_inbound = true;
             }
@@ -2094,14 +2758,14 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        let events = receive_until(&mut subscription, |event| {
+        let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -2113,10 +2777,10 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("reattach");
-        let mut second_subscription = second
+        let second_subscription = second
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("resume from the retained stream");
-        let replayed = receive_until(&mut second_subscription, |event| {
+        let replayed = receive_until(&second_subscription, |event| {
             event.cursor == terminal_cursor
         })
         .await;
@@ -2182,7 +2846,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.background[0].state,
             BackgroundLifecycle::Running
@@ -2224,7 +2888,7 @@ mod tests {
             .await
             .expect("terminal");
         assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Cancelled);
         assert!(snapshot.background[0].result.is_some());
     }
@@ -2273,21 +2937,21 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
 
         // The detached execution remains visible after the attempt
         // terminated and settles on its own schedule.
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
@@ -2325,14 +2989,14 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        let events = receive_until(&mut subscription, |event| {
+        let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AgentStatusComposed { .. })
         })
         .await;
@@ -2346,7 +3010,7 @@ mod tests {
         // The model request is recorded slightly after the status
         // observation; wait for the attempt to settle so the request is
         // provably recorded.
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -2367,7 +3031,7 @@ mod tests {
             crate::runtime_client::snapshot::RuntimeClientStatusSection::Facts { facts }
                 if facts.iter().any(|fact| fact.label == "extension" && fact.value == "fact")
         )));
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.status.expect("status view").rendered,
             model_rendered
@@ -2396,14 +3060,14 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let mut subscription = attachment
+        let subscription = attachment
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("go"),
         });
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
         })
         .await;
@@ -2428,7 +3092,7 @@ mod tests {
 
         // The current attempt continues to settlement; detach still works.
         release_tx.send(true).expect("release");
-        receive_until(&mut subscription, |event| {
+        receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
@@ -2437,7 +3101,7 @@ mod tests {
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach after shutdown still works");
-        let (snapshot, _) = fixture.host.snapshot();
+        let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
