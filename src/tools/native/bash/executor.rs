@@ -14,6 +14,7 @@ use super::capture::{
     BashProcessControlError, CapturePark, PreviewCapture, await_drain, consume_combined,
     spool_stream,
 };
+use super::input::BashInput;
 #[cfg(test)]
 use crate::runtime::process_runner::RunnerTestControl;
 use crate::runtime::process_runner::{
@@ -280,19 +281,12 @@ async fn run_bash(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
-    let Some(object) = invocation.arguments.as_object() else {
-        return failed_result("bash arguments must be an object");
+    let input = match BashInput::parse(&invocation.arguments) {
+        Ok(input) => input,
+        Err(error) => return failed_result(error),
     };
-    let Some(command) = object.get("command").and_then(serde_json::Value::as_str) else {
-        return failed_result("bash requires a string command");
-    };
-    if command.is_empty() {
-        return failed_result("bash requires a non-empty command");
-    }
-    let explicit_timeout = object
-        .get("timeout_ms")
-        .and_then(serde_json::Value::as_u64)
-        .map(Duration::from_millis);
+    let command = input.command.as_str();
+    let explicit_timeout = input.explicit_timeout();
     let timeout = match invocation.mode {
         // Foreground: the omitted timeout uses the default foreground
         // timeout; an explicit timeout overrides it.

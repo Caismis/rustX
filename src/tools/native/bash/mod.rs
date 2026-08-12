@@ -123,6 +123,7 @@
 
 mod capture;
 mod executor;
+mod input;
 // The supervisor is not a separate tool: it is an implementation detail of
 // Bash execution ownership, owned by this module.
 #[cfg(unix)]
@@ -133,6 +134,8 @@ mod tests;
 
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::types::ToolInvocationPolicy;
+
+use input::BashInput;
 
 #[cfg(test)]
 pub(crate) use executor::BashTestControl;
@@ -145,20 +148,11 @@ pub const NAME: &str = "bash";
 #[must_use]
 pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
-        native_definition(
+        native_definition::<BashInput>(
             "tool-bash",
             NAME,
             "Run one non-interactive /bin/bash command inside the workspace with an explicit \
              environment and supervised process ownership.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                    "timeout_ms": {"type": "integer", "minimum": 1}
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
             policy,
         ),
         std::sync::Arc::new(BashTool::new()),

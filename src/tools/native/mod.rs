@@ -33,6 +33,7 @@ mod bash;
 mod edit;
 mod glob;
 mod grep;
+mod input;
 mod read;
 mod registration;
 mod support;

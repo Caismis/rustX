@@ -6,6 +6,11 @@
 //! binary input fails explicitly rather than fabricating text. Path
 //! resolution goes through the workspace contract — nothing outside the
 //! workspace is ever read.
+//!
+//! The model-facing argument contract is the typed [`ReadInput`]; the
+//! canonical schema is generated from it.
+
+mod input;
 
 use futures_util::future::BoxFuture;
 
@@ -17,6 +22,8 @@ use crate::tools::types::{
     ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolResultContent, TruncationState,
 };
 
+use input::ReadInput;
+
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "read";
 
@@ -24,20 +31,10 @@ pub const NAME: &str = "read";
 #[must_use]
 pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
-        native_definition(
+        native_definition::<ReadInput>(
             "tool-read",
             NAME,
             "Read a UTF-8 text file inside the workspace with 1-based line slicing.",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "start_line": {"type": "integer", "minimum": 1},
-                    "line_count": {"type": "integer", "minimum": 1}
-                },
-                "required": ["path"],
-                "additionalProperties": false
-            }),
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -61,21 +58,12 @@ fn run_read(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
-    let Some(object) = invocation.arguments.as_object() else {
-        return failed("read arguments must be an object");
+    let input = match ReadInput::parse(&invocation.arguments) {
+        Ok(input) => input,
+        Err(error) => return failed(error),
     };
-    let Some(path) = object.get("path").and_then(serde_json::Value::as_str) else {
-        return failed("read requires a string path");
-    };
-    let start_line = object
-        .get("start_line")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(1);
-    let line_count = object
-        .get("line_count")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(200);
-    let resolved = match context.workspace.resolve(path) {
+    let (start_line, line_count) = (input.start_line(), input.line_count());
+    let resolved = match context.workspace.resolve(&input.path) {
         Ok(resolved) => resolved,
         Err(error) => return failed(error.to_string()),
     };

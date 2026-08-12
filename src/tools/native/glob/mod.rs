@@ -6,6 +6,11 @@
 //! lexicographically so physical filesystem enumeration order can never
 //! become result order, bounded by [`MAX_GLOB_RESULTS`] with explicit
 //! truncation reporting.
+//!
+//! The model-facing argument contract is the typed [`GlobInput`]; the
+//! canonical schema is generated from it.
+
+mod input;
 
 use std::path::Path;
 
@@ -18,6 +23,8 @@ use crate::tools::native::support::{failed_result, success_json_with};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
+use input::GlobInput;
+
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "glob";
 
@@ -25,19 +32,10 @@ pub const NAME: &str = "glob";
 #[must_use]
 pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
-        native_definition(
+        native_definition::<GlobInput>(
             "tool-glob",
             NAME,
             "List workspace-relative paths matching a glob pattern (no gitignore semantics).",
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "path": {"type": "string", "default": "."}
-                },
-                "required": ["pattern"],
-                "additionalProperties": false
-            }),
             policy,
         ),
         std::sync::Arc::new(GlobTool),
@@ -61,16 +59,11 @@ fn run_glob(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
-    let Some(object) = invocation.arguments.as_object() else {
-        return failed_result("glob arguments must be an object");
+    let input = match GlobInput::parse(&invocation.arguments) {
+        Ok(input) => input,
+        Err(error) => return failed_result(error),
     };
-    let Some(pattern) = object.get("pattern").and_then(serde_json::Value::as_str) else {
-        return failed_result("glob requires a string pattern");
-    };
-    let path = object
-        .get("path")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(".");
+    let pattern = input.pattern.as_str();
     let matcher = match globset::GlobBuilder::new(pattern)
         .literal_separator(true)
         .build()
@@ -79,7 +72,7 @@ fn run_glob(
         Ok(matcher) => matcher,
         Err(error) => return failed_result(format!("invalid glob pattern {pattern:?}: {error}")),
     };
-    let root = match context.workspace.resolve(path) {
+    let root = match context.workspace.resolve(&input.path) {
         Ok(root) => root,
         Err(error) => return failed_result(error.to_string()),
     };
