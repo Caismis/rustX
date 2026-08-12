@@ -1185,6 +1185,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
+- Runtime Client Protocol v1 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -1192,6 +1193,164 @@ The outermost layer exposes the runtime to humans and other systems:
 - AG-UI projection
 
 AG-UI is an output projection, not the internal durable event model.
+
+#### Runtime Client Protocol v1 implementation (Issue #37)
+
+Issue #37 implements the one external semantic normalization boundary in
+`src/runtime_client`:
+
+```text
+canonical runtime state / internal RuntimeEvent
+                |
+                v
+ deterministic Runtime Client projection
+                |
+                v
+ RuntimeClientEvent / RuntimeClientSnapshot
+                |
+                v
+      Runtime Client Protocol v1
+```
+
+The governing invariant is that all authoritative execution and
+conversation state originates from rustX Runtime; external clients observe
+deterministic projections and never become a second authority. The
+internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
+the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
+explicit runtime-owned projection types with their own versioning
+(`RUNTIME_CLIENT_PROTOCOL_VERSION_V1`, independent from
+`EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
+version), lifecycle semantics, and cursor domain
+(`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL, Issue
+#36 WebSocket) wrap this semantic layer without redefining it, and a
+future AG-UI adapter consumes this projection as its only source — there
+is no second AG-UI interpretation path directly from internal runtime
+events. The existing `src/protocol` boundary remains the compiled
+`RuntimeManifest` protocol; the two protocols are not mixed.
+
+Module ownership:
+
+```text
+runtime_client/types.rs        protocol version, cursor, attachment/request
+                               ids, the typed request/response/event
+                               envelope, method results, typed errors
+runtime_client/event.rs        RuntimeClientEvent (external vocabulary)
+runtime_client/snapshot.rs     RuntimeClientSnapshot read model
+runtime_client/projection.rs   RuntimeClientProjection: the one
+                               linearization owner (fold, cursor
+                               allocation, bounded replay, subscribers)
+runtime_client/host.rs         RuntimeClientHost: conversation
+                               coordinator, canonical history between
+                               attempts, current-attempt handle,
+                               observer wiring, admission, shutdown
+runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
+                               RAII/explicit detach, request dispatch,
+                               event subscription delivery
+```
+
+- **One linearization owner.** The host guards one state instance with
+  one lock. Fold, cursor allocation, event publication, bounded replay
+  retention, subscriber delivery, snapshot reads, attachment
+  admission/detach, the current-attempt slot, canonical-history swap, and
+  shutdown decisions all serialize through it, so snapshot/cursor,
+  cancel-current, terminal settlement, and admission linearize by
+  synchronization, never by timing.
+- **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
+  cursor }` where the snapshot describes all Runtime Client state through
+  cursor C, and a subscription after C observes every subsequently
+  published event or fails explicitly with `resync_required`. This holds
+  by construction (one boundary), not by luck.
+- **RuntimeEvent mapping policy.** Every internal event is classified
+  PROJECT / FOLD INTO CLIENT STATE ONLY / INTERNAL in the projection
+  owner: attempt lifecycle/settlement, streaming output, tool-call
+  assembly, and foreground/background tool lifecycle project; turn
+  counting and final usage fold; model request mechanics and compaction
+  mechanics stay internal. Internal `RuntimeEvent` evolution therefore
+  cannot silently break Runtime Client Protocol v1.
+- **Streaming repair.** The snapshot carries an in-flight agent output
+  view (accumulated blocks) and foreground tool views keyed by the
+  logical tool-call identity, so a client repairing after `resync`
+  reconstructs every client-visible effect without duplicated or missing
+  semantic output. Parallel physical completion never corrupts logical
+  identities.
+- **Bounded pre-M8 replay.** A finite in-memory ring
+  (`RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT = 4096`, configurable) serves
+  resume after retained cursors; expired or ahead-of-stream cursors fail
+  with `resync_required`. There is no Event Journal, no persistence, and
+  no crash-safe replay claim (M8 owns durability).
+- **Attachment lifecycle.** Protocol v1 admits at most one active
+  attachment: the first attach succeeds, a second fails with
+  `attachment_in_use` and never evicts the first, detach (explicit or
+  RAII drop) releases ownership, reconnects receive a fresh attachment
+  identity, and request ids are attachment-scoped. Detach changes only
+  attachment state: it never cancels the attempt, never cancels
+  conversation-owned background work, never drains the mailbox, and
+  never mutates canonical history or capability state.
+- **Current-attempt coordination.** The host owns the current-attempt
+  slot and the exact `AgentCancellation` the attempt task runs against;
+  `cancel_current_attempt` requests cancellation under the one boundary
+  and its acceptance response is never terminal settlement (the Agent
+  Loop owns settlement, observed asynchronously). The host does not own a
+  second attempt state machine.
+- **Canonical history.** Between attempts the host owns canonical
+  conversation history; the loop owns its working copy during an
+  attempt; at settlement the host replaces its history with the
+  authoritative `AgentExecutionResult.messages` under the one boundary
+  and verifies the projection mirror. The projection mirror is never an
+  independently mutable history.
+- **Admission.** `submit_inbound` stamps runtime-owned metadata
+  (identity, mailbox sequence, timestamp, provenance), enqueues into the
+  authoritative mailbox, and starts an attempt when idle; while busy the
+  message waits for the loop's safe-boundary drain. Success means
+  accepted/admitted, never assistant-finished.
+- **Mailbox diagnostics.** The projection mirrors enqueue/drain facts
+  (pending items in `InboundSequence` order, latest drain watermark and
+  count) from an observation seam fired at the mailbox linearization
+  points; the mailbox observer queues observations (the host drains the
+  mailbox under its own lock) and a worker task plus every lock
+  acquisition applies them in total order. `RuntimeClientCursor` remains
+  a distinct domain from `InboundSequence`; clients can never drain or
+  mutate the mailbox. Background terminal notifications enqueue through
+  the same semantic path as every other mailbox state.
+- **Background projection.** The authoritative
+  `ConversationBackgroundRegistry` is projected through a read-only
+  observation seam: `BackgroundExecutionUpdated` events and the snapshot
+  background section carry execution identity, tool identity/name,
+  lifecycle, latest bounded progress, and terminal result. Detached work
+  survives attempt termination and client detach; protocol
+  `background_status`/`background_cancel` use the registry authority, and
+  cancel acceptance is distinct from terminal settlement.
+- **Capability/tool/Skill inspection.** One semantic projection derives
+  from the active `CapabilitySnapshot`: the revision, a deterministic
+  tool catalog (id, name, description, input schema, execution/
+  concurrency/replay policies, origin builtin/MCP/Python), and a
+  deterministic Skill catalog (identity, version, name, description).
+  Executors, environment paths, package-manager state, and `SKILL.md`
+  bodies never appear; ordering is deterministic; inspection never
+  mutates the capability set.
+- **Agent Status projection.** The loop observes the exact composed
+  `AgentStatus` (one clock sample, one provider invocation set) at
+  composition time; the client view carries the structured sections plus
+  the canonical rendered representation derived from the same
+  composition. The client never triggers a second composition and never
+  parses the rendered prompt text to recover structure.
+- **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
+  `request(id, method + typed params)`, `response(id, result | error)`,
+  and `event(cursor + typed payload)` with no request ids on
+  notifications. Every v1 method is client-initiated
+  (`initialize`, `submit_inbound`, `cancel_current_attempt`,
+  `snapshot_get`, `subscribe_events`, `capability_get`,
+  `background_status`, `background_cancel`, `detach`, `shutdown`).
+  Typed errors distinguish `unsupported_protocol_version`,
+  `attachment_in_use`, `not_attached`, `invalid_request`,
+  `no_current_attempt`, `unknown_background_execution`,
+  `resync_required`, `runtime_shutdown`, `invalid_state`,
+  `projection_exhausted`, and `runtime_failure` — provider SDK errors and
+  internal synchronization failures are never exposed.
+- **Shutdown vs detach.** `shutdown` accepts the narrow local-runtime
+  shutdown (no further inbound admission, current attempt continues to
+  settlement); it is not detach and not cancellation.
+
 
 ## 3. Dependency rule
 

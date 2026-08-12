@@ -921,6 +921,79 @@ message role, history shape, or timestamps:
   `ContextRuntime`; there is no no-context execution mode and no Agent
   Status disable flag.
 
+## Runtime Client projection (Issue #37)
+
+The Runtime Client boundary (`src/runtime_client`) is the one external
+semantic normalization boundary. The frozen invariants:
+
+- **Runtime is the sole semantic authority; Runtime Client state is a
+  deterministic external projection.** Internal `RuntimeEvent` is an
+  execution-fact vocabulary, never the wire contract; `RuntimeClientEvent`
+  and `RuntimeClientSnapshot` are explicit runtime-owned projection types
+  with their own versioning, lifecycle, and cursor domain. Every external
+  observation is classified PROJECT / FOLD INTO CLIENT STATE ONLY /
+  INTERNAL by one mapping owner.
+- **Client detach never implies semantic cancellation.** Detaching an
+  attachment changes only attachment state; the current attempt,
+  conversation-owned background executions, mailbox contents, canonical
+  conversation history, and capability state are untouched. Detach never
+  calls attempt/background cancellation and never drains the mailbox.
+- **RuntimeClientCursor is distinct from mailbox and Event Journal
+  ordering domains.** It is never an alias of `u64`, never
+  `InboundSequence`, never `RuntimeEventEnvelope.sequence`, never a
+  future Event Journal sequence. Cursor allocation is committed by
+  exactly one linearization owner together with event publication;
+  overflow fails explicitly and never wraps.
+- **A snapshot returned at cursor C contains all Runtime Client state
+  through C.** Fold, cursor allocation, event publication, replay
+  retention, subscriber delivery, snapshot reads, attachment
+  admission/detach, the current-attempt slot, canonical-history swap, and
+  shutdown decisions serialize through one synchronization boundary — no
+  snapshot may read several subsystem locks and hope nothing changed
+  between them.
+- **A successful resume after C observes every subsequent Runtime Client
+  event, otherwise the runtime reports `resync_required`.** The retained
+  replay gap is replayed under the same boundary that registers the
+  subscriber, so no resume silently jumps and no gap exists. Replay is
+  bounded, in-memory, and non-durable; there is no Event Journal, no
+  crash-safe replay, and no durable-cursor claim before M8.
+- **Runtime Client protocol versioning is independent from internal
+  RuntimeEvent/Event Journal schema versioning.** Version negotiation is
+  explicit at attachment admission; v1 rejects unsupported versions
+  explicitly and supports no parallel protocol versions.
+- **Client projection never becomes canonical conversation history,
+  mailbox authority, background ownership, or capability ownership.**
+  The conversation coordinator owns canonical history between attempts
+  (the loop owns its working copy during an attempt; at settlement the
+  authoritative `AgentExecutionResult.messages` replace the coordinator's
+  copy and the projection mirror is verified against them). The mailbox,
+  the background registry, and the capability coordinator remain the
+  authoritative owners; the projection observes them through read-only
+  seams.
+- **One active attachment.** Protocol v1 admits at most one attachment
+  per runtime instance; a second attach fails deterministically without
+  evicting the first; reconnect receives a fresh attachment identity;
+  request ids are attachment-scoped; cursor/replay state belongs to the
+  runtime observation stream and survives detach.
+- **Current-attempt coordination is one boundary.** The current-attempt
+  slot, `cancel_current_attempt`, snapshots, the terminal Runtime Client
+  event, and the next admitted attempt linearize through the one host
+  lock. The cancellation acceptance response is never terminal
+  settlement: the Agent Loop remains the settlement authority, and the
+  coordinator holds the exact cancellation trigger the attempt task runs
+  against.
+- **One Agent Status composition.** The model path and the Runtime Client
+  view consume the exact composed status of one request preparation (one
+  clock sample, one provider invocation set); the client never triggers a
+  second composition and never parses the rendered attachment to recover
+  structure.
+- **Mutations are acceptances.** A successful `submit_inbound`,
+  `cancel_current_attempt`, `background_cancel`, or `shutdown` response
+  means the runtime accepted/admitted the operation at its semantic
+  commit point, never that unrelated model/tool/background settlement
+  finished. State changes are observed through Runtime Client events and
+  snapshots.
+
 ## Durability
 
 Production runtime events are persisted before external publication.
