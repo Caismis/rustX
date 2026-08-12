@@ -50,6 +50,17 @@ use rustx::tools::types::{
     ToolInvocationMode,
 };
 
+/// The explicitly composed native tool plane.
+const NATIVE_TOOL_NAMES: [&str; 7] = [
+    "read",
+    "write",
+    "edit",
+    "glob",
+    "grep",
+    "bash",
+    "background_task",
+];
+
 /// The canonical definition of one registered native tool.
 fn definition(fixture: &common::NativeFixture, name: &str) -> ToolDefinition {
     fixture
@@ -96,16 +107,7 @@ fn properties(schema: &serde_json::Value) -> Vec<String> {
 #[test]
 fn generated_native_schemas_are_canonical_root_object_schemas() {
     let fixture = common::native_fixture();
-    let names = [
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-        "background_task",
-    ];
-    for name in names {
+    for name in NATIVE_TOOL_NAMES {
         let schema = definition(&fixture, name).input_schema;
         validate_canonical_schema(&schema)
             .unwrap_or_else(|error| panic!("{name} schema is canonical: {error}"));
@@ -129,27 +131,37 @@ fn generated_native_schemas_are_canonical_root_object_schemas() {
     }
 }
 
-/// The optional properties of the current native input contracts, with the
-/// single non-null type each one declares today.
+/// Every optional property of the current native input contracts — the
+/// ones that express omission through `Option<T>` or a serde default —
+/// with the single non-null type each one declares today.
 ///
 /// This is the concrete list the optional-non-nullable invariant is stated
 /// over. It is deliberately *not* a rule about every property of every
-/// schema: a future native contract is free to use a composite schema
-/// (`anyOf`, `oneOf`, a union type) where that is the right model-facing
-/// contract — the invariant only forbids picking up nullability implicitly
-/// from a Rust `Option<T>` that exists to express omission.
-const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 5] = [
+/// schema: a future native contract is free to use a composite or
+/// explicitly nullable schema (`anyOf`, `oneOf`, a union type) where that
+/// is the right model-facing contract — the invariant only forbids picking
+/// up nullability *implicitly* from a Rust field that exists to express
+/// omission.
+const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 8] = [
     ("read", "start_line", "integer"),
     ("read", "line_count", "integer"),
-    ("bash", "timeout_ms", "integer"),
-    ("grep", "glob", "string"),
     ("edit", "replace_all", "boolean"),
+    ("glob", "path", "string"),
+    ("grep", "path", "string"),
+    ("grep", "glob", "string"),
+    ("grep", "case_sensitive", "boolean"),
+    ("bash", "timeout_ms", "integer"),
 ];
 
 /// Each current optional native property means the property may be
 /// *absent*: it stays out of `required`, and its generated contract does
 /// not admit `null` just because the Rust field expresses omission with an
 /// `Option`/`default`.
+///
+/// The list is also proven complete: every property of every native
+/// contract that is absent from `required` is one of the properties this
+/// invariant is stated over, so a newly added optional property cannot
+/// silently escape it.
 #[test]
 fn optional_native_properties_are_absent_never_null() {
     let fixture = common::native_fixture();
@@ -170,6 +182,23 @@ fn optional_native_properties_are_absent_never_null() {
              nullable union"
         );
     }
+
+    for name in NATIVE_TOOL_NAMES {
+        let schema = definition(&fixture, name).input_schema;
+        let required = required(&schema);
+        for property in properties(&schema)
+            .into_iter()
+            .filter(|property| !required.contains(property))
+        {
+            assert!(
+                OPTIONAL_NATIVE_PROPERTIES
+                    .iter()
+                    .any(|(tool, listed, _)| *tool == name && *listed == property),
+                "{name}.{property} is optional but is not covered by the \
+                 optional-non-nullable invariant"
+            );
+        }
+    }
 }
 
 /// The optional-non-nullable contract holds at the runtime validation
@@ -178,75 +207,111 @@ fn optional_native_properties_are_absent_never_null() {
 /// `null` is rejected by the registry preflight before any invocation
 /// exists.
 ///
-/// The cases cover every entry of [`OPTIONAL_NATIVE_PROPERTIES`], which is
-/// every optional integer, string, and boolean property the native tools
-/// declare today.
+/// The cases cover every entry of [`OPTIONAL_NATIVE_PROPERTIES`] — every
+/// optional integer, string, and boolean property the native tools declare
+/// today — and that coverage is asserted, not assumed.
 #[test]
 fn explicit_null_is_rejected_for_optional_native_properties() {
     let fixture = common::native_fixture();
-    // (tool, accepted-without-the-property, accepted-with-a-value,
-    //  rejected-with-an-explicit-null)
+    // (tool, property, accepted-without-the-property,
+    //  accepted-with-a-value, rejected-with-an-explicit-null)
     let cases: [(
+        &str,
         &str,
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-    ); 5] = [
-        // Optional integer (Option<u64>).
+    ); 8] = [
+        // Optional integers (Option<u64>).
         (
             "read",
+            "start_line",
             serde_json::json!({"path": "a.txt"}),
             serde_json::json!({"path": "a.txt", "start_line": 3}),
             serde_json::json!({"path": "a.txt", "start_line": null}),
         ),
         (
             "read",
+            "line_count",
             serde_json::json!({"path": "a.txt"}),
             serde_json::json!({"path": "a.txt", "line_count": 5}),
             serde_json::json!({"path": "a.txt", "line_count": null}),
         ),
         (
             "bash",
+            "timeout_ms",
             serde_json::json!({"command": "true"}),
             serde_json::json!({"command": "true", "timeout_ms": 1000}),
             serde_json::json!({"command": "true", "timeout_ms": null}),
         ),
-        // Optional string (a defaulted search parameter).
+        // Optional strings (defaulted search parameters).
+        (
+            "glob",
+            "path",
+            serde_json::json!({"pattern": "*"}),
+            serde_json::json!({"pattern": "*", "path": "."}),
+            serde_json::json!({"pattern": "*", "path": null}),
+        ),
         (
             "grep",
+            "path",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "path": "."}),
+            serde_json::json!({"pattern": "x", "path": null}),
+        ),
+        (
+            "grep",
+            "glob",
             serde_json::json!({"pattern": "x"}),
             serde_json::json!({"pattern": "x", "glob": "**/*.rs"}),
             serde_json::json!({"pattern": "x", "glob": null}),
         ),
-        // Optional boolean (a defaulted flag).
+        // Optional booleans (defaulted flags).
+        (
+            "grep",
+            "case_sensitive",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "case_sensitive": false}),
+            serde_json::json!({"pattern": "x", "case_sensitive": null}),
+        ),
         (
             "edit",
+            "replace_all",
             serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"}),
             serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": true}),
             serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": null}),
         ),
     ];
-    for (name, absent, present, null) in cases {
+    for (tool, property, absent, present, null) in &cases {
         assert!(
             matches!(
-                preflight(&fixture, name, &absent),
+                preflight(&fixture, tool, absent),
                 PreflightOutcome::Ready(_)
             ),
-            "{name} accepts the absent optional property"
+            "{tool} accepts an invocation without {property}"
         );
         assert!(
             matches!(
-                preflight(&fixture, name, &present),
+                preflight(&fixture, tool, present),
                 PreflightOutcome::Ready(_)
             ),
-            "{name} accepts a valid optional value"
+            "{tool} accepts a valid {property} value"
         );
         assert!(
             matches!(
-                preflight(&fixture, name, &null),
+                preflight(&fixture, tool, null),
                 PreflightOutcome::Rejected { .. }
             ),
-            "{name} rejects an explicit null for an optional property"
+            "{tool} rejects an explicit null {property}"
+        );
+    }
+
+    for (tool, property, _) in OPTIONAL_NATIVE_PROPERTIES {
+        assert!(
+            cases
+                .iter()
+                .any(|(covered_tool, covered, ..)| *covered_tool == tool && *covered == property),
+            "{tool}.{property} has a runtime null-rejection case"
         );
     }
 }
