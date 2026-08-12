@@ -1550,8 +1550,8 @@ mod anchor_reaping_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod start_gate_frame_ownership_tests {
     //! The deterministic proof of the `START` gate's control-frame
-    //! ownership, in-process and without any stream between the two facts
-    //! it relates.
+    //! ownership: one buffered reader, in-process, with nothing between the
+    //! two facts it relates.
     //!
     //! A Unix stream preserves byte order, not the writer's write
     //! boundaries, so a regression that writes `START || TERMINATE` into a
@@ -1559,53 +1559,27 @@ mod start_gate_frame_ownership_tests {
     //! kernel may legally split them, and a gate-local reader would then
     //! survive by accident because the second frame was still unread in the
     //! kernel. This regression removes the kernel from the proof entirely:
-    //! the shared [`FrameReader`] is preloaded with both complete frames
-    //! before the gate runs, so "already read from the stream" is
-    //! established by construction and the only thing under test is the
-    //! phase transition:
+    //! the [`FrameReader`] is preloaded with both complete frames before the
+    //! gate runs, so "already read from the stream" is established by
+    //! construction and the only thing under test is the phase transition:
     //!
     //! ```text
     //! preload: [START][TERMINATE]  -> one FrameReader
-    //!     await_start   consumes exactly START
-    //!     handle_frames consumes the still-owned TERMINATE
+    //!     await_start consumes exactly START
+    //!     the same reader still owns a complete TERMINATE
     //! ```
     //!
-    //! Nothing is fed, read, or written into the reader between those two
-    //! calls, so a gate that reverted to a gate-local buffer fails here
-    //! immediately and deterministically — the owned handler would find
-    //! nothing to interpret. The end-to-end settlement of the same scenario
-    //! (real supervisor processes, `TERM` sequence, reaping, and the empty
-    //! process group) is the integration regression
+    //! Its whole responsibility is that ownership assertion. What the owned
+    //! control loop then *does* with the surviving `TERMINATE` — the `TERM`
+    //! sequence, reaping, and the empty process group — is the separate
+    //! end-to-end regression
     //! [`super::anchor_reaping_tests::start_and_terminate_in_one_read_never_loses_the_terminate`].
-
-    use std::io::Read;
-    use std::os::fd::OwnedFd;
-    use std::os::unix::net::UnixStream;
+    //! Keeping the two layers apart is what lets this one stay a pure
+    //! buffered-reader test: no socket, no `read`, no `write`, no `dup`, no
+    //! process-global fd state, no subprocess, no sleep and no scheduler
+    //! assumption participates in it.
 
     use super::*;
-
-    /// Binds fd 0 — which *is* the supervisor's control stream — to the
-    /// regression's own socket for the duration of the phase transition,
-    /// and restores the test binary's stdin afterwards (including on a
-    /// panic). Without it the owned terminate branch's observability frame
-    /// would be written to whatever the test binary inherited as stdin.
-    struct StdinBoundTo {
-        saved: OwnedFd,
-    }
-
-    impl StdinBoundTo {
-        fn control(stream: &UnixStream) -> Self {
-            let saved = nix::unistd::dup(std::io::stdin()).expect("save the test binary's stdin");
-            nix::unistd::dup2_stdin(stream).expect("bind fd 0 to the regression control stream");
-            Self { saved }
-        }
-    }
-
-    impl Drop for StdinBoundTo {
-        fn drop(&mut self) {
-            nix::unistd::dup2_stdin(&self.saved).expect("restore the test binary's stdin");
-        }
-    }
 
     /// One control frame with an empty payload, as it appears on the wire:
     /// `[u32 LE length][kind]`.
@@ -1618,25 +1592,17 @@ mod start_gate_frame_ownership_tests {
     /// One [`FrameReader`] owns a complete `START` and a complete
     /// `TERMINATE` frame before the gate executes. [`await_start`] must
     /// consume exactly the `START` frame and leave the `TERMINATE` owned by
-    /// the same reader, and the owned control loop's single interpretation
-    /// path ([`handle_frames`]) must then consume that exact already-owned
-    /// frame — with no further `feed`, `read`, or control input in between.
+    /// the same reader — intact enough that the very next `pop` parses it as
+    /// the authoritative terminate request the owned control loop reads.
+    /// Nothing is fed into the reader between the preload and the final
+    /// assertions, so its surviving contents can only be what the gate
+    /// chose not to discard.
     ///
-    /// The owned terminate branch runs under the existing `fail_signal`
-    /// seam, which emits its `MSG_SIGNAL_ATTEMPT` with `emitted = false` and
-    /// returns an explicit error *before* any `killpg`, so the regression
-    /// proves the real branch executed without signaling the test runner's
-    /// own process group.
-    ///
-    /// A gate-local reader fails this immediately: `await_start` would
-    /// return the same `Ok(true)`, but the trailing frame would be gone and
-    /// [`handle_frames`] would report `Ok(())` with nothing interpreted.
+    /// A gate-local reader fails this immediately and deterministically:
+    /// `await_start` would return the same `Ok(true)`, but the reader would
+    /// be empty afterwards and the `TERMINATE` unrecoverable.
     #[test]
-    fn preloaded_terminate_survives_the_start_gate_into_the_owned_handler() {
-        let (peer, control) = UnixStream::pair().expect("control socket pair");
-        peer.set_nonblocking(true).expect("bounded peer reads");
-        let bound = StdinBoundTo::control(&control);
-
+    fn preloaded_terminate_survives_the_start_gate() {
         // 1. One reader owns both complete frames before the gate starts.
         //    This is the byte-level state a coalesced `read()` produces —
         //    established here by construction, not by the kernel.
@@ -1651,82 +1617,34 @@ mod start_gate_frame_ownership_tests {
             "the gate must start with both complete frames already read"
         );
 
-        // 2./3. The gate returns its existing successful START result and
-        //    consumes exactly one frame.
+        // 2. The gate returns its existing successful START result, which
+        //    is what authorizes the owned Bash spawn.
         assert_eq!(
             await_start(&mut reader),
             Ok(true),
             "the buffered START authorizes the owned spawn"
         );
 
-        // 4. The trailing TERMINATE is still owned by the same reader after
-        //    the phase transition: no byte read from the control direction
-        //    was discarded.
+        // 3. It consumed exactly that one frame: the trailing TERMINATE is
+        //    still owned by the same reader after the lifecycle phase
+        //    transition, byte for byte.
         assert_eq!(
             reader.buffered(),
             frame(MSG_TERMINATE),
             "the gate consumes exactly START and keeps the trailing frame owned"
         );
 
-        // 5. The owned control interpretation path consumes that exact
-        //    already-buffered frame. No socket read, no scheduler race, no
-        //    sleep and no further control input participates: the only
-        //    input `handle_frames` can see is what the gate left behind.
-        let self_pgid = i32::try_from(std::process::id()).expect("the test pid fits in an i32");
-        let mut stream = ControlStream;
-        let mut kill_deadline = None;
-        let outcome = handle_frames(
-            &mut reader,
-            &mut stream,
-            self_pgid,
-            true,
-            false,
-            &mut kill_deadline,
-        );
+        // 4. The survivor is a *usable* frame, not just surplus bytes: the
+        //    owned control loop's only input step parses it as the
+        //    authoritative terminate request, and nothing else remains.
         assert_eq!(
-            outcome,
-            Err("injected signaling failure".to_owned()),
-            "the owned terminate branch must interpret the frame the gate left owned"
+            reader.pop(),
+            Some((MSG_TERMINATE, Vec::new())),
+            "the surviving frame parses as the authoritative terminate request"
         );
         assert!(
             reader.buffered().is_empty(),
-            "the owned handler consumes the trailing frame"
-        );
-        assert!(
-            kill_deadline.is_none(),
-            "the failed signal never establishes a grace period"
-        );
-
-        // The terminate branch's own observability frame, read back from
-        // the control socket the supervisor wrote it to: the tight proof
-        // that the production branch — not some other error path — ran.
-        drop(bound);
-        let mut chunk = [0u8; 64];
-        let count = (&peer)
-            .read(&mut chunk)
-            .expect("the terminate branch wrote its signal-attempt frame");
-        let mut emitted = FrameReader::new();
-        emitted.feed(&chunk[..count]);
-        let (kind, payload) = emitted.pop().expect("one complete signal-attempt frame");
-        assert_eq!(kind, MSG_SIGNAL_ATTEMPT);
-        assert_eq!(payload.len(), 9, "malformed signal-attempt frame");
-        assert_eq!(
-            i32::from_le_bytes(payload[0..4].try_into().expect("four bytes")),
-            self_pgid,
-            "the attempt names the invocation group"
-        );
-        assert_eq!(
-            i32::from_le_bytes(payload[4..8].try_into().expect("four bytes")),
-            libc::SIGTERM,
-            "the owned terminate branch attempts the TERM of the sequence"
-        );
-        assert_eq!(
-            payload[8], 0,
-            "the injected failure never reaches the kernel"
-        );
-        assert!(
-            emitted.pop().is_none(),
-            "exactly one frame is written for one interpreted TERMINATE"
+            "exactly two frames were preloaded and exactly two were consumed"
         );
     }
 }
