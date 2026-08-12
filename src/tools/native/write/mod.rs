@@ -4,35 +4,36 @@
 //! must already exist — there is no implicit recursive directory creation —
 //! and the write is atomic: a temporary file in the target directory is
 //! written and then renamed over the target. No shell invocation is used.
+//!
+//! The model-facing argument contract is the typed [`WriteInput`]; the
+//! canonical schema is generated from it.
+
+mod input;
 
 use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation};
+
+use input::WriteInput;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "write";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Write tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-write",
-        NAME,
-        "Create or replace a file inside the workspace (parent directory must already exist).",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"}
-            },
-            "required": ["path", "content"],
-            "additionalProperties": false
-        }),
-        policy,
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition::<WriteInput>(
+            "tool-write",
+            NAME,
+            "Create or replace a file inside the workspace (parent directory must already exist).",
+            policy,
+        ),
+        std::sync::Arc::new(WriteTool),
     )
 }
 
@@ -53,16 +54,12 @@ fn run_write(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
-    let Some(object) = invocation.arguments.as_object() else {
-        return failed_result("write arguments must be an object");
+    let input = match WriteInput::parse(&invocation.arguments) {
+        Ok(input) => input,
+        Err(error) => return failed_result(error),
     };
-    let Some(path_text) = object.get("path").and_then(serde_json::Value::as_str) else {
-        return failed_result("write requires a string path");
-    };
-    let Some(file_content) = object.get("content").and_then(serde_json::Value::as_str) else {
-        return failed_result("write requires a string content");
-    };
-    let target = match context.workspace.resolve(path_text) {
+    let file_content = input.content.as_str();
+    let target = match context.workspace.resolve(&input.path) {
         Ok(target) => target,
         Err(error) => return failed_result(error.to_string()),
     };

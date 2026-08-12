@@ -6,37 +6,36 @@
 //! explicitly. `replace_all = true` replaces every exact match but still
 //! fails on zero matches. The writeback is atomic (temporary file +
 //! rename). No fuzzy/LLM edit matching exists.
+//!
+//! The model-facing argument contract is the typed [`EditInput`]; the
+//! canonical schema is generated from it.
+
+mod input;
 
 use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation};
+
+use input::EditInput;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "edit";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Edit tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-edit",
-        NAME,
-        "Replace exact text in a UTF-8 file inside the workspace (atomic writeback).",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "old_text": {"type": "string"},
-                "new_text": {"type": "string"},
-                "replace_all": {"type": "boolean", "default": false}
-            },
-            "required": ["path", "old_text", "new_text"],
-            "additionalProperties": false
-        }),
-        policy,
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition::<EditInput>(
+            "tool-edit",
+            NAME,
+            "Replace exact text in a UTF-8 file inside the workspace (atomic writeback).",
+            policy,
+        ),
+        std::sync::Arc::new(EditTool),
     )
 }
 
@@ -57,26 +56,16 @@ fn run_edit(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
-    let Some(object) = invocation.arguments.as_object() else {
-        return failed_result("edit arguments must be an object");
+    let input = match EditInput::parse(&invocation.arguments) {
+        Ok(input) => input,
+        Err(error) => return failed_result(error),
     };
-    let Some(path) = object.get("path").and_then(serde_json::Value::as_str) else {
-        return failed_result("edit requires a string path");
-    };
-    let Some(old_text) = object.get("old_text").and_then(serde_json::Value::as_str) else {
-        return failed_result("edit requires a string old_text");
-    };
-    let Some(new_text) = object.get("new_text").and_then(serde_json::Value::as_str) else {
-        return failed_result("edit requires a string new_text");
-    };
-    let replace_all = object
-        .get("replace_all")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if old_text.is_empty() {
-        return failed_result("edit requires a non-empty old_text");
-    }
-    let target = match context.workspace.resolve(path) {
+    let (old_text, new_text, replace_all) = (
+        input.old_text.as_str(),
+        input.new_text.as_str(),
+        input.replace_all,
+    );
+    let target = match context.workspace.resolve(&input.path) {
         Ok(target) => target,
         Err(error) => return failed_result(error.to_string()),
     };
