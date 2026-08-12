@@ -893,7 +893,15 @@ terminal proof is the group-scoped wait (`waitid(Id::PGid)` returning
 driver task owns physical settlement from the moment the supervisor spawn
 succeeds, drains the server's stderr until EOF (bounded preview), reaps the
 direct supervisor child before publishing settlement, and runs the shared
-adopted-anchor emergency containment when the unit is lost. Streamable HTTP
+adopted-anchor emergency containment when the unit is lost. Startup is
+ownership-gated in both directions: the outer supervisor may create the unit
+hierarchy only after rustX accepted and retained its control connection
+(`MSG_OWNER_ATTACHED`), and the outer attaches its inner supervisor with a
+bounded pre-ownership state machine (inner connection, inner exit, upstream
+loss) instead of a blocking accept. Physical settlement is published only
+with proven terminality; an unproven terminal state is returned as an
+explicit error from `wait_for_settlement`/`McpServerRuntime::close`, never as
+a successful settlement. Streamable HTTP
 uses the current rmcp client transport with explicit static headers and no
 `Mcp-Session-Id` compatibility state.
 

@@ -593,8 +593,9 @@ async fn wait_for_terminal_release(_control: Option<&RunnerTestControl>) {
 pub(crate) use crate::runtime::supervised_unit::MSG_ALL_CHILDREN_REAPED;
 #[cfg(unix)]
 pub(crate) use crate::runtime::supervised_unit::{
-    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
-    MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,
+    MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
+    MSG_TERMINATE,
 };
 
 /// The test-only control seams of one owned invocation.
@@ -1206,6 +1207,20 @@ pub(crate) async fn send_start<W: tokio::io::AsyncWrite + Unpin>(
         .write_all(&frame)
         .await
         .map_err(|error| format!("cannot acknowledge the ownership gate: {error}"))
+}
+
+/// Opens the runtime->outer startup gate: the owner accepted and retained
+/// the outer control connection, so the outer may create the unit
+/// hierarchy. Until this frame is written the outer owns nothing.
+#[cfg(unix)]
+pub(crate) async fn send_owner_attached<W: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut W,
+) -> Result<(), String> {
+    let frame = [1u8, 0, 0, 0, MSG_OWNER_ATTACHED];
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| format!("cannot open the interactive startup gate: {error}"))
 }
 
 #[cfg(unix)]

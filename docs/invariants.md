@@ -318,7 +318,32 @@ observed only at the next quiescent re-discovery.
   physical settlement from the moment the supervisor spawn succeeds — a
   later handshake/control setup error can never strand a raw child — and
   the direct supervisor child is reaped before physical settlement is
-  published. The server's stderr is drained until EOF (only a bounded
+  published.
+- An interactive subprocess unit may publish physical settlement **iff**
+  the authoritative supervisor terminal event was received and the direct
+  supervisor was reaped, or emergency containment returned
+  `TerminalProven`, or the unit provably never left the pre-ownership state
+  (no owned process tree was ever created). `AnchorUnavailable`, a
+  containment failure, and a containment-task failure are process-control
+  outcomes without a terminal proof: they are published as an explicit
+  unproven-terminality settlement (`wait_for_settlement` and
+  `McpServerRuntime::close` return an error) and are never represented as
+  successful physical settlement. No timeout ever converts unknown
+  terminality into terminality.
+- Interactive startup is ownership-gated in both directions, so every
+  post-spawn setup outcome is physically owned. rustX writes the
+  runtime->outer startup gate (`MSG_OWNER_ATTACHED`) only after it accepted
+  and retained the outer control connection; a failed accept therefore
+  finds a gated outer that provably owns nothing and transfers into an
+  explicit containment/reap path, never a claim that the child was reaped.
+  The outer attaches its inner supervisor with a bounded pre-ownership
+  ownership state machine — inner control connection, inner direct-child
+  exit, upstream termination/control loss — never a blocking one-shot
+  accept. Before the inner control/start gate completes no server-owned
+  process tree can exist; an inner that exits or is terminated before
+  connecting is reaped, reported (`ProcessControlFailure` + `NoOwnership`),
+  and the outer exits cleanly.
+- The server's stderr is drained until EOF (only a bounded
   preview is retained; reading never stops merely because the preview limit
   was reached), and dropping the business-facing handle requests shutdown
   but never abandons the physical process owner.

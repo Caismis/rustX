@@ -78,6 +78,12 @@ pub(crate) const MSG_TERMINATE: u8 = 0x10;
 pub(crate) const MSG_START: u8 = 0x11;
 /// Owner -> outer: the authoritative terminal frame was parsed.
 pub(crate) const MSG_TERMINAL_ACK: u8 = 0x12;
+/// Owner -> outer: the owner accepted and retained the outer control
+/// connection. This is the runtime->outer startup gate: before it arrives
+/// the outer owns nothing and may not create any part of the unit
+/// hierarchy, so a control-setup failure at the owner can only ever find a
+/// gated outer with no inner and no server tree.
+pub(crate) const MSG_OWNER_ATTACHED: u8 = 0x13;
 
 /// The inner supervisor's exit status for a normal completion: it reached
 /// the kernel `ECHILD` terminal child state (or no owned process tree was

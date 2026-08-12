@@ -2135,7 +2135,7 @@ mod tests {
             .join(format!("{}.json", digest.as_str()));
         assert!(first_record.is_file(), "first binding recorded");
         assert!(second_record.is_file(), "second binding recorded");
-        assert!(first_record != second_record);
+        assert_ne!(first_record, second_record);
         let environment_marker = dir
             .path()
             .join("store/python-tool-envs")

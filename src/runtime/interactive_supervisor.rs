@@ -61,10 +61,10 @@ use nix::unistd::Pid;
 
 use crate::runtime::supervised_unit::{
     FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
-    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
-    MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE,
-    TERMINAL_ACK_TIMEOUT, become_child_subreaper, enforce_fixed_group_membership,
-    ignore_group_term, signal_group, write_frame,
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,
+    MSG_PROCESS_CONTROL_FAILURE, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
+    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
+    enforce_fixed_group_membership, ignore_group_term, signal_group, write_frame,
 };
 
 /// The environment variable naming the rustX-facing control socket.
@@ -85,6 +85,14 @@ pub(crate) const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_S
 /// Test-only observability: the inner supervisor writes its own pid (the
 /// unit's process-group id) to this file.
 pub(crate) const ANCHOR_PID_FILE_ENV: &str = "RUSTX_INTERACTIVE_ANCHOR_PID_FILE";
+/// Test-only injection: the inner supervisor exits before connecting its
+/// control socket. The value names the pid file the inner writes first, so
+/// the regression can prove the pre-ownership inner was reaped.
+pub(crate) const INNER_EXIT_BEFORE_CONNECT_ENV: &str =
+    "RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT";
+/// The inner supervisor's exit status for the test-only
+/// exits-before-connecting injection.
+const INNER_EXIT_BEFORE_CONNECT_STATUS: i32 = 43;
 
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
@@ -110,6 +118,21 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         eprintln!("interactive supervisor: cannot configure the control socket: {error}");
         return 1;
     }
+    // The runtime->outer startup gate. rustX writes `MSG_OWNER_ATTACHED`
+    // only after it accepted and retained this control connection, so no
+    // part of the unit hierarchy — not the inner, not the server — can be
+    // created while rustX might still fail its accept. Nothing is owned
+    // before this returns.
+    match await_owner_attached(&mut upstream) {
+        Ok(true) => {}
+        // rustX disappeared or requested shutdown at the gate: nothing was
+        // ever created, so exiting is the complete settlement.
+        Ok(false) => return 0,
+        Err(error) => {
+            eprintln!("interactive supervisor: {error}");
+            return 1;
+        }
+    }
     let inner_socket = std::env::temp_dir().join(format!(
         "rustx-interactive-inner-{}-{}.sock",
         std::process::id(),
@@ -125,6 +148,14 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 1;
         }
     };
+    // The pre-ownership acceptance is a bounded ownership state machine, not
+    // a blocking one-shot accept: the inner control connection, the inner's
+    // own exit, and upstream termination/control loss are all polled.
+    if let Err(error) = inner_listener.set_nonblocking(true) {
+        eprintln!("interactive supervisor: cannot configure the inner control socket: {error}");
+        let _ = std::fs::remove_file(&inner_socket);
+        return 1;
+    }
     if let Err(error) = become_child_subreaper() {
         let _ = write_frame(
             &mut upstream,
@@ -151,6 +182,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     let mut child = match inner.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let _ = std::fs::remove_file(&inner_socket);
             let _ = write_frame(
                 &mut upstream,
                 MSG_PROCESS_CONTROL_FAILURE,
@@ -160,17 +192,13 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 0;
         }
     };
-    let (mut downstream, _) = match inner_listener.accept() {
-        Ok(accepted) => accepted,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = write_frame(
-                &mut upstream,
-                MSG_PROCESS_CONTROL_FAILURE,
-                error.to_string().as_bytes(),
-            );
-            let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
+    let mut downstream = match attach_inner_control(&mut child, &inner_listener, &mut upstream) {
+        InnerAttachment::Attached(downstream) => downstream,
+        // The pre-ownership state machine already reaped the inner and
+        // reported the outcome: no server-owned process tree ever escaped
+        // the pre-ownership state.
+        InnerAttachment::Concluded => {
+            let _ = std::fs::remove_file(&inner_socket);
             return 0;
         }
     };
@@ -385,6 +413,173 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     }
 }
 
+/// Waits at the runtime->outer startup gate.
+///
+/// `Ok(true)` means rustX accepted and retained this control connection, so
+/// the unit hierarchy may be created. `Ok(false)` means rustX disappeared
+/// or requested shutdown before the gate opened — nothing was created, so
+/// there is nothing to contain.
+fn await_owner_attached(upstream: &mut std::os::unix::net::UnixStream) -> Result<bool, String> {
+    let mut reader = FrameReader::new();
+    loop {
+        let mut chunk = [0u8; 256];
+        match nix::unistd::read(&*upstream, &mut chunk) {
+            Ok(0) => return Ok(false),
+            Ok(count) => {
+                if let Some((kind, _payload)) = reader.push(&chunk[..count]) {
+                    return handle_startup_gate_frame(kind);
+                }
+                if let Some((kind, _payload)) = reader.pop() {
+                    return handle_startup_gate_frame(kind);
+                }
+            }
+            Err(Errno::EAGAIN | Errno::EINTR) => std::thread::sleep(POLL_INTERVAL),
+            Err(error) => return Err(format!("cannot read the startup gate: {error}")),
+        }
+    }
+}
+
+/// Handles one runtime->outer startup gate frame.
+fn handle_startup_gate_frame(kind: u8) -> Result<bool, String> {
+    match kind {
+        MSG_OWNER_ATTACHED => Ok(true),
+        MSG_TERMINATE => Ok(false),
+        other => Err(format!(
+            "unexpected startup gate control message {other:#04x}"
+        )),
+    }
+}
+
+/// The outcome of the outer's pre-ownership inner-attachment state machine.
+enum InnerAttachment {
+    /// The inner control connection was established.
+    Attached(std::os::unix::net::UnixStream),
+    /// The unit ended before ownership could exist. The pre-ownership inner
+    /// was reaped and the outcome was reported upstream; the outer exits.
+    Concluded,
+}
+
+/// Attaches the inner control connection with a bounded ownership state
+/// machine.
+///
+/// A blocking one-shot `accept()` would hang forever if the inner exited
+/// before connecting, so all three pre-ownership transitions are polled
+/// with the supervisor's existing polling model:
+///
+/// - the inner control connection is established;
+/// - the inner direct child exits before connecting (reap it, report the
+///   process-control failure and no-ownership);
+/// - rustX disappears or requests shutdown (terminate and reap the
+///   pre-ownership inner, report no-ownership).
+///
+/// The inner spawns the server only after the `START` gate, which can only
+/// be relayed over the connection established here, so no server-owned
+/// process tree can escape the pre-ownership state.
+fn attach_inner_control(
+    child: &mut std::process::Child,
+    inner_listener: &std::os::unix::net::UnixListener,
+    upstream: &mut std::os::unix::net::UnixStream,
+) -> InnerAttachment {
+    let mut reader = FrameReader::new();
+    loop {
+        match inner_listener.accept() {
+            Ok((downstream, _)) => return InnerAttachment::Attached(downstream),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => {
+                return conclude_pre_ownership(
+                    child,
+                    upstream,
+                    Some(&format!(
+                        "cannot accept the inner control connection: {error}"
+                    )),
+                );
+            }
+        }
+        // The inner direct child may have exited before connecting. The
+        // server spawn is gated behind the control connection, so its exit
+        // here provably leaves no owned process tree; `try_wait` reaps it.
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                let _ = write_frame(
+                    upstream,
+                    MSG_PROCESS_CONTROL_FAILURE,
+                    format!(
+                        "the inner supervisor exited before connecting its control channel: \
+                         {status}"
+                    )
+                    .as_bytes(),
+                );
+                let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &[]);
+                return InnerAttachment::Concluded;
+            }
+            Err(error) => {
+                return conclude_pre_ownership(
+                    child,
+                    upstream,
+                    Some(&format!(
+                        "cannot observe the pre-ownership inner supervisor: {error}"
+                    )),
+                );
+            }
+        }
+        // rustX termination requests and control loss before ownership.
+        let mut chunk = [0u8; 256];
+        match nix::unistd::read(&*upstream, &mut chunk) {
+            Ok(0) => return conclude_pre_ownership(child, upstream, None),
+            Ok(count) => {
+                let mut terminate =
+                    matches!(reader.push(&chunk[..count]), Some((MSG_TERMINATE, _)));
+                while let Some((kind, _payload)) = reader.pop() {
+                    terminate |= kind == MSG_TERMINATE;
+                }
+                if terminate {
+                    return conclude_pre_ownership(child, upstream, None);
+                }
+            }
+            Err(Errno::EAGAIN | Errno::EINTR) => {}
+            Err(error) => {
+                return conclude_pre_ownership(
+                    child,
+                    upstream,
+                    Some(&format!("cannot read the rustX control channel: {error}")),
+                );
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Terminates and reaps the pre-ownership inner, then reports no-ownership.
+///
+/// The inner cannot have spawned the server before its control connection
+/// carried the `START` gate, so terminating its pid is the complete
+/// physical containment of the unit at this stage.
+fn conclude_pre_ownership(
+    child: &mut std::process::Child,
+    upstream: &mut std::os::unix::net::UnixStream,
+    failure: Option<&str>,
+) -> InnerAttachment {
+    let _ = child.kill();
+    let reaped = child.wait();
+    if let Some(message) = failure {
+        let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
+    }
+    if let Err(error) = reaped {
+        let _ = write_frame(
+            upstream,
+            MSG_PROCESS_CONTROL_FAILURE,
+            format!("cannot reap the pre-ownership inner supervisor: {error}").as_bytes(),
+        );
+    }
+    let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &[]);
+    InnerAttachment::Concluded
+}
+
 /// Handles one upstream control frame (from rustX): START and TERMINATE
 /// are relayed to the inner; `TERMINAL_ACK` completes the terminal exchange.
 fn handle_upstream_frame(
@@ -481,6 +676,14 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         eprintln!("interactive supervisor: inner control socket path is missing");
         return 1;
     };
+    if let Ok(pid_file) = std::env::var(INNER_EXIT_BEFORE_CONNECT_ENV) {
+        // Test-only injection: the inner exits before its control
+        // connection exists. The outer's pre-ownership state machine must
+        // reap it and report no-ownership instead of blocking forever on a
+        // connection that can never arrive.
+        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        return INNER_EXIT_BEFORE_CONNECT_STATUS;
+    }
     let mut control = match std::os::unix::net::UnixStream::connect(&inner_socket) {
         Ok(stream) => stream,
         Err(error) => {

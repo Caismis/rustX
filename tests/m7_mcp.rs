@@ -187,7 +187,10 @@ mod unix_tests {
                 .collect::<Vec<_>>(),
             ["echo", "new_tool"]
         );
-        runtime.close().await;
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -343,7 +346,10 @@ mod unix_tests {
         .await
         .expect("the HTTP fixture server must observe the cancellation notification");
 
-        runtime.close().await;
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
         cancellation.cancel();
         server_task.abort();
         let _ = server_task.await;
@@ -415,7 +421,10 @@ mod unix_tests {
                 .collect::<Vec<_>>(),
             ["alpha", "beta", "delta", "echo", "gamma"]
         );
-        runtime.close().await;
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     /// Waits for a marker file with a strict deadline (a deadlock guard,

@@ -1006,7 +1006,8 @@ mod mcp_race_tests {
             .get(&server_id)
             .expect("runtime")
             .close()
-            .await;
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     /// Commit wins first: the candidate activates, a later notification
@@ -1079,7 +1080,8 @@ mod mcp_race_tests {
             .get(&server_id)
             .expect("runtime")
             .close()
-            .await;
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     /// A real `tools/list_changed` notification from the fixture server
@@ -1174,7 +1176,10 @@ mod mcp_race_tests {
             coordinator.commit(candidate),
             Err(CapabilityCommitError::StaleMcpCandidate { .. })
         ));
-        runtime.close().await;
+        runtime
+            .close()
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     /// The active-attempt lease contract holds with MCP servers configured:
@@ -1227,7 +1232,8 @@ mod mcp_race_tests {
             .get(&server_id)
             .expect("runtime")
             .close()
-            .await;
+            .await
+            .expect("the owned stdio unit must publish physical settlement");
     }
 
     /// The invalidation state itself is constructible and its epoch

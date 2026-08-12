@@ -216,6 +216,9 @@ pub enum McpError {
     Discovery(String),
     /// The remote call or response could not be translated.
     Execution(String),
+    /// The owned stdio process tree could not be proven terminal, so no
+    /// physical settlement could be published.
+    PhysicalSettlement(String),
 }
 
 impl std::fmt::Display for McpError {
@@ -226,6 +229,9 @@ impl std::fmt::Display for McpError {
             }
             Self::Discovery(message) => write!(formatter, "MCP discovery failed: {message}"),
             Self::Execution(message) => write!(formatter, "MCP execution failed: {message}"),
+            Self::PhysicalSettlement(message) => {
+                write!(formatter, "MCP physical settlement is unproven: {message}")
+            }
         }
     }
 }
@@ -456,15 +462,26 @@ impl McpServerRuntime {
     }
 
     /// Gracefully retires the runtime and its owned stdio process, when any.
-    pub async fn close(&self) {
-        if let Some(process) = &self.process {
-            let process = process.lock().await;
-            process.request_shutdown();
-            process.wait_for_settlement().await;
-        }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`McpError::PhysicalSettlement`] when the owned stdio unit
+    /// could not publish physical settlement: its owned process tree's
+    /// terminal state is unproven. The MCP service is retired either way,
+    /// but an unproven terminal state is never reported as success.
+    pub async fn close(&self) -> Result<(), McpError> {
+        let settlement = match &self.process {
+            Some(process) => {
+                let process = process.lock().await;
+                process.request_shutdown();
+                process.wait_for_settlement().await
+            }
+            None => Ok(()),
+        };
         if let Some(service) = self.service.lock().await.as_mut() {
             let _ = service.close().await;
         }
+        settlement.map_err(McpError::PhysicalSettlement)
     }
 
     async fn call(
