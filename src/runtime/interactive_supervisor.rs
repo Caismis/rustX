@@ -47,6 +47,51 @@
 //! - supervisor control traffic uses private Unix sockets, fully separate
 //!   from the server's business stdin/stdout protocol pair.
 //!
+//! # The anchor commit point (pre-anchor vs. anchored ownership)
+//!
+//! ```text
+//! RuntimeGated
+//!     | MSG_OWNER_ATTACHED (rustX accepted and retained the outer)
+//! InnerSpawnedPreAnchor          <- the inner is a direct child PID only
+//!     | valid MSG_ANCHOR_READY(inner_pid)   <- THE commit point
+//! Anchored                       <- inner pid == owned PGID
+//!     | MSG_OWNERSHIP_ESTABLISHED
+//! Owned
+//!     | group-scoped waitid(Id::PGid) == ECHILD
+//! Terminal
+//! ```
+//!
+//! `MSG_ANCHOR_READY` is the exact linearization point at which the inner
+//! supervisor's pid acquires its second meaning
+//! (`inner pid == owned process-group id == structural ownership anchor`).
+//! The inner connects its control socket **before** it runs `setsid()`,
+//! the subreaper/signal setup, the fixed-membership seccomp install, and
+//! the anchor announcement, so any of those can still fail on a connected
+//! inner. Before the commit point the inner is therefore only a direct
+//! pre-ownership child of the outer, and the outer:
+//!
+//! - owns and settles it strictly by pid (`kill`/`wait` on the direct
+//!   child), never by process group;
+//! - never runs a group-scoped wait against `inner_pid` — a
+//!   `waitid(Id::PGid(inner_pid))` can return `ECHILD` without reaping an
+//!   inner whose `setsid()` failed, so it is never a terminal proof and can
+//!   never produce `MSG_ALL_CHILDREN_REAPED`;
+//! - never relays the inner's own `MSG_NO_OWNERSHIP` upstream. A
+//!   pre-anchor `MSG_NO_OWNERSHIP` is a *report of the inner's setup
+//!   failure*, not a settlement proof: the outer reaps the direct inner pid
+//!   first and only then emits its own **proof-carrying**
+//!   `MSG_NO_OWNERSHIP` (payload: the reaped pid). If the direct reap
+//!   cannot be proven, the outer emits `MSG_PROCESS_CONTROL_FAILURE` and
+//!   **no** `MSG_NO_OWNERSHIP`, so terminality stays explicitly unproven.
+//!
+//! A valid `MSG_ANCHOR_READY` must occur exactly once, carry a positive
+//! pgid, and match the direct inner child's pid; it is the only transition
+//! into the group-owned lifecycle. After the commit point the group-scoped
+//! ownership core alone decides terminality, so a post-anchor
+//! `MSG_NO_OWNERSHIP` (for example a failed server spawn) is suppressed:
+//! the inner exits, the outer retains the anchor, and the group-scoped gate
+//! reaches `ECHILD` and reports `MSG_ALL_CHILDREN_REAPED`.
+//!
 //! The binary is dispatched by argv role (`outer`/`inner`), mirroring the
 //! Bash supervisor's `RUSTX_SUPERVISOR_ROLE` dispatch.
 
@@ -93,6 +138,23 @@ pub(crate) const INNER_EXIT_BEFORE_CONNECT_ENV: &str =
 /// The inner supervisor's exit status for the test-only
 /// exits-before-connecting injection.
 const INNER_EXIT_BEFORE_CONNECT_STATUS: i32 = 43;
+/// Test-only injection: the inner supervisor's `setsid()` fails **after**
+/// its control connection is established and before `MSG_ANCHOR_READY`, so
+/// the inner is a connected direct child whose pid is provably not a
+/// process-group id. The value names the pid file the inner writes first.
+pub(crate) const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
+/// Test-only injection: the inner supervisor connects its control socket
+/// and then stalls forever before `MSG_ANCHOR_READY`. The value names the
+/// pid file the inner writes right after connecting, so a regression can
+/// order "the inner exists and is connected" against an outer loss without
+/// a sleep.
+pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
+    "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
+/// Test-only injection: the outer's pre-anchor cleanup cannot prove the
+/// direct inner reap. This injects the semantic state only — the direct
+/// child is never actually waited for, so the proof-carrying
+/// `MSG_NO_OWNERSHIP` must not be emitted.
+pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
 
 /// Runs the outer supervisor role; returns its exit status.
 #[must_use]
@@ -157,6 +219,10 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         return 1;
     }
     if let Err(error) = become_child_subreaper() {
+        // No inner child exists yet, so "every pre-anchor child is gone" is
+        // vacuously proven: this `NoOwnership` is proof-carrying with an
+        // empty payload (no pid was reaped because none was created).
+        let _ = std::fs::remove_file(&inner_socket);
         let _ = write_frame(
             &mut upstream,
             MSG_PROCESS_CONTROL_FAILURE,
@@ -182,6 +248,8 @@ pub fn run_outer(arguments: &[String]) -> i32 {
     let mut child = match inner.spawn() {
         Ok(child) => child,
         Err(error) => {
+            // The spawn failed, so no pre-anchor child exists: an empty
+            // proof-carrying `NoOwnership`.
             let _ = std::fs::remove_file(&inner_socket);
             let _ = write_frame(
                 &mut upstream,
@@ -192,35 +260,58 @@ pub fn run_outer(arguments: &[String]) -> i32 {
             return 0;
         }
     };
-    let mut downstream = match attach_inner_control(&mut child, &inner_listener, &mut upstream) {
+    // One frame reader per direction is threaded through every phase, so a
+    // frame split across the pre-ownership, pre-anchor, and anchored phases
+    // is never lost at a phase boundary.
+    let mut upstream_reader = FrameReader::new();
+    let mut downstream_reader = FrameReader::new();
+    let mut downstream = match attach_inner_control(
+        &mut child,
+        &inner_listener,
+        &mut upstream,
+        &mut upstream_reader,
+    ) {
         InnerAttachment::Attached(downstream) => downstream,
-        // The pre-ownership state machine already reaped the inner and
-        // reported the outcome: no server-owned process tree ever escaped
-        // the pre-ownership state.
-        InnerAttachment::Concluded => {
+        // The pre-ownership state machine already settled the direct inner
+        // by pid and reported the outcome: no server-owned process tree
+        // ever escaped the pre-ownership state.
+        InnerAttachment::Concluded(status) => {
             let _ = std::fs::remove_file(&inner_socket);
-            return 0;
+            return status;
         }
     };
     let _ = std::fs::remove_file(&inner_socket);
     if let Err(error) = fcntl(&downstream, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)) {
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = write_frame(
+        // A pre-anchor cleanup path: the inner is owned as a direct child
+        // pid only, so no-ownership may be reported only after that pid is
+        // provably reaped.
+        return conclude_pre_anchor(
+            &mut child,
             &mut upstream,
-            MSG_PROCESS_CONTROL_FAILURE,
-            error.to_string().as_bytes(),
+            Some(&format!(
+                "cannot configure the inner control channel: {error}"
+            )),
         );
-        let _ = write_frame(&mut upstream, MSG_NO_OWNERSHIP, &[]);
-        return 0;
     }
-    // The inner supervisor's pid is the unit's process-group id and its
-    // structural ownership anchor.
+    // The inner is a connected direct child. Its pid is NOT a process-group
+    // id yet: `setsid()` runs after the connection and can still fail. Only
+    // a valid `MSG_ANCHOR_READY` commits the second meaning of this pid.
     let inner_pid = i32::try_from(child.id()).expect("the inner supervisor pid fits i32");
+    match await_anchor_commit(
+        &mut child,
+        inner_pid,
+        &mut downstream,
+        &mut upstream,
+        &mut downstream_reader,
+        &mut upstream_reader,
+    ) {
+        PreAnchor::Anchored => {}
+        PreAnchor::Concluded(status) => return status,
+    }
+    // The anchor commit point has passed: `inner_pid` is provably the owned
+    // process-group id, so the group-scoped ownership core now applies.
     let mut anchor = AnchorState::Running;
     let mut anchor_loss_reported = false;
-    let mut upstream_reader = FrameReader::new();
-    let mut downstream_reader = FrameReader::new();
     let mut terminal_reported = false;
     let mut ack_seen = false;
     let mut ack_deadline: Option<Instant> = None;
@@ -343,6 +434,14 @@ pub fn run_outer(arguments: &[String]) -> i32 {
         {
             let mut chunk = [0u8; 256];
             loop {
+                // Frames buffered by an earlier phase are drained first, so
+                // nothing is stranded in the reader.
+                while let Some((kind, _payload)) = upstream_reader.pop() {
+                    handle_upstream_frame(kind, &mut downstream, &mut upstream, &mut ack_seen);
+                }
+                if ack_seen {
+                    break;
+                }
                 match nix::unistd::read(&upstream, &mut chunk) {
                     Ok(0) => {
                         if !terminal_reported {
@@ -351,27 +450,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                         ack_seen = true;
                         break;
                     }
-                    Ok(count) => {
-                        if let Some((kind, _payload)) = upstream_reader.push(&chunk[..count]) {
-                            handle_upstream_frame(
-                                kind,
-                                &mut downstream,
-                                &mut upstream,
-                                &mut ack_seen,
-                            );
-                        }
-                        while let Some((kind, _payload)) = upstream_reader.pop() {
-                            handle_upstream_frame(
-                                kind,
-                                &mut downstream,
-                                &mut upstream,
-                                &mut ack_seen,
-                            );
-                        }
-                        if ack_seen {
-                            break;
-                        }
-                    }
+                    Ok(count) => upstream_reader.feed(&chunk[..count]),
                     Err(Errno::EAGAIN | Errno::EINTR) => break,
                     Err(error) => {
                         let _ = write_frame(
@@ -384,20 +463,17 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                 }
             }
         }
-        // Downstream frames (inner): reports are relayed upstream.
+        // Downstream frames (inner): post-anchor reports are relayed
+        // upstream, filtered by the anchored relay contract.
         {
             let mut chunk = [0u8; 256];
             loop {
+                while let Some((kind, payload)) = downstream_reader.pop() {
+                    relay_anchored_frame(kind, &payload, &mut upstream);
+                }
                 match nix::unistd::read(&downstream, &mut chunk) {
                     Ok(0) | Err(Errno::EAGAIN | Errno::EINTR) => break,
-                    Ok(count) => {
-                        if let Some((kind, payload)) = downstream_reader.push(&chunk[..count]) {
-                            let _ = write_frame(&mut upstream, kind, &payload);
-                        }
-                        while let Some((kind, payload)) = downstream_reader.pop() {
-                            let _ = write_frame(&mut upstream, kind, &payload);
-                        }
-                    }
+                    Ok(count) => downstream_reader.feed(&chunk[..count]),
                     Err(error) => {
                         let _ = write_frame(
                             &mut upstream,
@@ -454,9 +530,36 @@ fn handle_startup_gate_frame(kind: u8) -> Result<bool, String> {
 enum InnerAttachment {
     /// The inner control connection was established.
     Attached(std::os::unix::net::UnixStream),
-    /// The unit ended before ownership could exist. The pre-ownership inner
-    /// was reaped and the outcome was reported upstream; the outer exits.
-    Concluded,
+    /// The unit ended before ownership could exist. The pre-anchor inner
+    /// was settled by pid and the outcome was reported upstream; the outer
+    /// exits with this status.
+    Concluded(i32),
+}
+
+/// The outcome of the outer's pre-anchor ownership phase.
+enum PreAnchor {
+    /// A valid `MSG_ANCHOR_READY` committed the anchor: from here the inner
+    /// pid is provably the owned process-group id.
+    Anchored,
+    /// The unit ended before the anchor commit point. The direct inner was
+    /// settled by pid and the outcome was reported upstream; the outer
+    /// exits with this status.
+    Concluded(i32),
+}
+
+/// The classification of one inner control frame received before the anchor
+/// commit point.
+enum PreAnchorFrame {
+    /// A valid, unique, pid-matching `MSG_ANCHOR_READY`: the commit point.
+    AnchorCommit,
+    /// A report that carries no ownership claim; relayed upstream as-is.
+    Informational,
+    /// The inner reported that its setup ended before it could own
+    /// anything. This is **not** a settlement proof: the outer must reap
+    /// the direct inner pid before it may report no-ownership itself.
+    SetupEnded,
+    /// A pre-anchor protocol violation; the message is human-readable.
+    Violation(String),
 }
 
 /// Attaches the inner control connection with a bounded ownership state
@@ -479,8 +582,8 @@ fn attach_inner_control(
     child: &mut std::process::Child,
     inner_listener: &std::os::unix::net::UnixListener,
     upstream: &mut std::os::unix::net::UnixStream,
+    upstream_reader: &mut FrameReader,
 ) -> InnerAttachment {
-    let mut reader = FrameReader::new();
     loop {
         match inner_listener.accept() {
             Ok((downstream, _)) => return InnerAttachment::Attached(downstream),
@@ -490,94 +593,306 @@ fn attach_inner_control(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                 ) => {}
             Err(error) => {
-                return conclude_pre_ownership(
+                return InnerAttachment::Concluded(conclude_pre_anchor(
                     child,
                     upstream,
                     Some(&format!(
                         "cannot accept the inner control connection: {error}"
                     )),
-                );
+                ));
             }
         }
         // The inner direct child may have exited before connecting. The
         // server spawn is gated behind the control connection, so its exit
-        // here provably leaves no owned process tree; `try_wait` reaps it.
+        // here provably leaves no owned process tree; the pid-scoped
+        // settlement below is the complete containment.
         match child.try_wait() {
             Ok(None) => {}
             Ok(Some(status)) => {
-                let _ = write_frame(
+                return InnerAttachment::Concluded(conclude_pre_anchor(
+                    child,
                     upstream,
-                    MSG_PROCESS_CONTROL_FAILURE,
-                    format!(
+                    Some(&format!(
                         "the inner supervisor exited before connecting its control channel: \
                          {status}"
-                    )
-                    .as_bytes(),
-                );
-                let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &[]);
-                return InnerAttachment::Concluded;
+                    )),
+                ));
             }
             Err(error) => {
-                return conclude_pre_ownership(
+                return InnerAttachment::Concluded(conclude_pre_anchor(
                     child,
                     upstream,
                     Some(&format!(
                         "cannot observe the pre-ownership inner supervisor: {error}"
                     )),
-                );
+                ));
             }
         }
         // rustX termination requests and control loss before ownership.
         let mut chunk = [0u8; 256];
         match nix::unistd::read(&*upstream, &mut chunk) {
-            Ok(0) => return conclude_pre_ownership(child, upstream, None),
+            Ok(0) => return InnerAttachment::Concluded(conclude_pre_anchor(child, upstream, None)),
             Ok(count) => {
-                let mut terminate =
-                    matches!(reader.push(&chunk[..count]), Some((MSG_TERMINATE, _)));
-                while let Some((kind, _payload)) = reader.pop() {
+                upstream_reader.feed(&chunk[..count]);
+                let mut terminate = false;
+                while let Some((kind, _payload)) = upstream_reader.pop() {
                     terminate |= kind == MSG_TERMINATE;
                 }
                 if terminate {
-                    return conclude_pre_ownership(child, upstream, None);
+                    return InnerAttachment::Concluded(conclude_pre_anchor(child, upstream, None));
                 }
             }
             Err(Errno::EAGAIN | Errno::EINTR) => {}
             Err(error) => {
-                return conclude_pre_ownership(
+                return InnerAttachment::Concluded(conclude_pre_anchor(
                     child,
                     upstream,
                     Some(&format!("cannot read the rustX control channel: {error}")),
-                );
+                ));
             }
         }
         std::thread::sleep(POLL_INTERVAL);
     }
 }
 
-/// Terminates and reaps the pre-ownership inner, then reports no-ownership.
+/// The outer's pre-anchor ownership phase: the inner is a connected direct
+/// child pid, and nothing about it is group-scoped yet.
 ///
-/// The inner cannot have spawned the server before its control connection
-/// carried the `START` gate, so terminating its pid is the complete
-/// physical containment of the unit at this stage.
-fn conclude_pre_ownership(
+/// Exactly three transitions are monitored, none of which may use
+/// `inner_pid` as a process-group id:
+///
+/// - a valid `MSG_ANCHOR_READY` (unique, positive pgid, equal to the direct
+///   inner child's pid) — the commit point, relayed upstream;
+/// - the direct inner child's own exit, or a pre-anchor report/violation on
+///   its control channel — settled by pid;
+/// - rustX termination/control loss — settled by pid.
+fn await_anchor_commit(
+    child: &mut std::process::Child,
+    inner_pid: i32,
+    downstream: &mut std::os::unix::net::UnixStream,
+    upstream: &mut std::os::unix::net::UnixStream,
+    downstream_reader: &mut FrameReader,
+    upstream_reader: &mut FrameReader,
+) -> PreAnchor {
+    loop {
+        let mut chunk = [0u8; 256];
+        // Inner control frames before the commit point.
+        loop {
+            let mut frame = downstream_reader.pop();
+            while let Some((kind, payload)) = frame {
+                match classify_pre_anchor_frame(kind, &payload, inner_pid) {
+                    PreAnchorFrame::AnchorCommit => {
+                        // The single linearization point into the anchored,
+                        // group-owned lifecycle.
+                        let _ = write_frame(upstream, MSG_ANCHOR_READY, &payload);
+                        return PreAnchor::Anchored;
+                    }
+                    PreAnchorFrame::Informational => {
+                        let _ = write_frame(upstream, kind, &payload);
+                    }
+                    PreAnchorFrame::SetupEnded => {
+                        // Never relayed as a proof: the outer settles the
+                        // direct inner pid and reports no-ownership itself.
+                        return PreAnchor::Concluded(conclude_pre_anchor(child, upstream, None));
+                    }
+                    PreAnchorFrame::Violation(message) => {
+                        return PreAnchor::Concluded(conclude_pre_anchor(
+                            child,
+                            upstream,
+                            Some(&message),
+                        ));
+                    }
+                }
+                frame = downstream_reader.pop();
+            }
+            match nix::unistd::read(&*downstream, &mut chunk) {
+                Ok(0) => {
+                    return PreAnchor::Concluded(conclude_pre_anchor(
+                        child,
+                        upstream,
+                        Some(
+                            "the inner supervisor closed its control channel before announcing \
+                             the unit anchor",
+                        ),
+                    ));
+                }
+                Ok(count) => downstream_reader.feed(&chunk[..count]),
+                Err(Errno::EAGAIN | Errno::EINTR) => break,
+                Err(error) => {
+                    return PreAnchor::Concluded(conclude_pre_anchor(
+                        child,
+                        upstream,
+                        Some(&format!(
+                            "cannot read the inner control channel before the unit anchor: \
+                             {error}"
+                        )),
+                    ));
+                }
+            }
+        }
+        // The direct inner child's exit before the commit point. Its pid is
+        // not a process-group id, so only this pid-scoped wait can settle
+        // it — a group-scoped wait would reach `ECHILD` without reaping it.
+        match child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(status)) => {
+                return PreAnchor::Concluded(conclude_pre_anchor(
+                    child,
+                    upstream,
+                    Some(&format!(
+                        "the inner supervisor exited before announcing the unit anchor: {status}"
+                    )),
+                ));
+            }
+            Err(error) => {
+                return PreAnchor::Concluded(conclude_pre_anchor(
+                    child,
+                    upstream,
+                    Some(&format!(
+                        "cannot observe the pre-anchor inner supervisor: {error}"
+                    )),
+                ));
+            }
+        }
+        // rustX termination requests and control loss before the anchor.
+        match nix::unistd::read(&*upstream, &mut chunk) {
+            Ok(0) => return PreAnchor::Concluded(conclude_pre_anchor(child, upstream, None)),
+            Ok(count) => {
+                upstream_reader.feed(&chunk[..count]);
+                let mut terminate = false;
+                while let Some((kind, _payload)) = upstream_reader.pop() {
+                    terminate |= kind == MSG_TERMINATE;
+                }
+                if terminate {
+                    return PreAnchor::Concluded(conclude_pre_anchor(child, upstream, None));
+                }
+            }
+            Err(Errno::EAGAIN | Errno::EINTR) => {}
+            Err(error) => {
+                return PreAnchor::Concluded(conclude_pre_anchor(
+                    child,
+                    upstream,
+                    Some(&format!(
+                        "cannot read the rustX control channel before the unit anchor: {error}"
+                    )),
+                ));
+            }
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Classifies one inner control frame received before the anchor commit.
+fn classify_pre_anchor_frame(kind: u8, payload: &[u8], inner_pid: i32) -> PreAnchorFrame {
+    match kind {
+        MSG_ANCHOR_READY => {
+            let Ok(bytes) = <[u8; 4]>::try_from(payload) else {
+                return PreAnchorFrame::Violation(
+                    "the unit anchor announcement is malformed".to_owned(),
+                );
+            };
+            let pgid = i32::from_le_bytes(bytes);
+            if pgid <= 0 {
+                PreAnchorFrame::Violation(format!(
+                    "the unit anchor announcement carries the non-positive process-group id \
+                     {pgid}"
+                ))
+            } else if pgid != inner_pid {
+                PreAnchorFrame::Violation(format!(
+                    "the unit anchor announcement ({pgid}) does not match the direct inner \
+                     supervisor child ({inner_pid})"
+                ))
+            } else {
+                PreAnchorFrame::AnchorCommit
+            }
+        }
+        MSG_NO_OWNERSHIP => PreAnchorFrame::SetupEnded,
+        MSG_PROCESS_CONTROL_FAILURE | MSG_SIGNAL_ATTEMPT => PreAnchorFrame::Informational,
+        other => PreAnchorFrame::Violation(format!(
+            "unexpected pre-anchor inner control message {other:#04x}"
+        )),
+    }
+}
+
+/// Settles the pre-anchor inner **by pid** and reports the outcome.
+///
+/// Before the anchor commit point the inner is only a direct child: its pid
+/// is not a process-group id, and it cannot have spawned the server (that
+/// is gated behind `MSG_START`, which rustX sends only after the anchor
+/// announcement). Terminating and reaping that one pid is therefore the
+/// complete physical containment of the unit at this stage.
+///
+/// `MSG_NO_OWNERSHIP` is emitted **only** on a proven reap, and carries the
+/// reaped pid as its payload: that is what makes it proof-carrying. A
+/// failed direct-inner reap leaves terminality unproven, so it reports a
+/// process-control failure and deliberately emits no `MSG_NO_OWNERSHIP`.
+///
+/// Returns the outer's exit status.
+fn conclude_pre_anchor(
     child: &mut std::process::Child,
     upstream: &mut std::os::unix::net::UnixStream,
     failure: Option<&str>,
-) -> InnerAttachment {
-    let _ = child.kill();
-    let reaped = child.wait();
+) -> i32 {
     if let Some(message) = failure {
         let _ = write_frame(upstream, MSG_PROCESS_CONTROL_FAILURE, message.as_bytes());
     }
-    if let Err(error) = reaped {
-        let _ = write_frame(
-            upstream,
-            MSG_PROCESS_CONTROL_FAILURE,
-            format!("cannot reap the pre-ownership inner supervisor: {error}").as_bytes(),
-        );
+    let inner_pid = i32::try_from(child.id()).unwrap_or(0);
+    let _ = child.kill();
+    let reaped = if std::env::var(FAIL_PRE_ANCHOR_REAP_ENV).is_ok() {
+        // Test-only injection of the semantic state "the pre-anchor child
+        // cleanup cannot prove the reap"; the child is deliberately not
+        // waited for.
+        Err("injected pre-anchor reap failure".to_owned())
+    } else {
+        child
+            .wait()
+            .map(|_status| ())
+            .map_err(|error| error.to_string())
+    };
+    match reaped {
+        Ok(()) => {
+            let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &inner_pid.to_le_bytes());
+            0
+        }
+        Err(error) => {
+            let _ = write_frame(
+                upstream,
+                MSG_PROCESS_CONTROL_FAILURE,
+                format!(
+                    "cannot reap the pre-anchor inner supervisor (pid {inner_pid}): {error}; the \
+                     pre-anchor child's terminal state cannot be proven, so no-ownership is not \
+                     reported"
+                )
+                .as_bytes(),
+            );
+            1
+        }
     }
-    let _ = write_frame(upstream, MSG_NO_OWNERSHIP, &[]);
-    InnerAttachment::Concluded
+}
+
+/// Relays one post-anchor inner control frame upstream.
+///
+/// After the commit point the unit's terminality is decided by the outer's
+/// group-scoped gate alone. A post-anchor `MSG_NO_OWNERSHIP` (for example a
+/// failed server spawn) is therefore inner-local information and is
+/// suppressed: the inner exits, the outer retains the anchor, and the
+/// group-scoped wait reaches `ECHILD` and reports the authoritative
+/// `MSG_ALL_CHILDREN_REAPED`. A second `MSG_ANCHOR_READY` is a protocol
+/// violation: it is reported, never relayed.
+fn relay_anchored_frame(kind: u8, payload: &[u8], upstream: &mut std::os::unix::net::UnixStream) {
+    match kind {
+        MSG_NO_OWNERSHIP => {}
+        MSG_ANCHOR_READY => {
+            let _ = write_frame(
+                upstream,
+                MSG_PROCESS_CONTROL_FAILURE,
+                b"the inner supervisor announced the unit anchor more than once",
+            );
+        }
+        _ => {
+            let _ = write_frame(upstream, kind, payload);
+        }
+    }
 }
 
 /// Handles one upstream control frame (from rustX): START and TERMINATE
@@ -700,6 +1015,30 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         return 1;
     };
     let fail_signal = std::env::var(FAIL_SIGNAL_ENV).is_ok();
+    if let Ok(pid_file) = std::env::var(INNER_STALL_BEFORE_ANCHOR_ENV) {
+        // Test-only injection: a connected direct child that never reaches
+        // the anchor commit point. The pid file is written after the
+        // connection, so a regression can order "the inner exists and is
+        // connected" against an outer loss without a sleep.
+        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        loop {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+    }
+    if let Ok(pid_file) = std::env::var(FAIL_SETSID_ENV) {
+        // Test-only injection: `setsid()` fails after the control
+        // connection exists. This is byte-for-byte the real setsid-failure
+        // path below, so the inner stays in its parent's process group and
+        // its pid is provably not a process-group id.
+        let _ = std::fs::write(&pid_file, std::process::id().to_string());
+        let _ = write_frame(
+            &mut control,
+            MSG_PROCESS_CONTROL_FAILURE,
+            b"injected setsid failure after the inner control connection",
+        );
+        let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
+        return INNER_EXIT_NORMAL;
+    }
     if let Err(error) = nix::unistd::setsid() {
         let _ = write_frame(
             &mut control,

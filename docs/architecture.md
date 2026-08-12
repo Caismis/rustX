@@ -898,7 +898,15 @@ ownership-gated in both directions: the outer supervisor may create the unit
 hierarchy only after rustX accepted and retained its control connection
 (`MSG_OWNER_ATTACHED`), and the outer attaches its inner supervisor with a
 bounded pre-ownership state machine (inner connection, inner exit, upstream
-loss) instead of a blocking accept. Physical settlement is published only
+loss) instead of a blocking accept. `MSG_ANCHOR_READY` is then the anchor
+commit point: only a unique, positive, pid-matching announcement gives the
+inner pid its second meaning as the owned process-group id. Before it the
+outer owns the inner strictly as a direct child pid — no group-scoped wait
+may run against that pid — and reports `NoOwnership` only after proving
+that direct child reaped; an unprovable pre-anchor reap reports a
+process-control failure and no `NoOwnership`. After the startup gate has
+opened, bare pre-ownership plus control loss is therefore never a terminal
+proof. Physical settlement is published only
 with proven terminality; an unproven terminal state is returned as an
 explicit error from `wait_for_settlement`/`McpServerRuntime::close`, never as
 a successful settlement. Streamable HTTP

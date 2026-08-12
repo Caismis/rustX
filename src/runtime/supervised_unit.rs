@@ -390,8 +390,16 @@ impl FrameReader {
     /// is already consumed: callers must handle it and then drain the rest
     /// with repeated [`FrameReader::pop`] calls.
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Option<(u8, Vec<u8>)> {
-        self.buf.extend_from_slice(bytes);
+        self.feed(bytes);
         self.pop()
+    }
+
+    /// Feeds newly read bytes **without** consuming any frame, for readers
+    /// that drain with [`FrameReader::pop`] in one place. Unlike
+    /// [`FrameReader::push`] this can never silently drop a frame whose
+    /// return value is ignored.
+    pub(crate) fn feed(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
     }
 
     /// Parses the first complete frame out of the buffer. Call after

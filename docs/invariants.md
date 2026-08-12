@@ -319,17 +319,54 @@ observed only at the next quiescent re-discovery.
   later handshake/control setup error can never strand a raw child — and
   the direct supervisor child is reaped before physical settlement is
   published.
+- **`AnchorReady` is the anchor commit point.** It is the exact
+  linearization point at which the inner supervisor's pid acquires the
+  meaning `inner pid == owned process-group id == structural ownership
+  anchor`. The inner connects its control socket *before* it runs `setsid`,
+  the subreaper/signal setup, the fixed-membership seccomp install, and the
+  anchor announcement, so a connected inner may still fail any of them.
+  Before the commit point the inner is only a direct pre-ownership child of
+  the outer: the outer owns and settles it **by pid** and must never run a
+  group-scoped wait against `inner_pid`, because
+  `waitid(Id::PGid(inner_pid))` can return `ECHILD` without reaping an
+  inner whose `setsid` failed — such an `ECHILD` is never a terminal proof
+  and can never produce `AllChildrenReaped`. A valid `AnchorReady` occurs
+  exactly once, carries a positive pgid, and equals the direct inner
+  child's pid; it is the only transition into the group-scoped ownership
+  core.
+- **`NoOwnership` is proof-carrying.** rustX may treat it as successful
+  pre-ownership settlement only because a supervisor emits it only after it
+  has proven that every pre-anchor child it created is gone and reaped (the
+  frame's payload names that reaped pid; an empty payload means no
+  pre-anchor child was ever created). The outer therefore never relays the
+  inner's own pre-anchor `NoOwnership`: it records the setup failure, reaps
+  the direct inner by pid, and only then reports `NoOwnership` itself. If
+  that direct reap cannot be proven, the outer reports
+  `ProcessControlFailure` and deliberately emits **no** `NoOwnership`, so
+  terminality stays explicitly unproven. After the commit point
+  `NoOwnership` is never terminality: a post-anchor inner failure (a failed
+  server spawn, say) leaves the anchor with the outer, whose group-scoped
+  wait reaches `ECHILD` and reports the authoritative `AllChildrenReaped`.
+- **Bare pre-ownership control loss is not a terminal proof.** Once
+  `MSG_OWNER_ATTACHED` opened the outer gate, the outer may already have
+  spawned an inner whose identity rustX never received, so
+  `PreOwnership` + control EOF/error settles as `TerminalityUnproven`. Only
+  an explicit proof-carrying `NoOwnership` settles a pre-anchor unit
+  physically. The two startup cases that still settle physically do so
+  because the startup gate proves no inner could ever have been created:
+  an outer that exited before rustX attached it, and a gated outer
+  explicitly killed and reaped after an accept failure.
 - An interactive subprocess unit may publish physical settlement **iff**
   the authoritative supervisor terminal event was received and the direct
   supervisor was reaped, or emergency containment returned
-  `TerminalProven`, or the unit provably never left the pre-ownership state
-  (no owned process tree was ever created). `AnchorUnavailable`, a
-  containment failure, and a containment-task failure are process-control
-  outcomes without a terminal proof: they are published as an explicit
-  unproven-terminality settlement (`wait_for_settlement` and
-  `McpServerRuntime::close` return an error) and are never represented as
-  successful physical settlement. No timeout ever converts unknown
-  terminality into terminality.
+  `TerminalProven`, or an explicit proof-carrying `NoOwnership` was
+  received, or the unit provably never passed the startup gate.
+  `AnchorUnavailable`, a containment failure, a containment-task failure,
+  and an unproven pre-anchor state are process-control outcomes without a
+  terminal proof: they are published as an explicit unproven-terminality
+  settlement (`wait_for_settlement` and `McpServerRuntime::close` return an
+  error) and are never represented as successful physical settlement. No
+  timeout ever converts unknown terminality into terminality.
 - Interactive startup is ownership-gated in both directions, so every
   post-spawn setup outcome is physically owned. rustX writes the
   runtime->outer startup gate (`MSG_OWNER_ATTACHED`) only after it accepted
@@ -339,10 +376,13 @@ observed only at the next quiescent re-discovery.
   The outer attaches its inner supervisor with a bounded pre-ownership
   ownership state machine — inner control connection, inner direct-child
   exit, upstream termination/control loss — never a blocking one-shot
-  accept. Before the inner control/start gate completes no server-owned
-  process tree can exist; an inner that exits or is terminated before
-  connecting is reaped, reported (`ProcessControlFailure` + `NoOwnership`),
-  and the outer exits cleanly.
+  accept, and then holds it in the explicit pre-anchor phase (inner control
+  frames, inner direct-child exit, upstream termination/control loss) until
+  the anchor commit point. Before the inner control/start gate completes no
+  server-owned process tree can exist; an inner that exits, fails its
+  setup, or is terminated before the anchor commit is reaped **by pid** and
+  reported (`ProcessControlFailure` + proof-carrying `NoOwnership`), and
+  the outer exits cleanly.
 - The server's stderr is drained until EOF (only a bounded
   preview is retained; reading never stops merely because the preview limit
   was reached), and dropping the business-facing handle requests shutdown

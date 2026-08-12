@@ -288,7 +288,13 @@ pub(crate) enum SupervisorEvent {
     /// group.
     OwnershipEstablished,
     /// Setup ended without ever spawning an owned execution domain.
-    NoOwnership,
+    ///
+    /// This frame is proof-carrying: a supervisor may emit it only after it
+    /// has proven that every pre-anchor child it created is gone and
+    /// reaped. `reaped_child` names that direct child pid when one existed;
+    /// `None` means no pre-anchor child was ever created (the setup failed
+    /// before the spawn), which proves the same thing vacuously.
+    NoOwnership { reaped_child: Option<i32> },
     /// The shell exited; `status` is its canonical exit status.
     ShellExited { status: ExitStatus },
     /// The supervisor's wait loop observed `ECHILD`: no owned child
@@ -917,7 +923,7 @@ impl SupervisedCommandRunner {
                             self.failure = Some("invalid Bash ownership commit transition".to_owned());
                         }
                     }
-                    Ok(Some(SupervisorEvent::NoOwnership)) => {
+                    Ok(Some(SupervisorEvent::NoOwnership { .. })) => {
                         if matches!(self.lifecycle, ProcessLifecycle::PreOwnership | ProcessLifecycle::OwnershipPossible { .. }) {
                             self.lifecycle = ProcessLifecycle::Terminal;
                         } else {
@@ -1266,7 +1272,10 @@ pub(crate) async fn read_supervisor_event<R: tokio::io::AsyncRead + Unpin>(
             }))
         }
         MSG_OWNERSHIP_ESTABLISHED => Ok(Some(SupervisorEvent::OwnershipEstablished)),
-        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership)),
+        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership {
+            // An empty payload means no pre-anchor child was ever created.
+            reaped_child: <[u8; 4]>::try_from(payload).ok().map(i32::from_le_bytes),
+        })),
         MSG_SHELL_EXITED => {
             // { exit_code: i32 LE, signaled: u8, signal: i32 LE }
             if payload.len() != 9 {

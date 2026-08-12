@@ -18,13 +18,23 @@
 //! - the unit's terminal event is the outer supervisor's authoritative
 //!   `AllChildrenReaped` report; control-channel loss before it escalates
 //!   to the shared adopted-anchor emergency containment;
+//! - `AnchorReady` is the commit point of the unit's identity. Before it,
+//!   the outer may already have spawned a pre-anchor inner whose identity
+//!   rustX never received, so once the startup gate has opened, bare
+//!   [`UnitLifecycle::PreOwnership`] plus control EOF/error is **not** a
+//!   terminal proof: it settles as
+//!   [`UnitSettlement::TerminalityUnproven`]. Only an explicit
+//!   proof-carrying `NoOwnership` — which the outer emits only after it
+//!   proved its direct pre-anchor child gone and reaped — settles a
+//!   pre-anchor unit physically;
 //! - physical settlement is published **only** with proven terminality:
 //!   the authoritative terminal event plus the direct-child reap, an
 //!   emergency containment that returned
-//!   [`EmergencyContainment::TerminalProven`], or a unit that never left
-//!   the pre-ownership state. An unavailable emergency anchor, a
-//!   containment failure, or a containment-task failure is reported as
-//!   [`UnitSettlement::TerminalityUnproven`] and is never a successful
+//!   [`EmergencyContainment::TerminalProven`], a proof-carrying
+//!   `NoOwnership`, or a unit that provably never passed the startup gate.
+//!   An unavailable emergency anchor, a containment failure, a
+//!   containment-task failure, or an unproven pre-anchor state is reported
+//!   as [`UnitSettlement::TerminalityUnproven`] and is never a successful
 //!   physical settlement;
 //! - stderr is drained until EOF; only a bounded preview is retained, and
 //!   reading never stops merely because the preview limit was reached;
@@ -57,8 +67,9 @@ pub(crate) enum UnitSettlement {
     /// The owned process tree is provably terminal and the direct
     /// supervisor child was reaped: the authoritative `AllChildrenReaped`
     /// event was received, emergency containment returned
-    /// [`EmergencyContainment::TerminalProven`], or the unit never left the
-    /// pre-ownership state (no owned process tree was ever created).
+    /// [`EmergencyContainment::TerminalProven`], a proof-carrying
+    /// `NoOwnership` was received, or the unit provably never passed the
+    /// runtime->outer startup gate (no part of the hierarchy could exist).
     PhysicallySettled,
     /// The owned process tree's terminal state could not be proven. This is
     /// never a successful physical settlement: the group may still exist.
@@ -70,7 +81,9 @@ pub(crate) enum UnitSettlement {
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UnitLifecycle {
-    /// No owned process tree can exist yet.
+    /// No owned process tree can exist yet, and no unit anchor identity is
+    /// known to rustX. A pre-anchor inner supervisor may nevertheless exist
+    /// inside the outer's direct-child ownership.
     PreOwnership,
     /// The unit anchor was announced; the owned child may not be spawned
     /// yet, but the anchor identity is retained by the supervisor unit.
@@ -180,6 +193,20 @@ fn record_event(control: &InteractiveTestControl, event: &str) {
 
 #[cfg(all(unix, not(test)))]
 fn record_event(_control: &InteractiveTestControl, _event: &str) {}
+
+/// Records one observed `NoOwnership` event together with the pid the
+/// supervisor proved reaped, so a regression can verify that the
+/// proof-carrying frame really followed the direct-child reap.
+#[cfg(all(unix, test))]
+fn record_no_ownership(control: &InteractiveTestControl, reaped_child: Option<i32>) {
+    record_event(control, "no_ownership");
+    if let Some(pid) = reaped_child {
+        record_event(control, &format!("no_ownership_reaped:{pid}"));
+    }
+}
+
+#[cfg(all(unix, not(test)))]
+fn record_no_ownership(_control: &InteractiveTestControl, _reaped_child: Option<i32>) {}
 
 /// The explicit command description of one long-lived interactive server.
 /// Unlike the supervised-command spec, the business stdin/stdout pair
@@ -574,15 +601,20 @@ async fn run_interactive_unit(
                         lifecycle = UnitLifecycle::Owned { pgid };
                     }
                 }
-                Ok(Some(SupervisorEvent::NoOwnership)) => {
-                    record_event(test_control, "no_ownership");
-                    // Setup ended before any owned process was spawned: the
-                    // supervisor unit reaped its own pre-ownership child
-                    // domain, so no owned process tree exists (M5 parity).
-                    if matches!(
-                        lifecycle,
-                        UnitLifecycle::PreOwnership | UnitLifecycle::OwnershipPossible { .. }
-                    ) {
+                Ok(Some(SupervisorEvent::NoOwnership { reaped_child })) => {
+                    record_no_ownership(test_control, reaped_child);
+                    // Pre-anchor: the outer emits `NoOwnership` only after
+                    // it has proven that every pre-anchor child it created
+                    // is gone and reaped (or that none was ever created), so
+                    // this frame is proof-carrying — no owned process tree
+                    // exists and none can ever be created (M5 parity).
+                    //
+                    // Post-anchor it is inner-local information only (the
+                    // outer suppresses it; this arm is defense in depth):
+                    // an anchored unit's terminality is the outer's
+                    // group-scoped `AllChildrenReaped` proof, so it must
+                    // never make the lifecycle terminal earlier.
+                    if lifecycle == UnitLifecycle::PreOwnership {
                         lifecycle = UnitLifecycle::Terminal;
                     }
                 }
@@ -635,8 +667,23 @@ async fn run_interactive_unit(
     }
     match lifecycle {
         // The owned tree is provably terminal: the authoritative terminal
-        // event, or a unit that never created an owned process tree.
-        UnitLifecycle::Terminal | UnitLifecycle::PreOwnership => UnitSettlement::PhysicallySettled,
+        // event, or an explicit proof-carrying `NoOwnership`.
+        UnitLifecycle::Terminal => UnitSettlement::PhysicallySettled,
+        // The startup gate already opened, so the outer may have spawned an
+        // inner whose identity rustX never received: there is no anchor to
+        // contain and no proof that the pre-anchor child is gone. Bare
+        // pre-ownership plus control EOF/error is therefore never a
+        // terminal proof. (A unit that never got past the startup gate
+        // settles physically, but does so before this loop: an outer that
+        // exited before rustX attached it, and a gated outer explicitly
+        // killed and reaped after an accept failure, both prove that no
+        // inner could ever have been created.)
+        UnitLifecycle::PreOwnership => UnitSettlement::TerminalityUnproven(unproven_reason(
+            "the interactive supervisor's control channel was lost after the startup gate \
+             opened and before the unit anchor was announced: a pre-anchor inner supervisor \
+             whose identity rustX never received may exist, so no terminal state can be proven",
+            control_failure.as_deref(),
+        )),
         UnitLifecycle::OwnershipPossible { pgid } | UnitLifecycle::Owned { pgid } => {
             emergency_settlement(pgid, control_failure.as_deref(), test_control).await
         }
@@ -720,7 +767,8 @@ mod interactive_tests {
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
     use crate::runtime::interactive_supervisor::{
-        ANCHOR_PID_FILE_ENV, FAIL_SIGNAL_ENV, INNER_EXIT_BEFORE_CONNECT_ENV, OUTER_FAIL_ENV,
+        ANCHOR_PID_FILE_ENV, FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV, FAIL_SIGNAL_ENV,
+        INNER_EXIT_BEFORE_CONNECT_ENV, INNER_STALL_BEFORE_ANCHOR_ENV, OUTER_FAIL_ENV,
     };
     use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
 
@@ -786,6 +834,15 @@ mod interactive_tests {
             .trim()
             .parse()
             .expect("pid")
+    }
+
+    /// The live process-group id of `pid` (field 5 of `/proc/<pid>/stat`,
+    /// counted after the parenthesized command name).
+    fn proc_pgid(pid: i32) -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let close = stat.rfind(')')?;
+        // After ") ": state, ppid, pgrp, ...
+        stat[close + 2..].split_whitespace().nth(2)?.parse().ok()
     }
 
     fn proc_state(pid: i32) -> Option<char> {
@@ -1235,8 +1292,11 @@ mod interactive_tests {
             "the pre-ownership inner loss is a process-control failure: {events:?}"
         );
         assert!(
-            events.iter().any(|event| event == "no_ownership"),
-            "the unit must report that no ownership was ever established: {events:?}"
+            events
+                .iter()
+                .any(|event| event == &format!("no_ownership_reaped:{inner_pid}")),
+            "the proof-carrying no-ownership must name the direct child the outer reaped: \
+             {events:?}"
         );
         assert!(
             !events.iter().any(|event| event == "anchor_ready"),
@@ -1292,5 +1352,236 @@ mod interactive_tests {
             !server_marker.exists(),
             "a gated outer may never create the unit hierarchy"
         );
+    }
+
+    /// `setsid()` fails on a **connected** inner, before `AnchorReady`.
+    ///
+    /// The inner connects its control socket before it runs `setsid()`, so
+    /// a connected inner is still only a direct child pid. When its
+    /// `setsid()` fails, `PGID == inner_pid` is false, and a group-scoped
+    /// `waitid(Id::PGid(inner_pid))` would reach `ECHILD` **without**
+    /// reaping the inner. The outer must therefore settle the inner by pid
+    /// and must never produce the group-scoped terminal proof.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn setsid_failure_before_the_anchor_settles_by_direct_pid_reap() {
+        let fixture = Fixture::new();
+        let inner_pid_file = fixture.path("inner.pid");
+        let server_marker = fixture.path("server-started");
+        let script = format!("echo started > {}; sleep 30", server_marker.display());
+        let control = InteractiveTestControl::new();
+        let process = fixture
+            .spawn_with_control(
+                &script,
+                vec![(
+                    FAIL_SETSID_ENV.to_owned(),
+                    inner_pid_file.display().to_string(),
+                )],
+                control.clone(),
+            )
+            .expect("spawn");
+        let outer_pid = i32::try_from(
+            process
+                .supervisor_child_pid
+                .expect("test-only supervisor pid"),
+        )
+        .expect("pid fits i32");
+        published_settlement(&process, "the pre-anchor unit must settle, never hang")
+            .await
+            .expect("a pre-anchor inner proven reaped by pid is a proven physical settlement");
+        // The inner wrote its pid after connecting and before failing, so
+        // this is the exact direct child the outer had to reap by pid.
+        let inner_pid = read_pid(&inner_pid_file);
+        wait_for_reaped(inner_pid, "the pre-anchor inner supervisor");
+        wait_for_reaped(outer_pid, "the outer supervisor");
+        let events = control.observed_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event == "process_control_failure"),
+            "the inner's pre-anchor setup failure must be reported: {events:?}"
+        );
+        // The proof carrier: the outer writes `NoOwnership` with the reaped
+        // pid only on the success branch of the direct-child reap, so this
+        // event can exist only after that pid was provably reaped.
+        assert!(
+            events
+                .iter()
+                .any(|event| event == &format!("no_ownership_reaped:{inner_pid}")),
+            "no-ownership must be proof-carrying and name the reaped direct child: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| event == "anchor_ready"),
+            "a failed setsid can never reach the anchor commit point: {events:?}"
+        );
+        // The regression proof: with `inner_pid` misused as a process-group
+        // id, `waitid(Id::PGid(inner_pid))` reaches ECHILD immediately and
+        // the outer would report the authoritative group terminal event
+        // without ever having reaped the inner.
+        assert!(
+            !events.iter().any(|event| event == "all_children_reaped"),
+            "the pre-anchor inner pid is not a process-group id: no group-scoped terminal proof \
+             may be produced: {events:?}"
+        );
+        assert!(
+            !server_marker.exists(),
+            "no server-owned process tree may exist before the anchor commit point"
+        );
+    }
+
+    /// The outer is lost after the inner exists but before `AnchorReady`.
+    ///
+    /// rustX attached the outer (the startup gate opened) and the outer
+    /// spawned and connected an inner, but the anchor was never announced,
+    /// so rustX never learned the unit's identity. Losing the control
+    /// channel here is never a physical settlement: there is no anchor to
+    /// contain and no proof that the pre-anchor inner is gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outer_lost_before_the_anchor_is_terminality_unproven() {
+        let fixture = Fixture::new();
+        let inner_pid_file = fixture.path("inner.pid");
+        let server_marker = fixture.path("server-started");
+        let script = format!("echo started > {}; sleep 30", server_marker.display());
+        let control = InteractiveTestControl::new();
+        let process = fixture
+            .spawn_with_control(
+                &script,
+                vec![(
+                    INNER_STALL_BEFORE_ANCHOR_ENV.to_owned(),
+                    inner_pid_file.display().to_string(),
+                )],
+                control.clone(),
+            )
+            .expect("spawn");
+        let outer_pid = i32::try_from(
+            process
+                .supervisor_child_pid
+                .expect("test-only supervisor pid"),
+        )
+        .expect("pid fits i32");
+        // The ordering proof is the pid file the inner writes immediately
+        // after connecting its control socket — never a sleep: once it
+        // exists, the inner provably exists and is attached, and it
+        // provably cannot have announced the anchor.
+        let inner_pid = read_pid(&inner_pid_file);
+        // The premise of the whole pre-anchor phase, observed on the live
+        // inner: a connected inner that has not announced the anchor is not
+        // the leader of a process group whose id is its pid, so its pid may
+        // never be used as one.
+        assert_ne!(
+            proc_pgid(inner_pid),
+            Some(inner_pid),
+            "a pre-anchor inner's pid must not be a process-group id yet"
+        );
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(outer_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("kill the outer supervisor before the anchor commit point");
+        let settlement = published_settlement(
+            &process,
+            "the driver must publish an explicit settlement, never hang",
+        )
+        .await;
+        let reason = settlement
+            .expect_err("a pre-anchor control loss is never a successful physical settlement");
+        assert!(
+            reason.contains("before the unit anchor was announced"),
+            "the settlement must name the unproven pre-anchor state: {reason}"
+        );
+        let events = control.observed_events();
+        assert!(
+            events.iter().any(|event| event == "owner_attached"),
+            "the startup gate must have opened for this to be the pre-anchor hole: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| event == "anchor_ready"),
+            "the anchor must never have been announced: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| event == "no_ownership"),
+            "a lost outer cannot emit a proof-carrying no-ownership: {events:?}"
+        );
+        assert!(
+            !server_marker.exists(),
+            "no server-owned process tree may exist before the anchor commit point"
+        );
+        // Test-side cleanup: the pre-anchor inner outlived its outer and is
+        // now adopted by rustX (the child-subreaper prerequisite), so the
+        // test terminates and reaps it by its known pid.
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(inner_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .expect("test terminates the adopted pre-anchor inner");
+        nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(inner_pid), None)
+            .expect("reap the adopted pre-anchor inner");
+    }
+
+    /// A pre-anchor cleanup that cannot prove the direct-inner reap.
+    ///
+    /// The injected seam models exactly the forbidden state: the outer's
+    /// pre-anchor cleanup cannot prove that its direct child was reaped. It
+    /// must report the process-control failure and must **not** emit the
+    /// proof-carrying `NoOwnership`, so no successful physical settlement
+    /// is ever published.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unprovable_pre_anchor_reap_never_settles_physically() {
+        let fixture = Fixture::new();
+        let inner_pid_file = fixture.path("inner.pid");
+        let server_marker = fixture.path("server-started");
+        let script = format!("echo started > {}; sleep 30", server_marker.display());
+        let control = InteractiveTestControl::new();
+        let process = fixture
+            .spawn_with_control(
+                &script,
+                vec![
+                    (
+                        FAIL_SETSID_ENV.to_owned(),
+                        inner_pid_file.display().to_string(),
+                    ),
+                    (FAIL_PRE_ANCHOR_REAP_ENV.to_owned(), "1".to_owned()),
+                ],
+                control.clone(),
+            )
+            .expect("spawn");
+        let settlement = published_settlement(
+            &process,
+            "the driver must publish an explicit settlement, never hang",
+        )
+        .await;
+        let reason = settlement.expect_err(
+            "a pre-anchor child whose reap cannot be proven is never a physical settlement",
+        );
+        assert!(
+            reason.contains("before the unit anchor was announced"),
+            "the settlement must name the unproven pre-anchor state: {reason}"
+        );
+        let events = control.observed_events();
+        assert!(
+            events
+                .iter()
+                .any(|event| event == "process_control_failure"),
+            "the unprovable reap must be reported as a process-control failure: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| event == "no_ownership"),
+            "no-ownership may never be emitted without the proven direct-child reap: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|event| event == "all_children_reaped"),
+            "no group-scoped terminal proof may exist before the anchor commit point: {events:?}"
+        );
+        assert!(
+            !server_marker.exists(),
+            "no server-owned process tree may exist before the anchor commit point"
+        );
+        // Test-side cleanup: the outer deliberately did not consume its
+        // direct child, so the pre-anchor inner is adopted by rustX.
+        let inner_pid = read_pid(&inner_pid_file);
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(inner_pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+        let _ = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(inner_pid), None);
     }
 }
