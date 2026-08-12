@@ -1502,7 +1502,29 @@ mod coalesced_gate_tests {
                 Err(error) => abandon(child, &format!("{description}: {error}")),
             }
             match child.try_wait().expect("observe the supervisor process") {
-                Some(status) => return (frames, status),
+                // The process may have written its last frames between this
+                // iteration's read and its exit, so the queued bytes are
+                // drained to EOF before the frames are reported.
+                Some(status) => {
+                    loop {
+                        match control.read(&mut chunk) {
+                            Ok(0) => break,
+                            Ok(count) => {
+                                reader.feed(&chunk[..count]);
+                                while let Some(frame) = reader.pop() {
+                                    frames.push(frame);
+                                }
+                            }
+                            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                            Err(_) => break,
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "{description}: the control channel never reached EOF"
+                        );
+                    }
+                    return (frames, status);
+                }
                 None => {
                     if Instant::now() >= deadline {
                         abandon(child, description);
