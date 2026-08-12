@@ -641,7 +641,9 @@ impl ConversationBackgroundRegistry {
             let (settled, stored) = match record.lifecycle {
                 BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
                     match result.status {
-                        ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
+                        ToolExecutionStatus::Success => {
+                            (BackgroundLifecycle::Succeeded, result.clone())
+                        }
                         ToolExecutionStatus::Cancelled { .. } => {
                             (BackgroundLifecycle::Cancelled, result.clone())
                         }

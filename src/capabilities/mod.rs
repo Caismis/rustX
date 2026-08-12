@@ -39,7 +39,7 @@ mod error;
 mod snapshot;
 
 pub use coordinator::{
-    AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig,
+    AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
     PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};

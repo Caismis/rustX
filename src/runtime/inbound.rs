@@ -35,6 +35,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
 
@@ -65,7 +67,8 @@ pub trait InboundObserver: Send + Sync {
 /// [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
 /// and is never allocated from the Event Journal sequence; the mailbox owns
 /// allocation, and the first successful enqueue of a mailbox receives `1`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct InboundSequence(u64);
 
 impl InboundSequence {
@@ -250,7 +253,10 @@ impl core::fmt::Debug for MailboxState {
         f.debug_struct("MailboxState")
             .field("last_sequence", &self.last_sequence)
             .field("pending_len", &self.pending.len())
-            .field("observer", &self.observer.as_ref().map(|_| "<inbound observer>"))
+            .field(
+                "observer",
+                &self.observer.as_ref().map(|_| "<inbound observer>"),
+            )
             .field("probe", &probe)
             .finish()
     }

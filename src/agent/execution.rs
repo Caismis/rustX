@@ -195,9 +195,12 @@ pub struct AgentExecution<'a> {
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
-    /// next model turn; never present outside `#[cfg(test)]`.
+    /// next model turn; never present outside `#[cfg(test)]`. The `Mutex`
+    /// keeps an execution with an installed pause `Sync` (the pause holds
+    /// a `std::sync::mpsc::Receiver`), so host-driven attempt tasks can be
+    /// spawned across threads in tests.
     #[cfg(test)]
-    continuation_pause: Option<test_sync::ContinuationBoundaryPause>,
+    continuation_pause: std::sync::Mutex<Option<test_sync::ContinuationBoundaryPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -309,7 +312,7 @@ impl<'a> AgentExecution<'a> {
             last_request_fingerprint: None,
             observer: None,
             #[cfg(test)]
-            continuation_pause: None,
+            continuation_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
@@ -394,7 +397,11 @@ impl<'a> AgentExecution<'a> {
                 // observable deterministically between turns.
                 #[cfg(test)]
                 if terminal.is_none()
-                    && let Some(pause) = &self.continuation_pause
+                    && let Some(pause) = &self
+                        .continuation_pause
+                        .lock()
+                        .expect("continuation pause lock")
+                        .as_ref()
                 {
                     pause.park_at_continuation_boundary();
                 }
@@ -2309,7 +2316,7 @@ mod tests {
 
         let tool_runtime = tool_runtime();
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2318,7 +2325,11 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
 
@@ -2396,7 +2407,7 @@ mod tests {
 
         let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2405,7 +2416,11 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
 
@@ -2666,7 +2681,7 @@ mod tests {
                 .expect("release the second continuation boundary");
         });
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2675,7 +2690,11 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
         let _result = tokio::time::timeout(std::time::Duration::from_secs(15), execution.run())
             .await
             .expect("the attempt terminates");
