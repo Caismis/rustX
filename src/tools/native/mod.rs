@@ -30,12 +30,6 @@
 
 mod background_task;
 mod bash;
-// The supervisor process entry points are reachable only from main.rs
-// (supervisor-mode dispatch) and from test binaries via self-exec; they are
-// documented-hidden binary entry points, never tool-plane API.
-#[cfg(unix)]
-#[doc(hidden)]
-pub mod bash_supervisor;
 mod edit;
 mod glob;
 mod grep;
@@ -45,6 +39,16 @@ mod support;
 mod write;
 
 pub use registration::NativeToolRegistration;
+
+// The per-invocation Bash supervisor process entry points are reachable
+// only from the supervisor binary and from test binaries via self-exec;
+// they are documented-hidden binary entry points, never tool-plane API. The
+// supervisor is an implementation detail of Bash execution ownership, so it
+// is owned by the Bash module and only re-exported here under its binary
+// entry-point path.
+#[cfg(unix)]
+#[doc(hidden)]
+pub use bash::supervisor as bash_supervisor;
 
 use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::executor::{ToolRegistry, ToolRegistryError};
