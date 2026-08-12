@@ -15,6 +15,16 @@
 //! by default, and `ModelSelectable`/`BackgroundOnly` are explicit
 //! per-tool configuration choices.
 //!
+//! # Module ownership
+//!
+//! One native capability owns one module boundary: a tool module owns its
+//! name, its description, its input contract, its executor, and its
+//! tool-private helpers, and constructs itself through its own
+//! `registration(...)` function returning a [`NativeToolRegistration`].
+//! This module only *composes* the known native tools — the composition is
+//! explicit and deterministic, with no discovery, no plugin loading, and no
+//! generic tool factory.
+//!
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 
@@ -30,14 +40,15 @@ mod edit;
 mod glob;
 mod grep;
 mod read;
+mod registration;
 mod support;
 mod write;
 
-use std::sync::Arc;
+pub use registration::NativeToolRegistration;
 
 use crate::tools::background::ConversationBackgroundRegistry;
-use crate::tools::executor::{ToolExecutor, ToolRegistry, ToolRegistryError};
-use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy};
+use crate::tools::executor::{ToolRegistry, ToolRegistryError};
+use crate::tools::types::ToolInvocationPolicy;
 
 /// The conversation-owned resources native tools need beyond their
 /// execution context.
@@ -116,59 +127,24 @@ pub fn register_native_tools(
     policies: NativeToolPolicies,
 ) -> Result<(), ToolRegistryError> {
     let NativeToolResources { background } = resources;
-    let definitions = [
-        (
-            background_task::definition(),
-            Arc::new(background_task::BackgroundTaskExecutor::new(background))
-                as Arc<dyn ToolExecutor>,
-        ),
-        (
-            read::definition(policies.read),
-            Arc::new(read::ReadTool) as Arc<dyn ToolExecutor>,
-        ),
-        (
-            write::definition(policies.write),
-            Arc::new(write::WriteTool) as Arc<dyn ToolExecutor>,
-        ),
-        (
-            edit::definition(policies.edit),
-            Arc::new(edit::EditTool) as Arc<dyn ToolExecutor>,
-        ),
-        (
-            glob::definition(policies.glob),
-            Arc::new(glob::GlobTool) as Arc<dyn ToolExecutor>,
-        ),
-        (
-            grep::definition(policies.grep),
-            Arc::new(grep::GrepTool) as Arc<dyn ToolExecutor>,
-        ),
-        (
-            bash::definition(policies.bash),
-            Arc::new(bash::BashTool::new()) as Arc<dyn ToolExecutor>,
-        ),
+    // The explicit composition of the native tool plane: every entry is a
+    // tool-owned registration, and this list is the only place that knows
+    // which native capabilities exist.
+    let registrations = [
+        background_task::registration(background),
+        read::registration(policies.read),
+        write::registration(policies.write),
+        edit::registration(policies.edit),
+        glob::registration(policies.glob),
+        grep::registration(policies.grep),
+        bash::registration(policies.bash),
     ];
-    for (definition, executor) in definitions {
+    for NativeToolRegistration {
+        definition,
+        executor,
+    } in registrations
+    {
         registry.register(definition, executor)?;
     }
     Ok(())
-}
-
-/// Builds a canonical native tool definition under the configured policy.
-fn native_definition(
-    id: &str,
-    name: &str,
-    description: &str,
-    schema: serde_json::Value,
-    policy: ToolInvocationPolicy,
-) -> ToolDefinition {
-    ToolDefinition {
-        id: crate::runtime::identity::ToolId::new(id),
-        name: name.to_owned(),
-        description: description.to_owned(),
-        input_schema: schema,
-        execution_policy: policy.execution,
-        concurrency_policy: policy.concurrency,
-        replay_policy: ToolReplayPolicy::Never,
-        origin: ToolOrigin::Builtin,
-    }
 }

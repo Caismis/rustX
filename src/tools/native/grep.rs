@@ -12,33 +12,36 @@ use regex::RegexBuilder;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_GREP_MATCHES, MAX_MODEL_TOOL_RESULT_BYTES};
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, success_json_with};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation, TruncationState};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "grep";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Grep tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-grep",
-        NAME,
-        "Search workspace files with a Rust regex, ordered by path, line, and column.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "path": {"type": "string", "default": "."},
-                "glob": {"type": "string", "default": "**/*"},
-                "case_sensitive": {"type": "boolean", "default": true}
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        }),
-        policy,
+pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition(
+            "tool-grep",
+            NAME,
+            "Search workspace files with a Rust regex, ordered by path, line, and column.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "path": {"type": "string", "default": "."},
+                    "glob": {"type": "string", "default": "**/*"},
+                    "case_sensitive": {"type": "boolean", "default": true}
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            policy,
+        ),
+        std::sync::Arc::new(GrepTool),
     )
 }
 

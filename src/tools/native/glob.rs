@@ -13,31 +13,34 @@ use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::MAX_GLOB_RESULTS;
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, success_json_with};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation, TruncationState};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "glob";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Glob tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-glob",
-        NAME,
-        "List workspace-relative paths matching a glob pattern (no gitignore semantics).",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string"},
-                "path": {"type": "string", "default": "."}
-            },
-            "required": ["pattern"],
-            "additionalProperties": false
-        }),
-        policy,
+pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition(
+            "tool-glob",
+            NAME,
+            "List workspace-relative paths matching a glob pattern (no gitignore semantics).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "path": {"type": "string", "default": "."}
+                },
+                "required": ["pattern"],
+                "additionalProperties": false
+            }),
+            policy,
+        ),
+        std::sync::Arc::new(GlobTool),
     )
 }
 

@@ -146,35 +146,38 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
 };
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::failed_result;
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{
-    ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
+    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode,
     ToolResultContent, TruncationState,
 };
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "bash";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Bash tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-bash",
-        NAME,
-        "Run one non-interactive /bin/bash command inside the workspace with an explicit \
-         environment and supervised process ownership.",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "command": {"type": "string"},
-                "timeout_ms": {"type": "integer", "minimum": 1}
-            },
-            "required": ["command"],
-            "additionalProperties": false
-        }),
-        policy,
+pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition(
+            "tool-bash",
+            NAME,
+            "Run one non-interactive /bin/bash command inside the workspace with an explicit \
+             environment and supervised process ownership.",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout_ms": {"type": "integer", "minimum": 1}
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+            policy,
+        ),
+        std::sync::Arc::new(BashTool::new()),
     )
 }
 

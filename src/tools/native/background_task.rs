@@ -24,6 +24,7 @@ use futures_util::future::BoxFuture;
 use crate::runtime::identity::ToolExecutionId;
 use crate::tools::background::ConversationBackgroundRegistry;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
     ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy, ToolResultContent,
@@ -32,9 +33,21 @@ use crate::tools::types::{
 /// The canonical model-facing name of the intrinsic.
 pub const BACKGROUND_TASK_NAME: &str = crate::tools::executor::BACKGROUND_TASK_TOOL_NAME;
 
-/// The canonical schema of the `background_task` intrinsic.
+/// The tool-owned registration of the `background_task` runtime intrinsic.
+///
+/// The intrinsic owns its own fixed policies (foreground-only, sequential):
+/// unlike the ordinary native tools it takes no configurable policy, and the
+/// registry independently enforces the same fixed policies.
 #[must_use]
-pub fn definition() -> ToolDefinition {
+pub fn registration(background: ConversationBackgroundRegistry) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        definition(),
+        std::sync::Arc::new(BackgroundTaskExecutor::new(background)),
+    )
+}
+
+/// The canonical schema of the `background_task` intrinsic.
+fn definition() -> ToolDefinition {
     ToolDefinition {
         id: crate::runtime::identity::ToolId::new("tool-background-task"),
         name: BACKGROUND_TASK_NAME.to_owned(),

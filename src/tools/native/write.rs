@@ -8,31 +8,34 @@
 use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
-use crate::tools::native::native_definition;
+use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::ToolInvocationPolicy;
-use crate::tools::types::{ToolDefinition, ToolExecutionResult, ToolInvocation};
+use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "write";
 
-/// The canonical business schema of the tool.
+/// The tool-owned registration of the native Write tool.
 #[must_use]
-pub fn definition(policy: ToolInvocationPolicy) -> ToolDefinition {
-    native_definition(
-        "tool-write",
-        NAME,
-        "Create or replace a file inside the workspace (parent directory must already exist).",
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"}
-            },
-            "required": ["path", "content"],
-            "additionalProperties": false
-        }),
-        policy,
+pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+    NativeToolRegistration::new(
+        native_definition(
+            "tool-write",
+            NAME,
+            "Create or replace a file inside the workspace (parent directory must already exist).",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"}
+                },
+                "required": ["path", "content"],
+                "additionalProperties": false
+            }),
+            policy,
+        ),
+        std::sync::Arc::new(WriteTool),
     )
 }
 
