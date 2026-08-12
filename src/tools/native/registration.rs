@@ -5,7 +5,12 @@
 //! the [`NativeToolRegistration`] pair of its canonical [`ToolDefinition`]
 //! and its [`ToolExecutor`]. [`register_native_tools`] only composes the
 //! known native tools — there is no discovery, no factory, no plugin
-//! loading, and no registration macro.
+//! loading, and no registration macro. The registration pair is internal to
+//! the native plane; the public tool-plane API stays [`ToolDefinition`],
+//! [`ToolExecutor`], [`ToolRegistry`], and [`ToolExecutionResult`].
+//!
+//! [`ToolRegistry`]: crate::tools::executor::ToolRegistry
+//! [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
 //!
 //! A native tool's canonical input schema is *generated* from its typed
 //! input contract instead of being handwritten JSON: the Rust input type is
@@ -35,10 +40,17 @@ use crate::tools::types::{ToolDefinition, ToolInvocationPolicy, ToolOrigin, Tool
 /// One fully constructed native tool: its canonical definition and the
 /// executor that serves it.
 ///
-/// The pair is what the native tool plane hands to the registry; the
-/// registry keeps owning registration validation and the
-/// definition/executor relationship.
-pub struct NativeToolRegistration {
+/// This is the internal composition object of the native tool plane — a
+/// native tool module builds one, and [`register_native_tools`] consumes
+/// it. It is deliberately not part of the public tool-plane API: external
+/// consumers depend on [`ToolDefinition`], [`ToolExecutor`],
+/// [`ToolRegistry`], and [`ToolExecutionResult`], and the registry keeps
+/// owning registration validation and the definition/executor
+/// relationship.
+///
+/// [`ToolRegistry`]: crate::tools::executor::ToolRegistry
+/// [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
+pub(super) struct NativeToolRegistration {
     /// The canonical tool-owned definition (identity, description, input
     /// schema, policies).
     pub definition: ToolDefinition,
@@ -48,8 +60,7 @@ pub struct NativeToolRegistration {
 
 impl NativeToolRegistration {
     /// Pairs one canonical definition with its executor.
-    #[must_use]
-    pub fn new(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
+    pub(super) fn new(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
             definition,
             executor,

@@ -7,11 +7,19 @@
 //!
 //! - the generated schema is exactly the tool's model-facing input contract
 //!   (required fields, optional fields, constraints, no reserved property,
-//!   no `$ref`/`$defs` indirection), where an optional property means an
-//!   *absent* property and never an implicitly nullable one;
+//!   no `$ref`/`$defs` indirection), where a property that is optional
+//!   because its Rust field expresses omission means an *absent* property
+//!   and never an implicitly nullable one;
 //! - invalid input is rejected before execution — the registry preflight
 //!   rejects the call so no invocation is ever produced, and a direct
-//!   executor call rejects the arguments before performing any work.
+//!   executor call decodes and rejects the arguments before performing any
+//!   work.
+//!
+//! The optional-non-nullable assertions are stated over the concrete
+//! optional properties of the current contracts, never as a global rule
+//! about how every native property must be shaped: a future contract stays
+//! free to use a composite schema where that is the right model-facing
+//! shape.
 //!
 //! Agent-loop lifecycle and Bash lifecycle regressions live at the end of
 //! the file: a real native tool executes through the agent loop with the
@@ -121,61 +129,58 @@ fn generated_native_schemas_are_canonical_root_object_schemas() {
     }
 }
 
-/// An optional native property means the property may be *absent*: it is
-/// excluded from `required`, and its type contract never silently gains
-/// `"null"` just because the Rust field is an `Option`.
+/// The optional properties of the current native input contracts, with the
+/// single non-null type each one declares today.
 ///
-/// Omission has exactly one model-facing spelling.
+/// This is the concrete list the optional-non-nullable invariant is stated
+/// over. It is deliberately *not* a rule about every property of every
+/// schema: a future native contract is free to use a composite schema
+/// (`anyOf`, `oneOf`, a union type) where that is the right model-facing
+/// contract — the invariant only forbids picking up nullability implicitly
+/// from a Rust `Option<T>` that exists to express omission.
+const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 5] = [
+    ("read", "start_line", "integer"),
+    ("read", "line_count", "integer"),
+    ("bash", "timeout_ms", "integer"),
+    ("grep", "glob", "string"),
+    ("edit", "replace_all", "boolean"),
+];
+
+/// Each current optional native property means the property may be
+/// *absent*: it stays out of `required`, and its generated contract does
+/// not admit `null` just because the Rust field expresses omission with an
+/// `Option`/`default`.
 #[test]
 fn optional_native_properties_are_absent_never_null() {
     let fixture = common::native_fixture();
-    let names = [
-        "read",
-        "write",
-        "edit",
-        "glob",
-        "grep",
-        "bash",
-        "background_task",
-    ];
-    for name in names {
-        let schema = definition(&fixture, name).input_schema;
-        let required = required(&schema);
-        for (property, contract) in schema["properties"]
-            .as_object()
-            .expect("generated schemas declare properties")
-        {
-            // One single declared type per property: neither a nullable
-            // union nor an `anyOf`/`oneOf` alternative with a null branch
-            // can satisfy this.
-            let declared = &contract["type"];
-            assert!(
-                declared.is_string(),
-                "{name}.{property} declares exactly one type, got {declared}"
-            );
-            assert_ne!(
-                declared, "null",
-                "{name}.{property} is never a null-only property"
-            );
-        }
-        // Optional properties really are optional: absent from `required`
-        // while still being declared properties of the contract.
-        for optional in properties(&schema)
-            .into_iter()
-            .filter(|property| !required.contains(property))
-        {
-            assert!(
-                schema["properties"][&optional].is_object(),
-                "{name}.{optional} stays a declared optional property"
-            );
-        }
+    for (tool, property, declared_type) in OPTIONAL_NATIVE_PROPERTIES {
+        let schema = definition(&fixture, tool).input_schema;
+        assert!(
+            !required(&schema).contains(&property.to_owned()),
+            "{tool}.{property} is optional, so it is absent from required"
+        );
+        let contract = &schema["properties"][property];
+        assert!(
+            contract.is_object(),
+            "{tool}.{property} stays a declared property of the contract"
+        );
+        assert_eq!(
+            contract["type"], declared_type,
+            "{tool}.{property} keeps its own type and never becomes a \
+             nullable union"
+        );
     }
 }
 
 /// The optional-non-nullable contract holds at the runtime validation
-/// boundary for every representative optional field type: an absent
-/// property and a valid value are accepted, while an explicit `null` is
-/// rejected by the registry preflight before any invocation exists.
+/// boundary for every optional property of the current native contracts:
+/// an absent property and a valid value are accepted, while an explicit
+/// `null` is rejected by the registry preflight before any invocation
+/// exists.
+///
+/// The cases cover every entry of [`OPTIONAL_NATIVE_PROPERTIES`], which is
+/// every optional integer, string, and boolean property the native tools
+/// declare today.
 #[test]
 fn explicit_null_is_rejected_for_optional_native_properties() {
     let fixture = common::native_fixture();
@@ -186,13 +191,19 @@ fn explicit_null_is_rejected_for_optional_native_properties() {
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-    ); 4] = [
+    ); 5] = [
         // Optional integer (Option<u64>).
         (
             "read",
             serde_json::json!({"path": "a.txt"}),
             serde_json::json!({"path": "a.txt", "start_line": 3}),
             serde_json::json!({"path": "a.txt", "start_line": null}),
+        ),
+        (
+            "read",
+            serde_json::json!({"path": "a.txt"}),
+            serde_json::json!({"path": "a.txt", "line_count": 5}),
+            serde_json::json!({"path": "a.txt", "line_count": null}),
         ),
         (
             "bash",

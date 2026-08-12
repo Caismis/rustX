@@ -29,7 +29,7 @@ pub const NAME: &str = "read";
 
 /// The tool-owned registration of the native Read tool.
 #[must_use]
-pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<ReadInput>(
             "tool-read",

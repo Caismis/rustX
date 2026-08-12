@@ -20,10 +20,17 @@
 //! One native capability owns one module boundary: a tool module owns its
 //! name, its description, its input contract, its executor, and its
 //! tool-private helpers, and constructs itself through its own
-//! `registration(...)` function returning a [`NativeToolRegistration`].
-//! This module only *composes* the known native tools — the composition is
-//! explicit and deterministic, with no discovery, no plugin loading, and no
-//! generic tool factory.
+//! `registration(...)` function returning the plane-internal registration
+//! pair of a definition and its executor. This module only *composes* the
+//! known native tools — the composition is explicit and deterministic, with
+//! no discovery, no plugin loading, and no generic tool factory.
+//!
+//! The registration pair is an implementation detail: the public tool-plane
+//! API stays [`ToolDefinition`], [`ToolExecutor`], [`ToolRegistry`], and
+//! [`ToolExecutionResult`].
+//!
+//! [`ToolRegistry`]: crate::tools::executor::ToolRegistry
+//! [`ToolExecutionResult`]: crate::tools::types::ToolExecutionResult
 //!
 //! [`ToolDefinition`]: crate::tools::types::ToolDefinition
 //! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
@@ -39,7 +46,7 @@ mod registration;
 mod support;
 mod write;
 
-pub use registration::NativeToolRegistration;
+use registration::NativeToolRegistration;
 
 // The per-invocation Bash supervisor process entry points are reachable
 // only from the supervisor binary and from test binaries via self-exec;

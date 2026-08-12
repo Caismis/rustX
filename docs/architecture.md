@@ -587,15 +587,39 @@ All three converge at the same registry boundary, and the runtime keeps
 validating every invocation against the stored canonical schema before
 dispatch. An optional native property means an *absent* property: the
 native schema-generation boundary collapses the nullable union that
-`Option<T>` would otherwise produce, so `{"timeout_ms": null}` is a
-business argument violation rejected at preflight rather than a second
-spelling of omission. Inside an executor, arguments exist only as the tool's typed
-input: required fields, type correctness, and schema constraints belong to
-the input contract, while workspace permission, filesystem existence,
-pattern compilation, and process lifecycle rules remain execution
-concerns. Outputs are deliberately untyped: the canonical
-`ToolExecutionResult` stays the only tool result contract, so the agent
-loop never learns tool-specific result types. Bash treats one invocation as one complete lifecycle:
+`Option<T>` would otherwise produce for a field that only expresses
+omission, so `{"timeout_ms": null}` is a business argument violation
+rejected at preflight rather than a second spelling of omission. This is a
+rule about implicit nullability, not a restriction on the schema language:
+a native contract that genuinely needs a composite or nullable model-facing
+shape states it explicitly.
+
+The executor ABI is unchanged by this: `ToolRegistry` validates
+model-issued business arguments against the generated canonical schema
+before dispatch, and a native executor receives the validated canonical
+`ToolInvocation` — whose `arguments` remain canonical JSON — and
+immediately decodes them into its tool-owned typed input before any
+tool-specific filesystem, process, or other business work begins.
+`ToolExecutor` never carries typed generics.
+
+```text
+model JSON
+    -> ToolRegistry schema preflight
+    -> validated ToolInvocation
+    -> native executor boundary
+    -> typed input decode
+    -> tool-specific semantic validation
+    -> actual tool work
+```
+
+Required fields, type correctness, and schema constraints belong to the
+input contract, while workspace permission, filesystem existence, pattern
+compilation, and process lifecycle rules remain execution concerns.
+Outputs are deliberately untyped: the canonical `ToolExecutionResult` stays
+the only tool result contract, so the agent loop never learns tool-specific
+result types.
+
+Bash treats one invocation as one complete lifecycle:
 spawn one per-invocation supervisor, capture stdout/stderr/combined, let
 the supervisor own the invocation's process group to its kernel-mediated
 terminal state, and settle only when the shell's terminal status is

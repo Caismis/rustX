@@ -25,7 +25,7 @@ pub const NAME: &str = "write";
 
 /// The tool-owned registration of the native Write tool.
 #[must_use]
-pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<WriteInput>(
             "tool-write",

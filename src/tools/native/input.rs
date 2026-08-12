@@ -1,7 +1,11 @@
 //! The typed input boundary of the native tool plane.
 //!
-//! Model-issued arguments reach a native executor only through this
-//! boundary:
+//! The canonical executor ABI is unchanged: a [`ToolExecutor`] receives a
+//! [`ToolInvocation`] whose `arguments` are canonical JSON, already
+//! validated by the registry against the tool's generated schema. A native
+//! executor immediately decodes those validated arguments into its
+//! tool-owned typed input through this boundary, before any tool-specific
+//! filesystem, process, or other business work begins:
 //!
 //! ```text
 //! model JSON arguments
@@ -10,14 +14,20 @@
 //! canonical schema validation (registry preflight)
 //!         |
 //!         v
+//! validated ToolInvocation           <- the canonical executor ABI
+//!         |
+//!         v
 //! typed input deserialization        <- this module
 //!         |
 //!         v
 //! tool-specific semantic validation  <- the tool's own input module
 //!         |
 //!         v
-//! execution
+//! actual tool work
 //! ```
+//!
+//! [`ToolExecutor`]: crate::tools::executor::ToolExecutor
+//! [`ToolInvocation`]: crate::tools::types::ToolInvocation
 //!
 //! The typed input is the model-facing *input contract*: required fields,
 //! type correctness, and schema constraints belong to it. Workspace

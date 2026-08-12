@@ -46,7 +46,7 @@ pub const BACKGROUND_TASK_NAME: &str = crate::tools::executor::BACKGROUND_TASK_T
 /// unlike the ordinary native tools it takes no configurable policy, and the
 /// registry independently enforces the same fixed policies.
 #[must_use]
-pub fn registration(background: ConversationBackgroundRegistry) -> NativeToolRegistration {
+pub(super) fn registration(background: ConversationBackgroundRegistry) -> NativeToolRegistration {
     NativeToolRegistration::new(
         definition(),
         std::sync::Arc::new(BackgroundTaskExecutor::new(background)),

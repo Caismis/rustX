@@ -146,7 +146,7 @@ pub const NAME: &str = "bash";
 
 /// The tool-owned registration of the native Bash tool.
 #[must_use]
-pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<BashInput>(
             "tool-bash",

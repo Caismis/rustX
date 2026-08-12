@@ -449,24 +449,33 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - One native capability owns one module boundary: a native tool module owns
   its name, description, typed input contract, generated schema, executor,
   and private helpers, and constructs itself through its own
-  `registration(...)` function returning a `NativeToolRegistration`. The
-  native plane module only composes the known native tools — there is no
-  discovery, plugin loading, registration macro, or generic tool factory,
-  and the Bash supervisor is an implementation detail of Bash execution
-  ownership, never a separate tool.
-- An optional native tool property means the property may be *absent*: it is
-  excluded from `required` and never implicitly accepts JSON `null`, so
-  omission has exactly one model-facing spelling. A Rust `Option<T>` field
-  therefore generates `{"type": "T"}`, never `{"type": ["T", "null"]}`, and
-  an explicit `null` is a business argument violation rejected by the
-  registry preflight before dispatch. A tool that ever needs `null` as a
-  meaningful business value must state it explicitly in its own input
-  contract.
+  `registration(...)` function returning the plane-internal
+  `NativeToolRegistration` pair. The native plane module only composes the
+  known native tools — there is no discovery, plugin loading, registration
+  macro, or generic tool factory, and the Bash supervisor is an
+  implementation detail of Bash execution ownership, never a separate tool.
+  Native registration is not public API: external consumers depend on
+  `ToolDefinition`, `ToolExecutor`, `ToolRegistry`, and
+  `ToolExecutionResult`.
+- A native tool property that is optional because its Rust field expresses
+  omission (`Option<T>` or a serde default) means the property may be
+  *absent*: it is excluded from `required` and never implicitly accepts
+  JSON `null`, so omission has exactly one model-facing spelling. Such a
+  field generates `{"type": "T"}`, never `{"type": ["T", "null"]}`, and an
+  explicit `null` is a business argument violation rejected by the registry
+  preflight before dispatch. This constrains implicit nullability only: a
+  native contract that genuinely needs a nullable or composite model-facing
+  shape states it explicitly.
 - A native tool's canonical schema is generated from its typed input
   contract, which is the single source of truth for its model-facing
-  arguments. Executors never inspect raw JSON: arguments reach execution
-  only as the typed input. Required fields, type correctness, and schema
-  constraints belong to the input contract; workspace permission,
+  arguments. The executor ABI is unchanged: `ToolRegistry` validates
+  business arguments against that generated schema before dispatch, and the
+  native executor receives the validated canonical `ToolInvocation` and
+  immediately decodes its JSON arguments into the tool-owned typed input
+  before any tool-specific filesystem, process, or other business work
+  begins — no executor performs ad-hoc JSON inspection, and `ToolExecutor`
+  never carries typed generics. Required fields, type correctness, and
+  schema constraints belong to the input contract; workspace permission,
   filesystem existence, pattern compilation, and process lifecycle rules
   remain execution concerns. A rejected input is a normal failed result and
   never reaches the tool's work. MCP and Python schemas keep arriving

@@ -21,9 +21,7 @@ pub mod schema;
 pub mod types;
 pub mod workspace;
 
-pub use native::{
-    NativeToolPolicies, NativeToolRegistration, NativeToolResources, register_native_tools,
-};
+pub use native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 
 pub use artifacts::{ArtifactError, ArtifactStore, ArtifactWriter};
 pub use background::{

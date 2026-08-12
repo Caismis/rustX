@@ -27,7 +27,7 @@ pub const NAME: &str = "edit";
 
 /// The tool-owned registration of the native Edit tool.
 #[must_use]
-pub fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
+pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistration {
     NativeToolRegistration::new(
         native_definition::<EditInput>(
             "tool-edit",
