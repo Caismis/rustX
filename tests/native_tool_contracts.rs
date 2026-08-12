@@ -7,7 +7,8 @@
 //!
 //! - the generated schema is exactly the tool's model-facing input contract
 //!   (required fields, optional fields, constraints, no reserved property,
-//!   no `$ref`/`$defs` indirection);
+//!   no `$ref`/`$defs` indirection), where an optional property means an
+//!   *absent* property and never an implicitly nullable one;
 //! - invalid input is rejected before execution — the registry preflight
 //!   rejects the call so no invocation is ever produced, and a direct
 //!   executor call rejects the arguments before performing any work.
@@ -120,6 +121,143 @@ fn generated_native_schemas_are_canonical_root_object_schemas() {
     }
 }
 
+/// An optional native property means the property may be *absent*: it is
+/// excluded from `required`, and its type contract never silently gains
+/// `"null"` just because the Rust field is an `Option`.
+///
+/// Omission has exactly one model-facing spelling.
+#[test]
+fn optional_native_properties_are_absent_never_null() {
+    let fixture = common::native_fixture();
+    let names = [
+        "read",
+        "write",
+        "edit",
+        "glob",
+        "grep",
+        "bash",
+        "background_task",
+    ];
+    for name in names {
+        let schema = definition(&fixture, name).input_schema;
+        let required = required(&schema);
+        for (property, contract) in schema["properties"]
+            .as_object()
+            .expect("generated schemas declare properties")
+        {
+            // One single declared type per property: neither a nullable
+            // union nor an `anyOf`/`oneOf` alternative with a null branch
+            // can satisfy this.
+            let declared = &contract["type"];
+            assert!(
+                declared.is_string(),
+                "{name}.{property} declares exactly one type, got {declared}"
+            );
+            assert_ne!(
+                declared, "null",
+                "{name}.{property} is never a null-only property"
+            );
+        }
+        // Optional properties really are optional: absent from `required`
+        // while still being declared properties of the contract.
+        for optional in properties(&schema)
+            .into_iter()
+            .filter(|property| !required.contains(property))
+        {
+            assert!(
+                schema["properties"][&optional].is_object(),
+                "{name}.{optional} stays a declared optional property"
+            );
+        }
+    }
+}
+
+/// The optional-non-nullable contract holds at the runtime validation
+/// boundary for every representative optional field type: an absent
+/// property and a valid value are accepted, while an explicit `null` is
+/// rejected by the registry preflight before any invocation exists.
+#[test]
+fn explicit_null_is_rejected_for_optional_native_properties() {
+    let fixture = common::native_fixture();
+    // (tool, accepted-without-the-property, accepted-with-a-value,
+    //  rejected-with-an-explicit-null)
+    let cases: [(
+        &str,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+    ); 4] = [
+        // Optional integer (Option<u64>).
+        (
+            "read",
+            serde_json::json!({"path": "a.txt"}),
+            serde_json::json!({"path": "a.txt", "start_line": 3}),
+            serde_json::json!({"path": "a.txt", "start_line": null}),
+        ),
+        (
+            "bash",
+            serde_json::json!({"command": "true"}),
+            serde_json::json!({"command": "true", "timeout_ms": 1000}),
+            serde_json::json!({"command": "true", "timeout_ms": null}),
+        ),
+        // Optional string (a defaulted search parameter).
+        (
+            "grep",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "glob": "**/*.rs"}),
+            serde_json::json!({"pattern": "x", "glob": null}),
+        ),
+        // Optional boolean (a defaulted flag).
+        (
+            "edit",
+            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"}),
+            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": true}),
+            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": null}),
+        ),
+    ];
+    for (name, absent, present, null) in cases {
+        assert!(
+            matches!(
+                preflight(&fixture, name, &absent),
+                PreflightOutcome::Ready(_)
+            ),
+            "{name} accepts the absent optional property"
+        );
+        assert!(
+            matches!(
+                preflight(&fixture, name, &present),
+                PreflightOutcome::Ready(_)
+            ),
+            "{name} accepts a valid optional value"
+        );
+        assert!(
+            matches!(
+                preflight(&fixture, name, &null),
+                PreflightOutcome::Rejected { .. }
+            ),
+            "{name} rejects an explicit null for an optional property"
+        );
+    }
+}
+
+/// Preflights one model-issued call against the registered native tool.
+fn preflight(
+    fixture: &common::NativeFixture,
+    name: &str,
+    arguments: &serde_json::Value,
+) -> PreflightOutcome {
+    let definition = definition(fixture, name);
+    fixture
+        .registry
+        .preflight(&ToolCall {
+            id: ToolCallId::new("call-preflight"),
+            tool_id: definition.id.clone(),
+            name: name.to_owned(),
+            arguments: arguments.clone(),
+        })
+        .expect("resolvable call")
+}
+
 /// The generated Read schema is exactly the `ReadInput` contract: one
 /// required path, two optional bounded line-window fields.
 #[test]
@@ -135,9 +273,8 @@ fn read_schema_matches_its_input_contract() {
             "{optional} is bounded by its contract"
         );
         assert_eq!(
-            schema["properties"][optional]["type"],
-            serde_json::json!(["integer", "null"]),
-            "{optional} is an optional integer"
+            schema["properties"][optional]["type"], "integer",
+            "{optional} is an optional integer, never an implicit nullable union"
         );
     }
 }
@@ -410,6 +547,48 @@ async fn rejected_native_input_is_a_normal_failed_result_slot_in_the_agent_loop(
         lifecycle_events(&result).is_empty(),
         "a rejected invocation never starts an execution, so it emits no \
          tool execution lifecycle event"
+    );
+}
+
+/// An explicit `null` for a non-nullable optional native argument is a
+/// business argument violation in the Agent Loop: the registry rejects the
+/// call, the failed result slot is committed normally, no tool execution
+/// lifecycle event is emitted, and the tool's side effect never happens.
+#[cfg(unix)]
+#[tokio::test]
+async fn explicit_null_optional_argument_is_rejected_by_the_agent_loop() {
+    let fixture = common::native_fixture();
+    let marker = fixture.runtime.workspace().root().join("marker.txt");
+    let call = ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-bash",
+        name: "bash",
+        arguments: serde_json::json!({
+            "command": "printf marker > marker.txt",
+            "timeout_ms": null
+        }),
+    };
+    let result = run_through_agent_loop(&fixture, &call).await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop
+        }
+    ));
+    let messages = tool_messages(&result);
+    assert_eq!(messages.len(), 1, "the batch still settles exactly once");
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
+    assert!(
+        lifecycle_events(&result).is_empty(),
+        "a rejected null argument never starts a tool execution"
+    );
+    assert!(
+        !marker.exists(),
+        "the Bash command never ran, so its side effect never happened"
     );
 }
 

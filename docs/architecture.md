@@ -585,7 +585,11 @@ Python:   package schema                      -> ToolDefinition
 
 All three converge at the same registry boundary, and the runtime keeps
 validating every invocation against the stored canonical schema before
-dispatch. Inside an executor, arguments exist only as the tool's typed
+dispatch. An optional native property means an *absent* property: the
+native schema-generation boundary collapses the nullable union that
+`Option<T>` would otherwise produce, so `{"timeout_ms": null}` is a
+business argument violation rejected at preflight rather than a second
+spelling of omission. Inside an executor, arguments exist only as the tool's typed
 input: required fields, type correctness, and schema constraints belong to
 the input contract, while workspace permission, filesystem existence,
 pattern compilation, and process lifecycle rules remain execution

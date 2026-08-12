@@ -454,6 +454,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   discovery, plugin loading, registration macro, or generic tool factory,
   and the Bash supervisor is an implementation detail of Bash execution
   ownership, never a separate tool.
+- An optional native tool property means the property may be *absent*: it is
+  excluded from `required` and never implicitly accepts JSON `null`, so
+  omission has exactly one model-facing spelling. A Rust `Option<T>` field
+  therefore generates `{"type": "T"}`, never `{"type": ["T", "null"]}`, and
+  an explicit `null` is a business argument violation rejected by the
+  registry preflight before dispatch. A tool that ever needs `null` as a
+  meaningful business value must state it explicitly in its own input
+  contract.
 - A native tool's canonical schema is generated from its typed input
   contract, which is the single source of truth for its model-facing
   arguments. Executors never inspect raw JSON: arguments reach execution

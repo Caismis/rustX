@@ -24,8 +24,9 @@
 
 use std::sync::Arc;
 
-use schemars::JsonSchema;
 use schemars::generate::{SchemaGenerator, SchemaSettings};
+use schemars::transform::{Transform, transform_subschemas};
+use schemars::{JsonSchema, Schema};
 
 use crate::runtime::identity::ToolId;
 use crate::tools::executor::ToolExecutor;
@@ -90,12 +91,15 @@ pub(crate) fn native_definition<I: JsonSchema>(
 /// Per-property documentation is kept: it is the model-facing description
 /// of each argument.
 ///
+/// An optional field means the property may be *absent*
+/// ([`OptionalIsAbsentNotNull`]); it does not implicitly accept `null`.
+///
 /// # Panics
 ///
 /// Panics only when a native input contract generates a non-object root
 /// schema, which cannot happen for the derived struct contracts.
 pub(crate) fn input_schema<I: JsonSchema>() -> serde_json::Value {
-    let mut settings = SchemaSettings::draft2020_12();
+    let mut settings = SchemaSettings::draft2020_12().with_transform(OptionalIsAbsentNotNull);
     settings.inline_subschemas = true;
     settings.meta_schema = None;
     let mut schema = SchemaGenerator::new(settings)
@@ -107,4 +111,44 @@ pub(crate) fn input_schema<I: JsonSchema>() -> serde_json::Value {
     object.remove("title");
     object.remove("description");
     schema
+}
+
+/// The native input-contract rule that an optional property means an
+/// *absent* property.
+///
+/// A Rust `Option<T>` field is excluded from `required` — that is the
+/// optionality the model contract needs — but the schema generator also
+/// widens the property's type union to `["T", "null"]` by default. That
+/// would give omission two model-facing spellings (absent and `null`) for
+/// one meaning, so the union is collapsed back to the inner type here, at
+/// the one boundary that generates native input schemas.
+///
+/// The rule is deliberately narrow: only a type *union* that still has a
+/// non-null member loses its `"null"` entry. A schema whose only type is
+/// `null`, and an explicit `anyOf`/`const` alternative, are left untouched,
+/// so a tool that ever needs `null` as a meaningful business value can
+/// still express it explicitly in its own input contract.
+#[derive(Debug, Clone, Copy)]
+struct OptionalIsAbsentNotNull;
+
+impl Transform for OptionalIsAbsentNotNull {
+    fn transform(&mut self, schema: &mut Schema) {
+        let collapsed = schema
+            .get_mut("type")
+            .and_then(serde_json::Value::as_array_mut)
+            .filter(|types| types.iter().any(|entry| entry != "null"))
+            .map(|types| {
+                types.retain(|entry| entry != "null");
+                types.clone()
+            });
+        if let Some(mut types) = collapsed {
+            let value = if types.len() == 1 {
+                types.remove(0)
+            } else {
+                serde_json::Value::Array(types)
+            };
+            schema.insert("type".to_owned(), value);
+        }
+        transform_subschemas(self, schema);
+    }
 }
