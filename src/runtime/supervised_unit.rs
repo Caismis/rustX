@@ -400,6 +400,14 @@ impl FrameReader {
         self.buf.extend_from_slice(bytes);
     }
 
+    /// The bytes this reader still owns: the surplus that a lifecycle phase
+    /// transition must never discard. Test-only observation of the
+    /// ownership invariant itself; the supervisors only ever feed and pop.
+    #[cfg(test)]
+    pub(crate) fn buffered(&self) -> &[u8] {
+        &self.buf
+    }
+
     /// Parses the first complete frame out of the buffer. Call after
     /// [`FrameReader::feed`] fed new bytes; drain with repeated calls.
     pub(crate) fn pop(&mut self) -> Option<(u8, Vec<u8>)> {
