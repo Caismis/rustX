@@ -78,6 +78,7 @@ use crate::tools::types::{
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
+use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
 use chrono::{DateTime, Utc};
@@ -185,6 +186,12 @@ pub struct AgentExecution<'a> {
     context_runtime: ContextRuntime<'a>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
+    /// The optional live observation seam: when attached, every emitted
+    /// runtime fact, every committed canonical message, and every composed
+    /// Agent Status is observed at its commit linearization point. The
+    /// attempt-local ordered `events` trace remains the authoritative
+    /// record regardless of attachment.
+    observer: Option<&'a dyn AgentExecutionObserver>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
@@ -300,11 +307,24 @@ impl<'a> AgentExecution<'a> {
             context_runtime,
             observed: None,
             last_request_fingerprint: None,
+            observer: None,
             #[cfg(test)]
             continuation_pause: None,
             turn: 0,
             terminal_emitted: false,
         })
+    }
+
+    /// Attaches the live observation seam.
+    ///
+    /// The observer is read-only: it observes emitted runtime facts,
+    /// committed canonical messages, and composed Agent Status at their
+    /// commit linearization points, and it never influences execution. It
+    /// must be attached before [`AgentExecution::run`] to observe the whole
+    /// attempt; attaching is optional, and the attempt-local ordered event
+    /// trace in the result is recorded regardless.
+    pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
+        self.observer = Some(observer);
     }
 
     /// Runs the attempt to its single terminal outcome.
@@ -663,6 +683,7 @@ impl<'a> AgentExecution<'a> {
         for item in batch.into_items() {
             message_ids.push(item.message().id.clone());
             self.history.push(MessageBlock::User(item.into_message()));
+            self.observe_committed_last();
         }
         let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
             failure: AttemptFailure::Runtime {
@@ -770,6 +791,14 @@ impl<'a> AgentExecution<'a> {
             background: self.tool_runtime.background().active_snapshot(),
         };
         let status = self.context_runtime.status_composer.compose(&context)?;
+        if let Some(observer) = self.observer {
+            observer.observe_status(&AgentStatusObservation {
+                attempt_id: self.request.attempt_id.clone(),
+                turn: self.turn,
+                target_message_id: target_message_id.clone(),
+                status: status.clone(),
+            });
+        }
         Ok(Some(AgentStatusAttachment {
             target_message_id,
             rendered: crate::context::status::render_agent_status(&status),
@@ -1376,6 +1405,7 @@ impl<'a> AgentExecution<'a> {
                 tool_id: slot.tool_id(),
                 result,
             }));
+            self.observe_committed_last();
         }
         self.emit(RuntimeEvent::TurnCompleted);
     }
@@ -1517,6 +1547,17 @@ impl<'a> AgentExecution<'a> {
             id: message_id.clone(),
             content: content.to_vec(),
         }));
+        self.observe_committed_last();
+    }
+
+    /// Observes the most recently committed canonical message at its
+    /// commit point. The observer observes content, never influences it.
+    fn observe_committed_last(&self) {
+        if let Some(observer) = self.observer
+            && let Some(block) = self.history.last()
+        {
+            observer.observe_committed(&self.request.attempt_id, block);
+        }
     }
 
     /// Emits the runtime events for one non-terminal model event.
@@ -1584,6 +1625,9 @@ impl<'a> AgentExecution<'a> {
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
         );
+        if let Some(observer) = self.observer {
+            observer.observe_event(&self.request.attempt_id, &event);
+        }
         self.events.push(event);
     }
 
@@ -1604,6 +1648,9 @@ impl<'a> AgentExecution<'a> {
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         self.terminal_emitted = true;
+        if let Some(observer) = self.observer {
+            observer.observe_event(&self.request.attempt_id, &event);
+        }
         self.events.push(event);
     }
 }

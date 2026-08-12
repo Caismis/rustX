@@ -308,6 +308,7 @@ fn temporal_section(
 /// provider listing all use the stored id; `section_id()` is never called
 /// again for an already registered provider, so a stateful provider cannot
 /// mutate its identity after registration.
+#[derive(Clone)]
 struct RegisteredStatusProvider {
     id: AgentStatusSectionId,
     provider: Arc<dyn AgentStatusSectionProvider>,
@@ -324,6 +325,15 @@ struct RegisteredStatusProvider {
 pub struct AgentStatusComposer {
     clock: Arc<dyn AgentStatusClock>,
     providers: Vec<RegisteredStatusProvider>,
+}
+
+impl Clone for AgentStatusComposer {
+    fn clone(&self) -> Self {
+        Self {
+            clock: self.clock.clone(),
+            providers: self.providers.clone(),
+        }
+    }
 }
 
 impl core::fmt::Debug for AgentStatusComposer {
