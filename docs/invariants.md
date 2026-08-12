@@ -952,24 +952,61 @@ semantic normalization boundary. The frozen invariants:
   snapshot may read several subsystem locks and hope nothing changed
   between them.
 - **A successful resume after C observes every subsequent Runtime Client
-  event, otherwise the runtime reports `resync_required`.** The retained
-  replay gap is replayed under the same boundary that registers the
-  subscriber, so no resume silently jumps and no gap exists. Replay is
-  bounded, in-memory, and non-durable; there is no Event Journal, no
-  crash-safe replay, and no durable-cursor claim before M8.
+  event, otherwise the runtime reports `resync_required`.** Serviceability
+  is decided under the same boundary that registers the subscriber, so no
+  resume silently jumps and no gap exists. Replay is bounded, in-memory,
+  and non-durable; there is no Event Journal, no crash-safe replay, and no
+  durable-cursor claim before M8.
+- **The bounded replay ring is the only retained Runtime Client event
+  backlog.** A subscription is a consumed cursor into that ring plus an
+  edge-triggered, payload-free wakeup; it owns no event storage. Total
+  retained memory is bounded by the retention limit regardless of consumer
+  speed, a stalled consumer cannot grow memory, and notification never
+  blocks the publisher or any authoritative runtime state.
+- **A subscriber that falls behind retention is told so explicitly.** It
+  never receives a silently non-contiguous stream: cursors delivered to
+  one subscription are strictly contiguous, and once the events it still
+  needs are evicted, every subsequent poll returns the stable, terminal
+  `resync_required` result until the client re-subscribes.
+- **Projection failure after an authoritative transition is explicit.**
+  Cursor exhaustion stops publication without wrapping and makes every
+  read (`snapshot_get`, `capability_get`, `initialize`, subscribe, and
+  subscription polls) fail with `projection_exhausted`; no read hands back
+  a model that silently stopped folding transitions.
 - **Runtime Client protocol versioning is independent from internal
   RuntimeEvent/Event Journal schema versioning.** Version negotiation is
   explicit at attachment admission; v1 rejects unsupported versions
   explicitly and supports no parallel protocol versions.
-- **Client projection never becomes canonical conversation history,
-  mailbox authority, background ownership, or capability ownership.**
-  The conversation coordinator owns canonical history between attempts
-  (the loop owns its working copy during an attempt; at settlement the
-  authoritative `AgentExecutionResult.messages` replace the coordinator's
-  copy and the projection mirror is verified against them). The mailbox,
-  the background registry, and the capability coordinator remain the
-  authoritative owners; the projection observes them through read-only
-  seams.
+- **The semantic layer owns protocol negotiation and attachment
+  admission; transports are framing only.** `initialize` is dispatched by
+  `RuntimeClientEndpoint` and is by itself sufficient to establish the
+  active attachment. No transport implements version negotiation,
+  single-active-attachment admission, `AttachmentId` creation, or
+  attachment replacement/rejection semantics, and none requires an
+  out-of-band semantic attach operation.
+- **No authoritative subsystem acquires the host lock.** The mailbox, the
+  background registry, and the capability coordinator fire their
+  observation seams while holding their own lock; each seam only appends
+  an immutable observation to a leaf synchronization boundary and wakes
+  the host worker. The lock graph is therefore acyclic by construction
+  rather than by a call-order convention, an authoritative commit never
+  waits on the host lock, and subscriber notification never blocks
+  authoritative runtime state.
+- **Exactly one authoritative mutable canonical history owner at a
+  time.** Ownership transfers rather than being shared: the conversation
+  coordinator owns canonical history while idle; at admission the history
+  moves into the attempt's `AgentExecution`, which is the sole authority
+  for committed history for the duration of the attempt (including
+  safe-boundary mailbox drains); the coordinator never mutates a competing
+  copy while an attempt runs, and asynchronous inbound stays mailbox-owned
+  until the loop commits it; at settlement the authoritative
+  `AgentExecutionResult.messages` become the coordinator's history for the
+  next idle/admission boundary. `RuntimeClientSnapshot.messages` is
+  projection only, and the settlement `debug_assert_eq!` is a sanity
+  assertion on that mirror, never the mechanism that makes two authorities
+  agree. The mailbox, the background registry, and the capability
+  coordinator likewise remain the authoritative owners of their state; the
+  projection observes them through read-only seams.
 - **One active attachment.** Protocol v1 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;
@@ -982,11 +1019,14 @@ semantic normalization boundary. The frozen invariants:
   settlement: the Agent Loop remains the settlement authority, and the
   coordinator holds the exact cancellation trigger the attempt task runs
   against.
-- **One Agent Status composition.** The model path and the Runtime Client
-  view consume the exact composed status of one request preparation (one
-  clock sample, one provider invocation set); the client never triggers a
-  second composition and never parses the rendered attachment to recover
-  structure.
+- **One Agent Status composition per request.** For one model request
+  that receives Agent Status, `AgentStatusComposer::compose` runs exactly
+  once — one clock sample, one invocation of each registered provider —
+  and that single composed value fans out to both destinations: the
+  canonical model-facing rendered attachment and the Runtime Client
+  projection. The client path never composes again, not even through a
+  cloned composer sharing the same clock and providers, and never parses
+  the rendered attachment to recover structure.
 - **Mutations are acceptances.** A successful `submit_inbound`,
   `cancel_current_attempt`, `background_cancel`, or `shutdown` response
   means the runtime accepted/admitted the operation at its semantic

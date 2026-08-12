@@ -1246,7 +1246,30 @@ runtime_client/host.rs         RuntimeClientHost: conversation
 runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                RAII/explicit detach, request dispatch,
                                event subscription delivery
+runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
+                               semantic entry point that dispatches every
+                               v1 request, `initialize` included
 ```
+
+- **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
+  the boundary a transport wraps. It starts unattached and accepts every
+  v1 request; `initialize` performs version negotiation, single-attachment
+  admission, `AttachmentId` allocation, and the linearized initial
+  snapshot, storing the resulting attachment. Non-`initialize` requests
+  before that are `not_attached`; a successful `detach` (or dropping the
+  endpoint) returns it to the unattached state. `RuntimeClientHost::attach`
+  remains an internal primitive that the endpoint invokes — it is not the
+  protocol entry point. Issue #38 therefore reduces to framing:
+
+  ```text
+  JSONL line -> RuntimeClientRequest -> endpoint.handle_request
+             -> RuntimeClientResponse -> JSONL line
+  endpoint.next_event -> RuntimeClientProtocolEvent -> JSONL line
+  ```
+
+  No transport implements negotiation, admission, identity creation, or
+  replacement/rejection semantics, and none needs an out-of-band attach
+  operation.
 
 - **One linearization owner.** The host guards one state instance with
   one lock. Fold, cursor allocation, event publication, bounded replay
@@ -1255,6 +1278,30 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
   shutdown decisions all serialize through it, so snapshot/cursor,
   cancel-current, terminal settlement, and admission linearize by
   synchronization, never by timing.
+- **Lock order.** The graph is acyclic by construction:
+
+  ```text
+  HostState ──► ConversationInboundMailbox ──► PendingObservations
+      └──────────────────────────────────────► PendingObservations
+  ConversationBackgroundRegistry ────────────► PendingObservations
+  CapabilityCoordinator ─────────────────────► PendingObservations
+  ```
+
+  `PendingObservations` is a leaf (one mutex over a `VecDeque` plus a
+  `Notify`; it calls nothing). Every authoritative subsystem fires its
+  observer *while holding its own lock*, so every such observer only
+  appends an immutable observation to that leaf and wakes the host
+  worker — no subsystem ever acquires `HostState`. The single downward
+  edge `HostState -> mailbox` exists only in `admit_next_attempt`, which
+  drains under the host lock so the drain fact, the history commits, and
+  the attempt publication linearize together. Consequently an
+  authoritative commit never waits on the host lock, and subscriber
+  notification can never block authoritative runtime state. The
+  `AgentExecutionObserver` callbacks apply directly under `HostState`;
+  that adds no incoming edge because `AgentExecution` is owned by its
+  attempt task and holds no lock when it observes. Every host lock
+  acquisition drains the pending queue first, so queued observations fold
+  in enqueue order.
 - **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
   cursor }` where the snapshot describes all Runtime Client state through
   cursor C, and a subscription after C observes every subsequently
@@ -1273,11 +1320,32 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
   reconstructs every client-visible effect without duplicated or missing
   semantic output. Parallel physical completion never corrupts logical
   identities.
-- **Bounded pre-M8 replay.** A finite in-memory ring
-  (`RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT = 4096`, configurable) serves
-  resume after retained cursors; expired or ahead-of-stream cursors fail
-  with `resync_required`. There is no Event Journal, no persistence, and
-  no crash-safe replay claim (M8 owns durability).
+- **Bounded pre-M8 replay is the only retained backlog.** A finite
+  in-memory ring (`RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT = 4096`,
+  configurable) holds every retained event; expired or ahead-of-stream
+  cursors fail with `resync_required`. There is no Event Journal, no
+  persistence, and no crash-safe replay claim (M8 owns durability).
+- **Cursor-driven subscriptions (no second backlog).** A subscription is
+  a consumed `RuntimeClientCursor` into that one ring plus an
+  edge-triggered, payload-free wakeup. Publication pushes into the ring,
+  evicts beyond the retention limit, and wakes subscribers; a consumer
+  pulls the next retained entry after its cursor, one per poll. A stalled
+  consumer therefore costs one cursor rather than a queue, total retained
+  memory stays bounded by `replay_limit` no matter how far behind any
+  consumer is, and the publisher never blocks on a slow consumer. A
+  consumer that falls behind retention receives the explicit
+  `EventDelivery::ResyncRequired` — a stable, terminal verdict — instead
+  of a silently non-contiguous stream, so cursor contiguity within a
+  subscription is guaranteed. `EventDelivery` distinguishes `Event`,
+  `Pending`, `Closed`, `ResyncRequired`, and `Exhausted`, which is what
+  lets Issue #38 implement deterministic bounded transport backpressure
+  with no unbounded queue hidden underneath it.
+- **Explicit projection failure.** Cursor allocation uses a checked add:
+  overflow sets an exhausted flag rather than wrapping, publication
+  stops, and every read (`snapshot_get`, `capability_get`, `initialize`,
+  subscribe, and subscription polls) then fails with
+  `projection_exhausted`. A read never hands back a model that silently
+  stopped folding authoritative transitions.
 - **Attachment lifecycle.** Protocol v1 admits at most one active
   attachment: the first attach succeeds, a second fails with
   `attachment_in_use` and never evicts the first, detach (explicit or
@@ -1292,12 +1360,25 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
   and its acceptance response is never terminal settlement (the Agent
   Loop owns settlement, observed asynchronously). The host does not own a
   second attempt state machine.
-- **Canonical history.** Between attempts the host owns canonical
-  conversation history; the loop owns its working copy during an
-  attempt; at settlement the host replaces its history with the
-  authoritative `AgentExecutionResult.messages` under the one boundary
-  and verifies the projection mirror. The projection mirror is never an
-  independently mutable history.
+- **Canonical history: one owner at a time.** Ownership transfers, it is
+  never shared:
+
+  ```text
+  idle        Host owns canonical history
+  admission   the history is moved into the attempt's AgentExecution,
+              which is the sole authority for committed history while the
+              attempt runs (including safe-boundary mailbox drains)
+  running     the Host never mutates a competing copy; asynchronous
+              inbound stays mailbox-owned until the loop commits it, and
+              RuntimeClientSnapshot.messages is projection only
+  settlement  the execution's final `AgentExecutionResult.messages`
+              becomes the Host's canonical history for the next
+              idle/admission boundary
+  ```
+
+  The `debug_assert_eq!` at settlement is a sanity assertion on the
+  projection mirror, not the mechanism that keeps two authorities
+  coherent — there is only ever one.
 - **Admission.** `submit_inbound` stamps runtime-owned metadata
   (identity, mailbox sequence, timestamp, provenance), enqueues into the
   authoritative mailbox, and starts an attempt when idle; while busy the
@@ -1328,12 +1409,16 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
   Executors, environment paths, package-manager state, and `SKILL.md`
   bodies never appear; ordering is deterministic; inspection never
   mutates the capability set.
-- **Agent Status projection.** The loop observes the exact composed
-  `AgentStatus` (one clock sample, one provider invocation set) at
-  composition time; the client view carries the structured sections plus
-  the canonical rendered representation derived from the same
-  composition. The client never triggers a second composition and never
-  parses the rendered prompt text to recover structure.
+- **Agent Status projection: composed exactly once.** One request
+  preparation calls `AgentStatusComposer::compose` exactly once
+  (`AgentExecution::compose_status`), sampling the clock once and
+  invoking each registered provider once. That one `AgentStatus` value
+  fans out to both destinations: `render_agent_status` produces the
+  canonical model-facing attachment, and the same value is handed to
+  `observe_status` for the Runtime Client projection. The client path
+  never calls `compose` again — not even through a cloned composer
+  sharing the same clock and providers — and never parses the rendered
+  prompt text to recover structure.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on
