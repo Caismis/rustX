@@ -334,6 +334,28 @@ observed only at the next quiescent re-discovery.
   exactly once, carries a positive pgid, and equals the direct inner
   child's pid; it is the only transition into the group-scoped ownership
   core.
+- **A control frame that has been read is owned until it is processed or
+  explicitly rejected.** Changing lifecycle phase never discards
+  already-read bytes: Unix stream reads do not preserve the writer's frame
+  boundaries, so gate recognition consumes exactly the gate frame and every
+  valid frame that followed it in the same read stays owned by the next
+  phase. One stream direction therefore has exactly one logical buffered
+  reader across all its phases — rustX -> outer across
+  `await_owner_attached` -> the pre-inner drain -> `attach_inner_control`
+  -> `await_anchor_commit` -> the anchored relay loop, and outer -> inner
+  across `await_start` -> the owned inner control loop — never a gate-local
+  one. Every phase drains what is already buffered before it waits for
+  another read, so a pending `MSG_TERMINATE` is observed even when no
+  further byte ever arrives. Correctness never depends on separate writes
+  producing separate reads, and no ACK protocol or timing assumption is
+  used to prevent coalescing.
+- **`NoOwnership` is parsed by one strict, fail-closed grammar.** Because
+  the frame is terminal evidence, its payload is exactly `length 0` (no
+  pre-anchor child was ever created) or `length 4` carrying a **positive**
+  reaped pid. Every other length, and any non-positive pid, is a protocol
+  error: a malformed frame is never downgraded to the vacuous "no child
+  existed" proof. There is one parser for both supervisor domains; the M5
+  Bash supervisor's empty `MSG_NO_OWNERSHIP` remains valid under it.
 - **`NoOwnership` is proof-carrying.** rustX may treat it as successful
   pre-ownership settlement only because a supervisor emits it only after it
   has proven that every pre-anchor child it created is gone and reaped (the

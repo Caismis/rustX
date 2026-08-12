@@ -906,7 +906,15 @@ may run against that pid — and reports `NoOwnership` only after proving
 that direct child reaped; an unprovable pre-anchor reap reports a
 process-control failure and no `NoOwnership`. After the startup gate has
 opened, bare pre-ownership plus control loss is therefore never a terminal
-proof. Physical settlement is published only
+proof. Both gates are pure recognition points, not reader boundaries: each
+stream direction has exactly one buffered control-frame reader for the whole
+connection lifetime (rustX -> outer across the startup gate, the pre-inner
+drain, inner attachment, the pre-anchor phase and the anchored relay loop;
+outer -> inner across the START gate and the owned inner control loop), and
+every phase drains what is already buffered before it waits for another
+read. `NoOwnership` itself is parsed by one strict, fail-closed grammar
+(empty payload, or a four-byte positive reaped pid; anything else is a
+protocol error). Physical settlement is published only
 with proven terminality; an unproven terminal state is returned as an
 explicit error from `wait_for_settlement`/`McpServerRuntime::close`, never as
 a successful settlement. Streamable HTTP

@@ -1272,10 +1272,39 @@ pub(crate) async fn read_supervisor_event<R: tokio::io::AsyncRead + Unpin>(
             }))
         }
         MSG_OWNERSHIP_ESTABLISHED => Ok(Some(SupervisorEvent::OwnershipEstablished)),
-        MSG_NO_OWNERSHIP => Ok(Some(SupervisorEvent::NoOwnership {
-            // An empty payload means no pre-anchor child was ever created.
-            reaped_child: <[u8; 4]>::try_from(payload).ok().map(i32::from_le_bytes),
-        })),
+        MSG_NO_OWNERSHIP => {
+            // `NoOwnership` is terminal evidence, so its grammar is strict
+            // and fails closed:
+            //
+            //   payload length 0             -> no pre-anchor child was
+            //                                   ever created;
+            //   payload length 4, pid > 0    -> that direct child pid was
+            //                                   provably reaped;
+            //   anything else                -> protocol error.
+            //
+            // A malformed length or a non-positive pid is never silently
+            // mapped to `None`: that would manufacture a vacuous terminal
+            // proof ("no child existed") out of an unparseable frame.
+            match payload.len() {
+                0 => Ok(Some(SupervisorEvent::NoOwnership { reaped_child: None })),
+                4 => {
+                    let pid = i32::from_le_bytes(payload.try_into().expect("four bytes"));
+                    if pid > 0 {
+                        Ok(Some(SupervisorEvent::NoOwnership {
+                            reaped_child: Some(pid),
+                        }))
+                    } else {
+                        Err(format!(
+                            "the supervisor no-ownership frame carries the non-positive reaped \
+                             child pid {pid}"
+                        ))
+                    }
+                }
+                length => Err(format!(
+                    "malformed supervisor no-ownership frame: {length} payload bytes"
+                )),
+            }
+        }
         MSG_SHELL_EXITED => {
             // { exit_code: i32 LE, signaled: u8, signal: i32 LE }
             if payload.len() != 9 {
@@ -1541,5 +1570,97 @@ mod tests {
         assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
         assert_eq!(result.stdout, b"runner-result");
         assert!(result.stderr.is_empty());
+    }
+
+    /// The strict, fail-closed `NoOwnership` payload grammar.
+    ///
+    /// `NoOwnership` is terminal evidence — rustX publishes physical
+    /// settlement on it — so exactly two payload shapes are valid: an empty
+    /// payload (no pre-anchor child was ever created) and a four-byte
+    /// positive pid (that direct child was provably reaped). Every other
+    /// shape is a protocol error and must never be downgraded to the
+    /// vacuous `None` proof.
+    #[cfg(unix)]
+    mod strict_no_ownership {
+        use tokio::io::AsyncWriteExt;
+
+        use crate::runtime::process_runner::{
+            MSG_NO_OWNERSHIP, SupervisorEvent, read_supervisor_event,
+        };
+
+        /// Parses one hand-written `MSG_NO_OWNERSHIP` frame with the given
+        /// payload: `[u32 LE length][kind][payload]`.
+        async fn parse(payload: &[u8]) -> Result<Option<SupervisorEvent>, String> {
+            let (mut writer, mut reader) = tokio::net::UnixStream::pair().expect("socket pair");
+            let length = u32::try_from(1 + payload.len()).expect("frame length fits u32");
+            let mut frame = length.to_le_bytes().to_vec();
+            frame.push(MSG_NO_OWNERSHIP);
+            frame.extend_from_slice(payload);
+            writer.write_all(&frame).await.expect("no-ownership frame");
+            drop(writer);
+            read_supervisor_event(&mut reader).await
+        }
+
+        /// The M5 Bash contract: an empty payload is the vacuous proof that
+        /// no pre-anchor child was ever created.
+        #[tokio::test]
+        async fn empty_payload_is_accepted_as_no_child_created() {
+            assert_eq!(
+                parse(&[]).await,
+                Ok(Some(SupervisorEvent::NoOwnership { reaped_child: None }))
+            );
+        }
+
+        /// A four-byte positive pid is the proof-carrying form.
+        #[tokio::test]
+        async fn positive_four_byte_pid_is_accepted_as_the_reaped_child() {
+            assert_eq!(
+                parse(&4321i32.to_le_bytes()).await,
+                Ok(Some(SupervisorEvent::NoOwnership {
+                    reaped_child: Some(4321)
+                }))
+            );
+        }
+
+        /// A truncated pid is a protocol error, never `None`: a short
+        /// payload must not be read as "no child ever existed".
+        #[tokio::test]
+        async fn truncated_pid_payloads_are_rejected() {
+            for length in 1..4usize {
+                let payload = vec![1u8; length];
+                let parsed = parse(&payload).await;
+                assert!(
+                    parsed.is_err(),
+                    "a {length}-byte no-ownership payload must be a protocol error: {parsed:?}"
+                );
+            }
+        }
+
+        /// A payload longer than the four-byte pid is a protocol error: the
+        /// grammar admits exactly length 0 and length 4.
+        #[tokio::test]
+        async fn overlong_payloads_are_rejected() {
+            for length in 5..8usize {
+                let payload = vec![1u8; length];
+                let parsed = parse(&payload).await;
+                assert!(
+                    parsed.is_err(),
+                    "a {length}-byte no-ownership payload must be a protocol error: {parsed:?}"
+                );
+            }
+        }
+
+        /// A four-byte payload whose pid is not positive is a protocol
+        /// error: no pid was proven reaped, so no terminal evidence exists.
+        #[tokio::test]
+        async fn zero_and_negative_pids_are_rejected() {
+            for pid in [0i32, -1, i32::MIN] {
+                let parsed = parse(&pid.to_le_bytes()).await;
+                assert!(
+                    parsed.is_err(),
+                    "the non-positive reaped pid {pid} must be a protocol error: {parsed:?}"
+                );
+            }
+        }
     }
 }

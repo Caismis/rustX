@@ -373,6 +373,14 @@ pub(crate) fn signal_group(pgid: i32, signal: Signal) -> Result<(), String> {
 
 /// Incremental length-prefixed control-frame reader shared by the
 /// supervisor units: `[u32 LE length][kind][payload]`.
+///
+/// One stream direction has exactly one logical buffered reader, held across
+/// every lifecycle phase of that connection. Unix stream reads do not
+/// preserve the writer's frame boundaries, so a phase that recognizes its
+/// own frame and then drops a gate-local reader would discard valid frames
+/// that arrived in the same read. Feeding ([`FrameReader::feed`]) and
+/// draining ([`FrameReader::pop`]) are deliberately separate so a frame can
+/// never be lost through an ignored return value.
 #[derive(Debug, Default)]
 pub(crate) struct FrameReader {
     buf: Vec<u8>,
@@ -385,25 +393,15 @@ impl FrameReader {
         Self::default()
     }
 
-    /// Feeds newly read bytes and returns the first complete frame, if one
-    /// arrived. Partial frames stay buffered. Note that the returned frame
-    /// is already consumed: callers must handle it and then drain the rest
-    /// with repeated [`FrameReader::pop`] calls.
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Option<(u8, Vec<u8>)> {
-        self.feed(bytes);
-        self.pop()
-    }
-
-    /// Feeds newly read bytes **without** consuming any frame, for readers
-    /// that drain with [`FrameReader::pop`] in one place. Unlike
-    /// [`FrameReader::push`] this can never silently drop a frame whose
-    /// return value is ignored.
+    /// Feeds newly read bytes **without** consuming any frame: feeding and
+    /// draining are separate steps, so no frame can ever be dropped by
+    /// ignoring a return value.
     pub(crate) fn feed(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
 
     /// Parses the first complete frame out of the buffer. Call after
-    /// [`FrameReader::push`] fed new bytes once; drain with repeated calls.
+    /// [`FrameReader::feed`] fed new bytes; drain with repeated calls.
     pub(crate) fn pop(&mut self) -> Option<(u8, Vec<u8>)> {
         if self.buf.len() < 4 {
             return None;
