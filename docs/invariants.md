@@ -335,20 +335,23 @@ observed only at the next quiescent re-discovery.
   child's pid; it is the only transition into the group-scoped ownership
   core.
 - **A control frame that has been read is owned until it is processed or
-  explicitly rejected.** Changing lifecycle phase never discards
-  already-read bytes: Unix stream reads do not preserve the writer's frame
-  boundaries, so gate recognition consumes exactly the gate frame and every
-  valid frame that followed it in the same read stays owned by the next
-  phase. One stream direction therefore has exactly one logical buffered
-  reader across all its phases — rustX -> outer across
-  `await_owner_attached` -> the pre-inner drain -> `attach_inner_control`
-  -> `await_anchor_commit` -> the anchored relay loop, and outer -> inner
-  across `await_start` -> the owned inner control loop — never a gate-local
-  one. Every phase drains what is already buffered before it waits for
-  another read, so a pending `MSG_TERMINATE` is observed even when no
-  further byte ever arrives. Correctness never depends on separate writes
-  producing separate reads, and no ACK protocol or timing assumption is
-  used to prevent coalescing.
+  explicitly rejected.** This holds for every supervisor control-stream
+  direction in both domains (M5 Bash and M7 interactive). Changing
+  lifecycle phase never discards already-read bytes: Unix stream reads do
+  not preserve the writer's frame boundaries, so gate recognition consumes
+  exactly the gate frame and every valid frame that followed it in the same
+  read stays owned by the next phase. One stream direction therefore has
+  exactly one logical buffered reader (`FrameReader`, fed and drained as
+  separate steps) across all its phases — for the interactive unit, rustX
+  -> outer across `await_owner_attached` -> the pre-inner drain ->
+  `attach_inner_control` -> `await_anchor_commit` -> the anchored relay
+  loop, and outer -> inner across `await_start` -> the owned inner control
+  loop; for the Bash unit, rustX -> inner across `await_start` -> the owned
+  invocation control loop — never a gate-local one. Every phase drains what
+  is already buffered before it waits for another read, so a pending
+  `MSG_TERMINATE` is observed even when no further byte ever arrives.
+  Correctness never depends on separate writes producing separate reads,
+  and no ACK protocol or timing assumption is used to prevent coalescing.
 - **`NoOwnership` is parsed by one strict, fail-closed grammar.** Because
   the frame is terminal evidence, its payload is exactly `length 0` (no
   pre-anchor child was ever created) or `length 4` carrying a **positive**
@@ -569,6 +572,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   distinct syscall-number namespace. This restriction is what makes the
   supervisor's kernel child-wait terminal proof complete: an in-domain
   descendant cannot remain hidden behind an ancestor that left the domain.
+- **The `START` gate consumes only `START`.** The Bash inner supervisor's
+  rustX-facing control direction has one `FrameReader` for the whole
+  invocation: `await_start` drains what is already buffered before it reads
+  again, consumes exactly its gate frame, and hands the same reader to the
+  owned control loop, which drains it before every further read. A
+  `MSG_TERMINATE` that the kernel delivered in the same `read()` as
+  `MSG_START` therefore still drives the ordinary `TERM` -> grace -> `KILL`
+  path — cancellation and timeout stay authoritative until physical
+  settlement, and the runtime never depends on two writes becoming two
+  peer reads. This is the shared control-frame ownership invariant stated
+  above, applied to the M5 unit.
 - **The inner supervisor PID is an ownership anchor with exactly one
   reaping owner; generic child-reaping paths can never consume it.** A
   process used as a lifecycle identity anchor has one dedicated reaping

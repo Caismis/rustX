@@ -234,11 +234,11 @@ use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
 use nix::unistd::{Pid, read, write};
 
 use crate::runtime::supervised_unit::{
-    INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY,
-    MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED,
-    MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE,
-    TERMINAL_ACK_TIMEOUT, become_child_subreaper, enforce_fixed_group_membership,
-    ignore_group_term,
+    FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
+    MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
+    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
+    enforce_fixed_group_membership, ignore_group_term,
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -673,7 +673,14 @@ fn run_inner() -> i32 {
     {
         return INNER_EXIT_NORMAL;
     }
-    match await_start() {
+    // One buffered reader owns the complete rustX -> inner control
+    // direction: the pre-ownership `START` gate and the owned control loop
+    // below share it. Unix stream reads do not preserve the writer's frame
+    // boundaries, so a frame that arrived in the same `read()` as `START`
+    // must stay owned by the owned loop instead of being dropped with a
+    // gate-local buffer.
+    let mut control_reader = FrameReader::new();
+    match await_start(&mut control_reader) {
         Ok(true) => {}
         Ok(false) => {
             let _ = stream.write_frame(MSG_NO_OWNERSHIP, &[]);
@@ -710,7 +717,6 @@ fn run_inner() -> i32 {
     // it is only compared against `waitpid` pids of the same conversion.
     let bash_pid = i32::try_from(bash.id()).unwrap_or(0);
     let mut shell_reported = false;
-    let mut read_buf: Vec<u8> = Vec::with_capacity(256);
     let mut kill_deadline: Option<std::time::Instant> = None;
     loop {
         // Reaping hygiene of the inner child domain: matches every child
@@ -790,35 +796,41 @@ fn run_inner() -> i32 {
                 return INNER_EXIT_CONTAINMENT;
             }
         }
-        // Control frames from rustX (TERMINATE). The channel is
-        // non-blocking; the poll cadence keeps this loop deterministic.
+        // Control frames from rustX (TERMINATE). Frames that were already
+        // read — a `TERMINATE` that shared its `read()` with the `START`
+        // gate frame in particular — are drained before another read is
+        // issued, so an authoritative cancellation request is acted on even
+        // if rustX never writes another byte. The channel is non-blocking;
+        // the poll cadence keeps this loop deterministic.
         let mut chunk = [0u8; 256];
-        match read(std::io::stdin(), &mut chunk) {
-            Ok(0) => {
-                // rustX closed the control channel: the invocation is
-                // abandoned and nobody reads our reports anymore. Owned
-                // work may still be alive, so the exit signals the outer
-                // supervisor to fail-safe-contain the invocation.
+        loop {
+            if let Err(error) = handle_frames(
+                &mut control_reader,
+                &mut stream,
+                self_pid,
+                fail_signal,
+                force_anchor_loss,
+                &mut kill_deadline,
+            ) {
+                let _ = stream.write_failure(&error);
                 return INNER_EXIT_CONTAINMENT;
             }
-            Ok(control_read) => {
-                read_buf.extend_from_slice(&chunk[..control_read]);
-                if let Err(error) = handle_frames(
-                    &mut read_buf,
-                    &mut stream,
-                    self_pid,
-                    fail_signal,
-                    force_anchor_loss,
-                    &mut kill_deadline,
-                ) {
-                    let _ = stream.write_failure(&error);
+            match read(std::io::stdin(), &mut chunk) {
+                Ok(0) => {
+                    // rustX closed the control channel: the invocation is
+                    // abandoned and nobody reads our reports anymore. Owned
+                    // work may still be alive, so the exit signals the outer
+                    // supervisor to fail-safe-contain the invocation.
                     return INNER_EXIT_CONTAINMENT;
                 }
-            }
-            Err(Errno::EAGAIN) => {} // non-blocking; EWOULDBLOCK == EAGAIN on Linux
-            Err(error) => {
-                let _ = stream.write_failure(&format!("cannot read the control channel: {error}"));
-                return INNER_EXIT_CONTAINMENT;
+                Ok(control_read) => control_reader.feed(&chunk[..control_read]),
+                // non-blocking; EWOULDBLOCK == EAGAIN on Linux
+                Err(Errno::EAGAIN) => break,
+                Err(error) => {
+                    let _ =
+                        stream.write_failure(&format!("cannot read the control channel: {error}"));
+                    return INNER_EXIT_CONTAINMENT;
+                }
             }
         }
         // The grace period after TERM: if the owned tree has not reached
@@ -838,26 +850,22 @@ fn run_inner() -> i32 {
     }
 }
 
-/// Parses complete control frames out of `buf` and handles them.
+/// Drains every complete control frame already buffered in the owned
+/// control direction's reader and handles it.
+///
+/// This is the single interpretation path for owned control frames: a frame
+/// carried over from the `START` gate's `read()` is handled here exactly
+/// like a freshly read one, so terminate handling is never duplicated.
+/// Partial frames stay buffered in the reader for the next read.
 fn handle_frames(
-    buf: &mut Vec<u8>,
+    reader: &mut FrameReader,
     stream: &mut ControlStream,
     self_pid: i32,
     fail_signal: bool,
     force_anchor_loss: bool,
     kill_deadline: &mut Option<std::time::Instant>,
 ) -> Result<(), String> {
-    loop {
-        if buf.len() < 4 {
-            return Ok(());
-        }
-        let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-        if buf.len() < 4 + len {
-            return Ok(());
-        }
-        let kind = buf[4];
-        let _payload = buf[5..4 + len].to_vec();
-        buf.drain(..4 + len);
+    while let Some((kind, _payload)) = reader.pop() {
         match kind {
             MSG_TERMINATE => {
                 if fail_signal {
@@ -910,39 +918,36 @@ fn handle_frames(
             other => return Err(format!("unknown control message kind {other:#04x}")),
         }
     }
+    Ok(())
 }
 
 /// Waits at the pre-ownership gate for rustX to acknowledge that it has
 /// retained the invocation anchor. Bash cannot exist before `MSG_START`.
-fn await_start() -> Result<bool, String> {
-    let mut buf = Vec::with_capacity(32);
+///
+/// The reader belongs to the caller for the whole rustX -> inner control
+/// direction: already-buffered frames are drained before another `read()`
+/// is issued, partial frames stay buffered across reads, and the gate
+/// consumes **exactly** its own gate frame. Any valid frame that followed
+/// it in the same `read()` — an authoritative `MSG_TERMINATE` in
+/// particular — remains owned by the owned control loop that runs next.
+fn await_start(reader: &mut FrameReader) -> Result<bool, String> {
     loop {
+        if let Some((kind, _payload)) = reader.pop() {
+            return match kind {
+                MSG_START => Ok(true),
+                MSG_TERMINATE => Ok(false),
+                other => Err(format!(
+                    "unexpected pre-ownership control message {other:#04x}"
+                )),
+            };
+        }
         let mut chunk = [0u8; 32];
         match read(std::io::stdin(), &mut chunk) {
             Ok(0) => return Ok(false),
-            Ok(count) => buf.extend_from_slice(&chunk[..count]),
-            Err(Errno::EAGAIN) => {
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
-            }
-            Err(Errno::EINTR) => continue,
+            Ok(count) => reader.feed(&chunk[..count]),
+            Err(Errno::EAGAIN) => std::thread::sleep(POLL_INTERVAL),
+            Err(Errno::EINTR) => {}
             Err(error) => return Err(format!("cannot read the ownership start gate: {error}")),
-        }
-        if buf.len() >= 4 {
-            let len = u32::from_le_bytes(buf[..4].try_into().expect("four bytes")) as usize;
-            if buf.len() >= 4 + len {
-                let kind = buf[4];
-                buf.drain(..4 + len);
-                match kind {
-                    MSG_START => return Ok(true),
-                    MSG_TERMINATE => return Ok(false),
-                    other => {
-                        return Err(format!(
-                            "unexpected pre-ownership control message {other:#04x}"
-                        ));
-                    }
-                }
-            }
         }
     }
 }
@@ -1003,11 +1008,13 @@ fn supervisor_binary() -> std::path::PathBuf {
     )
 ))]
 mod anchor_reaping_tests {
-    //! Single-reaper anchor ownership regressions.
+    //! Supervisor ownership regressions: the single-reaper anchor
+    //! discipline and the control-frame ownership of the `START` gate.
     //!
     //! These run the real supervisor binary as a subprocess (the same
     //! binary `run_bash_unix` spawns) and drive the exact interleavings
-    //! through deterministic barriers — never through sleeps:
+    //! through deterministic barriers and protocol frames — never through
+    //! sleeps:
     //!
     //! - the mandatory race regression
     //!   ([`anchor_observed_alive_is_never_consumed_before_its_terminal_observation`]):
@@ -1020,6 +1027,14 @@ mod anchor_reaping_tests {
     //!   single-reaper ownership the zombie survives until the dedicated
     //!   observation, the fallback `SIGKILL` is issued while the anchor is
     //!   retained, and the group-scoped gate releases the anchor.
+    //! - the coalesced `START` gate regression
+    //!   ([`start_and_terminate_in_one_read_never_loses_the_terminate`]):
+    //!   `MSG_START` and `MSG_TERMINATE` are delivered to the inner
+    //!   supervisor in one peer `read()`, and nothing is written afterwards.
+    //!   With a gate-local buffer the trailing authoritative cancellation
+    //!   request was dropped at the phase transition; with one
+    //!   [`FrameReader`] per control direction it stays owned by the owned
+    //!   control loop.
 
     use super::*;
     use crate::runtime::process_runner::supervisor_binary;
@@ -1056,6 +1071,84 @@ mod anchor_reaping_tests {
             .spawn()
             .expect("spawn the outer supervisor");
         (child, stream_a)
+    }
+
+    /// Spawns the real supervisor for one ordinary invocation: no injected
+    /// failure and no barrier, so the only thing under test is the control
+    /// protocol itself.
+    fn spawn_invocation(
+        command: &str,
+        anchor_pid_file: &Path,
+    ) -> (std::process::Child, UnixStream) {
+        let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let child = std::process::Command::new(supervisor_binary())
+            .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(COMMAND_ENV, command)
+            .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
+            .stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the outer supervisor");
+        (child, stream_a)
+    }
+
+    /// Contains the invocation and fails.
+    ///
+    /// A regression that loses the trailing control frame would otherwise
+    /// leave a live owned Bash tree behind, so every failure path of the
+    /// coalesced-gate regression goes through here: the invocation group is
+    /// killed, the supervisor child is killed and reaped, and only then
+    /// does the test panic.
+    fn contain_and_fail(outer: &mut std::process::Child, pgid: Option<i32>, message: &str) -> ! {
+        if let Some(pgid) = pgid {
+            let _ = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+        }
+        let _ = outer.kill();
+        let _ = outer.wait();
+        panic!("{message}");
+    }
+
+    /// Reads the next complete control frame, containing the invocation
+    /// instead of hanging or leaking it when the deadlock guard expires.
+    ///
+    /// The reader is owned by the caller across calls for exactly the
+    /// reason the supervisor owns one per control direction: frames the
+    /// peer wrote separately can arrive in a single `read()`, and the
+    /// surplus must survive until the next call.
+    fn next_frame(
+        stream: &mut UnixStream,
+        reader: &mut FrameReader,
+        outer: &mut std::process::Child,
+        pgid: Option<i32>,
+        deadline: Instant,
+        description: &str,
+    ) -> (u8, Vec<u8>) {
+        loop {
+            if let Some(frame) = reader.pop() {
+                return frame;
+            }
+            let mut chunk = [0u8; 64];
+            match stream.read(&mut chunk) {
+                Ok(0) => contain_and_fail(
+                    outer,
+                    pgid,
+                    &format!("{description}: the control channel closed"),
+                ),
+                Ok(count) => reader.feed(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        contain_and_fail(outer, pgid, description);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => contain_and_fail(
+                    outer,
+                    pgid,
+                    &format!("{description}: control channel read failed: {error}"),
+                ),
+            }
+        }
     }
 
     /// Polls for a file with a strict deadlock guard.
@@ -1291,6 +1384,154 @@ mod anchor_reaping_tests {
         );
         wait_for_reaped(inner_pid);
         wait_for_reaped(sleep_pid);
+        wait_for_group_gone(inner_pid);
+    }
+
+    /// The coalesced `START` gate regression.
+    ///
+    /// Unix stream reads do not preserve the writer's frame boundaries, so
+    /// rustX's `START` acknowledgement and a cancellation request that
+    /// became observable immediately afterwards can reach the inner
+    /// supervisor in **one** `read()`:
+    ///
+    /// ```text
+    /// inner -> rustX:  MSG_ANCHOR_READY
+    /// rustX -> inner:  MSG_START || MSG_TERMINATE      (one read)
+    /// ```
+    ///
+    /// The gate must consume exactly `MSG_START` and leave the trailing
+    /// frame owned by the owned control loop. With the pre-fix gate-local
+    /// buffer the `MSG_TERMINATE` was dropped at the phase transition and
+    /// the invocation lost an authoritative cancellation request: the
+    /// fixture below would run to its own completion (far past the
+    /// deadlock guard) and no `SIGTERM` attempt would ever be reported.
+    ///
+    /// The test writes control bytes exactly once, so nothing but the
+    /// already-read trailing frame can drive the `TERM` sequence.
+    #[test]
+    fn start_and_terminate_in_one_read_never_loses_the_terminate() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let anchor_pid_file = dir.path().join("anchor.pid");
+        // `exec` replaces the shell, so the invocation group holds exactly
+        // the inner supervisor and one long-lived owned process: the
+        // fixture can never settle by finishing on its own within any test
+        // deadline, so only the invocation's own TERM sequence can settle
+        // it.
+        let (mut outer, mut stream) = spawn_invocation("exec sleep 600", &anchor_pid_file);
+        nix::fcntl::fcntl(
+            &stream,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .expect("nonblocking control stream");
+        let deadline = Instant::now() + DEADLINE;
+        let mut reader = FrameReader::new();
+
+        // 1. The synchronization point — never a sleep: the inner
+        //    supervisor's own `MSG_ANCHOR_READY`. Once it is read, the
+        //    inner provably completed its session/subreaper/seccomp setup
+        //    and is waiting at the `START` gate.
+        let (kind, payload) = next_frame(
+            &mut stream,
+            &mut reader,
+            &mut outer,
+            None,
+            deadline,
+            "the inner supervisor must announce the invocation anchor",
+        );
+        assert_eq!(
+            kind, MSG_ANCHOR_READY,
+            "the anchor announcement is the first frame of the invocation"
+        );
+        let inner_pid = i32::from_le_bytes(payload[..4].try_into().expect("four bytes"));
+        assert_eq!(
+            inner_pid,
+            read_pid(&anchor_pid_file),
+            "the announced anchor is the inner supervisor's own pid"
+        );
+
+        // 2. One `write_all` of two complete frames: the kernel presents
+        //    them to the inner supervisor as a single input batch, exactly
+        //    like a cancellation that becomes observable right after the
+        //    START acknowledgement was written.
+        let mut batch = Vec::with_capacity(10);
+        batch.extend_from_slice(&[1, 0, 0, 0, MSG_START]);
+        batch.extend_from_slice(&[1, 0, 0, 0, MSG_TERMINATE]);
+        stream
+            .write_all(&batch)
+            .expect("the coalesced START/TERMINATE batch");
+
+        // 3. Not one further control byte is written. `MSG_OWNERSHIP_ESTABLISHED`
+        //    proves START was consumed and the Bash spawn (the OS ownership
+        //    commit) happened; the `SIGTERM` attempt against the invocation
+        //    group is written only by the owned loop's terminate path, so it
+        //    proves the trailing frame survived the gate; `MSG_ALL_CHILDREN_REAPED`
+        //    is the outer supervisor's kernel-mediated terminal proof.
+        let mut saw_ownership = false;
+        let mut saw_terminate_signal = false;
+        let mut saw_terminal_event = false;
+        while !saw_terminal_event {
+            let (kind, payload) = next_frame(
+                &mut stream,
+                &mut reader,
+                &mut outer,
+                Some(inner_pid),
+                deadline,
+                "the invocation never terminated: the TERMINATE frame that shared its read with \
+                 START was lost at the pre-ownership gate",
+            );
+            match kind {
+                MSG_OWNERSHIP_ESTABLISHED => saw_ownership = true,
+                MSG_SIGNAL_ATTEMPT => {
+                    assert!(payload.len() >= 9, "malformed signal-attempt frame");
+                    let pgid = i32::from_le_bytes(payload[0..4].try_into().expect("four bytes"));
+                    let signal = i32::from_le_bytes(payload[4..8].try_into().expect("four bytes"));
+                    let emitted = payload[8] != 0;
+                    assert_eq!(pgid, inner_pid, "the signal targets the invocation group");
+                    assert!(emitted, "the TERM sequence must reach the kernel");
+                    if signal == libc::SIGTERM {
+                        saw_terminate_signal = true;
+                    }
+                }
+                // The shell's canonical exit status; the fixture is killed
+                // by the TERM sequence, so its exact shape is not asserted.
+                MSG_SHELL_EXITED => {}
+                MSG_ALL_CHILDREN_REAPED => saw_terminal_event = true,
+                MSG_PROCESS_CONTROL_FAILURE => contain_and_fail(
+                    &mut outer,
+                    Some(inner_pid),
+                    &format!(
+                        "unexpected process-control failure: {}",
+                        String::from_utf8_lossy(&payload)
+                    ),
+                ),
+                other => contain_and_fail(
+                    &mut outer,
+                    Some(inner_pid),
+                    &format!("unexpected control frame kind {other:#04x}"),
+                ),
+            }
+        }
+        assert!(
+            saw_ownership,
+            "START must be consumed and commit the owned Bash spawn"
+        );
+        assert!(
+            saw_terminate_signal,
+            "the trailing TERMINATE must drive the TERM sequence without another control write"
+        );
+
+        // 4. Closing the rustX end ends the outer's terminal-ack wait
+        //    without writing a control byte. Everything the invocation
+        //    owned is provably gone: the anchor is reaped and the numeric
+        //    invocation group no longer exists, so no Bash descendant
+        //    remains.
+        drop(stream);
+        let status = outer.wait().expect("outer supervisor wait");
+        assert!(
+            status.success(),
+            "the outer must exit 0 after the terminal event"
+        );
+        wait_for_reaped(inner_pid);
         wait_for_group_gone(inner_pid);
     }
 }

@@ -643,7 +643,13 @@ state makes this explicit: the inner reports `AnchorReady`, rustX retains the
 possible ownership identity and replies `Start`, then the inner reports
 `OwnershipEstablished` after spawning Bash. If communication fails after
 `Start`, rustX conservatively assumes ownership may exist. Pre-gate setup
-failure reports `NoOwnership` and may settle without a Bash domain.
+failure reports `NoOwnership` and may settle without a Bash domain. The
+`Start` gate is a recognition point, not a reader boundary: the inner's
+rustX-facing control direction owns one `FrameReader` for the whole
+invocation, shared by the gate and the owned control loop, so a `Terminate`
+that the kernel delivered in the same `read()` as `Start` still drives the
+ordinary `TERM` -> grace -> `KILL` path (the shared control-frame ownership
+invariant, identical to the interactive unit's gates).
 Catastrophic fallback authority is a pre-ownership prerequisite: the runtime
 child-subreaper primitive is consulted (once per process, idempotently)
 before the supervisor unit spawns, so `START` — which authorizes the Bash
