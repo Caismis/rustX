@@ -1079,6 +1079,40 @@ semantic normalization boundary. The frozen invariants:
   finished. State changes are observed through Runtime Client events and
   snapshots.
 
+## Runtime Client transports (Issue #38)
+
+A transport is a bounded byte-stream adapter around the semantic
+endpoint. It frames; it never becomes a second authority.
+
+- **Bounded dispatch.** No Runtime Client semantic request is applied
+  until one complete, in-bound-size framed record has successfully
+  deserialized to the exact Runtime Client request type. A record that
+  violates framing, exceeds the record limit, or fails exact
+  deserialization ends the transport having applied nothing; Protocol v1
+  has no uncorrelated error envelope, so no transport fabricates a
+  protocol record for it.
+- **Transport loss is not semantic cancellation.** Runtime Client
+  transport loss — EOF, a truncated or malformed record, an oversized
+  record, a broken output pipe, subscription lag, or a dropped session —
+  detaches an attachment and does nothing else. It never cancels the
+  current attempt, never settles anything, never drains the mailbox,
+  never mutates canonical history, and never shuts the runtime down.
+  Conversely a successful semantic `shutdown` never closes a transport.
+- **One serialization/write owner per transport session; the output
+  stream is protocol only.** Exactly one code path serializes, delimits,
+  writes, and flushes, so two protocol records' bytes never interleave
+  and the completion order of that path is the stream's serialization
+  point. Successful stdio output bytes are Runtime Client JSONL records
+  and nothing else — no human or operator logging shares the sink.
+- **A transport retains no event backlog.** The projection's bounded
+  replay ring remains the one retained Runtime Client event backlog. A
+  transport holds at most the one outbound record it is writing, so a
+  stalled consumer stalls the transport rather than growing memory or
+  blocking authoritative runtime publication. When a stall pushes an
+  active subscription behind retention, the transport terminates with a
+  typed local error and the client repairs from an authoritative
+  snapshot; it never invents a wire message for that state.
+
 ## Durability
 
 Production runtime events are persisted before external publication.
