@@ -1,0 +1,107 @@
+//! The local runtime process lifecycle over the Issue #38 stdio/JSONL
+//! transport.
+//!
+//! # Output contract
+//!
+//! ```text
+//! before serving : stdout is exactly empty
+//! while serving  : stdout is Runtime Client JSONL records only
+//! diagnostics    : stderr, always
+//! ```
+//!
+//! Startup configuration failure writes a bounded diagnostic to stderr,
+//! exits non-zero, and leaves stdout at **zero bytes** — composition
+//! finishes entirely before the transport is created, so no partial
+//! protocol frame can exist.
+//!
+//! # Exit semantics
+//!
+//! - clean input EOF at a record boundary, or a peer broken pipe, ends this
+//!   one-session process **successfully**;
+//! - malformed framing or any other transport error writes a diagnostic to
+//!   stderr and exits **non-zero**;
+//! - semantic `shutdown` keeps its Issue #38 behaviour — it responds, stops
+//!   admitting inbound work, lets the current attempt settle, and does
+//!   **not** close the transport. A controlling client closes the transport
+//!   or the process according to its own lifecycle policy.
+//!
+//! Transport EOF remains a detach, never an Agent Loop cancellation
+//! primitive, and this module implements no M9 recovery or quiescence.
+
+use std::io::Write;
+
+use crate::runtime_client::transport::stdio::{StdioSessionEnd, serve_stdio_jsonl};
+
+use super::cli::{USAGE, parse_arguments};
+use super::composition::{LocalConversationRuntime, LocalRuntimeDependencies};
+
+/// The deterministic terminal outcome of the local runtime process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessOutcome {
+    /// The transport closed cleanly; the process exits with code 0.
+    TransportClosed(StdioSessionEnd),
+    /// Startup configuration failed; nothing was ever written to stdout.
+    StartupFailed(String),
+    /// The transport terminated abnormally after serving began.
+    TransportFailed(String),
+}
+
+impl ProcessOutcome {
+    /// The process exit code of this outcome.
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
+        match self {
+            Self::TransportClosed(_) => 0,
+            Self::StartupFailed(_) => 2,
+            Self::TransportFailed(_) => 1,
+        }
+    }
+
+    /// The bounded stderr diagnostic of this outcome, when it has one.
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&str> {
+        match self {
+            Self::TransportClosed(_) => None,
+            Self::StartupFailed(detail) | Self::TransportFailed(detail) => Some(detail),
+        }
+    }
+}
+
+/// Composes the runtime from explicit arguments and serves it on
+/// stdin/stdout.
+///
+/// Returns the terminal outcome instead of exiting, so the binary owns the
+/// single exit point and tests can drive the same code path.
+pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcome {
+    let paths = match parse_arguments(arguments) {
+        Ok(paths) => paths,
+        Err(error) => return ProcessOutcome::StartupFailed(format!("{error}\n{USAGE}")),
+    };
+    // Composition completes — including the initial capability commit —
+    // before the transport exists, so a startup failure can never leave a
+    // partially initialized protocol server.
+    let runtime =
+        match LocalConversationRuntime::compose(&paths, &LocalRuntimeDependencies::default()).await
+        {
+            Ok(runtime) => runtime,
+            Err(error) => return ProcessOutcome::StartupFailed(error.to_string()),
+        };
+    match serve_stdio_jsonl(runtime.endpoint()).await {
+        Ok(end) => ProcessOutcome::TransportClosed(end),
+        Err(error) => ProcessOutcome::TransportFailed(error.to_string()),
+    }
+}
+
+/// Runs the process to its single exit point.
+///
+/// Diagnostics go to stderr with `writeln!`; `println!` is never used, so
+/// stdout carries protocol records and nothing else.
+pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
+    let outcome = serve(arguments).await;
+    if let Some(diagnostic) = outcome.diagnostic() {
+        let mut stderr = std::io::stderr();
+        let _ = writeln!(stderr, "rustx: {diagnostic}");
+        let _ = stderr.flush();
+    }
+    outcome.exit_code()
+}

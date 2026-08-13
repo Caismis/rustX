@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::snapshot::{AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution};
+use crate::model::session::SessionModelView;
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::error::ModelErrorKind;
@@ -238,6 +239,18 @@ pub enum RuntimeClientEvent {
     CapabilityPublished {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
+    },
+
+    /// The authoritative session model configuration changed.
+    ///
+    /// This is the one model-configuration observation, published on the
+    /// same stream and under the same linearization owner as every other
+    /// Runtime Client event, so a subscribed client stays synchronized
+    /// without polling. It never implies anything about a running attempt:
+    /// an already-admitted attempt keeps the model it froze at admission.
+    SessionModelChanged {
+        /// The redacted session model state after the update.
+        model: Box<SessionModelView>,
     },
 
     /// The runtime accepted a shutdown request and no longer admits

@@ -34,7 +34,48 @@ use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::tools::types::ModelToolDefinition;
 
-/// The runtime-owned context configuration.
+/// The static session-owned context policy.
+///
+/// A conversation session owns the *policy* — the safety reserve, the
+/// uncompressed recent-history target, and the summary output safety cap —
+/// but it deliberately does **not** own a context window. The context window
+/// belongs to the model, and the session model may change between attempts,
+/// so the effective [`ContextConfig`] of an attempt is derived from this
+/// policy plus that attempt's immutable model snapshot.
+///
+/// An attempt using model B therefore never makes compaction decisions with
+/// model A's window, and no context window captured at process start
+/// survives a model change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionContextPolicy {
+    /// Tokens permanently reserved out of whichever model context window is
+    /// in force.
+    pub reserve_tokens: u64,
+    /// Tokens of recent conversation history kept uncompressed. This is a
+    /// token target, never a message count target.
+    pub keep_recent_tokens: u64,
+    /// The context plane's summary/output safety cap, when it imposes one.
+    ///
+    /// The cap is applied through the runtime-owned protected max-output
+    /// field of the summary invocation; it never mutates a reasoning profile
+    /// or a request-parameter object.
+    pub summary_output_cap: Option<u32>,
+}
+
+impl SessionContextPolicy {
+    /// Derives the attempt context configuration for one model context
+    /// window.
+    #[must_use]
+    pub const fn config_for_window(&self, context_window_tokens: u64) -> ContextConfig {
+        ContextConfig {
+            context_window_tokens,
+            reserve_tokens: self.reserve_tokens,
+            keep_recent_tokens: self.keep_recent_tokens,
+        }
+    }
+}
+
+/// The runtime-owned context configuration of one attempt.
 ///
 /// The soft input limit of one request is derived explicitly and checked:
 ///

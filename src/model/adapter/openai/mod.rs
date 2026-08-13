@@ -15,5 +15,5 @@ pub(crate) mod mapping;
 pub mod responses;
 
 pub use chat_completions::OpenAiChatCompletionsAdapter;
-pub use config::{OpenAiAdapterConfig, ResponsesStorageMode};
+pub use config::OpenAiAdapterConfig;
 pub use responses::OpenAiResponsesAdapter;

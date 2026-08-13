@@ -154,13 +154,14 @@ use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver};
 use crate::context::checkpoint::ContextCheckpointStore;
-use crate::context::{AgentStatusComposer, ContextEngine, ContextRuntime, ContextSummarizer};
+use crate::context::tokens::TokenEstimator;
+use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::adapter::ModelAdapter;
-use crate::model::types::{ModelProtocol, ReasoningEffort};
+use crate::model::invocation::ModelInvocationError;
+use crate::model::session::{AttemptModelSnapshot, SessionModelConfig, SessionModelState};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
@@ -218,20 +219,34 @@ impl core::fmt::Display for HostConstructionError {
 
 impl std::error::Error for HostConstructionError {}
 
+/// Projects a model-resolution failure into the protocol error model.
+///
+/// Resolution errors never carry credential material: the catalog names an
+/// environment variable at most.
+fn invalid_model(error: ModelInvocationError) -> RuntimeClientError {
+    RuntimeClientError::InvalidModelConfiguration {
+        message: error.to_string(),
+    }
+}
+
 /// The shared context-plane pieces of the host.
 ///
-/// Every attempt builds a fresh [`ContextRuntime`] from these shared
-/// pieces, so the engine, the summarizer, the checkpoint store, and the
-/// Agent Status composer are exactly the instances the host was
-/// constructed with: checkpoints and status providers persist across
-/// attempts, and the model path and the Runtime Client projection share
-/// one composer.
+/// These are the **session-owned static** pieces: the token estimator, the
+/// checkpoint store, the Agent Status composer, and the context policy
+/// (reserve tokens, keep-recent target, summary output cap). They persist
+/// across attempts, and the model path and the Runtime Client projection
+/// share one composer.
+///
+/// The context *window* is deliberately absent: it belongs to the model, so
+/// each attempt derives its [`ContextRuntime`] from this policy plus that
+/// attempt's immutable model snapshot. No window captured at process start
+/// can survive a session model change.
 #[derive(Clone)]
 pub struct RuntimeClientContextConfig {
-    /// The deterministic context engine.
-    pub engine: ContextEngine,
-    /// The provider-neutral summary service.
-    pub summarizer: Arc<dyn ContextSummarizer>,
+    /// The static session-owned context policy.
+    pub policy: SessionContextPolicy,
+    /// The deterministic token estimator.
+    pub estimator: Arc<dyn TokenEstimator>,
     /// The checkpoint store.
     pub checkpoint_store: Arc<dyn ContextCheckpointStore>,
     /// The Agent Status composer shared by the model path and the Runtime
@@ -252,18 +267,15 @@ pub struct RuntimeClientContextConfig {
 pub struct RuntimeClientHostConfig {
     /// The agent executed by attempts of this runtime.
     pub agent_id: AgentId,
-    /// The provider model identifier of every attempt.
-    pub model: String,
-    /// The canonical protocol of every attempt.
-    pub protocol: ModelProtocol,
-    /// The reasoning effort of every attempt.
-    pub reasoning: ReasoningEffort,
-    /// The effective maximum output tokens of every attempt.
-    pub max_output_tokens: u32,
+    /// The session's authoritative model state: the binding registry plus
+    /// the initial desired configuration, already resolved and validated.
+    ///
+    /// This is the one model authority of the conversation. Attempts freeze
+    /// snapshots of it; a client updates it through `model_set`; nothing
+    /// else in the process resolves a provider binding.
+    pub model: SessionModelState,
     /// The per-conversation IANA timezone, when known.
     pub timezone: Option<Tz>,
-    /// The model adapter of every attempt.
-    pub adapter: Arc<dyn ModelAdapter>,
     /// The shared context-plane pieces.
     pub context: RuntimeClientContextConfig,
     /// The conversation tool runtime (owns the canonical mailbox and the
@@ -302,6 +314,13 @@ struct HostState {
     /// The Runtime Client projection: snapshot read model, cursor,
     /// bounded replay, subscribers.
     projection: RuntimeClientProjection,
+    /// The session's authoritative mutable model state.
+    ///
+    /// It lives under the *same* lock that owns attempt admission and
+    /// projection publication, so a model update and an attempt admission
+    /// can never interleave ambiguously: whichever acquires the lock first
+    /// linearizes first.
+    model: SessionModelState,
     /// The canonical conversation history between attempts. During an
     /// attempt the loop owns its working copy; at settlement the host
     /// replaces this value with the authoritative result messages.
@@ -447,12 +466,7 @@ impl PendingObservations {
 pub(crate) struct HostInner {
     conversation_id: ConversationId,
     agent_id: AgentId,
-    model: String,
-    protocol: ModelProtocol,
-    reasoning: ReasoningEffort,
-    max_output_tokens: u32,
     timezone: Option<Tz>,
-    adapter: Arc<dyn ModelAdapter>,
     context: RuntimeClientContextConfig,
     tool_runtime: ConversationToolRuntime,
     mailbox: ConversationInboundMailbox,
@@ -492,13 +506,26 @@ impl HostInner {
         guard
     }
 
-    /// Builds one fresh `ContextRuntime` from the shared pieces.
-    fn context_runtime(&self) -> ContextRuntime<'static> {
-        ContextRuntime::with_status_composer(
-            self.context.engine.clone(),
-            self.context.summarizer.clone(),
-            self.context.checkpoint_store.clone(),
+    /// Builds the `ContextRuntime` of one admitted attempt.
+    ///
+    /// The engine window and the summary invocation both come from that
+    /// attempt's immutable model snapshot, so an attempt on a 32k model
+    /// never plans compaction with a previously selected 128k window.
+    ///
+    /// # Errors
+    ///
+    /// Returns the engine construction error when the session context policy
+    /// leaves no positive input budget under this attempt's window.
+    fn context_runtime(
+        &self,
+        model: &AttemptModelSnapshot,
+    ) -> Result<ContextRuntime, crate::context::ContextError> {
+        ContextRuntime::for_attempt(
+            self.context.policy,
+            Arc::clone(&self.context.estimator),
+            Arc::clone(&self.context.checkpoint_store),
             self.context.status_composer.clone(),
+            model,
         )
     }
 
@@ -565,9 +592,16 @@ impl HostInner {
         initial_messages: Vec<MessageBlock>,
         fresh: Option<FreshInboundTurn>,
         cancellation: &AgentCancellation,
+        model: AttemptModelSnapshot,
     ) -> crate::agent::AgentExecutionResult {
         let lease = self.capability.acquire_attempt_lease();
         let observer = HostObserver::new(self);
+        // The context runtime is derived from the frozen snapshot, so the
+        // attempt's window, output budget, and summary invocation all agree
+        // with the model it was admitted with.
+        let context_runtime = self
+            .context_runtime(&model)
+            .expect("admission validated this model against the session context policy");
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -578,17 +612,13 @@ impl HostInner {
                 None => InitialTurnTrigger::Continuation,
             },
             timezone: self.timezone,
-            model: self.model.clone(),
-            protocol: self.protocol,
-            reasoning: self.reasoning,
-            max_output_tokens: self.max_output_tokens,
+            model,
         };
         let mut execution = AgentExecution::new(
             request,
-            self.adapter.as_ref(),
             lease,
             cancellation,
-            self.context_runtime(),
+            context_runtime,
             &self.tool_runtime,
         )
         // Neither rejection is reachable: `conversation_id` *is* the tool
@@ -598,6 +628,30 @@ impl HostInner {
         .expect("the host derives its conversation identity from this tool runtime");
         execution.observe(&observer);
         execution.run().await
+    }
+
+    /// Whether one model snapshot is compatible with the session context
+    /// policy.
+    ///
+    /// A model whose context window cannot accommodate the policy reserve
+    /// plus the model's output budget can never run an attempt, so it is
+    /// rejected when the session model is *set*, never discovered at
+    /// admission.
+    fn validate_context_policy(
+        &self,
+        model: &AttemptModelSnapshot,
+    ) -> Result<(), crate::context::ContextError> {
+        let config = self
+            .context
+            .policy
+            .config_for_window(model.primary().context_window());
+        config.soft_input_limit(model.primary().max_output_tokens())?;
+        let summary = model.summary_invocation();
+        self.context
+            .policy
+            .config_for_window(summary.context_window())
+            .soft_input_limit(summary.max_output_tokens())?;
+        Ok(())
     }
 
     /// The settlement path of one attempt: commit the authoritative
@@ -682,6 +736,16 @@ impl HostInner {
             attempt_id: attempt_id.clone(),
         });
         let initial_messages = state.canonical_history.clone();
+        // The attempt model snapshot is taken at exactly this admission
+        // linearization boundary, under the same lock that publishes the
+        // attempt. A `model_set` that linearizes before this point is
+        // observed by the attempt; one that linearizes after it affects only
+        // future attempts.
+        let model = state.model.snapshot();
+        state.projection.apply(Observation::AttemptModelFrozen {
+            attempt_id: attempt_id.clone(),
+            model: Box::new(model.view()),
+        });
         drop(state);
         let inner = Arc::clone(self);
         tokio::spawn(async move {
@@ -691,6 +755,7 @@ impl HostInner {
                     initial_messages,
                     Some(fresh),
                     &cancellation,
+                    model,
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
@@ -813,6 +878,7 @@ impl RuntimeClientHost {
             conversation_id.clone(),
             config.initial_messages.clone(),
             capability_view(&snapshot),
+            config.model.view(),
             replay_limit,
         );
         // Mirror the pre-existing authoritative background records.
@@ -822,12 +888,7 @@ impl RuntimeClientHost {
         let inner = Arc::new(HostInner {
             conversation_id,
             agent_id: config.agent_id,
-            model: config.model,
-            protocol: config.protocol,
-            reasoning: config.reasoning,
-            max_output_tokens: config.max_output_tokens,
             timezone: config.timezone,
-            adapter: config.adapter,
             context: config.context,
             tool_runtime: config.tool_runtime,
             mailbox,
@@ -835,6 +896,7 @@ impl RuntimeClientHost {
             clock,
             state: Mutex::new(HostState {
                 projection,
+                model: config.model,
                 canonical_history: config.initial_messages,
                 current_attempt: None,
                 attachment: None,
@@ -1162,6 +1224,93 @@ impl RuntimeClientHost {
         let snapshot = state.projection.snapshot_ref_checked()?;
         Ok(RuntimeClientResult::Capability {
             capabilities: snapshot.capabilities.clone(),
+        })
+    }
+
+    /// Reads the safe public model catalog.
+    ///
+    /// This is the query that makes client-side `models.json` reading
+    /// unnecessary: it carries model references, protocols, limits, declared
+    /// and effective capabilities, reasoning profile identities with their
+    /// semantic enabled state, and the redacted credential *source*. It
+    /// never carries a credential value, an adapter, or a provider HTTP
+    /// client.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
+    /// observation stream is over.
+    pub fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let state = self.inner.lock_state();
+        state.projection.snapshot_ref_checked()?;
+        Ok(RuntimeClientResult::ModelCatalog {
+            catalog: state.model.catalog_view(),
+        })
+    }
+
+    /// Reads the authoritative session model state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::ProjectionExhausted`] when the
+    /// observation stream is over.
+    pub fn model_get(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let state = self.inner.lock_state();
+        state.projection.snapshot_ref_checked()?;
+        Ok(RuntimeClientResult::Model {
+            model: Box::new(state.model.view()),
+        })
+    }
+
+    /// Replaces the authoritative session model configuration.
+    ///
+    /// # Linearization
+    ///
+    /// The whole operation — resolution, validation, state replacement, and
+    /// the single projection publication — happens under the one host lock
+    /// that also owns attempt admission. An update therefore either
+    /// linearizes before an admission (and that attempt observes it) or
+    /// after it (and only later attempts observe it). There is no third
+    /// possibility and no timing assumption.
+    ///
+    /// # Transactionality
+    ///
+    /// A rejected update changes nothing: the session keeps its previous
+    /// configuration, no cursor is allocated, and no event is published.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
+    /// configuration cannot be resolved against the catalog or cannot run
+    /// under the session context policy, and
+    /// [`RuntimeClientError::ProjectionExhausted`] when the observation
+    /// stream is over.
+    pub fn model_set(
+        &self,
+        config: SessionModelConfig,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let mut state = self.inner.lock_state();
+        state.projection.snapshot_ref_checked()?;
+        // Resolve into a scratch copy first: `SessionModelState::apply` is
+        // itself transactional, and the context-policy check runs against the
+        // *candidate* snapshot before anything is published.
+        let mut candidate = state.model.clone();
+        candidate.apply(config).map_err(invalid_model)?;
+        self.inner
+            .validate_context_policy(&candidate.snapshot())
+            .map_err(|error| RuntimeClientError::InvalidModelConfiguration {
+                message: format!(
+                    "the selected model cannot run under the session context policy: {}",
+                    error.message
+                ),
+            })?;
+        let view = candidate.view();
+        state.model = candidate;
+        state.projection.apply(Observation::SessionModelChanged {
+            model: Box::new(view.clone()),
+        });
+        Ok(RuntimeClientResult::ModelSet {
+            model: Box::new(view),
         })
     }
 
@@ -1523,7 +1672,8 @@ mod tests {
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
-    use crate::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
+    use crate::model::fixture::scripted_session_model;
+    use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::types::RuntimeClock;
@@ -1777,26 +1927,17 @@ mod tests {
             .expect("prepare candidate");
         coordinator.commit(candidate).expect("commit candidate");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            crate::context::ContextConfig {
-                context_window_tokens: 10_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            estimator,
-        )
-        .expect("context engine");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
             agent_id: AgentId::new("agent-a"),
-            model: "scripted".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 512,
+            model: scripted_session_model(adapter.clone()),
             timezone: None,
-            adapter: adapter.clone(),
             context: RuntimeClientContextConfig {
-                engine,
-                summarizer: Arc::new(super::tests::NeverSummarizes),
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
                 checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: composer,
             },
@@ -3696,7 +3837,7 @@ mod tests {
     /// ownership domains.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn host_construction_validates_ownership() {
-        let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let (adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
         let other_dir = tempfile::tempdir().expect("temp dir");
         std::fs::create_dir_all(other_dir.path().join("workspace")).expect("workspace");
         let other_runtime = crate::tools::runtime::ConversationToolRuntime::new(
@@ -3706,26 +3847,17 @@ mod tests {
         )
         .expect("other runtime");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            crate::context::ContextConfig {
-                context_window_tokens: 1_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            estimator,
-        )
-        .expect("engine");
         let error = RuntimeClientHost::new(RuntimeClientHostConfig {
             agent_id: AgentId::new("agent-a"),
-            model: "scripted".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 512,
+            model: scripted_session_model(adapter),
             timezone: None,
-            adapter: fixture.host.inner.adapter.clone(),
             context: RuntimeClientContextConfig {
-                engine,
-                summarizer: Arc::new(NeverSummarizes),
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
                 checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: composer(),
             },
@@ -3772,27 +3904,18 @@ mod tests {
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
         coordinator.commit(candidate).expect("commit");
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            crate::context::ContextConfig {
-                context_window_tokens: 10_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            estimator,
-        )
-        .expect("engine");
         let host = RuntimeClientHost::with_probe(
             RuntimeClientHostConfig {
                 agent_id: AgentId::new("agent-a"),
-                model: "scripted".to_owned(),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                reasoning: ReasoningEffort::Medium,
-                max_output_tokens: 512,
+                model: crate::model::fixture::scripted_session_model(adapter.clone()),
                 timezone: None,
-                adapter: adapter.clone(),
                 context: RuntimeClientContextConfig {
-                    engine,
-                    summarizer: Arc::new(NeverSummarizes),
+                    policy: crate::context::SessionContextPolicy {
+                        reserve_tokens: 0,
+                        keep_recent_tokens: 0,
+                        summary_output_cap: None,
+                    },
+                    estimator,
                     checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                     status_composer: composer(),
                 },

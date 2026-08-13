@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
+use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
     AttemptId, CapabilityRevision, ConversationId, MessageId, SkillId, SkillVersionId, ToolCallId,
@@ -71,6 +72,18 @@ pub struct RuntimeClientSnapshot {
     pub status: Option<AgentStatusView>,
     /// The active capability projection.
     pub capabilities: CapabilityView,
+    /// The redacted session model state: the authoritative *desired*
+    /// configuration and its resolution.
+    ///
+    /// This is deliberately distinct from
+    /// [`RuntimeClientAttempt::model`], which is the immutable snapshot an
+    /// already-admitted attempt froze. While an attempt on model A runs and
+    /// the session has been switched to model B, this section truthfully
+    /// shows B and the attempt section truthfully shows A.
+    ///
+    /// No credential, adapter object, provider HTTP client, or
+    /// synchronization identity appears here.
+    pub model: SessionModelView,
 }
 
 /// The external attempt view of the Runtime Client projection.
@@ -97,6 +110,12 @@ pub struct RuntimeClientAttempt {
     /// order.
     #[serde(default)]
     pub foreground: Vec<ForegroundToolExecution>,
+    /// The immutable model snapshot this attempt was admitted with.
+    ///
+    /// A client never has to infer "which model is this attempt actually
+    /// using" from event ordering: the answer is here for the attempt's
+    /// whole lifetime, even after the session moved on to another model.
+    pub model: Box<AttemptModelView>,
 }
 
 /// The externally meaningful phase of one attempt.

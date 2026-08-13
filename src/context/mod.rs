@@ -29,13 +29,15 @@ pub mod tokens;
 
 use std::sync::Arc;
 
-use crate::model::adapter::ModelAdapter;
+use crate::model::session::AttemptModelSnapshot;
 
 pub use checkpoint::{
     ContextBoundary, ContextCheckpoint, ContextCheckpointStore, InMemoryCheckpointStore,
     summary_message_id,
 };
-pub use engine::{CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine};
+pub use engine::{
+    CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine, SessionContextPolicy,
+};
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
 pub use status::{
@@ -45,7 +47,7 @@ pub use status::{
 };
 pub use summarizer::{
     ContextSummarizer, ModelBackedSummarizer, SplitTurnSummaryInput, SummaryInputItem,
-    SummaryModelConfig, SummaryRequest,
+    SummaryRequest,
 };
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ProviderObservedInput, TokenEstimator,
@@ -59,11 +61,12 @@ pub use tokens::{
 /// integration point. The summary service and checkpoint store are shared
 /// (cheaply clonable) so one store can be reused across attempts of one
 /// conversation.
-pub struct ContextRuntime<'a> {
-    /// The deterministic context engine.
+pub struct ContextRuntime {
+    /// The deterministic context engine, configured for this attempt's
+    /// model context window.
     pub engine: ContextEngine,
     /// The provider-neutral summary service.
-    pub summarizer: Arc<dyn ContextSummarizer + 'a>,
+    pub summarizer: Arc<dyn ContextSummarizer>,
     /// The checkpoint persistence abstraction.
     pub checkpoint_store: Arc<dyn ContextCheckpointStore>,
     /// The Agent Status composer: the structured status sections and the
@@ -72,29 +75,51 @@ pub struct ContextRuntime<'a> {
     pub status_composer: AgentStatusComposer,
 }
 
-impl<'a> ContextRuntime<'a> {
-    /// Creates a context runtime bundle with the default Agent Status
-    /// composer (system clock, mandatory temporal section only).
-    #[must_use]
-    pub fn new(
-        engine: ContextEngine,
-        summarizer: Arc<dyn ContextSummarizer + 'a>,
+impl ContextRuntime {
+    /// Creates the production context runtime of one admitted attempt.
+    ///
+    /// The engine's context window comes from the attempt's **immutable
+    /// model snapshot**, never from a window captured at process start, and
+    /// the summarizer is derived from that same snapshot's frozen summary
+    /// policy. There is deliberately no production path that supplies an
+    /// unrelated summarizer beside the attempt's model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an engine construction error when the derived configuration
+    /// leaves no positive effective input budget.
+    pub fn for_attempt(
+        policy: SessionContextPolicy,
+        estimator: Arc<dyn TokenEstimator>,
         checkpoint_store: Arc<dyn ContextCheckpointStore>,
-    ) -> Self {
-        Self {
+        status_composer: AgentStatusComposer,
+        model: &AttemptModelSnapshot,
+    ) -> Result<Self, ContextError> {
+        let engine = ContextEngine::new(
+            policy.config_for_window(model.primary().context_window()),
+            estimator,
+        )?;
+        let summary = match policy.summary_output_cap {
+            Some(cap) => model.summary_invocation().with_output_cap(cap),
+            None => model.summary_invocation().clone(),
+        };
+        Ok(Self {
             engine,
-            summarizer,
+            summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
             checkpoint_store,
-            status_composer: AgentStatusComposer::default(),
-        }
+            status_composer,
+        })
     }
 
-    /// Creates a context runtime bundle with an explicit Agent Status
-    /// composer.
+    /// Creates a context runtime bundle over an explicit summary service.
+    ///
+    /// This is the narrow deterministic seam tests use to observe compaction
+    /// without a provider; it is not a production configuration mode, and
+    /// production composition never calls it.
     #[must_use]
-    pub fn with_status_composer(
+    pub fn with_summarizer(
         engine: ContextEngine,
-        summarizer: Arc<dyn ContextSummarizer + 'a>,
+        summarizer: Arc<dyn ContextSummarizer>,
         checkpoint_store: Arc<dyn ContextCheckpointStore>,
         status_composer: AgentStatusComposer,
     ) -> Self {
@@ -104,25 +129,5 @@ impl<'a> ContextRuntime<'a> {
             checkpoint_store,
             status_composer,
         }
-    }
-
-    /// Creates a production runtime bundle backed by the canonical model
-    /// adapter: the model-backed summarizer shares the execution's adapter
-    /// and model configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an engine construction error for an impossible context
-    /// configuration.
-    pub fn model_backed(
-        config: ContextConfig,
-        estimator: Arc<dyn TokenEstimator>,
-        adapter: &'a dyn ModelAdapter,
-        summary_config: SummaryModelConfig,
-        checkpoint_store: Arc<dyn ContextCheckpointStore>,
-    ) -> Result<Self, ContextError> {
-        let engine = ContextEngine::new(config, estimator)?;
-        let summarizer = Arc::new(ModelBackedSummarizer::new(adapter, summary_config));
-        Ok(Self::new(engine, summarizer, checkpoint_store))
     }
 }

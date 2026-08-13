@@ -7,7 +7,8 @@ use crate::message::types::{AgentContentBlock, MessageBlock, UserContentBlock};
 use crate::model::adapter::validation::ValidatedTools;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::finish::ModelFinishReason;
-use crate::model::types::{ModelUsage, ReasoningEffort, UsageDetails};
+use crate::model::invocation::finalize_provider_request;
+use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 use crate::runtime::identity::ToolId;
 
@@ -170,7 +171,13 @@ fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>) {
     }
 }
 
-/// The request body sent to `/v1/messages`.
+/// The runtime-owned structural part of the request body sent to
+/// `/v1/messages`.
+///
+/// Only fields rustX owns semantically appear here. Provider sampling and
+/// reasoning fields (`thinking`, `output_config`, `temperature`, …) are
+/// *not* modelled: they arrive as the request's opaque effective
+/// `requestParams` and are shallow-overlaid onto the serialized object.
 #[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct WireRequest {
     pub model: String,
@@ -180,19 +187,7 @@ pub(crate) struct WireRequest {
     pub system: Option<Vec<WireTextBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<WireTool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_config: Option<WireOutputConfig>,
     pub stream: bool,
-}
-
-/// The `output_config` request object; only the rustX-supported `effort`
-/// level is ever written. This wire representation is private to the
-/// Anthropic adapter.
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WireOutputConfig {
-    pub effort: &'static str,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -215,45 +210,31 @@ pub(crate) struct WireTool {
     pub input_schema: serde_json::Value,
 }
 
-/// Translates a canonical request into the Anthropic wire request.
+/// Translates a canonical request into the final Anthropic request JSON.
 ///
-/// Current Anthropic semantics separate the two controls: `thinking` selects
-/// the thinking mode (`adaptive`) and `output_config.effort` steers how much
-/// work the model puts into the response. `low` / `medium` / `high` are
-/// `output_config.effort` values, never `thinking.display` values, and
-/// `Minimal` is rejected because the provider exposes no exact semantic
-/// match.
+/// Canonical translation produces the typed runtime-owned [`WireRequest`];
+/// it is then serialized to a JSON object and shallow-overlaid with the
+/// request's effective opaque `requestParams` under the protected-key
+/// contract. No `thinking` or `output_config` field is ever synthesized:
+/// whatever the selected reasoning profile configured is exactly what
+/// reaches the wire, and a model whose profile configures nothing sends
+/// nothing.
 pub(crate) fn translate_request(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
-) -> Result<WireRequest, ModelError> {
-    let (output_config, thinking) = match request.reasoning {
-        ReasoningEffort::Minimal => {
-            return Err(ModelError {
-                kind: ModelErrorKind::Unsupported,
-                message: "Anthropic cannot represent ReasoningEffort::Minimal; it is not \
-                          remapped to another effort level"
-                    .to_owned(),
-                retry_after_ms: None,
-                provider_code: None,
-            });
-        }
-        ReasoningEffort::Low => (
-            Some(WireOutputConfig { effort: "low" }),
-            serde_json::json!({"type": "adaptive"}),
-        ),
-        ReasoningEffort::Medium => (
-            Some(WireOutputConfig { effort: "medium" }),
-            serde_json::json!({"type": "adaptive"}),
-        ),
-        ReasoningEffort::High => (
-            Some(WireOutputConfig { effort: "high" }),
-            serde_json::json!({"type": "adaptive"}),
-        ),
-    };
-
+) -> Result<serde_json::Value, ModelError> {
     let (system, messages) = translate_messages(request, tools)?;
 
+    if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
+        return Err(ModelError {
+            kind: ModelErrorKind::Unsupported,
+            message: "the effective model capabilities do not include tool calls; \
+                      tool definitions are never sent to a text-only model"
+                .to_owned(),
+            retry_after_ms: None,
+            provider_code: None,
+        });
+    }
     let tools: Vec<WireTool> = request
         .tools
         .iter()
@@ -264,16 +245,25 @@ pub(crate) fn translate_request(
         })
         .collect();
 
-    Ok(WireRequest {
-        model: request.model.clone(),
-        max_tokens: request.max_output_tokens,
+    let wire = WireRequest {
+        model: request.model().to_owned(),
+        max_tokens: request.max_output_tokens(),
         messages,
         system: (!system.is_empty()).then_some(system),
         tools: (!tools.is_empty()).then_some(tools),
-        thinking: Some(thinking),
-        output_config,
         stream: true,
-    })
+    };
+    let value = serde_json::to_value(&wire).map_err(|error| ModelError {
+        kind: ModelErrorKind::InvalidRequest,
+        message: format!("failed to serialize the Anthropic request: {error}"),
+        retry_after_ms: None,
+        provider_code: None,
+    })?;
+    finalize_provider_request(
+        value,
+        request.request_params(),
+        ModelProtocol::AnthropicMessages,
+    )
 }
 
 /// Translates the canonical message list into Anthropic wire messages and

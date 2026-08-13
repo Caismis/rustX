@@ -8,6 +8,19 @@
 //!
 //! Chat Completions has no Responses-style continuation: the adapter rejects
 //! any non-`None` canonical continuation state before executing.
+//!
+//! # Opaque request parameters
+//!
+//! Canonical translation still uses the typed SDK request builder. Before
+//! sending, the typed request is serialized to a `serde_json::Value`,
+//! required to be an object, checked against the runtime-owned protected
+//! wire keys, and shallow-overlaid with the request's effective
+//! `requestParams`. The resulting value is sent through the SDK's BYOT
+//! streaming entry point, so there is exactly one HTTP implementation and no
+//! invented `extra_body` nesting level.
+//!
+//! No reasoning field is ever synthesized: whatever the selected reasoning
+//! profile configured is exactly what appears on the wire.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -24,8 +37,7 @@ use async_openai::types::chat::{
     ChatCompletionRequestToolMessageContentPart, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
     ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionTools, CompletionUsage,
-    CreateChatCompletionRequest, CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
-    ReasoningEffort,
+    CreateChatCompletionRequestArgs, FunctionCall, FunctionObject,
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -42,8 +54,10 @@ use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::catalog::ChatStreamUsage;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
+use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::ToolCallId;
@@ -65,7 +79,7 @@ impl OpenAiChatCompletionsAdapter {
     /// Creates the adapter from rustX-owned configuration.
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
-        let (api_key, api_base, _responses_storage, http_client) = config.into_parts();
+        let (api_key, api_base, http_client) = config.into_parts();
         Self {
             client: build_client(&api_key, &api_base, http_client),
         }
@@ -253,18 +267,18 @@ fn cancelled_error() -> ModelError {
 /// Phase machine driving one adapter invocation.
 ///
 /// The `Preparing` variant is deliberately larger than the others: it owns
-/// the typed request and the normalizer until the provider stream opens.
+/// the final request JSON and the normalizer until the provider stream opens.
 #[allow(clippy::large_enum_variant)]
 enum ChatPhase {
     Preparing {
         client: Client<OpenAIConfig>,
-        request: CreateChatCompletionRequest,
+        request: serde_json::Value,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
     Opening {
         client: Client<OpenAIConfig>,
-        request: CreateChatCompletionRequest,
+        request: serde_json::Value,
         normalizer: ChatStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -537,33 +551,60 @@ fn provider_error(message: String) -> ModelError {
     }
 }
 
-/// Translates a canonical request into a typed Chat Completions request.
-fn translate_request(request: &ModelRequest) -> Result<CreateChatCompletionRequest, ModelError> {
+/// Translates a canonical request into the final Chat Completions request
+/// JSON.
+///
+/// Canonical translation uses the typed SDK builder; the runtime-owned
+/// structural fields are then written explicitly onto the serialized object
+/// (including the compat-selected max-token spelling), and the effective
+/// opaque request parameters are shallow-overlaid last under the
+/// protected-key contract.
+fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
     let messages = translate_messages(request)?;
     let mut builder = CreateChatCompletionRequestArgs::default();
-    builder
-        .model(request.model.clone())
-        .messages(messages)
-        .stream_options(ChatCompletionStreamOptions {
+    builder.model(request.model().to_owned()).messages(messages);
+    if request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported {
+        builder.stream_options(ChatCompletionStreamOptions {
             include_usage: Some(true),
             include_obfuscation: None,
         });
-    builder.max_completion_tokens(request.max_output_tokens);
-    builder.reasoning_effort(match request.reasoning {
-        crate::model::types::ReasoningEffort::Minimal => ReasoningEffort::Minimal,
-        crate::model::types::ReasoningEffort::Low => ReasoningEffort::Low,
-        crate::model::types::ReasoningEffort::Medium => ReasoningEffort::Medium,
-        crate::model::types::ReasoningEffort::High => ReasoningEffort::High,
-    });
+    }
+    // Tool definitions are only sent to a model whose effective capabilities
+    // include tool calls; the runtime never compiles tools for a text-only
+    // model, and this is the adapter-side guard for the same invariant.
     if !request.tools.is_empty() {
+        if !request.invocation.capabilities.tool_calls {
+            return Err(unsupported(
+                "the effective model capabilities do not include tool calls; \
+                 tool definitions are never sent to a text-only model",
+            ));
+        }
         builder.tools(translate_tools(&request.tools));
     }
-    builder.build().map_err(|e| ModelError {
+    let typed = builder.build().map_err(|e| ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: format!("failed to build Chat Completions request: {e}"),
         retry_after_ms: None,
         provider_code: None,
-    })
+    })?;
+    let mut value = serde_json::to_value(&typed).map_err(|e| ModelError {
+        kind: ModelErrorKind::InvalidRequest,
+        message: format!("failed to serialize the Chat Completions request: {e}"),
+        retry_after_ms: None,
+        provider_code: None,
+    })?;
+    // Runtime-owned structural fields: streaming is always on, and exactly
+    // one max-token spelling is written, chosen by the model's compat
+    // metadata. Both spellings are protected, so no request parameter can add
+    // a second contradictory maximum.
+    value["stream"] = serde_json::Value::Bool(true);
+    value[request.invocation.compat.chat_max_tokens_field.wire_name()] =
+        request.max_output_tokens().into();
+    finalize_provider_request(
+        value,
+        request.request_params(),
+        ModelProtocol::OpenAiChatCompletions,
+    )
 }
 
 /// Translates the canonical message list into typed Chat Completions

@@ -45,6 +45,8 @@ use serde::{Deserialize, Serialize};
 use super::event::RuntimeClientEvent;
 use super::snapshot::{CapabilityView, RuntimeClientSnapshot};
 use crate::message::types::UserContentBlock;
+use crate::model::catalog::ModelCatalogView;
+use crate::model::session::{SessionModelConfig, SessionModelView};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
 
@@ -212,6 +214,34 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
+    /// Read the safe public model catalog: which models and reasoning
+    /// profiles this runtime can select.
+    ///
+    /// This exists so a client never reads `models.json` itself. The result
+    /// carries no credential, no adapter internal, and no compat
+    /// implementation object.
+    ModelCatalogGet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Read the authoritative session model state.
+    ModelGet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+    },
+    /// Replace the authoritative session model configuration.
+    ///
+    /// This is a whole-state replacement, never a patch. Validation is
+    /// transactional: an invalid update changes nothing and publishes
+    /// nothing. A valid update may occur while an attempt is running; it
+    /// affects **future admissions only**, and the running attempt keeps the
+    /// model it froze at its own admission.
+    ModelSet {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The complete desired session model configuration.
+        config: Box<SessionModelConfig>,
+    },
     /// Inspect one background execution.
     BackgroundStatus {
         /// Attachment-scoped request id.
@@ -257,6 +287,9 @@ impl RuntimeClientRequest {
             | Self::SnapshotGet { id, .. }
             | Self::SubscribeEvents { id, .. }
             | Self::CapabilityGet { id, .. }
+            | Self::ModelCatalogGet { id, .. }
+            | Self::ModelGet { id, .. }
+            | Self::ModelSet { id, .. }
             | Self::BackgroundStatus { id, .. }
             | Self::BackgroundCancel { id, .. }
             | Self::Detach { id, .. }
@@ -274,6 +307,9 @@ impl RuntimeClientRequest {
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
             Self::CapabilityGet { .. } => "capability_get",
+            Self::ModelCatalogGet { .. } => "model_catalog_get",
+            Self::ModelGet { .. } => "model_get",
+            Self::ModelSet { .. } => "model_set",
             Self::BackgroundStatus { .. } => "background_status",
             Self::BackgroundCancel { .. } => "background_cancel",
             Self::Detach { .. } => "detach",
@@ -348,6 +384,24 @@ pub enum RuntimeClientResult {
         /// The deterministic active capability projection.
         capabilities: CapabilityView,
     },
+    /// `model_catalog_get` succeeded: the safe selectable-model view.
+    ModelCatalog {
+        /// The bounded public catalog view.
+        catalog: ModelCatalogView,
+    },
+    /// `model_get` succeeded: the authoritative session model state.
+    Model {
+        /// The redacted session model view.
+        model: Box<SessionModelView>,
+    },
+    /// `model_set` succeeded: the update was applied and published.
+    ///
+    /// The result carries the *session* state after the update. It never
+    /// implies that a running attempt changed model.
+    ModelSet {
+        /// The redacted session model view after the update.
+        model: Box<SessionModelView>,
+    },
     /// `background_status` succeeded.
     BackgroundStatus {
         /// The canonical registry snapshot of the execution.
@@ -417,6 +471,15 @@ pub enum RuntimeClientError {
         /// Human-readable detail.
         message: String,
     },
+    /// A model configuration update could not be resolved.
+    ///
+    /// The update was rejected as a whole: no session state changed and no
+    /// model-configuration event was published. The message never carries a
+    /// credential.
+    InvalidModelConfiguration {
+        /// Human-readable detail.
+        message: String,
+    },
     /// The Runtime Client observation stream is exhausted.
     ProjectionExhausted,
     /// A runtime-internal failure prevented the operation; no provider
@@ -454,6 +517,8 @@ mod tests {
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
+use crate::model::catalog::ModelCatalogView;
+use crate::model::session::{SessionModelConfig, SessionModelView};
     use crate::runtime::identity::{AttemptId, ToolExecutionId};
     use crate::runtime_client::event::RuntimeClientEvent;
 

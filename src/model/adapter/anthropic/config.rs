@@ -1,4 +1,12 @@
 //! RustX-owned configuration for the Anthropic Messages adapter.
+//!
+//! # The endpoint is mandatory
+//!
+//! There is deliberately **no** default `https://api.anthropic.com`. A
+//! provider binding is constructible only with an explicit base URL, which
+//! always originates from the validated model catalog
+//! ([`crate::model::catalog`]). No provider *name* can therefore select an
+//! official network endpoint.
 
 use reqwest::Client as ReqwestClient;
 
@@ -14,23 +22,20 @@ pub struct AnthropicAdapterConfig {
 }
 
 impl AnthropicAdapterConfig {
-    /// Creates a configuration for the default Anthropic API with the given
-    /// API key.
+    /// Creates a configuration from an explicit credential and endpoint.
+    ///
+    /// Both arguments are mandatory: there is no implicit official endpoint
+    /// and no credential discovery. The `anthropic-version` request header
+    /// keeps a pinned default because it is a protocol version, not an
+    /// endpoint.
     #[must_use]
-    pub fn new(api_key: impl Into<String>) -> Self {
+    pub fn new(api_key: impl Into<String>, api_base: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            api_base: "https://api.anthropic.com".to_owned(),
+            api_base: api_base.into(),
             anthropic_version: "2023-06-01".to_owned(),
             http_client: None,
         }
-    }
-
-    /// Overrides the provider API base URL.
-    #[must_use]
-    pub fn with_api_base(mut self, api_base: impl Into<String>) -> Self {
-        self.api_base = api_base.into();
-        self
     }
 
     /// Overrides the `anthropic-version` request header.
@@ -42,8 +47,10 @@ impl AnthropicAdapterConfig {
 
     /// Injects an HTTP client instead of building a default one.
     ///
-    /// This is the test seam used by deterministic tests that point the
-    /// adapter at a local fixture server; production callers do not need it.
+    /// This is the narrow test seam used by deterministic tests that point
+    /// the adapter at a local fixture server. It changes transport only: the
+    /// endpoint and credential remain explicit, so it is not a second
+    /// production configuration mode.
     #[must_use]
     pub fn with_http_client(mut self, client: ReqwestClient) -> Self {
         self.http_client = Some(client);

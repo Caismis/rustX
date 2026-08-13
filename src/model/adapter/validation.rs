@@ -1,16 +1,19 @@
 //! Deterministic local capability validation for model requests.
 //!
-//! M2 does not invent a mutable provider model catalog and performs no
-//! network capability discovery. It validates what rustX can know locally
-//! from the canonical request itself: protocol agreement, continuation
-//! variant agreement, and tool identity integrity. Provider-specific
-//! restrictions that cannot be known locally surface later as normalized
-//! `InvalidRequest` or `Unsupported` provider errors.
+//! This is the runtime/model invocation boundary: everything rustX can know
+//! locally is decided here, **before** a provider request is opened, so the
+//! provider is never the first validator of a known rustX mismatch. It
+//! validates protocol agreement, effective-capability agreement with the
+//! canonical content of the request, continuation variant agreement, and
+//! tool identity integrity. Provider-specific restrictions that cannot be
+//! known locally still surface later as normalized `InvalidRequest` or
+//! `Unsupported` provider errors.
 
 use std::collections::BTreeMap;
 
 use crate::message::types::{InboundKind, MessageBlock};
 use crate::model::error::{ModelError, ModelErrorKind};
+use crate::model::invocation::validate_content_modalities;
 use crate::model::types::{ModelProtocol, ModelRequest};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::ToolId;
@@ -49,12 +52,27 @@ pub fn validate_request(
     request: &ModelRequest,
     protocol: ModelProtocol,
 ) -> Result<ValidatedTools, ModelError> {
-    if request.protocol != protocol {
+    if request.protocol() != protocol {
         return Err(invalid_request(format!(
             "request protocol {} does not match adapter protocol {}",
-            serde_name(request.protocol),
+            serde_name(request.protocol()),
             serde_name(protocol)
         )));
+    }
+
+    // Effective-capability agreement is checked before anything else that
+    // could reach the network: content the invocation cannot represent is
+    // rejected here, not by the provider.
+    validate_content_modalities(&request.messages, &request.invocation.capabilities)?;
+    if !request.tools.is_empty() && !request.invocation.capabilities.tool_calls {
+        return Err(ModelError {
+            kind: ModelErrorKind::Unsupported,
+            message: "the effective model capabilities do not include tool calls; \
+                      tool definitions are never sent to a text-only model"
+                .to_owned(),
+            retry_after_ms: None,
+            provider_code: None,
+        });
     }
 
     validate_continuation(request, protocol)?;
@@ -208,14 +226,18 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
-            model: "m".to_owned(),
-            protocol: ModelProtocol::OpenAiResponses,
+            invocation: crate::model::invocation::ModelInvocationConfig {
+                model: "m".to_owned(),
+                protocol: ModelProtocol::OpenAiResponses,
+                max_output_tokens: 512,
+                request_params: crate::model::invocation::RequestParams::new(),
+                capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                compat: crate::model::catalog::ModelCompat::default(),
+            },
             messages: Vec::new(),
             tools: Vec::new(),
             agent_status: None,
             skill_catalog: None,
-            reasoning: crate::model::types::ReasoningEffort::Medium,
-            max_output_tokens: 512,
             continuation: None,
         }
     }
@@ -232,7 +254,7 @@ mod tests {
     #[test]
     fn protocol_mismatch_is_invalid_request() {
         let mut r = request();
-        r.protocol = ModelProtocol::AnthropicMessages;
+        r.invocation.protocol = ModelProtocol::AnthropicMessages;
         let error = validate_request(&r, ModelProtocol::OpenAiResponses).expect_err("must fail");
         assert_eq!(error.kind, ModelErrorKind::InvalidRequest);
     }
@@ -248,7 +270,7 @@ mod tests {
             }),
         ] {
             let mut r = request();
-            r.protocol = ModelProtocol::OpenAiChatCompletions;
+            r.invocation.protocol = ModelProtocol::OpenAiChatCompletions;
             r.continuation = Some(state);
             let error =
                 validate_request(&r, ModelProtocol::OpenAiChatCompletions).expect_err("must fail");
@@ -271,7 +293,7 @@ mod tests {
     #[test]
     fn anthropic_rejects_non_anthropic_continuation() {
         let mut r = request();
-        r.protocol = ModelProtocol::AnthropicMessages;
+        r.invocation.protocol = ModelProtocol::AnthropicMessages;
         r.continuation = Some(ProviderContinuationState::OpenAiResponses(
             OpenAiResponsesContinuation::Stateless { items: Vec::new() },
         ));
