@@ -995,6 +995,20 @@ semantic normalization boundary. The frozen invariants:
   background, or capability state moves. Observer installation is
   crate-private, so no external caller can replace the Runtime Client
   observer by another route.
+- **The `ConversationToolRuntime` is the one conversation authority at the
+  Runtime Client host boundary.** `RuntimeClientHostConfig` carries no
+  conversation id: `RuntimeClientHost::new` derives the host's conversation
+  identity from `ConversationToolRuntime::conversation_id`, and every
+  conversation-scoped value the host publishes or derives — the projection's
+  conversation, the `initialized` result, generated inbound message ids,
+  generated attempt ids, and the `conversation_id` of every
+  `AgentExecutionRequest` it issues — is that one identity. A host whose
+  conversation identity disagrees with the runtime it coordinates is
+  therefore unrepresentable rather than rejected by an equality check, so an
+  admitted attempt can never fail `AgentExecution::new` with
+  `MailboxError::ConversationMismatch` because of host configuration. The
+  capability coordinator is a separate authoritative identity and is still
+  validated explicitly against the tool runtime.
 - **Runtime Client host lifetime is not attachment lifetime.** Reconnect
   replaces the attachment on the same host — detach, then a fresh endpoint
   `initialize` with a new `AttachmentId` — and never reconstructs the host.

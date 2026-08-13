@@ -11,6 +11,12 @@
 //! construction leaves no trace, and that the binding is a lifetime
 //! binding rather than a lease.
 //!
+//! They also pin the companion ownership invariant: the
+//! `ConversationToolRuntime` is the *one* conversation authority at this
+//! boundary. `RuntimeClientHostConfig` has no conversation id field, so the
+//! host derives its identity from the runtime it coordinates and cannot be
+//! configured to name a different conversation.
+//!
 //! All synchronization is exact; no sleep participates in any proof.
 
 #[path = "common/mod.rs"]
@@ -90,7 +96,6 @@ fn config(
     )
     .expect("engine");
     RuntimeClientHostConfig {
-        conversation_id: runtime.conversation_id().clone(),
         agent_id: AgentId::new("agent-a"),
         model: "scripted".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,
@@ -134,6 +139,63 @@ fn write_skill(workspace: &Path, name: &str) {
         format!("---\nname: {name}\ndescription: \"a binding probe skill\"\n---\nbody\n"),
     )
     .expect("SKILL.md");
+}
+
+/// A background tool execution that never settles on its own: it runs until
+/// its own cancellation fires, so the published record stays observable.
+struct ParkedBackgroundTool;
+
+impl rustx::tools::executor::ToolExecutor for ParkedBackgroundTool {
+    fn execute<'a>(
+        &'a self,
+        _invocation: rustx::tools::types::ToolInvocation,
+        context: rustx::tools::executor::ToolExecutionContext<'a>,
+    ) -> futures_util::future::BoxFuture<'a, rustx::tools::types::ToolExecutionResult> {
+        Box::pin(async move {
+            context.cancellation.cancelled().await;
+            rustx::tools::types::ToolExecutionResult {
+                status: rustx::tools::types::ToolExecutionStatus::Cancelled {
+                    reason: rustx::runtime::types::CancellationReason::UserRequested,
+                },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+            }
+        })
+    }
+}
+
+/// Commits one authoritative background dispatch on the runtime's registry
+/// and returns its execution identity. The record is published under the
+/// registry's ownership commit, before this returns.
+fn dispatch_background(
+    runtime: &ConversationToolRuntime,
+) -> rustx::runtime::identity::ToolExecutionId {
+    let executor: Arc<dyn rustx::tools::executor::ToolExecutor> = Arc::new(ParkedBackgroundTool);
+    let invocation = rustx::tools::types::ToolInvocation {
+        call_id: rustx::runtime::identity::ToolCallId::new("call-binding-seam"),
+        tool_id: rustx::runtime::identity::ToolId::new("tool-binding-seam"),
+        tool_name: "binding-seam".to_owned(),
+        mode: rustx::tools::types::ToolInvocationMode::Background,
+        arguments: serde_json::json!({}),
+    };
+    let registry = runtime.background();
+    let prepared = registry
+        .prepare_dispatch(
+            &invocation,
+            &executor,
+            rustx::tools::environment::ToolEnvironment::new(),
+        )
+        .expect("prepare background dispatch");
+    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+        outcome
+    else {
+        panic!("the background dispatch is accepted");
+    };
+    execution_id
 }
 
 fn text(text: &str) -> Vec<rustx::message::types::UserContentBlock> {
@@ -247,6 +309,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         .await
         .expect("prepare");
     let committed = bundle.coordinator.commit(candidate).expect("commit");
+    // The background registry transition is published under the registry's
+    // ownership commit, so its arrival at the observer is exact.
+    let background_id = dispatch_background(&bundle.runtime);
 
     let (observed, _) = host_a.snapshot().expect("snapshot");
     assert!(
@@ -261,6 +326,13 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         observed.capabilities.revision,
         committed.revision(),
         "the capability seam still reaches host A"
+    );
+    assert!(
+        observed
+            .background
+            .iter()
+            .any(|execution| execution.execution_id == background_id),
+        "the background seam still reaches host A"
     );
 
     // Host A still coordinates execution end to end after the rejection.
@@ -392,4 +464,110 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
         "reconnect receives a fresh attachment identity"
     );
     host.snapshot().expect("the host served both attachments");
+}
+
+/// The `ConversationToolRuntime` is the one conversation authority at the
+/// Runtime Client host boundary.
+///
+/// `RuntimeClientHostConfig` carries no conversation id of its own — the
+/// field this test would otherwise have to set to a *different* conversation
+/// does not exist — so the host derives its identity from the runtime it
+/// coordinates. This test pins the runtime consequence of that structural
+/// absence: everything the host reports, publishes, or generates names the
+/// runtime's conversation, including the `AgentExecutionRequest` of an
+/// admitted attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
+    let bundle = new_bundle("conv-37-authority").await;
+    let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
+    let host = RuntimeClientHost::new(config(
+        bundle.runtime.clone(),
+        bundle.coordinator.clone(),
+        model.clone(),
+    ))
+    .expect("host");
+    let authority = bundle.runtime.conversation_id().clone();
+
+    // The host reports exactly the tool runtime's conversation.
+    assert_eq!(host.conversation_id(), &authority);
+
+    // `initialize` publishes that same identity, over the protocol path a
+    // transport uses.
+    let endpoint = host.endpoint();
+    let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
+        id: rustx::runtime_client::RequestId::new(1),
+        protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+    });
+    let Some(RuntimeClientResult::Initialized {
+        conversation_id, ..
+    }) = response.result
+    else {
+        panic!("initialized");
+    };
+    assert_eq!(
+        conversation_id, authority,
+        "initialize reports the tool runtime's conversation"
+    );
+    // Detach, so the attachment below is admitted on the same host.
+    drop(endpoint);
+
+    let (attachment, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let subscription = attachment
+        .subscribe_events(rustx::runtime_client::RuntimeClientCursor::new(0))
+        .expect("subscribe");
+    let (snapshot, _) = host.snapshot().expect("snapshot");
+    assert_eq!(
+        snapshot.conversation_id(),
+        &authority,
+        "the projection read model carries the tool runtime's conversation"
+    );
+
+    // A client-submitted inbound message is allocated in that identity
+    // domain.
+    let response = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+        id: rustx::runtime_client::RequestId::new(2),
+        content: text("go"),
+    });
+    let Some(RuntimeClientResult::InboundAccepted { message_id, .. }) = response.result else {
+        panic!("inbound accepted");
+    };
+    assert_eq!(
+        message_id.as_str(),
+        format!("{authority}-inbound-1"),
+        "generated inbound message ids are scoped to the one conversation"
+    );
+
+    // The attempt admitted for it is allocated in the same domain, and it
+    // reaches settlement: `AgentExecution::new` is handed the very runtime
+    // the request's conversation came from, so it cannot reject the request
+    // with `MailboxError::ConversationMismatch` and the spawned attempt task
+    // cannot panic after admission.
+    let settled_attempt = loop {
+        // Liveness guard only: the delivery wait itself is exact.
+        let delivery =
+            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
+                .await
+                .expect("the stream must not stall");
+        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
+            panic!("subscription stays open, got {delivery:?}");
+        };
+        if let RuntimeClientEvent::AttemptSettled { attempt_id, .. } = event.event {
+            break attempt_id;
+        }
+    };
+    assert_eq!(
+        settled_attempt.as_str(),
+        format!("{authority}-attempt-0"),
+        "generated attempt ids are scoped to the one conversation"
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "the attempt actually ran against the model"
+    );
+    let (settled, _) = host.snapshot().expect("snapshot");
+    let attempt = settled.attempt.expect("the attempt is projected");
+    assert_eq!(attempt.attempt_id, settled_attempt);
 }

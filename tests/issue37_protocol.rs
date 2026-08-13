@@ -63,7 +63,6 @@ async fn host() -> RuntimeClientHost {
     let adapter: Arc<dyn rustx::model::ModelAdapter> =
         Arc::new(common::fake::FakeModel::new(Vec::new()));
     RuntimeClientHost::new(RuntimeClientHostConfig {
-        conversation_id: tool_runtime.conversation_id().clone(),
         agent_id: AgentId::new("agent-a"),
         model: "scripted".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,

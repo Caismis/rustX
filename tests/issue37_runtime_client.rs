@@ -153,7 +153,6 @@ async fn host(
     )
     .expect("engine");
     let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        conversation_id: tool_runtime.conversation_id().clone(),
         agent_id: AgentId::new("agent-a"),
         model: "scripted".to_owned(),
         protocol: ModelProtocol::OpenAiChatCompletions,

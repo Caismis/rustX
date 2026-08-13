@@ -1298,6 +1298,17 @@ runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
   infallible, so the claim is the ownership-commit boundary and a rejected
   construction has no semantic side effect: no observer is replaced, no
   worker starts, and no mailbox, background, or capability state moves.
+- **One conversation authority.** The `ConversationToolRuntime` owns the
+  `ConversationId`, the canonical mailbox, the authoritative background
+  registry, and the Runtime Client binding identity; the host *derives* its
+  conversation identity from it. `RuntimeClientHostConfig` therefore has no
+  conversation id field of its own — a second configured identity could
+  disagree with the runtime, and a host that coordinates one runtime while
+  naming another conversation would issue `AgentExecutionRequest`s the
+  runtime rejects, after having already admitted the attempt. Structural
+  absence removes that state instead of checking for it. The capability
+  coordinator remains a separate authoritative identity, so it is still
+  validated explicitly against the runtime before the binding claim.
 
   **Host lifetime is not attachment lifetime.** Reconnect replaces the
   attachment on the same host (detach, then a fresh `RuntimeClientEndpoint`

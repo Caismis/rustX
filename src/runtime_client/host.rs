@@ -240,9 +240,16 @@ pub struct RuntimeClientContextConfig {
 }
 
 /// The construction-time configuration of one Runtime Client host.
+///
+/// # One conversation authority
+///
+/// There is deliberately no `conversation_id` field: the
+/// [`ConversationToolRuntime`] is the single authority for the conversation
+/// identity at this boundary, and the host derives its identity from
+/// [`ConversationToolRuntime::conversation_id`]. A host whose conversation
+/// identity disagrees with the runtime it coordinates is therefore not
+/// representable, rather than rejected by an equality check.
 pub struct RuntimeClientHostConfig {
-    /// The conversation this runtime serves.
-    pub conversation_id: ConversationId,
     /// The agent executed by attempts of this runtime.
     pub agent_id: AgentId,
     /// The provider model identifier of every attempt.
@@ -584,7 +591,11 @@ impl HostInner {
             self.context_runtime(),
             &self.tool_runtime,
         )
-        .expect("host construction validated the ownership domains");
+        // Neither rejection is reachable: `conversation_id` *is* the tool
+        // runtime's own identity (the host has no independent conversation
+        // authority to disagree with it), and construction validated the
+        // coordinator against that same runtime.
+        .expect("the host derives its conversation identity from this tool runtime");
         execution.observe(&observer);
         execution.run().await
     }
@@ -709,6 +720,21 @@ impl core::fmt::Debug for RuntimeClientHost {
 impl RuntimeClientHost {
     /// Creates the host and installs the observation seams.
     ///
+    /// # One conversation authority
+    ///
+    /// The conversation identity of the host *is*
+    /// [`ConversationToolRuntime::conversation_id`]. The configuration
+    /// carries no conversation id of its own, so the host's identity, the
+    /// canonical mailbox, the authoritative background registry, and the
+    /// Runtime Client binding identity all name one conversation by
+    /// construction. Every conversation-scoped value this host derives —
+    /// the projection's conversation, the `initialized` result, generated
+    /// inbound message ids, generated attempt ids, and every
+    /// [`AgentExecutionRequest`] it issues — uses that one identity.
+    ///
+    /// The capability coordinator is a *separate* authoritative identity,
+    /// so it is still validated explicitly against the runtime.
+    ///
     /// # One host per runtime identity
     ///
     /// Construction claims the one-time Runtime Client binding of the
@@ -742,14 +768,21 @@ impl RuntimeClientHost {
     /// [`HostConstructionError::Context`] when the context engine
     /// configuration is impossible.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
+        // The one conversation authority at this boundary: every identity
+        // this host publishes or derives comes from the tool runtime it
+        // coordinates, so host and runtime cannot disagree.
+        let conversation_id = config.tool_runtime.conversation_id().clone();
+
         // ---- Fallible validation: nothing below is observable yet. ----
         let snapshot = config.capability.current_snapshot();
-        if snapshot.conversation_id() != config.tool_runtime.conversation_id()
+        // The coordinator is a separate authoritative identity, so it is
+        // still validated explicitly against the runtime's identity.
+        if snapshot.conversation_id() != &conversation_id
             || snapshot.workspace_root() != config.tool_runtime.workspace().root()
         {
             return Err(HostConstructionError::OwnershipMismatch {
                 capability_conversation: snapshot.conversation_id().clone(),
-                runtime_conversation: config.tool_runtime.conversation_id().clone(),
+                runtime_conversation: conversation_id,
             });
         }
 
@@ -761,15 +794,11 @@ impl RuntimeClientHost {
         // a rejected construction must leave no trace, and this is the only
         // place a claim is ever released.
         if !config.tool_runtime.claim_runtime_client() {
-            return Err(HostConstructionError::RuntimeClientAlreadyBound {
-                conversation_id: config.tool_runtime.conversation_id().clone(),
-            });
+            return Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id });
         }
         if !config.capability.claim_runtime_client() {
             config.tool_runtime.release_runtime_client_claim();
-            return Err(HostConstructionError::RuntimeClientAlreadyBound {
-                conversation_id: config.tool_runtime.conversation_id().clone(),
-            });
+            return Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id });
         }
 
         // ---- Infallible wiring: from here construction always succeeds. ----
@@ -781,7 +810,7 @@ impl RuntimeClientHost {
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
         let mut projection = RuntimeClientProjection::new(
-            config.conversation_id.clone(),
+            conversation_id.clone(),
             config.initial_messages.clone(),
             capability_view(&snapshot),
             replay_limit,
@@ -791,7 +820,7 @@ impl RuntimeClientHost {
             projection.apply(Observation::Background(existing));
         }
         let inner = Arc::new(HostInner {
-            conversation_id: config.conversation_id,
+            conversation_id,
             agent_id: config.agent_id,
             model: config.model,
             protocol: config.protocol,
@@ -1758,7 +1787,6 @@ mod tests {
         )
         .expect("context engine");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            conversation_id: conversation_id.clone(),
             agent_id: AgentId::new("agent-a"),
             model: "scripted".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
@@ -3688,7 +3716,6 @@ mod tests {
         )
         .expect("engine");
         let error = RuntimeClientHost::new(RuntimeClientHostConfig {
-            conversation_id: ConversationId::new("conv-host"),
             agent_id: AgentId::new("agent-a"),
             model: "scripted".to_owned(),
             protocol: ModelProtocol::OpenAiChatCompletions,
@@ -3756,7 +3783,6 @@ mod tests {
         .expect("engine");
         let host = RuntimeClientHost::with_probe(
             RuntimeClientHostConfig {
-                conversation_id: conversation_id.clone(),
                 agent_id: AgentId::new("agent-a"),
                 model: "scripted".to_owned(),
                 protocol: ModelProtocol::OpenAiChatCompletions,

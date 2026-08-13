@@ -166,7 +166,6 @@ async fn capability_projection_covers_native_python_and_skills() {
     )
     .expect("engine");
     let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        conversation_id: tool_runtime.conversation_id().clone(),
         agent_id: rustx::runtime::identity::AgentId::new("agent-a"),
         model: "scripted".to_owned(),
         protocol: rustx::model::types::ModelProtocol::OpenAiChatCompletions,
@@ -315,7 +314,6 @@ async fn capability_projection_covers_mcp_origins() {
     )
     .expect("engine");
     let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        conversation_id: tool_runtime.conversation_id().clone(),
         agent_id: rustx::runtime::identity::AgentId::new("agent-a"),
         model: "scripted".to_owned(),
         protocol: rustx::model::types::ModelProtocol::OpenAiChatCompletions,
