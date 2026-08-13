@@ -82,6 +82,43 @@
 //! to do, so the total order of externally visible transitions is the
 //! order in which authoritative subsystems committed them.
 //!
+//! # The ownership graph
+//!
+//! ```text
+//!   semantic owner ────────────────► Arc<HostInner>
+//!   (RuntimeClientHost and its clones, RuntimeAttachment,
+//!    RuntimeClientEndpoint, EventSubscription, a running attempt task)
+//!
+//!   HostInner ──► authoritative subsystems (tool runtime, mailbox,
+//!                 capability coordinator)
+//!             ──► projection state (HostState)
+//!             ──► Arc<PendingObservations>
+//!
+//!   authoritative subsystem ──► Arc<HostObserver>
+//!   HostObserver ─────────────► Weak<HostInner>
+//!
+//!   observation worker ───────► Weak<HostInner>
+//!                         ────► Arc<PendingObservations>
+//! ```
+//!
+//! > **Observation edges are non-owning with respect to
+//! > `RuntimeClientHost`. No observer and no observation worker may extend
+//! > `HostInner`'s lifetime.**
+//!
+//! Installing an observation seam therefore does not create a cycle: a
+//! subsystem owns the observer, but the observer only *observes* the host.
+//! When the last semantic owner is released, `HostInner` is destroyed at
+//! that release — not at process exit — even while the subsystems, their
+//! observer `Arc`s, and the worker task still exist.
+//!
+//! Teardown is one step: [`HostInner`]'s `Drop` closes
+//! [`PendingObservations`], which is the worker's terminal condition. It
+//! takes no host lock, joins nothing, and publishes nothing.
+//!
+//! A running attempt task is a deliberate, *bounded* strong owner: an
+//! admitted attempt must reach settlement, and the task releases the host
+//! when it does.
+//!
 //! # Canonical history ownership
 //!
 //! Between attempts the host owns the canonical conversation history (the
@@ -100,7 +137,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use chrono_tz::Tz;
 
@@ -282,11 +319,24 @@ impl HostState {
 ///
 /// This type is the leaf of the lock graph: it owns one mutex over a
 /// `VecDeque` plus a `Notify` and calls nothing.
+///
+/// It is also the observation worker's rendezvous point. The worker holds
+/// `Arc<PendingObservations>` — never `Arc<HostInner>` across an await — so
+/// this queue, not the host, is what keeps the worker's wait alive. When
+/// `HostInner` is dropped it [`close`](PendingObservations::close)s the
+/// queue, which is the worker's terminal condition.
 struct PendingObservations {
     /// The FIFO observation queue.
     queue: Mutex<VecDeque<Observation>>,
-    /// Wakes the worker task on every push.
+    /// Wakes the worker task on every push and on close.
     notify: tokio::sync::Notify,
+    /// Set exactly once, by `HostInner::drop`. Terminal: no further
+    /// observation is accepted and the worker exits.
+    closed: AtomicBool,
+    /// Test-only worker-exit signal, so worker termination is observable
+    /// deterministically instead of by timeout.
+    #[cfg(test)]
+    worker_exit: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl PendingObservations {
@@ -294,10 +344,18 @@ impl PendingObservations {
         Self {
             queue: Mutex::new(VecDeque::new()),
             notify: tokio::sync::Notify::new(),
+            closed: AtomicBool::new(false),
+            #[cfg(test)]
+            worker_exit: Mutex::new(None),
         }
     }
 
     fn push(&self, observation: Observation) {
+        if self.closed.load(Ordering::Acquire) {
+            // Projection teardown is terminal: never queue an observation
+            // that nothing will ever fold.
+            return;
+        }
         self.queue
             .lock()
             .expect("pending observation queue lock poisoned")
@@ -311,6 +369,54 @@ impl PendingObservations {
             .lock()
             .expect("pending observation queue lock poisoned");
         queue.drain(..).collect()
+    }
+
+    /// Waits for the next push or for close.
+    ///
+    /// `Notify::notify_one` stores one permit even with no waiter, so a
+    /// push or a close between two waits is never missed.
+    async fn wait(&self) {
+        self.notify.notified().await;
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// The terminal close, performed exactly once by `HostInner::drop`.
+    ///
+    /// No concurrent producer can exist: every producer reaches this queue
+    /// through an upgraded `Arc<HostInner>`, and a live upgrade would have
+    /// prevented the drop that calls this.
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.queue
+            .lock()
+            .expect("pending observation queue lock poisoned")
+            .clear();
+        self.notify.notify_one();
+    }
+
+    /// Installs the test-only worker-exit signal.
+    #[cfg(test)]
+    fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
+        *self
+            .worker_exit
+            .lock()
+            .expect("worker exit probe lock poisoned") = Some(sender);
+    }
+
+    /// Fires the test-only worker-exit signal, once.
+    #[cfg(test)]
+    fn signal_worker_exit(&self) {
+        if let Some(sender) = self
+            .worker_exit
+            .lock()
+            .expect("worker exit probe lock poisoned")
+            .take()
+        {
+            let _ = sender.send(());
+        }
     }
 }
 
@@ -331,10 +437,24 @@ pub(crate) struct HostInner {
     clock: Arc<dyn RuntimeClock>,
     /// The one synchronization boundary.
     state: Mutex<HostState>,
-    /// The mailbox-observation queue (see [`PendingObservations`]).
-    pending: PendingObservations,
+    /// The subsystem-observation queue (see [`PendingObservations`]).
+    ///
+    /// Shared with the observation worker by `Arc`, so the worker can wait
+    /// on it without owning this `HostInner`.
+    pending: Arc<PendingObservations>,
     /// Whether the projection worker task was spawned.
     worker_started: AtomicBool,
+}
+
+/// Releasing the last semantic owner of a host closes its observation
+/// queue, which is the observation worker's terminal condition.
+///
+/// This is the only teardown action: it takes no host lock (the host is
+/// already unreachable), joins nothing, and publishes nothing.
+impl Drop for HostInner {
+    fn drop(&mut self) {
+        self.pending.close();
+    }
 }
 
 impl HostInner {
@@ -370,7 +490,18 @@ impl HostInner {
     /// path always observes queued facts — only promptness for an idle
     /// subscriber does.
     ///
-    /// The worker holds a weak handle and exits when the host is dropped.
+    /// # Lifetime
+    ///
+    /// The worker never owns the host. It captures `Weak<HostInner>` plus
+    /// an `Arc<PendingObservations>` — the minimal wait state — and it
+    /// upgrades the weak handle only inside a folding step, never across
+    /// an await. A parked worker therefore holds no strong reference, so it
+    /// cannot keep a host alive that has no semantic owner left.
+    ///
+    /// Termination is deterministic, not timed: dropping the last
+    /// `Arc<HostInner>` runs `HostInner::drop`, which closes the pending
+    /// queue and wakes the worker; the worker observes the closed queue and
+    /// exits. The upgrade check is a second, independent exit path.
     fn ensure_worker(self: &Arc<Self>) {
         // Construction may happen outside a runtime; a later call from a
         // request path spawns the worker instead.
@@ -381,17 +512,24 @@ impl HostInner {
             return;
         }
         let weak = Arc::downgrade(self);
+        let pending = Arc::clone(&self.pending);
         tokio::spawn(async move {
             loop {
-                let Some(inner) = weak.upgrade() else {
-                    return;
-                };
-                inner.pending.notify.notified().await;
-                let Some(inner) = weak.upgrade() else {
-                    return;
-                };
-                let _state = inner.lock_state();
+                pending.wait().await;
+                if pending.is_closed() {
+                    break;
+                }
+                // The strong handle exists only inside this block, so it is
+                // never held across the await above.
+                {
+                    let Some(inner) = weak.upgrade() else {
+                        break;
+                    };
+                    let _state = inner.lock_state();
+                }
             }
+            #[cfg(test)]
+            pending.signal_worker_exit();
         });
     }
 
@@ -406,9 +544,7 @@ impl HostInner {
         cancellation: &AgentCancellation,
     ) -> crate::agent::AgentExecutionResult {
         let lease = self.capability.acquire_attempt_lease();
-        let observer = HostObserver {
-            inner: self.clone(),
-        };
+        let observer = HostObserver::new(self);
         let request = AgentExecutionRequest {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
@@ -615,12 +751,10 @@ impl RuntimeClientHost {
                 next_attempt_seq: 0,
                 next_inbound_seq: 0,
             }),
-            pending: PendingObservations::new(),
+            pending: Arc::new(PendingObservations::new()),
             worker_started: AtomicBool::new(false),
         });
-        let observer: Arc<HostObserver> = Arc::new(HostObserver {
-            inner: inner.clone(),
-        });
+        let observer: Arc<HostObserver> = Arc::new(HostObserver::new(&inner));
         inner.mailbox.install_observer(observer.clone());
         inner
             .tool_runtime
@@ -1011,18 +1145,44 @@ impl RuntimeClientHost {
 ///   the host worker is woken. These paths never acquire `HostState`.
 /// - [`HostObserver::apply_direct`] — for `AgentExecution`, which holds no
 ///   lock when it observes.
+///
+/// # Lifetime
+///
+/// The observer is **non-owning**. Authoritative subsystems keep it alive
+/// (`Arc<dyn InboundObserver>` and friends are unchanged), but it holds
+/// only a `Weak<HostInner>`, so the edge
+/// `HostInner -> subsystem -> Arc<HostObserver> -> HostInner` is broken:
+/// installing an observation seam never extends a host's lifetime.
+///
+/// Every callback upgrades the weak handle and returns without publishing
+/// when the upgrade fails — the Runtime Client projection simply no longer
+/// exists. That is never an error for the subsystem: the mailbox, the
+/// background registry, and the capability coordinator stay authoritative
+/// whether or not a projection is observing them. The upgrade is transient
+/// and confined to the callback, so an observer can neither resurrect nor
+/// prolong a host.
 pub(crate) struct HostObserver {
-    inner: Arc<HostInner>,
+    host: Weak<HostInner>,
 }
 
 impl HostObserver {
+    /// Creates the non-owning observer of one host.
+    fn new(host: &Arc<HostInner>) -> Self {
+        Self {
+            host: Arc::downgrade(host),
+        }
+    }
+
     /// Applies one observation directly under the host lock, applying
     /// queued pending observations first so total order is preserved.
     ///
     /// Only legal from a caller that holds no authoritative subsystem
     /// lock.
     fn apply_direct(&self, observation: Observation) {
-        let mut state = self.inner.lock_state();
+        let Some(inner) = self.host.upgrade() else {
+            return;
+        };
+        let mut state = inner.lock_state();
         state.projection.apply(observation);
     }
 
@@ -1032,7 +1192,10 @@ impl HostObserver {
     /// This is the only shape legal from a subsystem observer that fires
     /// while its authoritative lock is held.
     fn enqueue(&self, observation: Observation) {
-        self.inner.pending.push(observation);
+        let Some(inner) = self.host.upgrade() else {
+            return;
+        };
+        inner.pending.push(observation);
     }
 }
 
@@ -1230,6 +1393,16 @@ impl RuntimeClientHost {
             .expect("host lock")
             .current_attempt
             .is_some()
+    }
+
+    /// A non-owning handle to the shared host state, for lifetime tests.
+    pub(crate) fn weak_inner(&self) -> Weak<HostInner> {
+        Arc::downgrade(&self.inner)
+    }
+
+    /// Installs the deterministic worker-exit signal, for lifetime tests.
+    pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
+        self.inner.pending.install_worker_exit_probe(sender);
     }
 }
 
@@ -2413,6 +2586,280 @@ mod tests {
             "one authoritative history, extended across the tool turn, the \
              safe-boundary drain, and both attempts"
         );
+    }
+
+    /// Blocks off the runtime until the worker-exit signal arrives.
+    ///
+    /// The signal itself is the correctness proof: it fires only on the
+    /// worker's terminal path. The timeout is an outer liveness guard so a
+    /// regression fails loudly instead of hanging.
+    async fn await_worker_exit(receiver: std::sync::mpsc::Receiver<()>) {
+        tokio::task::spawn_blocking(move || {
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the observation worker must terminate after the host is released");
+        })
+        .await
+        .expect("worker exit task");
+    }
+
+    /// Writes one discoverable Skill package, making the next capability
+    /// candidate a real (non-no-op) commit.
+    fn write_probe_skill(workspace: &std::path::Path, name: &str) {
+        let skill = workspace.join(".agents").join("skills").join(name);
+        std::fs::create_dir_all(&skill).expect("skill dir");
+        std::fs::write(
+            skill.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: \"a probe skill\"\n---\nbody\n"),
+        )
+        .expect("SKILL.md");
+    }
+
+    /// Releasing the last semantic owner destroys `HostInner` and
+    /// terminates the observation worker — deterministically, and without
+    /// depending on process exit.
+    ///
+    /// All three subsystem observation seams are exercised first, so every
+    /// `Arc<HostObserver>` is installed and live at the moment the host is
+    /// released. Under the old strong-`Arc` observer this test could not
+    /// pass: `HostInner -> subsystem -> Arc<HostObserver> -> HostInner` was
+    /// a cycle, and the worker held a strong handle across its await.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn releasing_the_last_owner_destroys_the_host_and_exits_the_worker() {
+        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let HostFixture {
+            _dir: dir,
+            host,
+            coordinator,
+        } = fixture;
+
+        let weak = host.weak_inner();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        host.install_worker_exit_probe(exit_tx);
+
+        // Seam 1: the mailbox observer fires under the mailbox lock.
+        host.inner
+            .mailbox
+            .enqueue(inbound_text("msg-lifetime", "queued"))
+            .expect("enqueue");
+        // Seam 2: the background registry observer fires under the registry
+        // lock.
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = host
+            .inner
+            .tool_runtime
+            .background()
+            .prepare_dispatch(
+                &ToolInvocation {
+                    call_id: ToolCallId::new("call-lifetime"),
+                    tool_id: ToolId::new("tool-bg"),
+                    tool_name: "bg".to_owned(),
+                    mode: ToolInvocationMode::Background,
+                    arguments: serde_json::json!({}),
+                },
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = host
+            .inner
+            .tool_runtime
+            .background()
+            .commit_dispatch(prepared, &CancellationSignal::new())
+        else {
+            panic!("accepted dispatch");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("background runner started");
+        release.notify_one();
+        host.inner
+            .tool_runtime
+            .background()
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        // Seam 3: the capability observer fires under the coordinator lock.
+        write_probe_skill(&dir.path().join("workspace"), "lifetime-skill");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+
+        // Every seam has fired and the projection folded them.
+        let (before, _) = host.snapshot().expect("snapshot");
+        // (The settled background execution also posts its terminal
+        // notification into the same authoritative mailbox.)
+        assert!(
+            before
+                .inbound
+                .pending
+                .iter()
+                .any(|item| item.message.id.as_str() == "msg-lifetime")
+        );
+        assert_eq!(before.background.len(), 1);
+        assert!(
+            before
+                .capabilities
+                .skills
+                .iter()
+                .any(|skill| skill.name == "lifetime-skill")
+        );
+
+        // Release the one semantic owner. The subsystems, their observer
+        // `Arc`s, and the worker task all still exist.
+        drop(host);
+
+        // The worker terminated on its own terminal condition. Once it has,
+        // no strong reference can exist anywhere.
+        await_worker_exit(exit_rx).await;
+        assert_eq!(
+            weak.strong_count(),
+            0,
+            "no strong reference to the host remains"
+        );
+        assert!(
+            weak.upgrade().is_none(),
+            "HostInner is destroyed, not merely unreachable"
+        );
+
+        // The authoritative subsystems outlived the projection, as they
+        // must.
+        drop(coordinator);
+        drop(dir);
+    }
+
+    /// A surviving authoritative subsystem handle neither retains nor
+    /// resurrects the host: its observer no-ops, and its own transitions
+    /// still succeed.
+    ///
+    /// This is the property that makes projection observation distinct from
+    /// subsystem ownership.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_surviving_subsystem_handle_never_retains_the_host() {
+        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let HostFixture {
+            _dir: dir,
+            host,
+            coordinator,
+        } = fixture;
+
+        // Clone subsystem handles out of the host, exactly as an embedder
+        // legitimately may.
+        let mailbox = host.inner.mailbox.clone();
+        let registry = host.inner.tool_runtime.background().clone();
+        let weak = host.weak_inner();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        host.install_worker_exit_probe(exit_tx);
+
+        drop(host);
+        await_worker_exit(exit_rx).await;
+        assert!(weak.upgrade().is_none(), "the host is gone");
+
+        // Authoritative mailbox transition: the observer's upgrade fails and
+        // the seam no-ops, but the mailbox is unaffected.
+        let sequence = mailbox
+            .enqueue(inbound_text("msg-after", "still authoritative"))
+            .expect("the mailbox remains authoritative without a projection");
+        assert_eq!(sequence.get(), 1);
+        let batch = mailbox.drain().expect("the drain still works");
+        assert_eq!(batch.items().len(), 1);
+
+        // Authoritative background transition: same.
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &ToolInvocation {
+                    call_id: ToolCallId::new("call-after"),
+                    tool_id: ToolId::new("tool-bg"),
+                    tool_name: "bg".to_owned(),
+                    mode: ToolInvocationMode::Background,
+                    arguments: serde_json::json!({}),
+                },
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            registry.commit_dispatch(prepared, &CancellationSignal::new())
+        else {
+            panic!("accepted dispatch");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("background runner started");
+        release.notify_one();
+        registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("the registry still settles executions");
+
+        // Authoritative capability transition: same.
+        write_probe_skill(&dir.path().join("workspace"), "after-skill");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        let committed = coordinator
+            .commit(candidate)
+            .expect("the coordinator remains authoritative");
+        assert!(
+            committed
+                .catalog_entries()
+                .iter()
+                .any(|entry| entry.name == "after-skill")
+        );
+
+        // None of those transitions resurrected the host.
+        assert_eq!(weak.strong_count(), 0);
+        assert!(
+            weak.upgrade().is_none(),
+            "an observation seam can never resurrect a destroyed host"
+        );
+    }
+
+    /// Attachment detach is not host destruction: the host survives, the
+    /// attachment slot is released, and a fresh endpoint initializes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn detach_releases_the_attachment_but_never_the_host() {
+        let (_adapter, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), composer()).await;
+        let weak = fixture.host.weak_inner();
+
+        let endpoint = fixture.host.endpoint();
+        let response = endpoint.handle_request(RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        });
+        assert!(response.error.is_none());
+
+        // Dropping the endpoint detaches only that attachment.
+        drop(endpoint);
+        assert!(
+            weak.upgrade().is_some(),
+            "detach is not host destruction while a semantic owner remains"
+        );
+
+        // The host is still usable and the slot is free.
+        fixture
+            .host
+            .snapshot()
+            .expect("the host still serves reads");
+        let reconnected = fixture.host.endpoint();
+        let response = reconnected.handle_request(RuntimeClientRequest::Initialize {
+            id: crate::runtime_client::RequestId::new(1),
+            protocol_version: crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        });
+        assert!(
+            matches!(
+                response.result,
+                Some(RuntimeClientResult::Initialized { .. })
+            ),
+            "reconnect remains possible while the host is owned"
+        );
+
+        // Only releasing the host itself ends its lifetime.
+        drop(reconnected);
+        drop(fixture);
+        assert!(weak.upgrade().is_none(), "the host ends with its owner");
     }
 
     /// The lock-order invariant, made structurally testable: an

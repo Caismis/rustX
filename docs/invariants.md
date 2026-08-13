@@ -984,6 +984,18 @@ semantic normalization boundary. The frozen invariants:
   single-active-attachment admission, `AttachmentId` creation, or
   attachment replacement/rejection semantics, and none requires an
   out-of-band semantic attach operation.
+- **Observation edges are non-owning with respect to the Runtime Client
+  host.** No observer and no observation worker may extend `HostInner`'s
+  lifetime: the concrete observer installed into the mailbox, background
+  registry, and capability coordinator holds a weak host handle, and the
+  observation worker holds a weak host handle plus the queue it waits on,
+  never a strong handle across an await. When the last semantic owner of a
+  `RuntimeClientHost` is released the host and its worker are reclaimed at
+  that release — reclamation never depends on process exit. An observer
+  whose upgrade fails returns without publishing; that is never an error
+  for the authoritative subsystem, which remains authoritative whether or
+  not a projection is observing it, and an observer can neither resurrect
+  nor prolong a destroyed host. Attachment detach is not host destruction.
 - **No authoritative subsystem acquires the host lock.** The mailbox, the
   background registry, and the capability coordinator fire their
   observation seams while holding their own lock; each seam only appends

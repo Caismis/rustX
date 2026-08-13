@@ -1278,6 +1278,41 @@ runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
   shutdown decisions all serialize through it, so snapshot/cursor,
   cancel-current, terminal settlement, and admission linearize by
   synchronization, never by timing.
+- **Ownership: observation edges are non-owning.** The graph is:
+
+  ```text
+  semantic owner ─────────► Arc<HostInner>
+  (RuntimeClientHost and clones, RuntimeAttachment,
+   RuntimeClientEndpoint, EventSubscription, a running attempt task)
+
+  HostInner ──► authoritative subsystems (tool runtime, mailbox,
+                capability coordinator)
+            ──► projection state
+            ──► Arc<PendingObservations>
+
+  authoritative subsystem ──► Arc<HostObserver>
+  HostObserver ─────────────► Weak<HostInner>
+
+  observation worker ───────► Weak<HostInner>
+                       ────► Arc<PendingObservations>
+  ```
+
+  Subsystem observer slots keep owning `Arc<dyn InboundObserver>` and
+  friends; the concrete `HostObserver` is what became non-owning, so
+  installing a seam cannot create the cycle
+  `HostInner -> subsystem -> Arc<HostObserver> -> HostInner`. Each callback
+  upgrades the weak handle and returns without publishing when the upgrade
+  fails — the projection no longer exists, which is never an error for the
+  subsystem. The observation worker likewise holds only a weak host handle
+  plus the queue it waits on, and never a strong handle across an await.
+
+  `HostInner` is therefore destroyed when its last semantic owner is
+  released, not at process exit. `HostInner::drop` closes
+  `PendingObservations`, which is the worker's terminal condition; teardown
+  takes no host lock, joins nothing, and publishes nothing. A running
+  attempt task is a deliberate *bounded* strong owner — an admitted attempt
+  must reach settlement, and the task releases the host when it does.
+  Attachment detach remains unrelated to host lifetime.
 - **Lock order.** The graph is acyclic by construction:
 
   ```text
