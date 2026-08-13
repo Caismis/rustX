@@ -518,8 +518,8 @@ where
 /// Exactly one code path owns JSON serialization, the LF, the write, and
 /// the flush, so protocol records can never interleave and the completion
 /// order of this path *is* the serialization point of the output stream.
-/// The writer retains one serialization buffer whose length and capacity
-/// are both bounded by the record limit; it holds no queue of records.
+/// The writer retains one serialization buffer whose length is bounded by
+/// the record limit; it holds no queue of records.
 struct RecordWriter<W> {
     /// The output stream.
     writer: W,
@@ -606,7 +606,8 @@ where
 /// A write that would push the buffer past the limit is refused instead of
 /// performed, so the serializer stops at the bound rather than allocating
 /// past it and being measured afterwards. Growth is doubling clamped to the
-/// limit, so the buffer's capacity never exceeds the limit either.
+/// limit, so the buffer never retains more than one record's bytes and no
+/// reservation larger than one record is ever requested.
 struct LimitedBuffer<'a> {
     /// The buffer being filled.
     buffer: &'a mut Vec<u8>,
@@ -636,13 +637,20 @@ impl std::io::Write for LimitedBuffer<'_> {
     }
 }
 
-/// Reserves room for `additional` bytes without ever allocating past
-/// `limit`.
+/// Reserves room for `additional` bytes without ever requesting capacity
+/// beyond `limit`.
 ///
 /// Growth stays amortized (doubling) but is clamped to the record limit, so
-/// neither the record accumulator nor the serialization buffer can hold a
-/// capacity larger than one record — the usual `Vec` over-allocation cannot
-/// double the transport's documented memory bound.
+/// the transport never intentionally asks for more room than one record —
+/// the usual `Vec` growth strategy cannot double the transport's documented
+/// memory bound on its own.
+///
+/// The bound this establishes is on *logical record retention*: the record
+/// accumulator and the serialization buffer each hold at most one record's
+/// bytes, and rustX requests no capacity above the limit. What an allocator
+/// then does with such a request — rounding a reservation up to a size
+/// class or a page — is outside this contract, so `Vec::capacity()` itself
+/// is not claimed to be bounded by the limit.
 ///
 /// The caller has already established `buffer.len() + additional <= limit`.
 fn reserve_bounded(buffer: &mut Vec<u8>, additional: usize, limit: usize) {
@@ -709,8 +717,8 @@ mod tests {
             "the reader's internal chunk is fixed regardless of record size"
         );
         assert!(
-            reader.pending.capacity() <= 1024 * 1024,
-            "the record accumulator never allocates past the record limit"
+            record.len() <= 1024 * 1024 && reader.pending.is_empty(),
+            "the record accumulator retains at most one record's bytes"
         );
     }
 
@@ -853,9 +861,14 @@ mod tests {
         assert!(sink.is_empty(), "nothing partial reached the output");
     }
 
-    /// The serialization buffer never allocates past the record limit.
+    /// The serialization buffer retains at most one record's bytes: writes
+    /// are refused at the bound rather than measured afterwards.
+    ///
+    /// The assertion is on retained bytes, not on `Vec::capacity()`: rustX
+    /// never requests capacity above the limit, but how an allocator rounds
+    /// such a request is outside this contract.
     #[test]
-    fn the_serialization_buffer_capacity_is_bounded() {
+    fn the_serialization_buffer_retention_is_bounded() {
         let mut buffer = Vec::new();
         let mut sink = LimitedBuffer {
             buffer: &mut buffer,
@@ -867,8 +880,11 @@ mod tests {
         }
         assert!(std::io::Write::write_all(&mut sink, b"z").is_err());
         assert!(sink.overflowed);
-        assert_eq!(buffer.len(), 100);
-        assert!(buffer.capacity() <= 100);
+        assert_eq!(
+            buffer.len(),
+            100,
+            "the refused write left the buffer at exactly one record's bytes"
+        );
     }
 
     /// A broken output pipe is a normal session end, not an error.

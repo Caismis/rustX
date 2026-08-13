@@ -73,12 +73,18 @@ impl FramingAdapter {
 ///
 /// Construction is the shared Runtime Client fixture, so this file and the
 /// Issue #38 conformance scenarios exercise identically built runtimes.
+///
+/// The host outlives the fixture handle here, so it is taken through the
+/// fixture's own `into_parts` ownership path, which keeps the temporary
+/// workspace alive for the rest of the process. Moving the host field out
+/// instead would drop the workspace directory under a live runtime.
 async fn host(conversation: &str, scripts: Vec<Vec<FakeStep>>) -> RuntimeClientHost {
     common::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
         .scripts(scripts)
         .build()
         .await
-        .host
+        .into_parts()
+        .1
 }
 
 fn one_turn_stop() -> Vec<FakeStep> {

@@ -1565,7 +1565,11 @@ means adding a sibling module there; no semantic module moves.
   `STDIO_JSONL_READ_CHUNK_BYTES` chunk with the bound checked before
   every append; outbound records are serialized into a size-limited sink
   so an oversized record is refused mid-serialization rather than built
-  and then measured.
+  and then measured. The bound is on logical record retention: each
+  transport buffer holds at most one record's bytes and no reservation
+  above the limit is ever requested. Allocator rounding of such a
+  request is outside this contract, so `Vec::capacity()` itself is not
+  claimed to be bounded by the limit.
 - **LF, and accepted CRLF.** LF is the sole record delimiter. One
   physical LF terminates one record, so an escaped `\n` inside a JSON
   string stays in one record and multiline pretty-printed JSON is not

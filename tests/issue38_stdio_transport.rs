@@ -24,6 +24,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
@@ -44,7 +45,7 @@ use rustx::runtime_client::{
     RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent, RuntimeClientResponse,
     RuntimeClientResult,
 };
-use tokio::io::{AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::sync::watch;
 
 /// The outer liveness guard of one whole wait. Every wait below is exact;
@@ -314,6 +315,114 @@ impl AsyncWrite for GatedSink {
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// The shared state of a test-driven input stream.
+struct ScriptedInputState {
+    /// Bytes made readable but not yet taken by the transport's reader.
+    readable: VecDeque<u8>,
+    /// How many bytes the transport's reader has taken so far.
+    taken: usize,
+    /// Whether the stream has been closed (EOF).
+    closed: bool,
+    /// The reader parked on an exhausted stream.
+    waker: Option<Waker>,
+}
+
+/// An input stream a test feeds byte-exactly.
+///
+/// `progress` publishes `(bytes taken by the reader, reader parked waiting
+/// for more)` as one value, so a test can establish the exact state "every
+/// pushed byte has been consumed and the reader is now waiting for the rest
+/// of a record" with a `watch` barrier rather than a sleep. `parked` is only
+/// ever published from a poll that found the stream exhausted, so the pair
+/// cannot report a park that happened before the last bytes were taken.
+#[derive(Clone)]
+struct ScriptedInput {
+    state: Arc<Mutex<ScriptedInputState>>,
+    progress: watch::Sender<(usize, bool)>,
+}
+
+impl ScriptedInput {
+    /// Creates an open, empty stream.
+    fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ScriptedInputState {
+                readable: VecDeque::new(),
+                taken: 0,
+                closed: false,
+                waker: None,
+            })),
+            progress: watch::Sender::new((0, false)),
+        }
+    }
+
+    /// Makes `bytes` readable, wakes a parked reader, and reports how many
+    /// bytes were pushed.
+    fn push(&self, bytes: &[u8]) -> usize {
+        let waker = {
+            let mut state = self.state.lock().expect("input lock");
+            state.readable.extend(bytes.iter().copied());
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+        bytes.len()
+    }
+
+    /// Closes the stream at EOF and wakes a parked reader.
+    fn close(&self) {
+        let waker = {
+            let mut state = self.state.lock().expect("input lock");
+            state.closed = true;
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Waits until the reader has taken exactly `taken` bytes and is parked
+    /// waiting for more.
+    async fn await_parked_after(&self, taken: usize) {
+        let mut progress = self.progress.subscribe();
+        tokio::time::timeout(
+            LIVENESS_GUARD,
+            progress.wait_for(|(seen, parked)| *seen == taken && *parked),
+        )
+        .await
+        .expect("the reader must consume the pushed bytes and wait for more")
+        .expect("the progress channel stays open");
+    }
+}
+
+impl AsyncRead for ScriptedInput {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let mut state = self.state.lock().expect("input lock");
+        if state.readable.is_empty() {
+            if state.closed {
+                return Poll::Ready(Ok(()));
+            }
+            state.waker = Some(cx.waker().clone());
+            let taken = state.taken;
+            drop(state);
+            self.progress.send_replace((taken, true));
+            return Poll::Pending;
+        }
+        let count = state.readable.len().min(buf.remaining());
+        let chunk: Vec<u8> = state.readable.drain(..count).collect();
+        buf.put_slice(&chunk);
+        state.taken += count;
+        let taken = state.taken;
+        drop(state);
+        self.progress.send_replace((taken, false));
         Poll::Ready(Ok(()))
     }
 }
@@ -616,6 +725,115 @@ async fn eof_distinguishes_a_boundary_from_a_truncated_record() {
         outcome.records.len(),
         1,
         "the truncated record was never applied"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reader cancellation safety
+// ---------------------------------------------------------------------------
+
+/// A half-read record survives losing the session loop's `tokio::select!`
+/// race to an event delivery.
+///
+/// The session drops the in-flight `next_record` future every time the
+/// subscription branch wins. The reader's accumulation state therefore lives
+/// in the reader, not in that future, and its only await reads nothing when
+/// it is dropped while pending — so a partially consumed record is neither
+/// lost, duplicated, nor corrupted by an interleaved event.
+///
+/// The interleaving is established, never timed:
+///
+/// 1. `initialize` + `subscribe_events` make the subscription branch live;
+/// 2. only a prefix of the next request is fed, with no terminating LF;
+/// 3. the input stream's `(bytes taken, reader parked)` watch proves the
+///    prefix was consumed and the reader is waiting for more bytes, which
+///    is exactly the state in which the input future is pending;
+/// 4. a Runtime Client event is published out of band, so the subscription
+///    branch is the only ready one and wins the select, dropping the input
+///    future mid-record;
+/// 5. the event reaching the output stream proves that happened;
+/// 6. the suffix and its LF are released;
+/// 7. the original request decodes whole — its id came from the prefix —
+///    and receives its correlated response.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_partly_read_record_survives_an_event_winning_the_select() {
+    /// The prefix of the pending request, carrying its correlation id: a
+    /// response for it can only exist if these exact bytes survived.
+    const REQUEST_PREFIX: &[u8] = br#"{"method":"snapshot_get","id":7"#;
+    /// The rest of that request, released only after the event was written.
+    const REQUEST_SUFFIX: &[u8] = b"}\n";
+
+    let fixture = RuntimeClientFixture::builder("conv-38-partial-record")
+        .build()
+        .await;
+    let sink = CapturingSink::default();
+    let input = ScriptedInput::new();
+    let endpoint = fixture.host.endpoint();
+    let session = tokio::spawn({
+        let sink = sink.clone();
+        let input = input.clone();
+        async move { serve_stdio_jsonl_with_io(endpoint, input, sink).await }
+    });
+
+    // 1. Attach and subscribe, so the session selects over both arms.
+    let mut fed = input.push(&initialize_record(1));
+    fed += input.push(b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":0}\n");
+    sink.await_record(|record| !is_event(record) && as_response(record).id.get() == 2)
+        .await;
+
+    // 2/3. Feed only a prefix of the next request, then establish that the
+    //      reader consumed it and is waiting for the rest: the input future
+    //      is pending with a partial record accumulated.
+    fed += input.push(REQUEST_PREFIX);
+    input.await_parked_after(fed).await;
+
+    // 4/5. Publish one event out of band. The input arm is pending, so the
+    //      subscription arm wins the select and the input future is dropped
+    //      mid-record; the event reaching the wire is the proof.
+    assert_eq!(
+        fixture.host.shutdown(),
+        RuntimeClientResult::ShutdownAccepted
+    );
+    sink.await_record(|record| {
+        is_event(record) && matches!(as_event(record).event, RuntimeClientEvent::RuntimeShutdown)
+    })
+    .await;
+    let written = sink.complete_records();
+    assert_eq!(
+        written.len(),
+        3,
+        "exactly the two responses and the event: the partial record was \
+         not answered, fabricated, or split, got {written:?}"
+    );
+    assert!(
+        is_event(&written[2]),
+        "the event overtook a record the transport had already partly read"
+    );
+
+    // 6/7. Release the suffix. The request the reader was midway through
+    //      decodes whole and gets its correlated response.
+    input.push(REQUEST_SUFFIX);
+    sink.await_record(|record| !is_event(record) && as_response(record).id.get() == 7)
+        .await;
+    input.close();
+    let result = tokio::time::timeout(LIVENESS_GUARD, session)
+        .await
+        .expect("the session must terminate")
+        .expect("the session task must not panic");
+    assert!(matches!(result, Ok(StdioSessionEnd::InputEof)));
+
+    let records = sink.records();
+    assert_eq!(
+        records.len(),
+        4,
+        "the interrupted record produced exactly one response: {records:?}"
+    );
+    let response = as_response(&records[3]);
+    assert_eq!(response.id.get(), 7, "the prefix's id survived the drop");
+    assert!(
+        matches!(response.result, Some(RuntimeClientResult::Snapshot { .. })),
+        "the reassembled record decoded to the original request, got {:?}",
+        response.result
     );
 }
 
