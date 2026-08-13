@@ -30,7 +30,7 @@ mod common;
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep, ScriptedCall, tool_call_events};
+use common::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -40,7 +40,6 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
@@ -743,13 +742,12 @@ async fn run_through_agent_loop(
     fixture: &common::NativeFixture,
     call: &ScriptedCall,
 ) -> AgentExecutionResult {
-    let model = FakeModel::new(tool_turn_then_stop(call));
+    let model = fake_model(tool_turn_then_stop(call));
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let (lease, _coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     AgentExecution::new(
-        request(fixture.runtime.conversation_id().clone()),
-        &model,
+        request(fixture.runtime.conversation_id().clone(), &model),
         lease,
         &cancellation,
         context_runtime(),
@@ -787,7 +785,10 @@ fn tool_turn_then_stop(call: &ScriptedCall) -> Vec<Vec<FakeStep>> {
 }
 
 /// The attempt request bound to the fixture's conversation identity.
-fn request(conversation_id: ConversationId) -> AgentExecutionRequest {
+fn request(
+    conversation_id: ConversationId,
+    model: &std::sync::Arc<FakeModel>,
+) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id,
@@ -803,15 +804,12 @@ fn request(conversation_id: ConversationId) -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: common::attempt_model(model.clone(), "fake-model"),
     }
 }
 
 /// A context runtime with no compaction pressure.
-fn context_runtime() -> rustx::context::ContextRuntime<'static> {
+fn context_runtime() -> rustx::context::ContextRuntime {
     use rustx::context::{
         ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
         InMemoryCheckpointStore,
@@ -826,9 +824,10 @@ fn context_runtime() -> rustx::context::ContextRuntime<'static> {
         estimator,
     )
     .expect("valid context configuration");
-    ContextRuntime::new(
+    ContextRuntime::with_summarizer(
         engine,
         Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         Arc::new(InMemoryCheckpointStore::new()),
+        rustx::context::AgentStatusComposer::default(),
     )
 }

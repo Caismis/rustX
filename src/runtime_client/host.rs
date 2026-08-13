@@ -223,7 +223,7 @@ impl std::error::Error for HostConstructionError {}
 ///
 /// Resolution errors never carry credential material: the catalog names an
 /// environment variable at most.
-fn invalid_model(error: ModelInvocationError) -> RuntimeClientError {
+fn invalid_model(error: &ModelInvocationError) -> RuntimeClientError {
     RuntimeClientError::InvalidModelConfiguration {
         message: error.to_string(),
     }
@@ -1295,7 +1295,9 @@ impl RuntimeClientHost {
         // itself transactional, and the context-policy check runs against the
         // *candidate* snapshot before anything is published.
         let mut candidate = state.model.clone();
-        candidate.apply(config).map_err(invalid_model)?;
+        candidate
+            .apply(config)
+            .map_err(|error| invalid_model(&error))?;
         self.inner
             .validate_context_policy(&candidate.snapshot())
             .map_err(|error| RuntimeClientError::InvalidModelConfiguration {
@@ -1661,8 +1663,8 @@ mod tests {
     };
     use crate::context::{
         AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
-        AgentStatusSectionId, AgentStatusSectionProvider, ContextEngine, ContextError,
-        DefaultTokenEstimator, InMemoryCheckpointStore, TokenEstimator,
+        AgentStatusSectionId, AgentStatusSectionProvider, ContextError, DefaultTokenEstimator,
+        InMemoryCheckpointStore, TokenEstimator,
     };
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1961,19 +1963,6 @@ mod tests {
     /// The default status composer over the fixed clock.
     fn composer() -> AgentStatusComposer {
         AgentStatusComposer::new(Arc::new(FixedStatusClock))
-    }
-
-    /// A no-compaction summarizer (a huge window prevents compaction).
-    struct NeverSummarizes;
-
-    impl crate::context::ContextSummarizer for NeverSummarizes {
-        fn summarize(
-            &self,
-            _request: crate::context::summarizer::SummaryRequest,
-            _cancellation: CancellationSignal,
-        ) -> BoxFuture<'_, Result<String, ContextError>> {
-            unreachable!("no compaction occurs under a huge window")
-        }
     }
 
     fn inbound_text(id: &str, text: &str) -> UserMessageBlock {

@@ -283,6 +283,74 @@ pub fn describe_events(events: &[rustx::model::ModelEvent]) -> String {
         .join("\n")
 }
 
+/// The immutable attempt model snapshot of a loop test.
+///
+/// The binding is resolved through a real fixture catalog — explicit
+/// endpoint, explicit credential, validated limits and capabilities — so a
+/// loop test exercises the same selection path production uses; only the
+/// adapter behind it is scripted.
+pub fn attempt_model(
+    adapter: std::sync::Arc<dyn rustx::model::ModelAdapter>,
+    model: &str,
+) -> rustx::model::AttemptModelSnapshot {
+    attempt_model_with_window(adapter, model, 10_000_000, 512)
+}
+
+/// The attempt model snapshot of a loop test with explicit limits.
+pub fn attempt_model_with_window(
+    adapter: std::sync::Arc<dyn rustx::model::ModelAdapter>,
+    model: &str,
+    context_window: u64,
+    max_output_tokens: u32,
+) -> rustx::model::AttemptModelSnapshot {
+    use rustx::model::fixture::{FixtureModel, ScriptedAdapterFactory, fixture_session_model};
+    let reference = format!("fixture/{model}");
+    fixture_session_model(
+        &[FixtureModel::text(
+            &reference,
+            rustx::model::ModelProtocol::OpenAiChatCompletions,
+        )
+        .with_context_window(context_window)
+        .with_max_output_tokens(max_output_tokens)],
+        &reference,
+        &ScriptedAdapterFactory::new(adapter),
+    )
+    .snapshot()
+}
+
+/// A `requestParams` object literal.
+///
+/// # Panics
+///
+/// Panics when the value is not a JSON object, which always means the test
+/// itself is wrong.
+pub fn request_params(value: serde_json::Value) -> rustx::model::RequestParams {
+    match value {
+        serde_json::Value::Object(map) => map,
+        other => panic!("requestParams must be a JSON object, got {other}"),
+    }
+}
+
+/// The canonical text-only invocation configuration of an adapter test.
+///
+/// Adapter tests exercise translation, not selection, so the invocation is
+/// built directly rather than resolved from a catalog. It carries no request
+/// parameters, so any provider field an adapter test observes was produced
+/// by translation and not by a configured overlay.
+pub fn invocation(
+    protocol: rustx::model::ModelProtocol,
+    model: &str,
+) -> rustx::model::ModelInvocationConfig {
+    rustx::model::ModelInvocationConfig {
+        model: model.to_owned(),
+        protocol,
+        max_output_tokens: 512,
+        request_params: rustx::model::RequestParams::new(),
+        capabilities: rustx::model::ModelCapabilities::text_only(true, true),
+        compat: rustx::model::ModelCompat::default(),
+    }
+}
+
 /// A canonical user-only request for the given protocol.
 pub fn simple_request(
     protocol: rustx::model::ModelProtocol,
@@ -291,11 +359,9 @@ pub fn simple_request(
 ) -> rustx::model::ModelRequest {
     use rustx::message::content::TextBlock;
     use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
-    use rustx::model::ReasoningEffort;
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
-        model: model.to_owned(),
-        protocol,
+        invocation: invocation(protocol, model),
         messages: vec![MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-user-1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -308,8 +374,6 @@ pub fn simple_request(
         tools: Vec::new(),
         agent_status: None,
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
         continuation: None,
     }
 }

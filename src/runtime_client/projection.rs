@@ -1297,7 +1297,6 @@ mod tests {
         AttemptId::new("attempt-1")
     }
 
-
     /// A deterministic session model view for projection unit tests.
     fn model_view() -> crate::model::session::SessionModelView {
         crate::model::fixture::scripted_session_model(std::sync::Arc::new(

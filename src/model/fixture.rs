@@ -79,11 +79,9 @@ where
         provider: &ResolvedProvider,
         protocol: ModelProtocol,
     ) -> Result<Arc<dyn ModelAdapter>, ModelInvocationError> {
-        (self.lookup)(provider.id(), protocol).ok_or_else(|| {
-            ModelInvocationError::MissingAdapter {
-                model: ModelRef::new(provider.id().clone(), ModelId::new("unmapped")),
-                protocol,
-            }
+        (self.lookup)(provider.id(), protocol).ok_or_else(|| ModelInvocationError::MissingAdapter {
+            model: ModelRef::new(provider.id().clone(), ModelId::new("unmapped")),
+            protocol,
         })
     }
 }
@@ -237,6 +235,11 @@ impl FixtureModel {
 ///
 /// Every provider gets an explicit local base URL and a literal credential:
 /// there is no implicit endpoint anywhere, exactly as in production.
+///
+/// # Panics
+///
+/// Panics when the fixture models do not form a well-formed document, which
+/// always means the fixture itself is wrong.
 #[must_use]
 pub fn fixture_catalog_document(models: &[FixtureModel]) -> ModelCatalogDocument {
     let mut providers = serde_json::Map::new();
@@ -314,11 +317,10 @@ pub fn fixture_session_model(
 #[must_use]
 pub fn scripted_session_model(adapter: Arc<dyn ModelAdapter>) -> SessionModelState {
     fixture_session_model(
-        &[FixtureModel::text(
-            "scripted/scripted",
-            ModelProtocol::OpenAiChatCompletions,
-        )
-        .with_max_output_tokens(512)],
+        &[
+            FixtureModel::text("scripted/scripted", ModelProtocol::OpenAiChatCompletions)
+                .with_max_output_tokens(512),
+        ],
         "scripted/scripted",
         &ScriptedAdapterFactory::new(adapter),
     )

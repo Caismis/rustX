@@ -64,8 +64,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::adapter::ModelAdapter;
 use crate::model::catalog::{
-    CatalogModelView, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition, ModelRef,
-    Modality, ProviderId, ReasoningProfileId, ReasoningProfileView, ResolvedModelCatalog,
+    CatalogModelView, Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition,
+    ModelRef, ProviderId, ReasoningProfileId, ReasoningProfileView, ResolvedModelCatalog,
     ResolvedProvider,
 };
 use crate::model::error::{ModelError, ModelErrorKind};
@@ -354,6 +354,9 @@ impl fmt::Debug for ResolvedModelInvocation {
             .field("request_params", &self.request_params)
             .field("capabilities", &self.capabilities)
             .field("compat", &self.compat)
+            .field("declared_capabilities", &self.declared_capabilities)
+            .field("model_max_output_tokens", &self.model_max_output_tokens)
+            .field("provider", &self.provider)
             .field("adapter", &"<provider adapter>")
             .finish()
     }
@@ -638,7 +641,10 @@ impl fmt::Display for ModelInvocationError {
                 write!(f, "model {model} output budget is invalid: {detail}")
             }
             Self::UnusableCapabilities { model, detail } => {
-                write!(f, "model {model} effective capabilities are unusable: {detail}")
+                write!(
+                    f,
+                    "model {model} effective capabilities are unusable: {detail}"
+                )
             }
             Self::MissingAdapter { model, protocol } => write!(
                 f,
@@ -721,10 +727,7 @@ impl fmt::Debug for ModelBindingRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ModelBindingRegistry")
             .field("catalog", &self.catalog)
-            .field(
-                "adapters",
-                &self.adapters.keys().collect::<Vec<_>>(),
-            )
+            .field("adapters", &self.adapters.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -744,9 +747,8 @@ impl ModelBindingRegistry {
         for reference in catalog.model_refs().collect::<Vec<_>>() {
             let (provider, model) = catalog.binding(&reference)?;
             let key = (provider.id().clone(), model.protocol);
-            if !adapters.contains_key(&key) {
-                let adapter = factory.adapter(provider, model.protocol)?;
-                adapters.insert(key, adapter);
+            if let std::collections::btree_map::Entry::Vacant(slot) = adapters.entry(key) {
+                slot.insert(factory.adapter(provider, model.protocol)?);
             }
         }
         Ok(Self { catalog, adapters })
@@ -1089,8 +1091,7 @@ mod tests {
     fn protected_sets_are_protocol_specific() {
         assert!(protected_keys(ModelProtocol::OpenAiChatCompletions).contains(&"max_tokens"));
         assert!(
-            protected_keys(ModelProtocol::OpenAiChatCompletions)
-                .contains(&"max_completion_tokens")
+            protected_keys(ModelProtocol::OpenAiChatCompletions).contains(&"max_completion_tokens")
         );
         assert!(protected_keys(ModelProtocol::OpenAiResponses).contains(&"store"));
         assert!(protected_keys(ModelProtocol::OpenAiResponses).contains(&"previous_response_id"));
@@ -1142,7 +1143,10 @@ mod tests {
             ModelProtocol::OpenAiChatCompletions,
         )
         .expect_err("protected key");
-        assert_eq!(rejected.kind, crate::model::error::ModelErrorKind::InvalidRequest);
+        assert_eq!(
+            rejected.kind,
+            crate::model::error::ModelErrorKind::InvalidRequest
+        );
         assert!(rejected.message.contains("messages"));
     }
 
@@ -1155,7 +1159,10 @@ mod tests {
             ModelProtocol::OpenAiResponses,
         )
         .expect_err("must fail");
-        assert_eq!(error.kind, crate::model::error::ModelErrorKind::InvalidRequest);
+        assert_eq!(
+            error.kind,
+            crate::model::error::ModelErrorKind::InvalidRequest
+        );
     }
 
     /// The protected-key error keeps its layer attribution.

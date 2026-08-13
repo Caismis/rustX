@@ -23,11 +23,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::snapshot::{AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution};
-use crate::model::session::SessionModelView;
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
+use crate::model::session::SessionModelView;
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::{CancellationReason, RuntimeError};

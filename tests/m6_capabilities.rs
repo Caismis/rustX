@@ -1445,7 +1445,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             usage: None,
         },
     ));
-    let model = common::fake::FakeModel::new(vec![
+    let model = common::fake::fake_model(vec![
         first,
         vec![
             common::fake::FakeStep::Emit(rustx::model::ModelEvent::Started),
@@ -1480,12 +1480,9 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         initial_messages: vec![],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: rustx::model::ModelProtocol::OpenAiChatCompletions,
-        reasoning: rustx::model::ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: common::attempt_model(model.clone(), "fake-model"),
     };
-    let runtime = rustx::context::ContextRuntime::new(
+    let runtime = rustx::context::ContextRuntime::with_summarizer(
         rustx::context::ContextEngine::new(
             rustx::context::ContextConfig {
                 context_window_tokens: 10_000_000,
@@ -1497,18 +1494,13 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         .expect("engine"),
         Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         Arc::new(rustx::context::InMemoryCheckpointStore::new()),
+        rustx::context::AgentStatusComposer::default(),
     );
-    let result = rustx::agent::AgentExecution::new(
-        request,
-        &model,
-        lease,
-        &cancellation,
-        runtime,
-        &tool_runtime,
-    )
-    .expect("execution")
-    .run()
-    .await;
+    let result =
+        rustx::agent::AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
+            .expect("execution")
+            .run()
+            .await;
     assert!(matches!(
         result.outcome,
         rustx::events::types::AttemptOutcome::Completed { .. }

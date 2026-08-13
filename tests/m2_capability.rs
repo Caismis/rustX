@@ -13,7 +13,7 @@ use rustx::message::types::{
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
     ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter, ResponsesStorageMode,
+    OpenAiResponsesAdapter,
 };
 use rustx::runtime::identity::MessageId;
 use rustx::runtime::identity::{ArtifactId, ToolCallId, ToolId};
@@ -137,27 +137,28 @@ async fn image_references_are_unsupported() {
     )> = vec![
         (
             "openai-chat",
-            Box::new(OpenAiChatCompletionsAdapter::new(
-                OpenAiAdapterConfig::new("k").with_api_base(chat_server.url("/v1")),
-            )),
+            Box::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
+                "k",
+                chat_server.url("/v1"),
+            ))),
             image_user_request(ModelProtocol::OpenAiChatCompletions, "gpt-test"),
             &chat_server,
         ),
         (
             "openai-responses",
-            Box::new(OpenAiResponsesAdapter::new(
-                OpenAiAdapterConfig::new("k")
-                    .with_api_base(responses_server.url("/v1"))
-                    .with_responses_storage(ResponsesStorageMode::Stored),
-            )),
+            Box::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
+                "k",
+                responses_server.url("/v1"),
+            ))),
             image_user_request(ModelProtocol::OpenAiResponses, "gpt-test"),
             &responses_server,
         ),
         (
             "anthropic",
-            Box::new(AnthropicMessagesAdapter::new(
-                AnthropicAdapterConfig::new("k").with_api_base(anthropic_server.url("")),
-            )),
+            Box::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
+                "k",
+                anthropic_server.url(""),
+            ))),
             image_user_request(ModelProtocol::AnthropicMessages, "claude-test"),
             &anthropic_server,
         ),
@@ -190,9 +191,7 @@ async fn chat_rejects_previous_reasoning() {
         }),
     );
     unsupported_rejected(
-        &OpenAiChatCompletionsAdapter::new(
-            OpenAiAdapterConfig::new("k").with_api_base(server.url("/v1")),
-        ),
+        &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
         request,
         &server,
     )
@@ -208,9 +207,8 @@ async fn chat_translates_full_history_roles() {
         sse_fixture("openai_chat", "plain_text.sse")
     })
     .await;
-    let adapter = OpenAiChatCompletionsAdapter::new(
-        OpenAiAdapterConfig::new("k").with_api_base(server.url("/v1")),
-    );
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
     let events = common::collect_events(
         &adapter,
         history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test"),
@@ -250,11 +248,7 @@ async fn responses_translates_full_history() {
         sse_fixture("openai_responses", "plain_text.sse")
     })
     .await;
-    let adapter = OpenAiResponsesAdapter::new(
-        OpenAiAdapterConfig::new("k")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(ResponsesStorageMode::Stored),
-    );
+    let adapter = OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
     let events = common::collect_events(
         &adapter,
         history_request(ModelProtocol::OpenAiResponses, "gpt-test"),
@@ -296,9 +290,7 @@ async fn responses_translates_full_history() {
 async fn anthropic_translates_full_history() {
     let server =
         common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
-    let adapter = AnthropicMessagesAdapter::new(
-        AnthropicAdapterConfig::new("k").with_api_base(server.url("")),
-    );
+    let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("k", server.url("")));
     let events = common::collect_events(
         &adapter,
         history_request(ModelProtocol::AnthropicMessages, "claude-test"),
@@ -345,9 +337,7 @@ async fn file_tool_results_are_unsupported() {
         },
     )];
     unsupported_rejected(
-        &OpenAiChatCompletionsAdapter::new(
-            OpenAiAdapterConfig::new("k").with_api_base(server.url("/v1")),
-        ),
+        &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
         request,
         &server,
     )

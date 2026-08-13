@@ -18,9 +18,7 @@ use rustx::runtime::continuation::{AnthropicContinuation, ProviderContinuationSt
 use rustx::runtime::identity::ToolCallId;
 
 fn adapter(server: &common::FixtureServer) -> AnthropicMessagesAdapter {
-    AnthropicMessagesAdapter::new(
-        AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
-    )
+    AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("test-key", server.url("")))
 }
 
 fn request_with_tools(prompt: &str) -> ModelRequest {
@@ -821,16 +819,18 @@ async fn http_errors_normalize() {
     }
 }
 
-/// The Anthropic request carries only model-facing tool fields, maps effort
-/// to `output_config.effort` (never `thinking.display`), and sends the
+/// The Anthropic request carries only model-facing tool fields and sends the
 /// runtime-resolved `max_tokens` explicitly.
+///
+/// It also proves the retired universal reasoning mapping is gone: with no
+/// configured request parameters the adapter synthesizes **no** `thinking`
+/// and **no** `output_config` field at all.
 #[tokio::test]
 async fn request_serialization_is_model_facing_only() {
     let server =
         common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
     let mut request = request_with_tools("hi");
-    request.reasoning = rustx::model::ReasoningEffort::High;
-    request.max_output_tokens = 4096;
+    request.invocation.max_output_tokens = 4096;
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
@@ -841,14 +841,9 @@ async fn request_serialization_is_model_facing_only() {
         body["max_tokens"], 4096,
         "the runtime-resolved output limit is sent explicitly"
     );
-    assert_eq!(body["thinking"]["type"], "adaptive");
-    assert_eq!(
-        body["output_config"]["effort"], "high",
-        "effort is an output_config value, not a thinking display value"
-    );
     assert!(
-        body["thinking"].get("display").is_none(),
-        "low/medium/high are never written to thinking.display"
+        body.get("thinking").is_none() && body.get("output_config").is_none(),
+        "no legacy reasoning field is ever synthesized: {body}"
     );
     assert_eq!(body["messages"][0]["role"], "user");
     assert_eq!(body["messages"][0]["content"][0]["type"], "text");
@@ -863,47 +858,56 @@ async fn request_serialization_is_model_facing_only() {
     }
 }
 
-/// Every canonical effort level maps to the exact provider `effort` field.
+/// A reasoning profile's configured request parameters reach the Anthropic
+/// wire **exactly**, and nothing else appears.
+///
+/// The two profiles deliberately use different provider-specific shapes, so
+/// the assertion cannot pass by an enum conversion: the wire JSON is exactly
+/// the configured overlay.
 #[tokio::test]
-async fn effort_levels_map_to_output_config_effort() {
-    for (effort, expected) in [
-        (rustx::model::ReasoningEffort::Low, "low"),
-        (rustx::model::ReasoningEffort::Medium, "medium"),
-        (rustx::model::ReasoningEffort::High, "high"),
-    ] {
+async fn reasoning_profiles_produce_their_exact_configured_overlay() {
+    let cases = [
+        (
+            serde_json::json!({"thinking": {"type": "disabled"}, "temperature": 0.7}),
+            "off",
+        ),
+        (
+            serde_json::json!({
+                "thinking": {"type": "enabled", "budget_tokens": 32_000},
+                "output_config": {"effort": "high"},
+                "temperature": 1.0
+            }),
+            "on",
+        ),
+    ];
+    for (params, label) in cases {
         let server =
             common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse"))
                 .await;
         let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
-        request.reasoning = effort;
+        request.invocation.request_params = common::request_params(params.clone());
         let events = collect_events(&adapter(&server), request).await;
         assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
         let body: serde_json::Value =
             serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-        assert_eq!(
-            body["output_config"]["effort"], expected,
-            "effort {effort:?}"
-        );
-        assert_eq!(body["thinking"]["type"], "adaptive");
-        assert!(
-            body["thinking"].get("display").is_none(),
-            "effort {effort:?} must not leak into thinking.display"
-        );
+        let configured = params.as_object().expect("object");
+        for (key, value) in configured {
+            assert_eq!(&body[key], value, "profile {label} key {key}");
+        }
+        // Nothing beyond the runtime-owned structural fields and the exact
+        // configured overlay appears.
+        let allowed: std::collections::BTreeSet<&str> =
+            ["model", "max_tokens", "messages", "stream"]
+                .into_iter()
+                .chain(configured.keys().map(String::as_str))
+                .collect();
+        for key in body.as_object().expect("object").keys() {
+            assert!(
+                allowed.contains(key.as_str()),
+                "profile {label} produced an unexpected wire field {key}: {body}"
+            );
+        }
     }
-}
-
-/// `Anthropic` rejects `ReasoningEffort::Minimal` before the network; it is never
-/// remapped to another effort level.
-#[tokio::test]
-async fn minimal_reasoning_effort_is_unsupported() {
-    let server =
-        common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
-    let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
-    request.reasoning = rustx::model::ReasoningEffort::Minimal;
-    let events = collect_events(&adapter(&server), request).await;
-    assert_eq!(events.len(), 1);
-    assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
-    assert_eq!(server.attempt_count(), 0, "no provider request");
 }
 
 /// Previous signed thinking is replayed from its opaque provider state, never

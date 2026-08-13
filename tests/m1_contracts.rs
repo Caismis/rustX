@@ -183,10 +183,12 @@ fn manifest_round_trip() {
         manifest.model.protocol,
         rustx::model::types::ModelProtocol::OpenAiResponses
     );
+    assert_eq!(manifest.model.model.to_string(), "provider-a/gpt-5-mini");
     assert_eq!(
-        manifest.model.reasoning,
-        rustx::model::types::ReasoningEffort::High
+        manifest.model.reasoning_profile,
+        Some(rustx::model::ReasoningProfileId::new("high"))
     );
+    assert!(manifest.model.reasoning_enabled);
     assert_eq!(manifest.capabilities.revision, CapabilityRevision::new(42));
     assert_eq!(manifest.capabilities.skills.len(), 1);
     assert_eq!(manifest.capabilities.tools.len(), 2);

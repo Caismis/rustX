@@ -517,8 +517,6 @@ mod tests {
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
-use crate::model::catalog::ModelCatalogView;
-use crate::model::session::{SessionModelConfig, SessionModelView};
     use crate::runtime::identity::{AttemptId, ToolExecutionId};
     use crate::runtime_client::event::RuntimeClientEvent;
 

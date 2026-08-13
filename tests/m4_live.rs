@@ -26,17 +26,14 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    ContextCheckpointStore, ContextConfig, ContextRuntime, DefaultTokenEstimator,
-    InMemoryCheckpointStore,
+    ContextCheckpointStore, ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use rustx::model::{
-    ModelAdapter, ModelProtocol, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, ReasoningEffort,
-};
+use rustx::model::{ModelAdapter, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
@@ -52,11 +49,15 @@ async fn live_step(
     history: Vec<MessageBlock>,
     attempt: &str,
     model: &str,
-    adapter: &dyn ModelAdapter,
+    adapter: Arc<dyn ModelAdapter>,
     tools: ToolRegistry,
     store: Arc<InMemoryCheckpointStore>,
     window: u64,
 ) -> AgentExecutionResult {
+    // One attempt snapshot drives everything: the loop's provider binding,
+    // the engine window, and the summary invocation. In `session` summary
+    // mode the summary uses exactly this primary invocation.
+    let snapshot = common::attempt_model_with_window(adapter, model, window, 64);
     let request = AgentExecutionRequest {
         agent_id: AgentId::new("agent-live"),
         conversation_id: conversation_id(),
@@ -64,34 +65,25 @@ async fn live_step(
         initial_messages: history,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: model.to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 64,
+        model: snapshot.clone(),
     };
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let runtime = ContextRuntime::model_backed(
-        ContextConfig {
-            context_window_tokens: window,
+    let runtime = ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 40,
+            summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        adapter,
-        rustx::context::SummaryModelConfig {
-            model: model.to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 64,
-        },
         store,
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
     .expect("live context runtime");
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request,
-        adapter,
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -118,7 +110,11 @@ async fn live_repeated_compaction() {
     };
     let model =
         std::env::var("RUSTX_OPENAI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_owned());
-    let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
+    let base_url = std::env::var("RUSTX_OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
+    let adapter: Arc<dyn ModelAdapter> = Arc::new(OpenAiChatCompletionsAdapter::new(
+        OpenAiAdapterConfig::new(key, base_url),
+    ));
     let store = InMemoryCheckpointStore::new().shared();
 
     // A small window relative to the history guarantees compaction: the
@@ -144,7 +140,7 @@ async fn live_repeated_compaction() {
             history.clone(),
             &attempt,
             &model,
-            &adapter,
+            adapter.clone(),
             ToolRegistry::new(),
             store.clone(),
             window,

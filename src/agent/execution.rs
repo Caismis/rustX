@@ -731,11 +731,10 @@ impl<'a> AgentExecution<'a> {
             Ok(projection) => projection,
             Err(terminal) => return Err(terminal),
         };
-        let should_compact = match self
-            .context_runtime
-            .engine
-            .should_compact(&projection, self.request.model.primary().max_output_tokens())
-        {
+        let should_compact = match self.context_runtime.engine.should_compact(
+            &projection,
+            self.request.model.primary().max_output_tokens(),
+        ) {
             Ok(value) => value,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
@@ -1016,11 +1015,10 @@ impl<'a> AgentExecution<'a> {
         )?;
         // The rebuilt projection must fit under the soft input limit; if
         // pinned context and the actual summary cannot fit, fail explicitly.
-        match self
-            .context_runtime
-            .engine
-            .fits_under_soft_limit(&projection, self.request.model.primary().max_output_tokens())
-        {
+        match self.context_runtime.engine.fits_under_soft_limit(
+            &projection,
+            self.request.model.primary().max_output_tokens(),
+        ) {
             Ok(true) => {}
             Ok(false) => {
                 return Err(ContextError::new(

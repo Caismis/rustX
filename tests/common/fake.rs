@@ -57,6 +57,17 @@ pub fn model_release() -> (
 /// The script is a queue of invocation scripts: `stream` pops the next
 /// script per invocation, so multi-turn tests script one sub-script per
 /// model request. An exhausted script fails explicitly instead of hanging.
+/// A scripted model shared as an `Arc`, ready to bind into an attempt model
+/// snapshot.
+///
+/// The Agent Loop receives its provider binding through the attempt's
+/// immutable model snapshot, which owns an `Arc<dyn ModelAdapter>`; tests
+/// therefore hold the scripted model behind the same handle.
+#[must_use]
+pub fn fake_model(scripts: Vec<Vec<FakeStep>>) -> std::sync::Arc<FakeModel> {
+    std::sync::Arc::new(FakeModel::new(scripts))
+}
+
 pub struct FakeModel {
     scripts: Mutex<VecDeque<Vec<FakeStep>>>,
     requests: Arc<Mutex<Vec<ModelRequest>>>,

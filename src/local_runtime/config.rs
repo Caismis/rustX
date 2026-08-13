@@ -93,9 +93,7 @@ impl LocalSessionConfig {
                 detail: "conversationId and agentId must be non-empty".to_owned(),
             });
         }
-        if self.context.keep_recent_tokens > 0
-            && self.context.summary_output_cap == Some(0)
-        {
+        if self.context.keep_recent_tokens > 0 && self.context.summary_output_cap == Some(0) {
             return Err(LocalSessionConfigError::Invalid {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
             });
@@ -405,7 +403,13 @@ mod tests {
         assert_eq!(config.conversation_id.as_str(), "conv-1");
         assert_eq!(config.context_policy().reserve_tokens, 1024);
         assert!(config.mcp_server_configs().is_empty());
-        assert!(config.tool_environment().expect("environment").authorized_entries().is_empty());
+        assert!(
+            config
+                .tool_environment()
+                .expect("environment")
+                .authorized_entries()
+                .is_empty()
+        );
     }
 
     /// Unknown fields fail rather than silently changing semantics.

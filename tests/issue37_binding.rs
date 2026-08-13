@@ -27,12 +27,11 @@ use std::sync::Arc;
 
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
 use rustx::context::{
-    AgentStatusComposer, ContextConfig, ContextEngine, DefaultTokenEstimator,
-    InMemoryCheckpointStore, TokenEstimator,
+    AgentStatusComposer, DefaultTokenEstimator, InMemoryCheckpointStore, TokenEstimator,
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
+
 use rustx::runtime::identity::AgentId;
 use rustx::runtime_client::{
     HostConstructionError, RuntimeClientContextConfig, RuntimeClientEvent, RuntimeClientHost,
@@ -86,26 +85,17 @@ fn config(
     model: Arc<FakeModel>,
 ) -> RuntimeClientHostConfig {
     let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
     RuntimeClientHostConfig {
         agent_id: AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: rustx::model::fixture::scripted_session_model(model),
         timezone: None,
-        adapter: model,
         context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
+            policy: rustx::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            estimator,
             checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             status_composer: AgentStatusComposer::default(),
         },

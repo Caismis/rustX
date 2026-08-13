@@ -45,9 +45,7 @@ use std::sync::Arc;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::model::invocation::{
-    RequestParams, RequestParamsLayer, validate_request_params_layer,
-};
+use crate::model::invocation::{RequestParams, RequestParamsLayer, validate_request_params_layer};
 use crate::model::types::ModelProtocol;
 
 /// The only model-catalog schema version this runtime accepts.
@@ -97,14 +95,9 @@ macro_rules! catalog_identity {
             /// separator.
             pub fn parse(value: impl Into<String>) -> Result<Self, ModelCatalogError> {
                 let value = value.into();
-                if value.is_empty()
-                    || value.contains('/')
-                    || value.chars().any(char::is_whitespace)
+                if value.is_empty() || value.contains('/') || value.chars().any(char::is_whitespace)
                 {
-                    return Err(ModelCatalogError::InvalidIdentity {
-                        kind: $what,
-                        value,
-                    });
+                    return Err(ModelCatalogError::InvalidIdentity { kind: $what, value });
                 }
                 Ok(Self(value))
             }
@@ -159,9 +152,10 @@ impl ModelRef {
                 value: value.to_owned(),
             });
         };
-        let provider = ProviderId::parse(provider).map_err(|_| ModelCatalogError::InvalidModelRef {
-            value: value.to_owned(),
-        })?;
+        let provider =
+            ProviderId::parse(provider).map_err(|_| ModelCatalogError::InvalidModelRef {
+                value: value.to_owned(),
+            })?;
         let model = ModelId::parse(model).map_err(|_| ModelCatalogError::InvalidModelRef {
             value: value.to_owned(),
         })?;
@@ -517,7 +511,9 @@ impl ModelDefinition {
     /// declares reasoning profiles.
     #[must_use]
     pub fn default_reasoning_profile(&self) -> Option<&ReasoningProfileId> {
-        self.reasoning.as_ref().map(|config| &config.default_profile)
+        self.reasoning
+            .as_ref()
+            .map(|config| &config.default_profile)
     }
 
     /// Resolves one declared profile by identity.
@@ -604,10 +600,7 @@ impl ModelCatalog {
     ///
     /// Returns [`ModelCatalogError::UnknownProvider`] or
     /// [`ModelCatalogError::UnknownModel`].
-    pub fn model(
-        &self,
-        reference: &ModelRef,
-    ) -> Result<&Arc<ModelDefinition>, ModelCatalogError> {
+    pub fn model(&self, reference: &ModelRef) -> Result<&Arc<ModelDefinition>, ModelCatalogError> {
         let provider = self.providers.get(reference.provider()).ok_or_else(|| {
             ModelCatalogError::UnknownProvider {
                 provider: reference.provider().clone(),
@@ -762,12 +755,11 @@ impl ResolvedModelCatalog {
         reference: &ModelRef,
     ) -> Result<(&ResolvedProvider, &Arc<ModelDefinition>), ModelCatalogError> {
         let provider = self.provider(reference.provider())?;
-        let model = provider
-            .models
-            .get(reference.model())
-            .ok_or_else(|| ModelCatalogError::UnknownModel {
+        let model = provider.models.get(reference.model()).ok_or_else(|| {
+            ModelCatalogError::UnknownModel {
                 model: reference.clone(),
-            })?;
+            }
+        })?;
         Ok((provider, model))
     }
 
@@ -878,9 +870,7 @@ pub struct ModelDocument {
 }
 
 /// Deserializes a map, rejecting duplicate keys instead of keeping the last.
-fn deserialize_unique_map<'de, D, V>(
-    deserializer: D,
-) -> Result<BTreeMap<String, V>, D::Error>
+fn deserialize_unique_map<'de, D, V>(deserializer: D) -> Result<BTreeMap<String, V>, D::Error>
 where
     D: Deserializer<'de>,
     V: Deserialize<'de>,
@@ -898,9 +888,7 @@ where
             let mut out = BTreeMap::new();
             while let Some((key, value)) = access.next_entry::<String, V>()? {
                 if out.contains_key(&key) {
-                    return Err(serde::de::Error::custom(format!(
-                        "duplicate key {key:?}"
-                    )));
+                    return Err(serde::de::Error::custom(format!("duplicate key {key:?}")));
                 }
                 out.insert(key, value);
             }
@@ -1018,7 +1006,12 @@ fn validate_model(
     })?;
 
     if let Some(reasoning) = &document.reasoning {
-        validate_reasoning(&reference, document.protocol, &document.capabilities, reasoning)?;
+        validate_reasoning(
+            &reference,
+            document.protocol,
+            &document.capabilities,
+            reasoning,
+        )?;
     }
 
     Ok(ModelDefinition {
@@ -1332,7 +1325,10 @@ mod tests {
             model_json("")
         ));
         let error = ModelCatalog::from_json_slice(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(error, ModelCatalogError::Syntax { .. }), "{error:?}");
+        assert!(
+            matches!(error, ModelCatalogError::Syntax { .. }),
+            "{error:?}"
+        );
         assert!(error.to_string().contains("baseUrl"));
     }
 
@@ -1533,10 +1529,7 @@ mod tests {
             )
         ));
         let error = ModelCatalog::from_json_slice(json.as_bytes()).expect_err("must fail");
-        assert!(matches!(
-            error,
-            ModelCatalogError::InvalidReasoning { .. }
-        ));
+        assert!(matches!(error, ModelCatalogError::InvalidReasoning { .. }));
         assert!(error.to_string().contains("defaultProfile"));
     }
 
@@ -1573,9 +1566,7 @@ mod tests {
     fn reasoning_profile_protected_key_collision_fails() {
         let json = catalog_json(&format!(
             r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
-            model_json(
-                r#","capabilities_placeholder":0"#
-            )
+            model_json(r#","capabilities_placeholder":0"#)
         ));
         // `capabilities_placeholder` is not a schema field: unknown fields
         // are rejected, which is itself the contract under test here.
@@ -1602,7 +1593,10 @@ mod tests {
         let catalog = ModelCatalog::from_json_slice(valid_catalog().as_bytes()).expect("valid");
         let reference = ModelRef::parse("p/m").expect("parses");
         assert_eq!(reference.to_string(), "p/m");
-        assert_eq!(catalog.model(&reference).expect("resolves").id.as_str(), "m");
+        assert_eq!(
+            catalog.model(&reference).expect("resolves").id.as_str(),
+            "m"
+        );
         assert!(matches!(
             catalog
                 .model(&ModelRef::parse("p/other").expect("parses"))

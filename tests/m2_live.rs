@@ -8,21 +8,61 @@
 //! OPENAI_API_KEY=... ANTHROPIC_API_KEY=... cargo test --test m2_live -- --ignored
 //! ```
 //!
+//! Provider endpoints are read from `RUSTX_OPENAI_BASE_URL` and
+//! `RUSTX_ANTHROPIC_BASE_URL`: no adapter can infer an official endpoint, so
+//! a live run states the endpoint explicitly just like the catalog does.
+//!
 //! Model names are read from `RUSTX_OPENAI_CHAT_MODEL`,
 //! `RUSTX_OPENAI_RESPONSES_MODEL`, and `RUSTX_ANTHROPIC_MODEL` (the latter
-//! explicitly required). The `OpenAI`
-//! tests fall back to a conservative default; the Anthropic test requires
-//! `RUSTX_ANTHROPIC_MODEL` explicitly, because no single model can be
-//! assumed to accept the request configuration (adaptive thinking plus
-//! `output_config.effort`) — a missing model is skipped and reported, never
-//! silently assumed. Deterministic fixture tests remain the authoritative
-//! correctness tests.
+//! explicitly required). The `OpenAI` tests fall back to a conservative
+//! default; the Anthropic test requires `RUSTX_ANTHROPIC_MODEL` explicitly,
+//! because no single model can be assumed available — a missing model is
+//! skipped and reported, never silently assumed. Deterministic fixture tests
+//! remain the authoritative correctness tests.
+//!
+//! A live request carries **no** request parameters, so any provider field
+//! that reaches the wire came from canonical translation and not from a
+//! configured overlay.
 
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelEvent, ModelProtocol,
-    ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
-    ReasoningEffort, ResponsesStorageMode,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCapabilities, ModelCompat,
+    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
+    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams, ResponsesStorageMode,
 };
+
+/// The explicit `OpenAI`-compatible endpoint of a live run.
+fn openai_base_url() -> String {
+    env_or("RUSTX_OPENAI_BASE_URL", Some("https://api.openai.com/v1")).expect("base url")
+}
+
+/// The explicit Anthropic-compatible endpoint of a live run.
+fn anthropic_base_url() -> String {
+    env_or(
+        "RUSTX_ANTHROPIC_BASE_URL",
+        Some("https://api.anthropic.com"),
+    )
+    .expect("base url")
+}
+
+/// The live invocation configuration: no request parameters, so anything a
+/// live run observes on the wire came from translation, not configuration.
+fn live_invocation(
+    protocol: ModelProtocol,
+    model: &str,
+    storage: ResponsesStorageMode,
+) -> ModelInvocationConfig {
+    ModelInvocationConfig {
+        model: model.to_owned(),
+        protocol,
+        max_output_tokens: 256,
+        request_params: RequestParams::new(),
+        capabilities: ModelCapabilities::text_only(true, true),
+        compat: ModelCompat {
+            responses_storage: storage,
+            ..ModelCompat::default()
+        },
+    }
+}
 
 fn env_or(name: &str, default: Option<&str>) -> Option<String> {
     std::env::var(name)
@@ -39,14 +79,22 @@ fn anthropic_key() -> Option<String> {
 }
 
 fn live_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
+    live_request_with_storage(protocol, model, ResponsesStorageMode::Stored)
+}
+
+/// A live request with an explicit Responses storage/continuation mode.
+fn live_request_with_storage(
+    protocol: ModelProtocol,
+    model: &str,
+    storage: ResponsesStorageMode,
+) -> ModelRequest {
     use rustx::message::content::TextBlock;
     use rustx::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use rustx::runtime::identity::MessageId;
     ModelRequest {
-        model: model.to_owned(),
-        protocol,
+        invocation: live_invocation(protocol, model, storage),
         messages: vec![MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-live-1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -59,8 +107,6 @@ fn live_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
         tools: Vec::new(),
         agent_status: None,
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 256,
         continuation: None,
     }
 }
@@ -110,7 +156,8 @@ async fn live_openai_chat() {
         return;
     };
     let model = env_or("RUSTX_OPENAI_CHAT_MODEL", Some("gpt-5-mini")).expect("model");
-    let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key, openai_base_url()));
     run_live(
         &adapter,
         live_request(ModelProtocol::OpenAiChatCompletions, &model),
@@ -127,9 +174,7 @@ async fn live_openai_responses() {
         return;
     };
     let model = env_or("RUSTX_OPENAI_RESPONSES_MODEL", Some("gpt-5-mini")).expect("model");
-    let adapter = OpenAiResponsesAdapter::new(
-        OpenAiAdapterConfig::new(key).with_responses_storage(ResponsesStorageMode::Stored),
-    );
+    let adapter = OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(key, openai_base_url()));
     run_live(
         &adapter,
         live_request(ModelProtocol::OpenAiResponses, &model),
@@ -146,23 +191,23 @@ async fn live_openai_responses_stateless() {
         return;
     };
     let model = env_or("RUSTX_OPENAI_RESPONSES_MODEL", Some("gpt-5-mini")).expect("model");
-    let adapter = OpenAiResponsesAdapter::new(
-        OpenAiAdapterConfig::new(key).with_responses_storage(ResponsesStorageMode::Stateless),
-    );
+    let adapter = OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(key, openai_base_url()));
     run_live(
         &adapter,
-        live_request(ModelProtocol::OpenAiResponses, &model),
+        live_request_with_storage(
+            ModelProtocol::OpenAiResponses,
+            &model,
+            ResponsesStorageMode::Stateless,
+        ),
     )
     .await;
 }
 
 /// Live `Anthropic` Messages.
 ///
-/// The model must be supplied explicitly via `RUSTX_ANTHROPIC_MODEL`: the
-/// request shape (adaptive thinking + `output_config.effort`) is not
-/// supported by every model, so no model is silently assumed. When the
-/// variable is missing the test skips and reports that clearly; it never
-/// claims to have passed.
+/// The model must be supplied explicitly via `RUSTX_ANTHROPIC_MODEL`: no
+/// model is silently assumed. When the variable is missing the test skips
+/// and reports that clearly; it never claims to have passed.
 #[tokio::test]
 #[ignore = "requires ANTHROPIC_API_KEY, RUSTX_ANTHROPIC_MODEL, and network access"]
 async fn live_anthropic_messages() {
@@ -177,7 +222,8 @@ async fn live_anthropic_messages() {
         );
         return;
     };
-    let adapter = AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(key));
+    let adapter =
+        AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(key, anthropic_base_url()));
     run_live(
         &adapter,
         live_request(ModelProtocol::AnthropicMessages, &model),
@@ -203,8 +249,11 @@ async fn live_openai_chat_tool_call() {
     };
     let model = env_or("RUSTX_OPENAI_CHAT_MODEL", Some("gpt-5-mini")).expect("model");
     let request = ModelRequest {
-        model,
-        protocol: ModelProtocol::OpenAiChatCompletions,
+        invocation: live_invocation(
+            ModelProtocol::OpenAiChatCompletions,
+            &model,
+            ResponsesStorageMode::Stored,
+        ),
         messages: vec![MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-live-2"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -227,11 +276,10 @@ async fn live_openai_chat_tool_call() {
         }],
         agent_status: None,
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 256,
         continuation: None,
     };
-    let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key, openai_base_url()));
     let cancellation = rustx::runtime::CancellationSignal::new();
     let mut stream = adapter.stream(request, cancellation);
     let mut saw_tool_call = false;

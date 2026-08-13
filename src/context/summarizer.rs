@@ -177,7 +177,10 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 skill_catalog: None,
                 continuation: None,
             };
-            let mut stream = self.invocation.adapter().stream(model_request, cancellation);
+            let mut stream = self
+                .invocation
+                .adapter()
+                .stream(model_request, cancellation);
             let mut text = String::new();
             let mut state = SummaryStreamState::default();
             let mut finish_reason = None;

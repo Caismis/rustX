@@ -11,28 +11,20 @@ use common::{error_fixture, simple_request, sse_fixture};
 use rustx::model::{
     AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
     ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter, ResponsesStorageMode,
+    OpenAiResponsesAdapter,
 };
 use rustx::runtime::CancellationSignal;
 
 fn openai_chat(server: &common::FixtureServer) -> OpenAiChatCompletionsAdapter {
-    OpenAiChatCompletionsAdapter::new(
-        OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
-    )
+    OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1")))
 }
 
 fn openai_responses(server: &common::FixtureServer) -> OpenAiResponsesAdapter {
-    OpenAiResponsesAdapter::new(
-        OpenAiAdapterConfig::new("test-key")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(ResponsesStorageMode::Stored),
-    )
+    OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1")))
 }
 
 fn anthropic(server: &common::FixtureServer) -> AnthropicMessagesAdapter {
-    AnthropicMessagesAdapter::new(
-        AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
-    )
+    AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new("test-key", server.url("")))
 }
 
 fn chat_request() -> ModelRequest {

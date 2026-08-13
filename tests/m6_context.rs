@@ -22,8 +22,7 @@ const SYSTEM_TEXT: &str = "You are a helpful agent.";
 /// Skill catalog attachment.
 fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
     ModelRequest {
-        model: "m6-test".to_owned(),
-        protocol,
+        invocation: common::invocation(protocol, "m6-test"),
         messages: vec![
             MessageBlock::System(SystemMessageBlock {
                 id: MessageId::new("msg-system-1"),
@@ -53,8 +52,6 @@ fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
         skill_catalog: with_catalog.then(|| SkillCatalogAttachment {
             rendered: CATALOG.to_owned(),
         }),
-        reasoning: rustx::model::ReasoningEffort::Medium,
-        max_output_tokens: 512,
         continuation: None,
     }
 }
@@ -68,7 +65,7 @@ async fn anthropic_places_the_catalog_in_top_level_system_content() {
     })
     .await;
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
-        rustx::model::AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
+        rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
     );
     let events =
         common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, true)).await;
@@ -110,7 +107,7 @@ async fn anthropic_omits_the_catalog_when_no_skill_is_active() {
     })
     .await;
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
-        rustx::model::AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
+        rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
     );
     let events =
         common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, false)).await;
@@ -141,7 +138,7 @@ async fn chat_completions_places_the_catalog_in_a_system_message() {
     })
     .await;
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let events = common::collect_events(
         &adapter,
@@ -207,9 +204,7 @@ async fn responses_places_the_catalog_in_the_instructions_channel() {
     })
     .await;
     let adapter = rustx::model::OpenAiResponsesAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(rustx::model::ResponsesStorageMode::Stored),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let events =
         common::collect_events(&adapter, request(ModelProtocol::OpenAiResponses, true)).await;
@@ -241,9 +236,7 @@ async fn responses_continuation_keeps_sending_the_catalog() {
     })
     .await;
     let adapter = rustx::model::OpenAiResponsesAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(rustx::model::ResponsesStorageMode::Stored),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let mut request = request(ModelProtocol::OpenAiResponses, true);
     request.continuation = Some(
@@ -383,5 +376,5 @@ fn large_catalog_contributes_to_cannot_fit() {
         )
         .expect("plan");
     assert_eq!(plan.skill_catalog, Some(moderate_catalog));
-    let _ = ContextRuntime::new;
+    let _ = ContextRuntime::for_attempt;
 }

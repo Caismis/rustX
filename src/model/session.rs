@@ -146,7 +146,7 @@ pub enum AttemptSummaryModel {
     /// The summary follows the attempt's primary invocation.
     Session,
     /// The summary uses this already-resolved explicit invocation.
-    Explicit(ResolvedModelInvocation),
+    Explicit(Box<ResolvedModelInvocation>),
 }
 
 /// The immutable model ownership object of one admitted attempt.
@@ -199,7 +199,7 @@ impl AttemptModelSnapshot {
             summary: match &self.summary {
                 AttemptSummaryModel::Session => SummaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
-                    SummaryModelView::Explicit(invocation.view())
+                    SummaryModelView::Explicit(Box::new(invocation.view()))
                 }
             },
         }
@@ -292,7 +292,7 @@ impl SessionModelState {
             summary: match &self.summary {
                 AttemptSummaryModel::Session => SummaryModelView::Session,
                 AttemptSummaryModel::Explicit(invocation) => {
-                    SummaryModelView::Explicit(invocation.view())
+                    SummaryModelView::Explicit(Box::new(invocation.view()))
                 }
             },
         }
@@ -308,9 +308,9 @@ fn resolve(
     let primary = registry.resolve(&config.selection())?;
     let summary = match config.summary_selection() {
         None => AttemptSummaryModel::Session,
-        Some(selection) => AttemptSummaryModel::Explicit(
+        Some(selection) => AttemptSummaryModel::Explicit(Box::new(
             registry.resolve_with_layer(&selection, RequestParamsLayer::SummaryOverrides)?,
-        ),
+        )),
     };
     Ok((primary, summary))
 }
@@ -347,7 +347,7 @@ pub enum SummaryModelView {
     /// The summary follows the primary model.
     Session,
     /// The summary uses this resolved explicit invocation.
-    Explicit(ModelInvocationView),
+    Explicit(Box<ModelInvocationView>),
 }
 
 /// The redacted client-facing projection of one attempt's frozen model

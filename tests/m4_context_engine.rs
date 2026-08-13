@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, model_release, success_result, tool_call_events,
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, model_release, success_result,
+    tool_call_events,
 };
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
@@ -22,8 +23,7 @@ use rustx::context::{
     ContextBoundary, ContextCheckpointStore, ContextConfig, ContextEngine, ContextError,
     ContextErrorKind, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
     InMemoryCheckpointStore, ModelBackedSummarizer, ProjectionItem, ProviderObservedInput,
-    SummaryInputItem, SummaryModelConfig, SummaryRequest, TokenEstimator, TokenMeasurement,
-    TokenMeasurementSource,
+    SummaryInputItem, SummaryRequest, TokenEstimator, TokenMeasurement, TokenMeasurementSource,
 };
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -33,7 +33,7 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort};
+use rustx::model::types::{ModelRequest, ModelUsage};
 use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
@@ -210,6 +210,7 @@ fn request(
     attempt: &str,
     initial_messages: Vec<MessageBlock>,
     max_output_tokens: u32,
+    model: &Arc<FakeModel>,
 ) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
@@ -218,10 +219,12 @@ fn request(
         initial_messages,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens,
+        model: common::attempt_model_with_window(
+            model.clone(),
+            "fake-model",
+            10_000_000,
+            max_output_tokens.max(1),
+        ),
     }
 }
 
@@ -312,6 +315,20 @@ fn scripted_call() -> ScriptedCall {
     }
 }
 
+/// The resolved summary invocation of a scripted model, with an explicit
+/// output budget.
+///
+/// It is built through the same catalog resolution as a primary model, so a
+/// summarizer test exercises the real binding path.
+fn summary_invocation(
+    model: &Arc<FakeModel>,
+    max_output_tokens: u32,
+) -> rustx::model::ResolvedModelInvocation {
+    common::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, max_output_tokens)
+        .summary_invocation()
+        .clone()
+}
+
 fn tool_registry_with_alpha() -> ToolRegistry {
     let mut tools = ToolRegistry::new();
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
@@ -325,11 +342,12 @@ fn runtime_with(
     estimator: Arc<dyn TokenEstimator>,
     summarizer: FakeContextSummarizer,
     store: Arc<InMemoryCheckpointStore>,
-) -> ContextRuntime<'static> {
-    ContextRuntime::new(
+) -> ContextRuntime {
+    ContextRuntime::with_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
         store,
+        rustx::context::AgentStatusComposer::default(),
     )
 }
 
@@ -1265,7 +1283,7 @@ fn fresh_checkpoint_is_established_after_absorption() {
 /// suffix is retired.
 #[tokio::test]
 async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "answer")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -1290,10 +1308,11 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::new(
+    let runtime = ContextRuntime::with_summarizer(
         engine(400, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
+        rustx::context::AgentStatusComposer::default(),
     );
     let history = vec![
         user("u1", ""),
@@ -1306,8 +1325,7 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", history, 0),
-        &model,
+        request("attempt-1", history, 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -1380,7 +1398,7 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
 /// The same end-to-end guarantee for an absorbed `InsideAgent` checkpoint.
 #[tokio::test]
 async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "answer")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -1404,10 +1422,11 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::new(
+    let runtime = ContextRuntime::with_summarizer(
         engine(500, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
+        rustx::context::AgentStatusComposer::default(),
     );
     let history = vec![
         user("u1", ""),
@@ -1420,8 +1439,7 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", history, 0),
-        &model,
+        request("attempt-1", history, 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2258,7 +2276,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
 #[allow(clippy::too_many_lines)] // the full expected trace is asserted verbatim
 async fn proactive_compaction_before_the_next_turn() {
     let scripted = scripted_call();
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &scripted)[0].clone()),
@@ -2281,8 +2299,7 @@ async fn proactive_compaction_before_the_next_turn() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2432,7 +2449,7 @@ async fn proactive_compaction_before_the_next_turn() {
 #[tokio::test]
 async fn below_threshold_runs_without_compaction() {
     let scripted = scripted_call();
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &scripted)[0].clone()),
@@ -2460,8 +2477,7 @@ async fn below_threshold_runs_without_compaction() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2498,7 +2514,7 @@ async fn below_threshold_runs_without_compaction() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn overflow_compact_and_retry_succeeds() {
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "provisional")),
@@ -2519,8 +2535,7 @@ async fn overflow_compact_and_retry_succeeds() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2612,7 +2627,7 @@ async fn overflow_compact_and_retry_succeeds() {
 /// overflow; no second compaction and no third request occur.
 #[tokio::test]
 async fn overflow_retry_exhausted_after_one_retry() {
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "first")),
@@ -2633,8 +2648,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2686,7 +2700,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
 /// the failed request never enters the committed message.
 #[tokio::test]
 async fn overflow_retry_never_commits_provisional_failed_content() {
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "PROVISIONAL")),
@@ -2707,8 +2721,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2766,7 +2779,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
             .map(FakeStep::Emit),
     );
     first.push(FakeStep::Emit(overflow_event()));
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         first,
         vec![
             FakeStep::Emit(started()),
@@ -2783,8 +2796,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2831,7 +2843,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
 #[tokio::test]
 async fn overflow_retry_budget_is_per_model_turn() {
     let scripted = scripted_call();
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         // Turn 1: overflow, then its own retry → ToolCalls.
         vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
         vec![
@@ -2860,8 +2872,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -2915,7 +2926,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
 #[tokio::test]
 async fn invalid_summary_fails_without_checkpoint_or_retry() {
     for bad_summary in ["", "   "] {
-        let model = FakeModel::new(vec![vec![
+        let model = fake_model(vec![vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(overflow_event()),
         ]]);
@@ -2928,8 +2939,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
         let tool_runtime = common::tool_runtime("conv-1");
         let capability = common::capability_lease(tools, &tool_runtime).await;
         let result = AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-            &model,
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
             capability.into_lease(),
             &cancellation,
             runtime,
@@ -2985,7 +2995,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
 /// overflow as the final model failure.
 #[tokio::test]
 async fn compaction_failure_after_overflow_preserves_the_overflow() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "provisional")),
         FakeStep::Emit(overflow_event()),
@@ -3001,8 +3011,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -3088,7 +3097,11 @@ impl rustx::context::AgentStatusSectionProvider for FailingStatusProvider {
 
 /// A fresh-inbound request: the first turn carries a pending fresh inbound
 /// turn, so Agent Status composition is mandatory.
-fn fresh_request(attempt: &str, initial_messages: Vec<MessageBlock>) -> AgentExecutionRequest {
+fn fresh_request(
+    attempt: &str,
+    initial_messages: Vec<MessageBlock>,
+    model: &Arc<FakeModel>,
+) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: conversation(),
@@ -3099,10 +3112,7 @@ fn fresh_request(attempt: &str, initial_messages: Vec<MessageBlock>) -> AgentExe
                 .expect("valid fresh turn"),
         ),
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 0,
+        model: common::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 1),
     }
 }
 
@@ -3126,7 +3136,7 @@ fn fresh_user(id: &str, text: &str) -> MessageBlock {
 /// `Runtime(ContextPreparationFailed { .. })`.
 #[tokio::test]
 async fn failing_status_provider_is_preparation_failure_not_compaction() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "ok")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -3141,11 +3151,14 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        fresh_request("attempt-1", vec![fresh_user("msg-inbound-1", "deploy it")]),
-        &model,
+        fresh_request(
+            "attempt-1",
+            vec![fresh_user("msg-inbound-1", "deploy it")],
+            &model,
+        ),
         capability.into_lease(),
         &cancellation,
-        rustx::context::ContextRuntime::with_status_composer(
+        rustx::context::ContextRuntime::with_summarizer(
             engine(10_000_000, 0, 0, weighted(10, 10, 10)),
             Arc::new(FakeContextSummarizer::new(Vec::new())),
             store,
@@ -3214,7 +3227,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
 /// genuinely started and failed.
 #[tokio::test]
 async fn proactive_compaction_failure_is_context_compaction_failed() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "ok")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -3234,8 +3247,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        fresh_request("attempt-1", initial),
-        &model,
+        fresh_request("attempt-1", initial, &model),
         capability.into_lease(),
         &cancellation,
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer, store.clone()),
@@ -3295,7 +3307,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
 /// terminal event.
 #[tokio::test]
 async fn no_progress_compaction_fails_without_retry() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "provisional")),
         FakeStep::Emit(overflow_event()),
@@ -3309,8 +3321,7 @@ async fn no_progress_compaction_fails_without_retry() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -3361,7 +3372,7 @@ async fn no_progress_compaction_fails_without_retry() {
 #[tokio::test]
 async fn cancel_before_proactive_compaction() {
     let scripted = scripted_call();
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &scripted)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &scripted)[1].clone()),
@@ -3382,8 +3393,7 @@ async fn cancel_before_proactive_compaction() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -3427,7 +3437,7 @@ async fn cancel_before_proactive_compaction() {
 /// dropped, no completion, no failure, no retry, and no checkpoint.
 #[tokio::test]
 async fn cancel_while_summary_generation_is_pending() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "provisional")),
         FakeStep::Emit(overflow_event()),
@@ -3441,8 +3451,7 @@ async fn cancel_while_summary_generation_is_pending() {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let execution = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -3520,7 +3529,7 @@ async fn run_continuation_case(
             }),
         );
     }
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         turn1,
         vec![
             FakeStep::Emit(started()),
@@ -3541,8 +3550,7 @@ async fn run_continuation_case(
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -3658,25 +3666,17 @@ async fn no_continuation_is_fabricated() {
 // ---------------------------------------------------------------------------
 
 /// The model-backed summarizer issues a canonical one-off request with no
-/// tools, no continuation, the configured model/protocol/reasoning/output
-/// budget, and deterministic input.
+/// tools, no continuation, the resolved summary invocation's
+/// model/protocol/output budget, and deterministic input.
 #[tokio::test]
 async fn model_backed_summarizer_issues_a_canonical_request() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text_delta(0, "summary ")),
         FakeStep::Emit(text_delta(0, "text")),
         FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 9)),
     ]]);
-    let summarizer = ModelBackedSummarizer::new(
-        &model,
-        SummaryModelConfig {
-            model: "fake-model".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::High,
-            max_output_tokens: 128,
-        },
-    );
+    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 128));
     let request = SummaryRequest {
         previous_summary: Some("s1".to_owned()),
         newly_retired: vec![SummaryInputItem::Message(user("u1", "hi"))],
@@ -3690,10 +3690,12 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
 
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model, "fake-model");
-    assert_eq!(requests[0].protocol, ModelProtocol::OpenAiChatCompletions);
-    assert_eq!(requests[0].reasoning, ReasoningEffort::High);
-    assert_eq!(requests[0].max_output_tokens, 128);
+    assert_eq!(requests[0].model(), "fake-model");
+    assert_eq!(
+        requests[0].protocol(),
+        rustx::model::ModelProtocol::OpenAiChatCompletions
+    );
+    assert_eq!(requests[0].max_output_tokens(), 128);
     assert!(requests[0].tools.is_empty());
     assert_eq!(requests[0].continuation, None);
     let MessageBlock::User(user) = &requests[0].messages[0] else {
@@ -3745,16 +3747,8 @@ async fn model_backed_summarizer_rejects_invalid_streams() {
         ),
     ];
     for (events, expected) in cases {
-        let model = FakeModel::new(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(
-            &model,
-            SummaryModelConfig {
-                model: "fake-model".to_owned(),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                reasoning: ReasoningEffort::Medium,
-                max_output_tokens: 64,
-            },
-        );
+        let model = fake_model(vec![events]);
+        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
         let request = SummaryRequest {
             previous_summary: None,
             newly_retired: vec![],
@@ -3792,16 +3786,8 @@ async fn model_backed_summarizer_rejects_refusal_without_delta_and_empty_output(
         ],
     ];
     for events in cases {
-        let model = FakeModel::new(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(
-            &model,
-            SummaryModelConfig {
-                model: "fake-model".to_owned(),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                reasoning: ReasoningEffort::Medium,
-                max_output_tokens: 64,
-            },
-        );
+        let model = fake_model(vec![events]);
+        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
         let request = SummaryRequest {
             previous_summary: None,
             newly_retired: vec![],
@@ -3843,16 +3829,8 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
         ],
     ];
     for events in cases {
-        let model = FakeModel::new(vec![events]);
-        let summarizer = ModelBackedSummarizer::new(
-            &model,
-            SummaryModelConfig {
-                model: "fake-model".to_owned(),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                reasoning: ReasoningEffort::Medium,
-                max_output_tokens: 64,
-            },
-        );
+        let model = fake_model(vec![events]);
+        let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
         let request = SummaryRequest {
             previous_summary: None,
             newly_retired: vec![],
@@ -3869,16 +3847,8 @@ async fn model_backed_summarizer_rejects_malformed_stream_orderings() {
 /// Cancellation aborts the summary.
 #[tokio::test]
 async fn model_backed_summarizer_aborts_on_cancellation() {
-    let model = FakeModel::new(vec![vec![FakeStep::ParkUntilCancelled]]);
-    let summarizer = ModelBackedSummarizer::new(
-        &model,
-        SummaryModelConfig {
-            model: "fake-model".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 64,
-        },
-    );
+    let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
+    let summarizer = ModelBackedSummarizer::new(summary_invocation(&model, 64));
     let cancellation = rustx::runtime::CancellationSignal::new();
     let request = SummaryRequest {
         previous_summary: None,
@@ -3904,7 +3874,7 @@ async fn model_backed_summarizer_aborts_on_cancellation() {
 /// request state.
 #[tokio::test]
 async fn model_backed_summarizer_does_not_contaminate_the_execution() {
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "provisional")),
@@ -3924,28 +3894,28 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
-    let runtime = ContextRuntime::model_backed(
-        ContextConfig {
-            context_window_tokens: 500,
+    // One attempt snapshot drives both the loop and the summary: the
+    // production `for_attempt` path derives the engine window and the summary
+    // invocation from exactly the model the attempt was admitted with.
+    let snapshot = common::attempt_model_with_window(model.clone(), "fake-model", 500, 1);
+    let runtime = ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 5,
+            summary_output_cap: None,
         },
         weighted(100, 10, 0),
-        &model,
-        SummaryModelConfig {
-            model: "fake-model".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 0,
-        },
         store.clone(),
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
     .expect("runtime");
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
+    let mut attempt_request = request("attempt-1", vec![user("msg-user-1", "hi")], 1, &model);
+    attempt_request.model = snapshot;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0),
-        &model,
+        attempt_request,
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -4058,8 +4028,8 @@ fn block_id(block: &MessageBlock) -> String {
 
 /// Scripts a two-turn model whose first turn parks (with a released text
 /// delta) and completes with Stop; the second turn completes immediately.
-fn parked_two_turn_model(release: tokio::sync::watch::Receiver<bool>) -> FakeModel {
-    FakeModel::new(vec![
+fn parked_two_turn_model(release: tokio::sync::watch::Receiver<bool>) -> Arc<FakeModel> {
+    fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text_delta(0, "doing")),
@@ -4124,8 +4094,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "start")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -4200,8 +4169,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "start")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -4321,7 +4289,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
 async fn m4_drain_retains_continuation_without_compaction() {
     let state = anthropic_state();
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(ModelEvent::ContinuationState {
@@ -4363,8 +4331,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "hi")], 0),
-        &model,
+        request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
         capability.into_lease(),
         &cancellation,
         runtime,

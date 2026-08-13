@@ -20,15 +20,18 @@ use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinua
 use rustx::runtime::identity::ToolCallId;
 use rustx::tools::types::ToolCall;
 
-fn adapter(
-    server: &common::FixtureServer,
-    storage_mode: ResponsesStorageMode,
-) -> OpenAiResponsesAdapter {
-    OpenAiResponsesAdapter::new(
-        OpenAiAdapterConfig::new("test-key")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(storage_mode),
-    )
+fn adapter(server: &common::FixtureServer) -> OpenAiResponsesAdapter {
+    OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1")))
+}
+
+/// Selects the provider storage/continuation mode of one request.
+///
+/// Storage mode is per-model structural compat metadata carried by the
+/// request's invocation configuration, not adapter configuration: one
+/// adapter serves every Responses model of its provider.
+fn with_storage(mut request: ModelRequest, storage: ResponsesStorageMode) -> ModelRequest {
+    request.invocation.compat.responses_storage = storage;
+    request
 }
 
 fn request_with_tools(prompt: &str) -> ModelRequest {
@@ -59,8 +62,11 @@ async fn plain_text_normalizes() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Say hello"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Say hello"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert_eq!(events[0], ModelEvent::Started);
@@ -116,8 +122,11 @@ async fn reasoning_merges_into_one_block() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     let reasoning_deltas: Vec<&str> = events
@@ -151,8 +160,11 @@ async fn reasoning_then_text_stays_separate() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert!(matches!(events[1], ModelEvent::ReasoningDelta { .. }));
@@ -175,8 +187,11 @@ async fn reasoning_then_function_call_normalizes() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        request_with_tools("Use the tool"),
+        &adapter(&server),
+        with_storage(
+            request_with_tools("Use the tool"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     let starts: Vec<&rustx::tools::types::ToolCallStart> = events
@@ -217,8 +232,8 @@ async fn multiple_output_blocks_keep_stable_indexes() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        request_with_tools("Mixed"),
+        &adapter(&server),
+        with_storage(request_with_tools("Mixed"), ResponsesStorageMode::Stored),
     )
     .await;
     assert!(matches!(events[1], ModelEvent::TextDelta { .. }));
@@ -242,8 +257,11 @@ async fn refusal_derives_refusal_finish() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "No"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "No"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert!(matches!(events[1], ModelEvent::RefusalDelta { .. }));
@@ -274,8 +292,11 @@ async fn incomplete_responses_map_reasons() {
         })
         .await;
         let events = collect_events(
-            &adapter(&server, ResponsesStorageMode::Stored),
-            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            &adapter(&server),
+            with_storage(
+                simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+                ResponsesStorageMode::Stored,
+            ),
         )
         .await;
         assert!(
@@ -303,8 +324,11 @@ async fn failed_response_is_a_failure() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
@@ -318,8 +342,11 @@ async fn stream_error_event_fails() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
@@ -333,8 +360,11 @@ async fn interrupted_stream_fails() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
@@ -348,8 +378,11 @@ async fn provider_hosted_output_item_is_unsupported() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Search"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Search"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
@@ -369,8 +402,11 @@ async fn reasoning_done_only_is_emitted_once() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Think"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     let reasoning: Vec<&String> = events
@@ -393,8 +429,11 @@ async fn stateless_fresh_request_preserves_opaque_items() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stateless),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stateless,
+        ),
     )
     .await;
     let ModelEvent::ContinuationState { state, .. } = &events[events.len() - 2] else {
@@ -474,7 +513,11 @@ async fn stateless_continuation_replays_items_without_duplication() {
             ],
         },
     ));
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stateless), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stateless),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
@@ -499,8 +542,11 @@ async fn stored_mode_preserves_response_id() {
     })
     .await;
     let events = collect_events(
-        &adapter(&server, ResponsesStorageMode::Stored),
-        simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
     )
     .await;
     let body: serde_json::Value =
@@ -540,7 +586,11 @@ async fn stored_continuation_sends_only_tail_context() {
             previous_response_id: "resp_prev".to_owned(),
         },
     ));
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
@@ -587,7 +637,7 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
             }),
         );
         request.continuation = Some(continuation);
-        let events = collect_events(&adapter(&server, mode), request).await;
+        let events = collect_events(&adapter(&server), with_storage(request, mode)).await;
         assert_eq!(events.len(), 1, "terminal Failed without Started");
         assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);
         assert_eq!(server.attempt_count(), 0, "no provider request");
@@ -608,7 +658,11 @@ async fn continuation_without_boundary_fails() {
             previous_response_id: "resp_1".to_owned(),
         },
     ));
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert_eq!(events.len(), 1);
     assert_terminal_failed(&events, &ModelErrorKind::InvalidRequest);
     assert_eq!(server.attempt_count(), 0);
@@ -660,8 +714,11 @@ async fn http_errors_normalize() {
         })
         .await;
         let events = collect_events(
-            &adapter(&server, ResponsesStorageMode::Stored),
-            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            &adapter(&server),
+            with_storage(
+                simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+                ResponsesStorageMode::Stored,
+            ),
         )
         .await;
         assert_eq!(events.len(), 2, "fixture {fixture}");
@@ -692,7 +749,11 @@ async fn reasoning_without_provider_state_is_unsupported() {
             )],
         }),
     );
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert_eq!(events.len(), 1, "rejected before the network");
     assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
     assert_eq!(server.attempt_count(), 0);
@@ -730,7 +791,11 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
             )],
         }),
     );
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
@@ -754,21 +819,27 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
     );
 }
 
-/// The serialized fresh request carries only model-facing tool fields and the
-/// exact reasoning effort.
+/// The serialized fresh request carries only model-facing tool fields, and no
+/// reasoning field is synthesized when none is configured.
 #[tokio::test]
 async fn request_serialization_is_model_facing_only() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_responses", "plain_text.sse")
     })
     .await;
-    let mut request = request_with_tools("List");
-    request.reasoning = rustx::model::ReasoningEffort::High;
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let request = request_with_tools("List");
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    assert_eq!(body["reasoning"]["effort"], "high");
+    assert!(
+        body.get("reasoning").is_none(),
+        "the retired universal reasoning mapping never injects a field: {body}"
+    );
     assert_eq!(body["stream"], true);
     let tool = &body["tools"][0];
     assert_eq!(tool["type"], "function");
@@ -837,7 +908,11 @@ async fn continuation_tail_preserves_tool_then_users_order() {
             previous_response_id: "resp_prev".to_owned(),
         },
     ));
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
@@ -907,7 +982,11 @@ async fn continuation_no_tool_tail_preserves_both_users() {
             previous_response_id: "resp_prev".to_owned(),
         },
     ));
-    let events = collect_events(&adapter(&server, ResponsesStorageMode::Stored), request).await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(request, ResponsesStorageMode::Stored),
+    )
+    .await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");

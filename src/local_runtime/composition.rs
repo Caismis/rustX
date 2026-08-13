@@ -176,8 +176,7 @@ impl LocalConversationRuntime {
 
         // 3. Resolve startup credentials and build every model binding.
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
-        let registry =
-            ModelBindingRegistry::new(resolved, dependencies.adapter_factory.as_ref())?;
+        let registry = ModelBindingRegistry::new(resolved, dependencies.adapter_factory.as_ref())?;
 
         // 4. Load and validate the local session configuration.
         let session = LocalSessionConfig::from_json_slice(&session_bytes)?;
@@ -198,9 +197,9 @@ impl LocalConversationRuntime {
         runtime_config.environment = Some(base_environment.clone());
         let tool_runtime =
             ConversationToolRuntime::from_config(session.conversation_id.clone(), runtime_config)
-        .map_err(|error| LocalRuntimeError::ToolRuntime {
-            detail: format!("{error:?}"),
-        })?;
+                .map_err(|error| LocalRuntimeError::ToolRuntime {
+                detail: format!("{error:?}"),
+            })?;
 
         // 7-8. The base tool registry with the explicit native composition,
         // using *this* conversation's background registry for the
@@ -233,12 +232,11 @@ impl LocalConversationRuntime {
 
         // 10-11. Prepare and commit the initial capability candidate before
         // anything can serve protocol input.
-        let candidate = capability
-            .prepare_candidate()
-            .await
-            .map_err(|error| LocalRuntimeError::Capability {
+        let candidate = capability.prepare_candidate().await.map_err(|error| {
+            LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
-            })?;
+            }
+        })?;
         capability
             .commit(candidate)
             .map_err(|error| LocalRuntimeError::Capability {
