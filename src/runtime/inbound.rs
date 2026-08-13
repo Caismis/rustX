@@ -523,11 +523,17 @@ impl ConversationInboundMailbox {
     /// boundary (Issue #37); exactly one observer is expected, and a later
     /// installation replaces an earlier one.
     ///
+    /// Installation is crate-private: it is a runtime coordination seam,
+    /// not a public extension point. The one-time Runtime Client binding
+    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// installation, so no external caller can replace the Runtime Client
+    /// observer.
+    ///
     /// # Panics
     ///
     /// Panics only if the mailbox lock is poisoned, which would mean a
     /// previous operation panicked while holding the lock.
-    pub fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
+    pub(crate) fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
         self.state
             .lock()
             .expect("inbound mailbox lock poisoned")

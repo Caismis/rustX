@@ -183,6 +183,18 @@ pub enum HostConstructionError {
     },
     /// The context engine configuration is impossible.
     Context(String),
+    /// The conversation tool runtime identity (or the capability
+    /// coordinator identity) is already bound to a Runtime Client host.
+    ///
+    /// Protocol v1 binds one runtime identity to at most one
+    /// [`RuntimeClientHost`] for that identity's lifetime, so cloning a
+    /// runtime bundle never yields a second bindable identity and dropping
+    /// the bound host never makes it bindable again. Reconnect replaces the
+    /// attachment, not the host.
+    RuntimeClientAlreadyBound {
+        /// The conversation whose runtime identity is already bound.
+        conversation_id: ConversationId,
+    },
 }
 
 impl core::fmt::Display for HostConstructionError {
@@ -196,6 +208,10 @@ impl core::fmt::Display for HostConstructionError {
                 "capability owner {capability_conversation} does not match tool runtime owner {runtime_conversation}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
+            Self::RuntimeClientAlreadyBound { conversation_id } => write!(
+                f,
+                "the runtime identity of conversation {conversation_id} is already bound to a Runtime Client host"
+            ),
         }
     }
 }
@@ -693,14 +709,40 @@ impl core::fmt::Debug for RuntimeClientHost {
 impl RuntimeClientHost {
     /// Creates the host and installs the observation seams.
     ///
+    /// # One host per runtime identity
+    ///
+    /// Construction claims the one-time Runtime Client binding of the
+    /// conversation tool runtime and of the capability coordinator. Both are
+    /// `Clone`, and every clone shares one binding, so passing a cloned
+    /// runtime bundle to a second `new` is rejected with
+    /// [`HostConstructionError::RuntimeClientAlreadyBound`] rather than
+    /// silently replacing the first host's observation seams.
+    ///
+    /// The binding lasts for the runtime identity's lifetime and is not
+    /// released when the bound host is dropped: reconnect belongs to
+    /// attachments (detach, then a fresh
+    /// [`RuntimeClientEndpoint`](super::endpoint::RuntimeClientEndpoint)
+    /// `initialize`), not to host reconstruction. A new host requires a new
+    /// `ConversationToolRuntime` identity.
+    ///
+    /// # Construction order
+    ///
+    /// Every fallible validation runs *before* the binding claim, and every
+    /// step after it is infallible, so a rejected construction has no
+    /// semantic side effect at all and a claimed runtime is never left
+    /// unusable. The claim is the ownership-commit boundary.
+    ///
     /// # Errors
     ///
     /// Returns [`HostConstructionError::OwnershipMismatch`] when the
     /// capability coordinator and the conversation tool runtime do not
-    /// share the same conversation/workspace ownership domain, and
+    /// share the same conversation/workspace ownership domain,
+    /// [`HostConstructionError::RuntimeClientAlreadyBound`] when either is
+    /// already bound to a Runtime Client host, and
     /// [`HostConstructionError::Context`] when the context engine
     /// configuration is impossible.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
+        // ---- Fallible validation: nothing below is observable yet. ----
         let snapshot = config.capability.current_snapshot();
         if snapshot.conversation_id() != config.tool_runtime.conversation_id()
             || snapshot.workspace_root() != config.tool_runtime.workspace().root()
@@ -710,6 +752,27 @@ impl RuntimeClientHost {
                 runtime_conversation: config.tool_runtime.conversation_id().clone(),
             });
         }
+
+        // ---- Ownership commit: the one-time binding claim. ----
+        //
+        // The runtime identity is claimed first because it is the canonical
+        // mailbox/background identity this host coordinates. If the
+        // coordinator is already bound, the runtime claim is released again:
+        // a rejected construction must leave no trace, and this is the only
+        // place a claim is ever released.
+        if !config.tool_runtime.claim_runtime_client() {
+            return Err(HostConstructionError::RuntimeClientAlreadyBound {
+                conversation_id: config.tool_runtime.conversation_id().clone(),
+            });
+        }
+        if !config.capability.claim_runtime_client() {
+            config.tool_runtime.release_runtime_client_claim();
+            return Err(HostConstructionError::RuntimeClientAlreadyBound {
+                conversation_id: config.tool_runtime.conversation_id().clone(),
+            });
+        }
+
+        // ---- Infallible wiring: from here construction always succeeds. ----
         let replay_limit = config
             .replay_limit
             .unwrap_or(super::projection::RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT);

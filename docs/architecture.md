@@ -1278,6 +1278,39 @@ runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
   shutdown decisions all serialize through it, so snapshot/cursor,
   cancel-current, terminal settlement, and admission linearize by
   synchronization, never by timing.
+- **One host per runtime identity.** One `ConversationToolRuntime` identity
+  is bound to at most one `RuntimeClientHost` for that identity's lifetime.
+  `RuntimeClientHost::new` claims a one-time binding on the tool runtime and
+  on the capability coordinator; both are `Clone` and every clone shares one
+  binding, so a cloned runtime bundle is not a second bindable identity. A
+  second construction is rejected with
+  `HostConstructionError::RuntimeClientAlreadyBound`.
+
+  This is a runtime ownership invariant, not a caller convention. A host is
+  the conversation coordinator over its runtime identity — canonical
+  history, the current-attempt slot, the projection and its cursor domain,
+  attachment state, and the inbound and attempt identity counters all live
+  in one host — so two hosts would be two coordinators over one
+  authoritative runtime. Each subsystem also carries exactly one observer
+  slot, so the second host would silently unhook the first.
+
+  Every fallible validation runs before the claim and every step after it is
+  infallible, so the claim is the ownership-commit boundary and a rejected
+  construction has no semantic side effect: no observer is replaced, no
+  worker starts, and no mailbox, background, or capability state moves.
+
+  **Host lifetime is not attachment lifetime.** Reconnect replaces the
+  attachment on the same host (detach, then a fresh `RuntimeClientEndpoint`
+  `initialize` yielding a new `AttachmentId`); it never reconstructs the
+  host. The binding is deliberately not released when the bound host is
+  dropped: rebinding a surviving runtime bundle would require a recovery
+  model for canonical history, pending mailbox projection, and cursor
+  continuity that pre-M8 does not own. Recreating a host over the same
+  runtime bundle is **not** supported v1 recovery — a new host requires a
+  new `ConversationToolRuntime` identity. Observer installation on the
+  mailbox, background registry, and capability coordinator is crate-private
+  for the same reason: it is a runtime coordination seam, not a public
+  extension point.
 - **Ownership: observation edges are non-owning.** The graph is:
 
   ```text

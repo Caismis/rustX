@@ -395,7 +395,13 @@ impl ConversationBackgroundRegistry {
     /// registry synchronization boundary is held. Installation is owned by
     /// the Runtime Client boundary (Issue #37); exactly one observer is
     /// expected, and a later installation replaces an earlier one.
-    pub fn install_observer(&self, observer: Arc<dyn BackgroundObserver>) {
+    ///
+    /// Installation is crate-private: it is a runtime coordination seam,
+    /// not a public extension point. The one-time Runtime Client binding
+    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// installation, so no external caller can replace the Runtime Client
+    /// observer.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn BackgroundObserver>) {
         self.state().observer = Some(observer);
     }
 

@@ -984,6 +984,25 @@ semantic normalization boundary. The frozen invariants:
   single-active-attachment admission, `AttachmentId` creation, or
   attachment replacement/rejection semantics, and none requires an
   out-of-band semantic attach operation.
+- **One `ConversationToolRuntime` identity is bound to at most one
+  `RuntimeClientHost` for its lifetime.** The binding is claimed once, by
+  host construction, on both the tool runtime and the capability
+  coordinator; every clone of either shares that one binding, so cloning a
+  runtime bundle never yields a second bindable identity. A second
+  construction fails with a typed already-bound error and has no semantic
+  side effect: the claim is taken after every fallible validation and before
+  only infallible wiring, so no observer is replaced and no mailbox,
+  background, or capability state moves. Observer installation is
+  crate-private, so no external caller can replace the Runtime Client
+  observer by another route.
+- **Runtime Client host lifetime is not attachment lifetime.** Reconnect
+  replaces the attachment on the same host — detach, then a fresh endpoint
+  `initialize` with a new `AttachmentId` — and never reconstructs the host.
+  The binding is not released when the bound host is dropped: rebinding a
+  surviving runtime bundle would require a canonical-history, mailbox-
+  projection, and cursor-continuity recovery model that pre-M8 does not own,
+  so host recreation over the same runtime bundle is not supported v1
+  recovery. A new host requires a new `ConversationToolRuntime` identity.
 - **Observation edges are non-owning with respect to the Runtime Client
   host.** No observer and no observation worker may extend `HostInner`'s
   lifetime: the concrete observer installed into the mailbox, background
