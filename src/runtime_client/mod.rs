@@ -59,9 +59,15 @@
 //! - detach is never cancellation;
 //! - bounded in-memory replay (no Event Journal, no persistence, no
 //!   crash-safe resume claims — M8 owns durability);
-//! - no stdio/JSONL (Issue #38), no WebSocket (Issue #36), no TUI
-//!   (Issue #39), no M9 cancellation hierarchy, no AG-UI adapter
-//!   implementation.
+//! - no WebSocket (Issue #36), no TUI (Issue #39), no M9 cancellation
+//!   hierarchy, no AG-UI adapter implementation.
+//!
+//! # Transports
+//!
+//! [`transport`] holds the byte-stream adapters beneath the semantic
+//! layer — [`transport::stdio`] is the strict stdio/JSONL transport of
+//! Issue #38. A transport frames; it never re-implements semantics, and
+//! transport loss detaches without cancelling or settling anything.
 
 pub mod attachment;
 pub mod endpoint;
@@ -69,6 +75,7 @@ pub mod event;
 pub mod host;
 pub mod projection;
 pub mod snapshot;
+pub mod transport;
 pub mod types;
 
 #[cfg(test)]
