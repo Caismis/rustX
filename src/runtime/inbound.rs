@@ -950,9 +950,9 @@ mod tests {
         let drain_task = tokio::task::spawn_blocking(move || draining.drain());
         // The drain holds the mailbox lock, established its watermark for A,
         // detached the item, and parked inside its critical section.
-        drain_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("drain snapshot established");
+        // Exact: the counterparty is a blocking-pool task, so this waits
+        // for the linearization point itself rather than for a bound.
+        drain_rx.recv().expect("drain snapshot established");
         // B attempts to enqueue while the drain is still parked inside its
         // critical section: B's enqueue can only ever acquire the lock after
         // the drain releases it, so it provably blocks against that section
@@ -1013,9 +1013,9 @@ mod tests {
         });
         // The enqueue is inside its critical section: sequence 1 computed,
         // item not yet published.
-        computed_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("enqueue sequence computed");
+        // Exact: the counterparty is a blocking-pool task, so this waits
+        // for the linearization point itself rather than for a bound.
+        computed_rx.recv().expect("enqueue sequence computed");
         let draining = mailbox.clone();
         let drain_task = tokio::task::spawn_blocking(move || draining.drain());
         // Release the enqueue: it publishes the item and releases the lock.
