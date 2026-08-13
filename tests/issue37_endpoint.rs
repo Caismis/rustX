@@ -16,24 +16,15 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::sync::Arc;
-
-use rustx::context::{
-    AgentStatusComposer, ContextConfig, ContextEngine, DefaultTokenEstimator,
-    InMemoryCheckpointStore, TokenEstimator,
-};
 use rustx::message::types::MessageBlock;
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
-use rustx::runtime::identity::AgentId;
 use rustx::runtime_client::{
-    EventDelivery, RuntimeClientContextConfig, RuntimeClientEndpoint, RuntimeClientHost,
-    RuntimeClientHostConfig, RuntimeClientRequest, RuntimeClientResponse,
+    EventDelivery, RuntimeClientEndpoint, RuntimeClientHost, RuntimeClientRequest,
+    RuntimeClientResponse,
 };
-use rustx::tools::executor::ToolRegistry;
 
-use common::fake::{FakeModel, FakeStep};
+use common::fake::FakeStep;
 
 /// The complete set of operations a future transport performs.
 ///
@@ -79,60 +70,21 @@ impl FramingAdapter {
 }
 
 /// A host over one conversation with the given model script.
-async fn host(conversation: &str, model: FakeModel) -> (Arc<FakeModel>, RuntimeClientHost) {
-    let model = Arc::new(model);
-    let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
-    let tool_runtime = common::tool_runtime(conversation);
-    let coordinator = {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let coordinator = rustx::capabilities::CapabilityCoordinator::new(
-            rustx::capabilities::CapabilityCoordinatorConfig {
-                conversation_id: tool_runtime.conversation_id().clone(),
-                workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(ToolRegistry::new()),
-                mcp_servers: Vec::new(),
-                base_environment: tool_runtime.environment().clone(),
-                environment_store_root: dir.path().join("skill-env"),
-            },
-        )
-        .expect("coordinator");
-        let candidate = coordinator.prepare_candidate().await.expect("prepare");
-        coordinator.commit(candidate).expect("commit");
-        std::mem::forget(dir);
-        coordinator
-    };
-    let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
-    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        agent_id: AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
-        timezone: None,
-        adapter,
-        context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
-            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
-            status_composer: AgentStatusComposer::default(),
-        },
-        tool_runtime,
-        capability: coordinator,
-        clock: None,
-        initial_messages: Vec::new(),
-        replay_limit: None,
-    })
-    .expect("host");
-    (model, host)
+///
+/// Construction is the shared Runtime Client fixture, so this file and the
+/// Issue #38 conformance scenarios exercise identically built runtimes.
+///
+/// The host outlives the fixture handle here, so it is taken through the
+/// fixture's own `into_parts` ownership path, which keeps the temporary
+/// workspace alive for the rest of the process. Moving the host field out
+/// instead would drop the workspace directory under a live runtime.
+async fn host(conversation: &str, scripts: Vec<Vec<FakeStep>>) -> RuntimeClientHost {
+    common::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
+        .scripts(scripts)
+        .build()
+        .await
+        .into_parts()
+        .1
 }
 
 fn one_turn_stop() -> Vec<FakeStep> {
@@ -154,7 +106,7 @@ fn one_turn_stop() -> Vec<FakeStep> {
 /// identity allocation, and returns the linearized initial snapshot.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn initialize_alone_establishes_the_attachment() {
-    let (_, host) = host("conv-37-endpoint-init", FakeModel::new(Vec::new())).await;
+    let host = host("conv-37-endpoint-init", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
 
     // Before initialize the endpoint is unattached, and it says so with the
@@ -202,7 +154,7 @@ async fn initialize_alone_establishes_the_attachment() {
 /// and admits nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unsupported_protocol_version_is_a_correlated_typed_error() {
-    let (_, host) = host("conv-37-endpoint-version", FakeModel::new(Vec::new())).await;
+    let host = host("conv-37-endpoint-version", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
 
     let response = adapter.exchange(r#"{"method":"initialize","id":7,"protocol_version":9}"#);
@@ -226,7 +178,7 @@ async fn unsupported_protocol_version_is_a_correlated_typed_error() {
 /// first — whether it arrives on the same connection or a second one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_initialize_is_rejected_without_eviction() {
-    let (_, host) = host("conv-37-endpoint-second", FakeModel::new(Vec::new())).await;
+    let host = host("conv-37-endpoint-second", Vec::new()).await;
     let first = FramingAdapter::new(&host);
     let second = FramingAdapter::new(&host);
 
@@ -277,11 +229,7 @@ async fn a_second_initialize_is_rejected_without_eviction() {
 /// #38 depends on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_session_needs_no_out_of_band_semantic_operation() {
-    let (_, host) = host(
-        "conv-37-endpoint-session",
-        FakeModel::new(vec![one_turn_stop()]),
-    )
-    .await;
+    let host = host("conv-37-endpoint-session", vec![one_turn_stop()]).await;
     let adapter = FramingAdapter::new(&host);
 
     let response = adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":1}"#);
@@ -351,7 +299,7 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
 /// that loses its connection needs no explicit teardown semantics either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_endpoint_releases_the_attachment() {
-    let (_, host) = host("conv-37-endpoint-drop", FakeModel::new(Vec::new())).await;
+    let host = host("conv-37-endpoint-drop", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
     adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":1}"#);
     drop(adapter);
@@ -369,7 +317,7 @@ async fn dropping_the_endpoint_releases_the_attachment() {
 /// and it never mutates canonical history.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_is_neither_detach_nor_cancellation() {
-    let (_, host) = host("conv-37-endpoint-shutdown", FakeModel::new(Vec::new())).await;
+    let host = host("conv-37-endpoint-shutdown", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
     adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":1}"#);
 

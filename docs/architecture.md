@@ -1249,6 +1249,9 @@ runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
 runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
                                semantic entry point that dispatches every
                                v1 request, `initialize` included
+runtime_client/transport/      byte-stream adapters beneath the semantic
+                               layer (Issue #38); `stdio.rs` is the strict
+                               stdio/JSONL transport
 ```
 
 - **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
@@ -1514,6 +1517,111 @@ runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
 - **Shutdown vs detach.** `shutdown` accepts the narrow local-runtime
   shutdown (no further inbound admission, current attempt continues to
   settlement); it is not detach and not cancellation.
+
+#### Runtime Client transports: stdio JSONL (Issue #38)
+
+Transports live beneath the semantic layer, in their own namespace:
+
+```text
+rustX Runtime
+      |
+      v
+Runtime Client projection
+      |
+      v
+Runtime Client Protocol v1        semantic; Issue #37
+      |
+      v
+transport adapters                framing only; src/runtime_client/transport
+      |
+      +-- stdio / strict JSONL    Issue #38
+      |
+      +-- WebSocket               Issue #36, later
+      |
+      v
+clients
+```
+
+Issue #38 adds `src/runtime_client/transport/stdio.rs`. Adding Issue #36
+means adding a sibling module there; no semantic module moves.
+
+- **The endpoint remains the semantic owner.** A transport calls
+  `RuntimeClientEndpoint::handle_request` and forwards
+  `EventSubscription` deliveries. It implements no protocol-version
+  negotiation, no attachment admission, no `AttachmentId` allocation, and
+  no snapshot, cancellation, replay, or shutdown semantics. The governing
+  transport invariant is that only a complete, valid, in-bound-size
+  framed request may cross into `handle_request`.
+- **One session owns framing and I/O.** `serve_stdio_jsonl_with_io` is
+  one async loop owning the endpoint, the bounded reader, the writer, and
+  the framing state; `serve_stdio_jsonl` is the process-stdio composition
+  of it over `tokio::io::stdin()`/`stdout()`. There are no transport
+  tasks, no channels, and no ownership cycle back into the host. Dropping
+  the endpoint on return is the RAII detach.
+- **Record limit.** `STDIO_JSONL_MAX_RECORD_BYTES` is 8 MiB and applies
+  in both directions. It bounds one record's JSON payload: the
+  terminating LF is not counted, and a trailing CR is counted when CRLF
+  was used on input. Inbound records are accumulated out of a fixed
+  `STDIO_JSONL_READ_CHUNK_BYTES` chunk with the bound checked before
+  every append; outbound records are serialized into a size-limited sink
+  so an oversized record is refused mid-serialization rather than built
+  and then measured. The bound is on logical record retention: each
+  transport buffer holds at most one record's bytes and no reservation
+  above the limit is ever requested. Allocator rounding of such a
+  request is outside this contract, so `Vec::capacity()` itself is not
+  claimed to be bounded by the limit.
+- **LF, and accepted CRLF.** LF is the sole record delimiter. One
+  physical LF terminates one record, so an escaped `\n` inside a JSON
+  string stays in one record and multiline pretty-printed JSON is not
+  supported. CRLF input is accepted by removing exactly one `\r` before
+  the terminating LF; no other whitespace is touched.
+- **Malformed and oversized input is transport-fatal.** Protocol v1 has
+  no uncorrelated error envelope, and a malformed frame may not even
+  carry a request id, so the transport invents none. Any complete
+  in-bound-size record that does not deserialize to the exact v1 request
+  type — malformed JSON, unknown method, unknown field, wrong parameter
+  type, empty or whitespace-only record — ends the session with a
+  framing error, applies nothing, and writes no protocol record. An
+  oversized record is session-fatal immediately: no further buffering, no
+  discard/recovery state machine, and never a partially applied request.
+- **Zero outbound backlog.** The transport queues no protocol records. At
+  most one outbound record is being serialized and written at a time, and
+  the next input record or event is selected only after that write
+  completed. The projection's bounded replay ring stays the one retained
+  Runtime Client event backlog: there is no second transport history and
+  no reconnect log.
+- **A slow consumer stalls the transport, not the runtime.** A blocked
+  output parks the transport's current write and stops it consuming
+  input. Attempt execution, event publication, mailbox activity,
+  background execution, and capability state continue under their own
+  owners, and no host lock is held across any transport await.
+- **Active-subscription lag closes the transport.** After a stall the
+  subscription may fall behind the bounded replay ring. Protocol v1 has
+  no uncorrelated stream-error record, so the session ends with a typed
+  local `SubscriptionLagged` error carrying the cursor information and
+  the client repairs from an authoritative snapshot after reconnecting.
+  The semantic `subscribe_events` → `resync_required` path is unchanged.
+- **EOF and broken pipe detach only.** Clean EOF at a record boundary and
+  an output `BrokenPipe` are normal session ends; a partial record at EOF
+  is a typed truncation error. All of them drop the endpoint and detach,
+  and none cancels the current attempt, settles anything, drains the
+  mailbox, mutates canonical history, or shuts the runtime down. A failed
+  write is never retried, because it may have partially reached the peer.
+- **Semantic shutdown does not close the transport.** A successful
+  `shutdown` is answered like any other request and the session keeps
+  serving: reads still work, further inbound gets the typed
+  `runtime_shutdown` error, and only a later EOF or detach ends the byte
+  stream.
+- **Transport errors are not protocol errors.** `StdioTransportError` and
+  `StdioSessionEnd` are local to the transport; nothing transport-shaped
+  enters `RuntimeClientError`, and the transport writes no human or
+  operator logging to its output sink — failures are returned to the
+  caller for a process-composition layer to report.
+- **Conformance is transport-independent.** The Issue #38 scenario suite
+  (`tests/common/runtime_client_conformance.rs`) drives one set of
+  semantic scenarios through a direct-endpoint driver and the stdio
+  driver. Issue #36 adds a WebSocket driver and inherits every scenario
+  unchanged; byte-level framing tests stay transport-specific.
 
 
 ## 3. Dependency rule

@@ -9,9 +9,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use rustx::runtime_client::{
-    RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig,
-};
+use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
     RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
     RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
@@ -22,67 +20,14 @@ fn request_id(value: u64) -> rustx::runtime_client::RequestId {
 }
 
 /// A host over an empty conversation: no adapter is ever invoked.
+///
+/// Construction is the shared Runtime Client fixture.
 async fn host() -> RuntimeClientHost {
-    use rustx::context::{
-        ContextConfig, ContextEngine, DefaultTokenEstimator, InMemoryCheckpointStore,
-        TokenEstimator,
-    };
-    use rustx::model::types::{ModelProtocol, ReasoningEffort};
-    use rustx::runtime::identity::AgentId;
-    use std::sync::Arc;
-    let tool_runtime = common::tool_runtime("conv-37-protocol");
-    let coordinator = {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let coordinator = rustx::capabilities::CapabilityCoordinator::new(
-            rustx::capabilities::CapabilityCoordinatorConfig {
-                conversation_id: tool_runtime.conversation_id().clone(),
-                workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-                mcp_servers: Vec::new(),
-                base_environment: tool_runtime.environment().clone(),
-                environment_store_root: dir.path().join("skill-env"),
-            },
-        )
-        .expect("coordinator");
-        let candidate = coordinator.prepare_candidate().await.expect("prepare");
-        coordinator.commit(candidate).expect("commit");
-        std::mem::forget(dir);
-        coordinator
-    };
-    let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
-    // The adapter is never invoked by these tests.
-    let adapter: Arc<dyn rustx::model::ModelAdapter> =
-        Arc::new(common::fake::FakeModel::new(Vec::new()));
-    RuntimeClientHost::new(RuntimeClientHostConfig {
-        agent_id: AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
-        timezone: None,
-        adapter,
-        context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
-            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
-            status_composer: rustx::context::AgentStatusComposer::default(),
-        },
-        tool_runtime,
-        capability: coordinator,
-        clock: None,
-        initial_messages: Vec::new(),
-        replay_limit: None,
-    })
-    .expect("host")
+    common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-protocol")
+        .build()
+        .await
+        .into_parts()
+        .1
 }
 
 /// Every envelope kind serializes deterministically and round-trips

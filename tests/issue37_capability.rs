@@ -10,78 +10,13 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::path::Path;
 use std::sync::Arc;
 
 use rustx::runtime::identity::ToolId;
-use rustx::runtime_client::{
-    RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig, RuntimeClientRequest,
-    RuntimeClientResult,
-};
+use rustx::runtime_client::{RuntimeClientRequest, RuntimeClientResult};
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
-
-/// Writes one valid Skill package into the workspace.
-fn write_skill(workspace: &Path, name: &str, description: &str) {
-    let root = workspace.join(".agents").join("skills").join(name);
-    std::fs::create_dir_all(&root).expect("skill dir");
-    std::fs::write(
-        root.join("SKILL.md"),
-        format!("---\nname: {name}\ndescription: \"{description}\"\n---\nbody\n"),
-    )
-    .expect("SKILL.md");
-}
-
-/// Writes one valid Python tool package into the workspace.
-fn write_python_package(root: &Path, name: &str, description: &str) {
-    let package = root.join(".agents/tools").join(name);
-    std::fs::create_dir_all(&package).expect("package directory");
-    std::fs::write(
-        package.join("TOOL.toml"),
-        format!(
-            "schema_version = 1\nname = {name:?}\ndescription = {description:?}\nentrypoint = \"tool:main\"\nexecution = \"foreground_only\"\nconcurrency = \"sequential\"\n"
-        ),
-    )
-    .expect("manifest");
-    std::fs::write(
-        package.join("input.schema.json"),
-        r#"{"type":"object","properties":{},"additionalProperties":false}"#,
-    )
-    .expect("schema");
-    std::fs::write(
-        package.join("pyproject.toml"),
-        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n",
-    )
-    .expect("project");
-    std::fs::write(
-        package.join("tool.py"),
-        "def main(arguments):\n    return arguments\n",
-    )
-    .expect("source");
-    // Generate a real uv.lock (opt-in by availability, mirroring the
-    // m7_uv acceptance pattern); a missing uv skips the environment step.
-    if let Some(uv) = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("uv"))
-            .find(|path| path.is_file())
-    }) {
-        let lock = std::process::Command::new(&uv)
-            .args(["lock", "--offline", "--no-config"])
-            .current_dir(&package)
-            .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .env("HOME", root.parent().expect("fixture root"))
-            .env("UV_NO_PYTHON_DOWNLOADS", "1")
-            .output()
-            .expect("run fixture uv lock");
-        assert!(
-            lock.status.success(),
-            "fixture lock failed: {}",
-            String::from_utf8_lossy(&lock.stderr)
-        );
-    }
-}
 
 /// A capability view covering native + Python + Skill origins: the
 /// revision, deterministic ordering, origin metadata, and Skill
@@ -100,32 +35,10 @@ async fn capability_projection_covers_native_python_and_skills() {
         eprintln!("uv unavailable; capability Python origin not exercised");
         return;
     }
-    let dir = tempfile::tempdir().expect("workspace");
-    std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace dir");
-    let workspace_root = dir.path().join("workspace");
-    write_python_package(&workspace_root, "py-echo", "Echoes arguments");
-    write_skill(&workspace_root, "skill-readme", "Reads the README");
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
-        rustx::runtime::identity::ConversationId::new("conv-37-cap"),
-        &workspace_root,
-        dir.path().join("artifacts"),
-    )
-    .expect("tool runtime");
-
-    let mut base = rustx::tools::executor::ToolRegistry::new();
-    base.register(
-        ToolDefinition {
-            id: ToolId::new("tool-ls"),
-            name: "ls".to_owned(),
-            description: "list files".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
-            execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            replay_policy: ToolReplayPolicy::Never,
-            origin: ToolOrigin::Builtin,
-        },
-        Arc::new(common::fake::FakeTool::new(
-            ToolDefinition {
+    let fixture = common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-cap")
+        .tools({
+            let mut base = rustx::tools::executor::ToolRegistry::new();
+            let definition = ToolDefinition {
                 id: ToolId::new("tool-ls"),
                 name: "ls".to_owned(),
                 description: "list files".to_owned(),
@@ -134,58 +47,32 @@ async fn capability_projection_covers_native_python_and_skills() {
                 concurrency_policy: ToolConcurrencyPolicy::Sequential,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
-            },
-            common::fake::success_result("listed"),
-        )),
-    )
-    .expect("register base tool");
-    let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
-        rustx::capabilities::CapabilityCoordinatorConfig {
-            conversation_id: tool_runtime.conversation_id().clone(),
-            workspace: tool_runtime.workspace().clone(),
-            base_tool_registry: Arc::new(base),
-            mcp_servers: Vec::new(),
-            base_environment: tool_runtime.environment().clone(),
-            environment_store_root: dir.path().join("skill-env"),
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    )
-    .expect("coordinator");
-    let candidate = coordinator.prepare_candidate().await.expect("prepare");
-    coordinator.commit(candidate).expect("commit");
-
-    let estimator: Arc<dyn rustx::context::TokenEstimator> =
-        Arc::new(rustx::context::DefaultTokenEstimator);
-    let engine = rustx::context::ContextEngine::new(
-        rustx::context::ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
-    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        agent_id: rustx::runtime::identity::AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: rustx::model::types::ModelProtocol::OpenAiChatCompletions,
-        reasoning: rustx::model::types::ReasoningEffort::Medium,
-        max_output_tokens: 512,
-        timezone: None,
-        adapter: Arc::new(common::fake::FakeModel::new(Vec::new())),
-        context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
-            checkpoint_store: Arc::new(rustx::context::InMemoryCheckpointStore::new()),
-            status_composer: rustx::context::AgentStatusComposer::default(),
-        },
-        tool_runtime,
-        capability: coordinator,
-        clock: None,
-        initial_messages: Vec::new(),
-        replay_limit: None,
-    })
-    .expect("host");
+            };
+            base.register(
+                definition.clone(),
+                Arc::new(common::fake::FakeTool::new(
+                    definition,
+                    common::fake::success_result("listed"),
+                )),
+            )
+            .expect("register base tool");
+            base
+        })
+        .workspace_fixture(|workspace| {
+            common::runtime_client_fixture::write_python_package(
+                workspace,
+                "py-echo",
+                "Echoes arguments",
+            );
+            common::runtime_client_fixture::write_skill(
+                workspace,
+                "skill-readme",
+                "Reads the README",
+            );
+        })
+        .build()
+        .await;
+    let host = fixture.host.clone();
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");
@@ -260,15 +147,6 @@ async fn capability_projection_covers_mcp_origins() {
     {
         return;
     }
-    let dir = tempfile::tempdir().expect("workspace");
-    std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace dir");
-    let workspace_root = dir.path().join("workspace");
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
-        rustx::runtime::identity::ConversationId::new("conv-37-mcp"),
-        &workspace_root,
-        dir.path().join("artifacts"),
-    )
-    .expect("tool runtime");
     let mcp_config = rustx::tools::mcp::McpServerConfig {
         server_id: rustx::runtime::identity::McpServerId::new("fixture"),
         transport: rustx::tools::mcp::McpTransportConfig::Stdio {
@@ -287,53 +165,11 @@ async fn capability_projection_covers_mcp_origins() {
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
     };
-    let coordinator = rustx::capabilities::CapabilityCoordinator::with_backend(
-        rustx::capabilities::CapabilityCoordinatorConfig {
-            conversation_id: tool_runtime.conversation_id().clone(),
-            workspace: tool_runtime.workspace().clone(),
-            base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
-            mcp_servers: vec![mcp_config],
-            base_environment: tool_runtime.environment().clone(),
-            environment_store_root: dir.path().join("skill-env"),
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    )
-    .expect("coordinator");
-    let candidate = coordinator.prepare_candidate().await.expect("prepare");
-    coordinator.commit(candidate).expect("commit");
-
-    let estimator: Arc<dyn rustx::context::TokenEstimator> =
-        Arc::new(rustx::context::DefaultTokenEstimator);
-    let engine = rustx::context::ContextEngine::new(
-        rustx::context::ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
-    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        agent_id: rustx::runtime::identity::AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: rustx::model::types::ModelProtocol::OpenAiChatCompletions,
-        reasoning: rustx::model::types::ReasoningEffort::Medium,
-        max_output_tokens: 512,
-        timezone: None,
-        adapter: Arc::new(common::fake::FakeModel::new(Vec::new())),
-        context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
-            checkpoint_store: Arc::new(rustx::context::InMemoryCheckpointStore::new()),
-            status_composer: rustx::context::AgentStatusComposer::default(),
-        },
-        tool_runtime,
-        capability: coordinator,
-        clock: None,
-        initial_messages: Vec::new(),
-        replay_limit: None,
-    })
-    .expect("host");
+    let fixture = common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-mcp")
+        .mcp_servers(vec![mcp_config])
+        .build()
+        .await;
+    let host = fixture.host.clone();
     let (attachment, _) = host
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
         .expect("attach");

@@ -11,6 +11,7 @@
 
 pub mod context;
 pub mod fake;
+pub mod runtime_client_fixture;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
