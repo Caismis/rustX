@@ -14,17 +14,15 @@ use std::sync::Arc;
 use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
-    AgentStatusSectionId, AgentStatusSectionProvider, ContextConfig, ContextEngine, ContextError,
-    DefaultTokenEstimator, InMemoryCheckpointStore, TokenEstimator,
+    AgentStatusSectionId, AgentStatusSectionProvider, ContextError,
 };
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
-use rustx::runtime::identity::{AgentId, ToolId};
+use rustx::runtime::identity::ToolId;
 use rustx::runtime_client::{
-    RuntimeClientContextConfig, RuntimeClientEvent, RuntimeClientHost, RuntimeClientHostConfig,
-    RuntimeClientOutcome, RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResult,
+    RuntimeClientEvent, RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResult,
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
@@ -112,8 +110,11 @@ impl AgentStatusSectionProvider for CountingProvider {
 }
 
 /// Builds a host over one conversation with the given model scripts and
-/// tool registry. The returned model handle records the requests the host
-/// sent.
+/// tool registry.
+///
+/// Construction is the shared Runtime Client fixture, so this file and the
+/// Issue #38 conformance scenarios exercise identically built runtimes.
+/// The returned model handle records the requests the host sent.
 async fn host(
     conversation: &str,
     model: FakeModel,
@@ -121,59 +122,14 @@ async fn host(
     composer: AgentStatusComposer,
     replay_limit: Option<usize>,
 ) -> (Arc<FakeModel>, RuntimeClientHost) {
-    let model = Arc::new(model);
-    let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
-    let tool_runtime = common::tool_runtime(conversation);
-    let coordinator = {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let coordinator = rustx::capabilities::CapabilityCoordinator::new(
-            rustx::capabilities::CapabilityCoordinatorConfig {
-                conversation_id: tool_runtime.conversation_id().clone(),
-                workspace: tool_runtime.workspace().clone(),
-                base_tool_registry: Arc::new(tools),
-                mcp_servers: Vec::new(),
-                base_environment: tool_runtime.environment().clone(),
-                environment_store_root: dir.path().join("skill-env"),
-            },
-        )
-        .expect("coordinator");
-        let candidate = coordinator.prepare_candidate().await.expect("prepare");
-        coordinator.commit(candidate).expect("commit");
-        std::mem::forget(dir);
-        coordinator
-    };
-    let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-        },
-        estimator,
-    )
-    .expect("engine");
-    let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-        agent_id: AgentId::new("agent-a"),
-        model: "scripted".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
-        timezone: None,
-        adapter,
-        context: RuntimeClientContextConfig {
-            engine,
-            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
-            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
-            status_composer: composer,
-        },
-        tool_runtime,
-        capability: coordinator,
-        clock: None,
-        initial_messages: Vec::new(),
-        replay_limit,
-    })
-    .expect("host");
-    (model, host)
+    common::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
+        .model(model)
+        .tools(tools)
+        .composer(composer)
+        .replay_limit(replay_limit)
+        .build()
+        .await
+        .into_parts()
 }
 
 /// The outer liveness guard of the event-stream helper.

@@ -791,7 +791,7 @@ mod tests {
             &br#"{"method":"future_method","id":1}"#[..],
             &br#"{"method":"snapshot_get","id":1,"extra":true}"#[..],
             &br#"{"method":"initialize","id":"one","protocol_version":1}"#[..],
-            &br#"[]"#[..],
+            &br"[]"[..],
         ] {
             assert!(
                 matches!(
