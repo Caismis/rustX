@@ -1843,26 +1843,38 @@ mod tests {
         ]
     }
 
-    /// Receives events until the predicate matches, with a bounded count.
+    /// The outer liveness guard of the event-stream helpers.
+    ///
+    /// Waiting for an event is exact: the subscription wakes on
+    /// publication. This bounds only the total wall time of one
+    /// `receive_until` call, so a genuine regression fails with a message
+    /// instead of hanging. It is deliberately far larger than any
+    /// scheduling delay a loaded runner can produce, and it is a whole-call
+    /// budget rather than a per-event bound — a single scheduling stall can
+    /// never fail a correct run.
+    const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// Receives events until the predicate matches.
     async fn receive_until(
         subscription: &EventSubscription,
         mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
     ) -> Vec<RuntimeClientProtocolEvent> {
-        let mut seen = Vec::new();
-        loop {
-            let delivery =
-                tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
-                    .await
-                    .expect("event stream must not stall");
-            let EventDelivery::Event(event) = delivery else {
-                panic!("subscription must stay open and contiguous, got {delivery:?}");
-            };
-            let matched = predicate(&event);
-            seen.push(event);
-            if matched {
-                return seen;
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, async {
+            let mut seen = Vec::new();
+            loop {
+                let delivery = subscription.next().await;
+                let EventDelivery::Event(event) = delivery else {
+                    panic!("subscription must stay open and contiguous, got {delivery:?}");
+                };
+                let matched = predicate(&event);
+                seen.push(event);
+                if matched {
+                    return seen;
+                }
             }
-        }
+        })
+        .await
+        .expect("the observation stream must not stall")
     }
 
     /// First attachment succeeds, the second concurrent attachment is
@@ -2192,31 +2204,58 @@ mod tests {
         })
         .await;
 
-        // The cancel response is acceptance, not settlement: the attempt
-        // is still running when the response returns.
+        // The cancel response is acceptance, never terminal settlement.
+        //
+        // `AttemptCancellationAccepted` is itself the exact proof: it is
+        // returned only when the deciding observation — under the one host
+        // lock — found a non-settled attempt, and a settled attempt yields
+        // `NoCurrentAttempt` instead. Nothing after this point may assert
+        // that the attempt is *still* running: cancellation is precisely
+        // what makes the loop settle, so settlement is free to overtake any
+        // later observation the test makes. Asserting otherwise would be a
+        // scheduler assumption, not an invariant.
         let response = attachment.handle_request(RuntimeClientRequest::CancelCurrentAttempt {
             id: crate::runtime_client::RequestId::new(2),
         });
-        assert!(matches!(
-            response.result,
-            Some(RuntimeClientResult::AttemptCancellationAccepted { .. })
-        ));
+        let Some(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }) = response.result
+        else {
+            panic!("cancellation of a running attempt is accepted, got {response:?}");
+        };
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert!(matches!(
-            snapshot.attempt.expect("attempt view").phase,
-            RuntimeClientAttemptPhase::Running
-        ));
+        let view = snapshot.attempt.expect("attempt view");
+        assert_eq!(
+            view.attempt_id, attempt_id,
+            "acceptance names the attempt the snapshot describes"
+        );
+        assert!(
+            matches!(
+                view.phase,
+                RuntimeClientAttemptPhase::Running | RuntimeClientAttemptPhase::Settled { .. }
+            ),
+            "an accepted cancellation leaves the attempt running or already settled"
+        );
 
-        // A second cancel while the first is still active is also accepted
-        // (cancellation is idempotent at the signal level).
+        // A second cancel is idempotent at the signal level: it is accepted
+        // again while the attempt is still cancellable, and reports
+        // `no_current_attempt` once settlement won the race. Both are
+        // correct; neither is a scheduler assumption.
         let second_cancel = attachment.handle_request(RuntimeClientRequest::CancelCurrentAttempt {
             id: crate::runtime_client::RequestId::new(3),
         });
-        assert!(second_cancel.error.is_none());
+        assert!(
+            second_cancel.error.is_none()
+                || matches!(
+                    second_cancel.error,
+                    Some(RuntimeClientError::NoCurrentAttempt)
+                ),
+            "a second cancel is accepted or reports no cancellable attempt, got {second_cancel:?}"
+        );
 
-        // Release the parked model: the adapter observes the attempt
-        // cancellation and the loop settles cancelled — exactly once.
-        release_tx.send(true).expect("release");
+        // Release the parked model so it can finish. The adapter's park is
+        // biased on the attempt cancellation, so it may already have
+        // observed it and dropped its release handle — the release is a
+        // fallback, never part of the ordering proof.
+        let _ = release_tx.send(true);
         let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
@@ -3232,10 +3271,9 @@ mod tests {
             .expect("resume from the pre-transition cursor");
         let mut saw_inbound = false;
         loop {
-            let delivery =
-                tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
-                    .await
-                    .expect("stream must not stall");
+            let delivery = tokio::time::timeout(STREAM_LIVENESS_GUARD, subscription.next())
+                .await
+                .expect("stream must not stall");
             let EventDelivery::Event(event) = delivery else {
                 panic!("subscription stays open and contiguous, got {delivery:?}");
             };

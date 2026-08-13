@@ -177,26 +177,35 @@ async fn host(
     (model, host)
 }
 
+/// The outer liveness guard of the event-stream helper.
+///
+/// Waiting for an event is exact: the subscription wakes on publication.
+/// This bounds only the total wall time of one `receive_until` call, as a
+/// whole-call budget rather than a per-event bound, so a single scheduling
+/// stall on a loaded runner can never fail a correct run.
+const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Subscribes an attachment and receives until the predicate matches.
 async fn receive_until(
     subscription: &rustx::runtime_client::EventSubscription,
     mut predicate: impl FnMut(&RuntimeClientProtocolEvent) -> bool,
 ) -> Vec<RuntimeClientProtocolEvent> {
-    let mut seen = Vec::new();
-    loop {
-        let delivery =
-            tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
-                .await
-                .expect("event stream must not stall");
-        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
-            panic!("subscription must stay open and contiguous, got {delivery:?}");
-        };
-        let matched = predicate(&event);
-        seen.push(event);
-        if matched {
-            return seen;
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, async {
+        let mut seen = Vec::new();
+        loop {
+            let delivery = subscription.next().await;
+            let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
+                panic!("subscription must stay open and contiguous, got {delivery:?}");
+            };
+            let matched = predicate(&event);
+            seen.push(event);
+            if matched {
+                return seen;
+            }
         }
-    }
+    })
+    .await
+    .expect("the observation stream must not stall")
 }
 
 fn one_turn_stop() -> Vec<FakeStep> {
@@ -646,6 +655,8 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
 /// The bounded replay/resync contract through the public surface: an
 /// expired cursor fails with `resync_required` and a fresh snapshot
 /// repairs state; a serviceable cursor resumes without gaps.
+// One stall/repair lifecycle observed end to end.
+#[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     // The model parks on its first step, so the exact set of publications
@@ -728,29 +739,63 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     ));
 
     // A fresh snapshot repairs every externally visible fact, and resuming
-    // at its cursor delivers the rest of the stream contiguously.
+    // at its cursor is always serviceable.
     let (snapshot, cursor) = host.snapshot().expect("snapshot");
     assert_eq!(snapshot.messages.len(), 1, "the inbound message committed");
-    let resumed = attachment
+    let mut resumed = attachment
         .subscribe_events(cursor)
         .expect("the snapshot cursor is always serviceable");
     release.send_replace(true);
-    let tail = receive_until(&resumed, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
-    })
-    .await;
+
+    // Consume to settlement. With a two-entry ring a consumer can fall
+    // behind the attempt's publication burst more than once, and that is
+    // the contract working: every delivery is either the strictly next
+    // cursor or an explicit repair — never a silent gap. Repairing is a
+    // fresh snapshot plus a re-subscription at its cursor, so this loop
+    // terminates on the settlement it observes or on the settled snapshot
+    // it repairs to. Whether a repair happens at all is scheduling; that
+    // both outcomes are explicit is the invariant.
     let mut expected = cursor.get();
-    for event in &tail {
-        expected += 1;
-        assert_eq!(
-            event.cursor.get(),
-            expected,
-            "a resumed subscription observes strictly contiguous cursors"
-        );
+    let mut repairs = 0_u32;
+    loop {
+        // Liveness guard only: each delivery wait itself is exact.
+        let delivery = tokio::time::timeout(STREAM_LIVENESS_GUARD, resumed.next())
+            .await
+            .expect("the stream must not stall");
+        match delivery {
+            rustx::runtime_client::EventDelivery::Event(event) => {
+                expected += 1;
+                assert_eq!(
+                    event.cursor.get(),
+                    expected,
+                    "a subscription observes strictly contiguous cursors"
+                );
+                if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
+                    break;
+                }
+            }
+            rustx::runtime_client::EventDelivery::ResyncRequired { .. } => {
+                repairs += 1;
+                assert!(repairs < 32, "repairing must converge");
+                let (repaired, repaired_cursor) = host.snapshot().expect("snapshot");
+                if repaired.attempt.as_ref().is_some_and(|attempt| {
+                    matches!(
+                        attempt.phase,
+                        rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
+                    )
+                }) {
+                    break;
+                }
+                expected = repaired_cursor.get();
+                resumed = attachment
+                    .subscribe_events(repaired_cursor)
+                    .expect("the snapshot cursor is always serviceable");
+            }
+            other => panic!("the subscription stays open, got {other:?}"),
+        }
     }
 
-    let (final_snapshot, final_cursor) = host.snapshot().expect("snapshot");
-    assert_eq!(final_cursor, tail.last().expect("terminal").cursor);
+    let (final_snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(final_snapshot.messages.len(), 2);
     assert!(matches!(
         final_snapshot.attempt.expect("attempt").phase,

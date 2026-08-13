@@ -275,8 +275,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         Some(RuntimeClientResult::InboundAccepted { .. })
     ));
     loop {
+        // Liveness guard only: the delivery wait itself is exact.
         let delivery =
-            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next())
+            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
                 .await
                 .expect("the stream must not stall");
         let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
