@@ -39,8 +39,13 @@ mod error;
 mod snapshot;
 
 pub use coordinator::{
-    AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig,
+    AttemptCapabilityLease, CapabilityCoordinator, CapabilityCoordinatorConfig, CapabilityObserver,
     PreparedCapabilityCandidate,
 };
 pub use error::{CapabilityCommitError, CapabilityPreparationError};
 pub use snapshot::CapabilitySnapshot;
+
+/// The commit-boundary synchronization hook, used by the Runtime Client
+/// lock-order tests to park a commit with the coordinator lock held.
+#[cfg(test)]
+pub(crate) use coordinator::test_sync;

@@ -35,8 +35,30 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
+
+/// The read-only observation seam of the conversation inbound mailbox.
+///
+/// A mailbox fact observer receives the authoritative enqueue/drain facts
+/// at their mailbox linearization points. The callbacks fire while the
+/// mailbox synchronization boundary is held (immediately after the item is
+/// published / the batch is detached), so the observed order is exactly
+/// the mailbox linearization order. An observer must never call back into
+/// the mailbox and must never mutate mailbox state; the Runtime Client
+/// projection (Issue #37) treats each callback as one projection fold
+/// under its own synchronization boundary.
+pub trait InboundObserver: Send + Sync {
+    /// Observes one published enqueue: the item is pending under its
+    /// mailbox-assigned sequence.
+    fn on_enqueued(&self, item: &InboundItem);
+
+    /// Observes one committed finite drain: the batch (watermark, count,
+    /// and items) is detached and no longer pending.
+    fn on_drained(&self, batch: &InboundBatch);
+}
 
 /// A conversation-scoped inbound sequence number.
 ///
@@ -45,7 +67,8 @@ use crate::runtime::identity::{ConversationId, MessageId};
 /// [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
 /// and is never allocated from the Event Journal sequence; the mailbox owns
 /// allocation, and the first successful enqueue of a mailbox receives `1`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct InboundSequence(u64);
 
 impl InboundSequence {
@@ -208,15 +231,35 @@ impl fmt::Display for MailboxError {
 impl Error for MailboxError {}
 
 /// The internal synchronized state of one conversation mailbox.
-#[derive(Debug)]
 struct MailboxState {
     /// The last successfully allocated inbound sequence (0 = none yet).
     last_sequence: u64,
     /// The pending, not-yet-drained items in enqueue order.
     pending: VecDeque<InboundItem>,
+    /// The read-only fact observer, installed by the owning runtime client
+    /// boundary (Issue #37). It fires while the mailbox lock is held.
+    observer: Option<Arc<dyn InboundObserver>>,
     /// Test-only synchronization hooks for controlled race tests.
     #[cfg(test)]
     probe: Option<MailboxProbe>,
+}
+
+impl core::fmt::Debug for MailboxState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        #[cfg(test)]
+        let probe = self.probe.as_ref().map(|_| "<mailbox probe>");
+        #[cfg(not(test))]
+        let probe: Option<&str> = None;
+        f.debug_struct("MailboxState")
+            .field("last_sequence", &self.last_sequence)
+            .field("pending_len", &self.pending.len())
+            .field(
+                "observer",
+                &self.observer.as_ref().map(|_| "<inbound observer>"),
+            )
+            .field("probe", &probe)
+            .finish()
+    }
 }
 
 /// Test-only synchronization hooks.
@@ -465,10 +508,36 @@ impl ConversationInboundMailbox {
             state: Arc::new(Mutex::new(MailboxState {
                 last_sequence: 0,
                 pending: VecDeque::new(),
+                observer: None,
                 #[cfg(test)]
                 probe: None,
             })),
         }
+    }
+
+    /// Installs the read-only fact observer of the mailbox.
+    ///
+    /// The observer fires at the mailbox linearization points (item
+    /// published, batch detached) while the mailbox synchronization
+    /// boundary is held. Installation is owned by the Runtime Client
+    /// boundary (Issue #37); exactly one observer is expected, and a later
+    /// installation replaces an earlier one.
+    ///
+    /// Installation is crate-private: it is a runtime coordination seam,
+    /// not a public extension point. The one-time Runtime Client binding
+    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// installation, so no external caller can replace the Runtime Client
+    /// observer.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned, which would mean a
+    /// previous operation panicked while holding the lock.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .observer = Some(observer);
     }
 
     /// Creates an inbound mailbox with test-only synchronization hooks
@@ -482,6 +551,7 @@ impl ConversationInboundMailbox {
             state: Arc::new(Mutex::new(MailboxState {
                 last_sequence: 0,
                 pending: VecDeque::new(),
+                observer: None,
                 probe: Some(probe),
             })),
         }
@@ -544,6 +614,13 @@ impl ConversationInboundMailbox {
         }
         state.pending.push_back(item);
         state.last_sequence = sequence;
+        if let Some(observer) = &state.observer {
+            let item = state
+                .pending
+                .back()
+                .expect("the enqueued item was just published");
+            observer.on_enqueued(item);
+        }
         Ok(InboundSequence(sequence))
     }
 
@@ -586,12 +663,16 @@ impl ConversationInboundMailbox {
                 let _ = release.recv();
             }
         }
-        drop(state);
-        Some(InboundBatch {
+        let batch = InboundBatch {
             conversation_id: self.conversation_id.clone(),
             watermark,
             items,
-        })
+        };
+        if let Some(observer) = &state.observer {
+            observer.on_drained(&batch);
+        }
+        drop(state);
+        Some(batch)
     }
 }
 
@@ -854,6 +935,7 @@ mod tests {
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
+                observer: None,
                 probe: Some(MailboxProbe {
                     drain_snapshot: Some(drain_tx),
                     drain_release: Some(release_rx),
@@ -868,9 +950,9 @@ mod tests {
         let drain_task = tokio::task::spawn_blocking(move || draining.drain());
         // The drain holds the mailbox lock, established its watermark for A,
         // detached the item, and parked inside its critical section.
-        drain_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("drain snapshot established");
+        // Exact: the counterparty is a blocking-pool task, so this waits
+        // for the linearization point itself rather than for a bound.
+        drain_rx.recv().expect("drain snapshot established");
         // B attempts to enqueue while the drain is still parked inside its
         // critical section: B's enqueue can only ever acquire the lock after
         // the drain releases it, so it provably blocks against that section
@@ -915,6 +997,7 @@ mod tests {
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
+                observer: None,
                 probe: Some(MailboxProbe {
                     drain_snapshot: None,
                     drain_release: None,
@@ -930,9 +1013,9 @@ mod tests {
         });
         // The enqueue is inside its critical section: sequence 1 computed,
         // item not yet published.
-        computed_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("enqueue sequence computed");
+        // Exact: the counterparty is a blocking-pool task, so this waits
+        // for the linearization point itself rather than for a bound.
+        computed_rx.recv().expect("enqueue sequence computed");
         let draining = mailbox.clone();
         let drain_task = tokio::task::spawn_blocking(move || draining.drain());
         // Release the enqueue: it publishes the item and releases the lock.

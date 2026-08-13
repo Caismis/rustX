@@ -43,6 +43,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::events::RuntimeEventSink;
 use crate::runtime::RuntimeClock;
@@ -163,6 +164,33 @@ pub struct ConversationToolRuntime {
     artifacts: ArtifactStore,
     environment: ToolEnvironment,
     background: ConversationBackgroundRegistry,
+    /// The one-time Runtime Client binding of this runtime identity.
+    ///
+    /// Shared by every clone, so cloning a runtime handle never creates a
+    /// second bindable identity.
+    runtime_client: Arc<RuntimeClientBinding>,
+}
+
+/// The one-time Runtime Client binding of one `ConversationToolRuntime`
+/// identity.
+///
+/// A [`ConversationToolRuntime`] is the canonical mailbox/background
+/// identity of a conversation, and a Runtime Client host is the conversation
+/// coordinator over it: canonical history, the current-attempt slot, the
+/// projection and its cursor domain, attachment state, and the inbound and
+/// attempt identity counters all live in that one host. Two hosts over one
+/// runtime identity would therefore be two coordinators over one
+/// authoritative runtime.
+///
+/// The binding is claimed once and never released. It is deliberately
+/// **not** a lease: it is not reset when the bound host is dropped, because
+/// rebinding a surviving runtime bundle would require a recovery model for
+/// canonical history, pending mailbox projection, and cursor continuity
+/// that pre-M8 does not own. A fresh host requires a fresh
+/// `ConversationToolRuntime` identity.
+#[derive(Debug, Default)]
+struct RuntimeClientBinding {
+    bound: AtomicBool,
 }
 
 impl ConversationToolRuntime {
@@ -263,7 +291,39 @@ impl ConversationToolRuntime {
             artifacts,
             environment,
             background,
+            runtime_client: Arc::new(RuntimeClientBinding::default()),
         })
+    }
+
+    /// Claims the one-time Runtime Client binding of this runtime identity.
+    ///
+    /// Returns `true` for the one claim that wins and `false` for every
+    /// later claim on any clone. The transition is a single
+    /// `compare_exchange`, so concurrent claims cannot both succeed.
+    ///
+    /// The claim is never reset by dropping the bound host: see
+    /// [`RuntimeClientBinding`].
+    pub(crate) fn claim_runtime_client(&self) -> bool {
+        self.runtime_client
+            .bound
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Releases a claim taken by a host construction that then failed.
+    ///
+    /// This exists only so a rejected `RuntimeClientHost::new` leaves no
+    /// trace; it is never called on host drop, and a successfully
+    /// constructed host never releases its binding.
+    pub(crate) fn release_runtime_client_claim(&self) {
+        self.runtime_client.bound.store(false, Ordering::Release);
+    }
+
+    /// Whether this runtime identity is already bound to a Runtime Client
+    /// host.
+    #[must_use]
+    pub fn is_runtime_client_bound(&self) -> bool {
+        self.runtime_client.bound.load(Ordering::Acquire)
     }
 
     /// The owning conversation.

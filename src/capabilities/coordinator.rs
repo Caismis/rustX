@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
@@ -65,6 +65,16 @@ struct CoordinatorInner {
     environment_store: EnvironmentStore,
     state: Mutex<CoordinatorState>,
     condvar: Condvar,
+    /// The read-only state observer, installed by the owning runtime client
+    /// boundary (Issue #37). It fires while the coordinator lock is held.
+    observer: Mutex<Option<Arc<dyn CapabilityObserver>>>,
+    /// The one-time Runtime Client binding of this coordinator identity.
+    ///
+    /// The coordinator carries one observer slot, so binding it twice would
+    /// silently replace the first host's capability projection. Like the
+    /// `ConversationToolRuntime` binding this is claimed once and never
+    /// released, and every clone shares it.
+    runtime_client_bound: AtomicBool,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
@@ -87,6 +97,21 @@ struct CoordinatorInner {
 #[derive(Clone)]
 pub struct CapabilityCoordinator {
     inner: Arc<CoordinatorInner>,
+}
+
+/// The read-only observation seam of the capability coordinator.
+///
+/// A state observer receives the authoritative active snapshot after every
+/// actual capability activation (a revision swap). Identical no-op
+/// commits never fire the observer. The callback fires while the
+/// coordinator synchronization boundary is held, so the observed order is
+/// exactly the commit linearization order. An observer must never call
+/// back into the coordinator; the Runtime Client projection (Issue #37)
+/// treats each callback as one projection fold under its own
+/// synchronization boundary.
+pub trait CapabilityObserver: Send + Sync {
+    /// Observes one activated immutable capability snapshot.
+    fn on_snapshot(&self, snapshot: &CapabilitySnapshot);
 }
 
 /// A prepared but not yet committed candidate capability.
@@ -221,10 +246,31 @@ impl CapabilityCoordinator {
                     _next_staging: AtomicU64::new(0),
                 }),
                 condvar: Condvar::new(),
+                observer: Mutex::new(None),
+                runtime_client_bound: AtomicBool::new(false),
                 #[cfg(test)]
                 commit_hook: Mutex::new(None),
             }),
         })
+    }
+
+    /// Claims the one-time Runtime Client binding of this coordinator
+    /// identity.
+    ///
+    /// Returns `true` for the one claim that wins and `false` for every
+    /// later claim on any clone. Never reset by dropping the bound host.
+    pub(crate) fn claim_runtime_client(&self) -> bool {
+        self.inner
+            .runtime_client_bound
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Whether this coordinator identity is already bound to a Runtime
+    /// Client host.
+    #[must_use]
+    pub fn is_runtime_client_bound(&self) -> bool {
+        self.inner.runtime_client_bound.load(Ordering::Acquire)
     }
 
     /// The current active capability snapshot.
@@ -487,6 +533,16 @@ impl CapabilityCoordinator {
         state.revision = revision;
         state.snapshot = snapshot.clone();
         drop(invalidation);
+        let observer = self
+            .inner
+            .observer
+            .lock()
+            .expect("capability observer lock poisoned")
+            .clone();
+        if let Some(observer) = &observer {
+            observer.on_snapshot(&snapshot);
+        }
+        drop(state);
         self.inner.condvar.notify_all();
         Ok(snapshot)
     }
@@ -539,6 +595,27 @@ impl CapabilityCoordinator {
     #[cfg(test)]
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
+    }
+
+    /// Installs the read-only state observer of the coordinator.
+    ///
+    /// The observer fires at every actual capability activation while the
+    /// coordinator synchronization boundary is held. Installation is owned
+    /// by the Runtime Client boundary (Issue #37); exactly one observer is
+    /// expected, and a later installation replaces an earlier one.
+    ///
+    /// Installation is crate-private: it is a runtime coordination seam,
+    /// not a public extension point. The one-time Runtime Client binding
+    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// installation, so no external caller can replace the Runtime Client
+    /// observer.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the observer lock is poisoned, which would mean a
+    /// previous operation panicked while holding the lock.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn CapabilityObserver>) {
+        *self.inner.observer.lock().expect("observer lock") = Some(observer);
     }
 
     /// The shared MCP invalidation state (test observability). Only

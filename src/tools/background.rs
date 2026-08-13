@@ -123,6 +123,21 @@ pub enum BackgroundLifecycle {
     Cancelled,
 }
 
+/// The read-only observation seam of the background registry.
+///
+/// A state observer receives the authoritative snapshot of one background
+/// execution after every published registry transition (dispatch commit,
+/// start, progress, cancellation request, and terminal settlement). The
+/// callback fires while the registry synchronization boundary is held, so
+/// the observed order is exactly the registry linearization order. An
+/// observer must never call back into the registry; the Runtime Client
+/// projection (Issue #37) treats each callback as one projection fold
+/// under its own synchronization boundary.
+pub trait BackgroundObserver: Send + Sync {
+    /// Observes one authoritative registry transition snapshot.
+    fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot);
+}
+
 impl BackgroundLifecycle {
     /// Whether this state is terminal (absorbing).
     #[must_use]
@@ -297,6 +312,9 @@ struct BackgroundRegistryState {
     prepared: HashMap<ToolExecutionId, PreparedRecord>,
     records: Vec<BackgroundRecord>,
     index: HashMap<ToolExecutionId, usize>,
+    /// The read-only state observer, installed by the owning runtime client
+    /// boundary (Issue #37). It fires while the registry lock is held.
+    observer: Option<Arc<dyn BackgroundObserver>>,
     /// Test-only synchronization hook at the dispatch ownership commit
     /// boundary; never present outside `#[cfg(test)]`.
     #[cfg(test)]
@@ -347,6 +365,7 @@ impl ConversationBackgroundRegistry {
                 prepared: HashMap::new(),
                 records: Vec::new(),
                 index: HashMap::new(),
+                observer: None,
                 #[cfg(test)]
                 commit_hook: None,
             })),
@@ -368,6 +387,30 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         let mut state = self.state();
         state.commit_hook = Some(hook);
+    }
+
+    /// Installs the read-only state observer of the registry.
+    ///
+    /// The observer fires at every published registry transition while the
+    /// registry synchronization boundary is held. Installation is owned by
+    /// the Runtime Client boundary (Issue #37); exactly one observer is
+    /// expected, and a later installation replaces an earlier one.
+    ///
+    /// Installation is crate-private: it is a runtime coordination seam,
+    /// not a public extension point. The one-time Runtime Client binding
+    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// installation, so no external caller can replace the Runtime Client
+    /// observer.
+    pub(crate) fn install_observer(&self, observer: Arc<dyn BackgroundObserver>) {
+        self.state().observer = Some(observer);
+    }
+
+    /// Fires the installed observer for one record snapshot while the
+    /// registry lock is held.
+    fn observe_record(state: &BackgroundRegistryState, index: usize) {
+        if let Some(observer) = &state.observer {
+            observer.on_snapshot(&snapshot_of(&state.records[index]));
+        }
     }
 
     /// The conversation this registry belongs to.
@@ -501,6 +544,7 @@ impl ConversationBackgroundRegistry {
         let next_index = state.records.len();
         state.index.insert(execution_id.clone(), next_index);
         state.records.push(prepared_record.record);
+        Self::observe_record(&state, next_index);
         drop(state);
         self.notify_state_change();
         prepared.committed = true;
@@ -526,19 +570,22 @@ impl ConversationBackgroundRegistry {
     pub fn cancel(&self, execution_id: &ToolExecutionId) -> Option<BackgroundExecutionSnapshot> {
         let mut state = self.state();
         let index = *state.index.get(execution_id)?;
-        let record = &mut state.records[index];
-        match record.lifecycle {
-            BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
-                record.lifecycle = BackgroundLifecycle::Cancelling;
-                record.cancel_reason = Some(BACKGROUND_CANCEL_REASON);
-                record.cancellation.cancel();
+        {
+            let record = &mut state.records[index];
+            match record.lifecycle {
+                BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
+                    record.lifecycle = BackgroundLifecycle::Cancelling;
+                    record.cancel_reason = Some(BACKGROUND_CANCEL_REASON);
+                    record.cancellation.cancel();
+                }
+                BackgroundLifecycle::Cancelling
+                | BackgroundLifecycle::Succeeded
+                | BackgroundLifecycle::Failed
+                | BackgroundLifecycle::Cancelled => {}
             }
-            BackgroundLifecycle::Cancelling
-            | BackgroundLifecycle::Succeeded
-            | BackgroundLifecycle::Failed
-            | BackgroundLifecycle::Cancelled => {}
         }
-        let snapshot = snapshot_of(record);
+        Self::observe_record(&state, index);
+        let snapshot = snapshot_of(&state.records[index]);
         drop(state);
         self.notify_state_change();
         Some(snapshot)
@@ -592,63 +639,73 @@ impl ConversationBackgroundRegistry {
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
-        let record = &mut state.records[index];
-        if record.lifecycle.is_terminal() {
-            return;
-        }
-        let (settled, stored) = match record.lifecycle {
-            BackgroundLifecycle::Starting | BackgroundLifecycle::Running => match result.status {
-                ToolExecutionStatus::Success => (BackgroundLifecycle::Succeeded, result.clone()),
-                ToolExecutionStatus::Cancelled { .. } => {
-                    (BackgroundLifecycle::Cancelled, result.clone())
-                }
-                ToolExecutionStatus::Failed { .. }
-                | ToolExecutionStatus::TimedOut
-                | ToolExecutionStatus::Interrupted => (BackgroundLifecycle::Failed, result.clone()),
-            },
-            BackgroundLifecycle::Cancelling => {
-                // Cancellation intent already owns settlement. A normal
-                // executor return must not overwrite the cancellation
-                // winner; only an explicit runtime/process-control failure
-                // is represented as Failed.
-                if matches!(result.status, ToolExecutionStatus::Failed { .. }) {
-                    (BackgroundLifecycle::Failed, result.clone())
-                } else {
-                    let mut canonical = result.clone();
-                    canonical.status = ToolExecutionStatus::Cancelled {
-                        reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
-                    };
-                    (BackgroundLifecycle::Cancelled, canonical)
-                }
+        let notification = {
+            let record = &mut state.records[index];
+            if record.lifecycle.is_terminal() {
+                return;
             }
-            BackgroundLifecycle::Succeeded
-            | BackgroundLifecycle::Failed
-            | BackgroundLifecycle::Cancelled => return,
+            let (settled, stored) = match record.lifecycle {
+                BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
+                    match result.status {
+                        ToolExecutionStatus::Success => {
+                            (BackgroundLifecycle::Succeeded, result.clone())
+                        }
+                        ToolExecutionStatus::Cancelled { .. } => {
+                            (BackgroundLifecycle::Cancelled, result.clone())
+                        }
+                        ToolExecutionStatus::Failed { .. }
+                        | ToolExecutionStatus::TimedOut
+                        | ToolExecutionStatus::Interrupted => {
+                            (BackgroundLifecycle::Failed, result.clone())
+                        }
+                    }
+                }
+                BackgroundLifecycle::Cancelling => {
+                    // Cancellation intent already owns settlement. A normal
+                    // executor return must not overwrite the cancellation
+                    // winner; only an explicit runtime/process-control failure
+                    // is represented as Failed.
+                    if matches!(result.status, ToolExecutionStatus::Failed { .. }) {
+                        (BackgroundLifecycle::Failed, result.clone())
+                    } else {
+                        let mut canonical = result.clone();
+                        canonical.status = ToolExecutionStatus::Cancelled {
+                            reason: record.cancel_reason.unwrap_or(BACKGROUND_CANCEL_REASON),
+                        };
+                        (BackgroundLifecycle::Cancelled, canonical)
+                    }
+                }
+                BackgroundLifecycle::Succeeded
+                | BackgroundLifecycle::Failed
+                | BackgroundLifecycle::Cancelled => return,
+            };
+            record.lifecycle = settled;
+            record.result = Some(stored.clone());
+            if record.notification != NotificationState::Pending {
+                Self::observe_record(&state, index);
+                return;
+            }
+            record.notification = NotificationState::Publishing;
+            terminal_inbound_message(
+                execution_id,
+                &record.tool_name,
+                settled,
+                &stored.artifacts,
+                self.resources.clock.now(),
+            )
         };
-        record.lifecycle = settled;
-        record.result = Some(stored.clone());
-        if record.notification != NotificationState::Pending {
-            return;
-        }
-        record.notification = NotificationState::Publishing;
-        let message = terminal_inbound_message(
-            execution_id,
-            &record.tool_name,
-            settled,
-            &stored.artifacts,
-            self.resources.clock.now(),
-        );
-        match self.resources.mailbox.enqueue(message) {
+        match self.resources.mailbox.enqueue(notification) {
             Ok(_) => {
-                record.notification = NotificationState::Published;
+                state.records[index].notification = NotificationState::Published;
             }
             Err(_error) => {
                 // The authoritative terminal registry state is retained;
                 // the execution is never rolled back to active. The
                 // notification failure is recorded and reported.
-                record.notification = NotificationState::Failed;
+                state.records[index].notification = NotificationState::Failed;
             }
         }
+        Self::observe_record(&state, index);
         drop(state);
         self.notify_state_change();
     }
@@ -668,11 +725,15 @@ impl ConversationBackgroundRegistry {
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
-        let record = &mut state.records[index];
-        if !record.lifecycle.is_active() {
-            return;
+        {
+            let record = &mut state.records[index];
+            if !record.lifecycle.is_active() {
+                return;
+            }
+            record.progress = Some(bounded.clone());
         }
-        record.progress = Some(bounded.clone());
+        Self::observe_record(&state, index);
+        let record = &state.records[index];
         let event = RuntimeEvent::ToolExecutionProgress {
             tool_call_id: record.tool_call_id.clone(),
             tool_id: record.tool_id.clone(),
@@ -706,12 +767,17 @@ impl ConversationBackgroundRegistry {
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
-        let record = &mut state.records[index];
-        if record.lifecycle == BackgroundLifecycle::Starting {
-            record.lifecycle = BackgroundLifecycle::Running;
-            drop(state);
-            self.notify_state_change();
+        {
+            let record = &mut state.records[index];
+            if record.lifecycle == BackgroundLifecycle::Starting {
+                record.lifecycle = BackgroundLifecycle::Running;
+            } else {
+                return;
+            }
         }
+        Self::observe_record(&state, index);
+        drop(state);
+        self.notify_state_change();
     }
 
     /// Waits for one execution to reach an absorbing terminal state using the

@@ -1,0 +1,356 @@
+//! Issue #37: Runtime Client Protocol v1 wire-contract tests.
+//!
+//! These tests exercise the protocol boundary exclusively through the
+//! public Runtime Client surface: deterministic serialization of every
+//! envelope, request-id correlation, notification structure, version
+//! negotiation, and attachment lifecycle. No host-side race is asserted
+//! here (the in-crate host tests own the synchronization proofs).
+
+#[path = "common/mod.rs"]
+mod common;
+
+use rustx::runtime_client::{
+    RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig,
+};
+use rustx::runtime_client::{
+    RuntimeClientCursor, RuntimeClientError, RuntimeClientEvent, RuntimeClientProtocolEvent,
+    RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
+};
+
+fn request_id(value: u64) -> rustx::runtime_client::RequestId {
+    rustx::runtime_client::RequestId::new(value)
+}
+
+/// A host over an empty conversation: no adapter is ever invoked.
+async fn host() -> RuntimeClientHost {
+    use rustx::context::{
+        ContextConfig, ContextEngine, DefaultTokenEstimator, InMemoryCheckpointStore,
+        TokenEstimator,
+    };
+    use rustx::model::types::{ModelProtocol, ReasoningEffort};
+    use rustx::runtime::identity::AgentId;
+    use std::sync::Arc;
+    let tool_runtime = common::tool_runtime("conv-37-protocol");
+    let coordinator = {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let coordinator = rustx::capabilities::CapabilityCoordinator::new(
+            rustx::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: tool_runtime.conversation_id().clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(rustx::tools::executor::ToolRegistry::new()),
+                mcp_servers: Vec::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        std::mem::forget(dir);
+        coordinator
+    };
+    let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+    let engine = ContextEngine::new(
+        ContextConfig {
+            context_window_tokens: 10_000_000,
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+        },
+        estimator,
+    )
+    .expect("engine");
+    // The adapter is never invoked by these tests.
+    let adapter: Arc<dyn rustx::model::ModelAdapter> =
+        Arc::new(common::fake::FakeModel::new(Vec::new()));
+    RuntimeClientHost::new(RuntimeClientHostConfig {
+        agent_id: AgentId::new("agent-a"),
+        model: "scripted".to_owned(),
+        protocol: ModelProtocol::OpenAiChatCompletions,
+        reasoning: ReasoningEffort::Medium,
+        max_output_tokens: 512,
+        timezone: None,
+        adapter,
+        context: RuntimeClientContextConfig {
+            engine,
+            summarizer: Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
+            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
+            status_composer: rustx::context::AgentStatusComposer::default(),
+        },
+        tool_runtime,
+        capability: coordinator,
+        clock: None,
+        initial_messages: Vec::new(),
+        replay_limit: None,
+    })
+    .expect("host")
+}
+
+/// Every envelope kind serializes deterministically and round-trips
+/// exactly: requests carry their method tag, responses echo request ids,
+/// and events carry cursor + typed payload without a request id.
+#[test]
+fn protocol_envelopes_round_trip_deterministically() {
+    let request = RuntimeClientRequest::SubmitInbound {
+        id: request_id(5),
+        content: vec![rustx::message::types::UserContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "hello".to_owned(),
+            },
+        )],
+    };
+    let first = serde_json::to_string(&request).expect("serialize request");
+    let second = serde_json::to_string(&request).expect("serialize request again");
+    assert_eq!(first, second, "serialization is deterministic");
+    let decoded: RuntimeClientRequest = serde_json::from_str(&first).expect("deserialize");
+    assert_eq!(decoded, request);
+    let value: serde_json::Value = serde_json::from_str(&first).expect("json");
+    assert_eq!(value["method"], "submit_inbound");
+    assert_eq!(value["id"], 5);
+
+    let response = RuntimeClientResponse {
+        id: request_id(5),
+        result: Some(RuntimeClientResult::Detached),
+        error: None,
+    };
+    let json = serde_json::to_string(&response).expect("serialize response");
+    let decoded: RuntimeClientResponse = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, response);
+    let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    assert_eq!(value["id"], 5);
+
+    let event = RuntimeClientProtocolEvent {
+        cursor: RuntimeClientCursor::new(9),
+        event: RuntimeClientEvent::AttemptStarted {
+            attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
+        },
+    };
+    let json = serde_json::to_string(&event).expect("serialize event");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+    assert!(
+        value.get("id").is_none(),
+        "notifications never fabricate request ids"
+    );
+    assert_eq!(value["cursor"], 9);
+    let decoded: RuntimeClientProtocolEvent = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, event);
+}
+
+/// Every typed protocol error serializes with its stable category and
+/// round-trips exactly.
+#[test]
+fn protocol_errors_round_trip_with_stable_categories() {
+    let cases = [
+        RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 1,
+            requested: 2,
+        },
+        RuntimeClientError::AttachmentInUse {
+            existing_attachment_id: rustx::runtime_client::AttachmentId::new("attachment-1"),
+        },
+        RuntimeClientError::NotAttached,
+        RuntimeClientError::InvalidRequest {
+            message: "empty content".to_owned(),
+        },
+        RuntimeClientError::NoCurrentAttempt,
+        RuntimeClientError::UnknownBackgroundExecution {
+            execution_id: rustx::runtime::identity::ToolExecutionId::new("exec_1"),
+        },
+        RuntimeClientError::ResyncRequired {
+            after_cursor: RuntimeClientCursor::new(1),
+            earliest_serviceable: RuntimeClientCursor::new(5),
+        },
+        RuntimeClientError::RuntimeShutdown,
+        RuntimeClientError::InvalidState {
+            message: "mailbox full".to_owned(),
+        },
+        RuntimeClientError::ProjectionExhausted,
+        RuntimeClientError::RuntimeFailure {
+            message: "boom".to_owned(),
+        },
+    ];
+    for error in cases {
+        let json = serde_json::to_string(&error).expect("serialize error");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("json");
+        assert!(value.get("type").is_some(), "typed category: {json}");
+        let decoded: RuntimeClientError = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, error);
+    }
+}
+
+/// The snapshot and its sections round-trip exactly; no internal executor
+/// or path data exists on the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn snapshot_dto_round_trips() {
+    let host = host().await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let RuntimeClientResult::Initialized {
+        snapshot, cursor, ..
+    } = initialized
+    else {
+        panic!("initialized");
+    };
+    assert_eq!(cursor, RuntimeClientCursor::new(0));
+    let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+    let decoded: rustx::runtime_client::RuntimeClientSnapshot =
+        serde_json::from_str(&json).expect("deserialize snapshot");
+    assert_eq!(decoded, snapshot);
+    assert!(
+        !json.contains("executor"),
+        "no executor data appears on the wire"
+    );
+    assert!(
+        !json.contains("environment_store"),
+        "no environment internals appear on the wire"
+    );
+    let response =
+        attachment.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
+    let Some(RuntimeClientResult::Snapshot { snapshot, cursor }) = response.result else {
+        panic!("snapshot result");
+    };
+    assert_eq!(cursor, RuntimeClientCursor::new(0));
+    assert_eq!(snapshot.conversation_id().as_str(), "conv-37-protocol");
+    let _ = attachment;
+}
+
+/// Attachment request handling correlates ids, negotiates the version,
+/// and scopes request ids per attachment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attachment_request_correlation_and_version_negotiation() {
+    let host = host().await;
+    let (attachment, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let RuntimeClientResult::Initialized {
+        attachment_id,
+        conversation_id,
+        agent_id,
+        ..
+    } = initialized
+    else {
+        panic!("initialized");
+    };
+    assert_eq!(conversation_id.as_str(), "conv-37-protocol");
+    assert_eq!(agent_id.as_str(), "agent-a");
+    assert!(!attachment_id.as_str().is_empty());
+
+    // Multiple pipelined requests correlate by id.
+    let responses: Vec<RuntimeClientResponse> = (1..=3)
+        .map(|id| {
+            attachment.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(id) })
+        })
+        .collect();
+    for (index, response) in responses.iter().enumerate() {
+        assert_eq!(response.id.get(), u64::try_from(index + 1).expect("fits"));
+        assert!(response.error.is_none());
+    }
+
+    // Incompatible version negotiation fails explicitly.
+    let incompatible = host.attach(7);
+    assert!(matches!(
+        incompatible,
+        Err(RuntimeClientError::UnsupportedProtocolVersion {
+            supported: 1,
+            requested: 7,
+        })
+    ));
+
+    // The initialize method cannot re-initialize an admitted attachment.
+    let reinit = attachment.handle_request(RuntimeClientRequest::Initialize {
+        id: request_id(9),
+        protocol_version: 1,
+    });
+    assert!(matches!(
+        reinit.error,
+        Some(RuntimeClientError::InvalidRequest { .. })
+    ));
+}
+
+/// Request ids are scoped to one attachment: after detach + reattach, a
+/// fresh attachment reuses request ids without any cross-attachment
+/// state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn request_ids_are_attachment_scoped() {
+    let host = host().await;
+    let (first, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("first attach");
+    let first_response =
+        first.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
+    assert!(first_response.error.is_none());
+    first.detach();
+    let (second, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("second attach");
+    let second_response =
+        second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(1) });
+    assert!(
+        second_response.error.is_none(),
+        "request id 1 is fresh in the new attachment scope"
+    );
+    assert_ne!(
+        first.attachment_id(),
+        second.attachment_id(),
+        "reconnect receives a distinct attachment identity"
+    );
+}
+
+/// The second concurrent attachment fails deterministically and never
+/// evicts the first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn second_attachment_never_evicts_the_first() {
+    let host = host().await;
+    let (first, initialized) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("first attach");
+    let RuntimeClientResult::Initialized {
+        attachment_id: first_id,
+        ..
+    } = initialized
+    else {
+        panic!("initialized");
+    };
+    let second = host.attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1);
+    assert!(matches!(
+        second,
+        Err(RuntimeClientError::AttachmentInUse {
+            existing_attachment_id,
+        }) if existing_attachment_id == first_id
+    ));
+    let still_works = first.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(2) });
+    assert!(still_works.error.is_none());
+}
+
+/// Detach is a pure attachment operation: it never cancels anything and
+/// the runtime keeps serving new attachments afterwards.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn detach_releases_the_attachment_exactly() {
+    let host = host().await;
+    let (first, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    // Idempotent double detach.
+    first.detach();
+    first.detach();
+    let (second, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach after detach");
+    let response = second.handle_request(RuntimeClientRequest::SnapshotGet { id: request_id(3) });
+    assert!(response.error.is_none());
+}
+
+/// The `RuntimeAttachment` RAII handle detaches on drop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attachment_raii_drop_detaches() {
+    let host = host().await;
+    {
+        let (attachment, _) = host
+            .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let _ = attachment;
+    }
+    let (_, _) = host
+        .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach after drop");
+}

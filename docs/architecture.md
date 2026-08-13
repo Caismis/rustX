@@ -1185,6 +1185,7 @@ environment, finite timeout, bounded diagnostics, and no generic
 
 The outermost layer exposes the runtime to humans and other systems:
 
+- Runtime Client Protocol v1 (semantic client boundary)
 - Local interactive CLI
 - Runtime command interface
 - HTTP control interface
@@ -1192,6 +1193,328 @@ The outermost layer exposes the runtime to humans and other systems:
 - AG-UI projection
 
 AG-UI is an output projection, not the internal durable event model.
+
+#### Runtime Client Protocol v1 implementation (Issue #37)
+
+Issue #37 implements the one external semantic normalization boundary in
+`src/runtime_client`:
+
+```text
+canonical runtime state / internal RuntimeEvent
+                |
+                v
+ deterministic Runtime Client projection
+                |
+                v
+ RuntimeClientEvent / RuntimeClientSnapshot
+                |
+                v
+      Runtime Client Protocol v1
+```
+
+The governing invariant is that all authoritative execution and
+conversation state originates from rustX Runtime; external clients observe
+deterministic projections and never become a second authority. The
+internal `RuntimeEvent` vocabulary is an execution-fact vocabulary, **not**
+the wire contract: `RuntimeClientEvent` and `RuntimeClientSnapshot` are
+explicit runtime-owned projection types with their own versioning
+(`RUNTIME_CLIENT_PROTOCOL_VERSION_V1`, independent from
+`EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
+version), lifecycle semantics, and cursor domain
+(`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL, Issue
+#36 WebSocket) wrap this semantic layer without redefining it, and a
+future AG-UI adapter consumes this projection as its only source — there
+is no second AG-UI interpretation path directly from internal runtime
+events. The existing `src/protocol` boundary remains the compiled
+`RuntimeManifest` protocol; the two protocols are not mixed.
+
+Module ownership:
+
+```text
+runtime_client/types.rs        protocol version, cursor, attachment/request
+                               ids, the typed request/response/event
+                               envelope, method results, typed errors
+runtime_client/event.rs        RuntimeClientEvent (external vocabulary)
+runtime_client/snapshot.rs     RuntimeClientSnapshot read model
+runtime_client/projection.rs   RuntimeClientProjection: the one
+                               linearization owner (fold, cursor
+                               allocation, bounded replay, subscribers)
+runtime_client/host.rs         RuntimeClientHost: conversation
+                               coordinator, canonical history between
+                               attempts, current-attempt handle,
+                               observer wiring, admission, shutdown
+runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
+                               RAII/explicit detach, request dispatch,
+                               event subscription delivery
+runtime_client/endpoint.rs     RuntimeClientEndpoint: the transport-neutral
+                               semantic entry point that dispatches every
+                               v1 request, `initialize` included
+```
+
+- **The semantic endpoint owns `initialize`.** `RuntimeClientEndpoint` is
+  the boundary a transport wraps. It starts unattached and accepts every
+  v1 request; `initialize` performs version negotiation, single-attachment
+  admission, `AttachmentId` allocation, and the linearized initial
+  snapshot, storing the resulting attachment. Non-`initialize` requests
+  before that are `not_attached`; a successful `detach` (or dropping the
+  endpoint) returns it to the unattached state. `RuntimeClientHost::attach`
+  remains an internal primitive that the endpoint invokes — it is not the
+  protocol entry point. Issue #38 therefore reduces to framing:
+
+  ```text
+  JSONL line -> RuntimeClientRequest -> endpoint.handle_request
+             -> RuntimeClientResponse -> JSONL line
+  endpoint.next_event -> RuntimeClientProtocolEvent -> JSONL line
+  ```
+
+  No transport implements negotiation, admission, identity creation, or
+  replacement/rejection semantics, and none needs an out-of-band attach
+  operation.
+
+- **One linearization owner.** The host guards one state instance with
+  one lock. Fold, cursor allocation, event publication, bounded replay
+  retention, subscriber delivery, snapshot reads, attachment
+  admission/detach, the current-attempt slot, canonical-history swap, and
+  shutdown decisions all serialize through it, so snapshot/cursor,
+  cancel-current, terminal settlement, and admission linearize by
+  synchronization, never by timing.
+- **One host per runtime identity.** One `ConversationToolRuntime` identity
+  is bound to at most one `RuntimeClientHost` for that identity's lifetime.
+  `RuntimeClientHost::new` claims a one-time binding on the tool runtime and
+  on the capability coordinator; both are `Clone` and every clone shares one
+  binding, so a cloned runtime bundle is not a second bindable identity. A
+  second construction is rejected with
+  `HostConstructionError::RuntimeClientAlreadyBound`.
+
+  This is a runtime ownership invariant, not a caller convention. A host is
+  the conversation coordinator over its runtime identity — canonical
+  history, the current-attempt slot, the projection and its cursor domain,
+  attachment state, and the inbound and attempt identity counters all live
+  in one host — so two hosts would be two coordinators over one
+  authoritative runtime. Each subsystem also carries exactly one observer
+  slot, so the second host would silently unhook the first.
+
+  Every fallible validation runs before the claim and every step after it is
+  infallible, so the claim is the ownership-commit boundary and a rejected
+  construction has no semantic side effect: no observer is replaced, no
+  worker starts, and no mailbox, background, or capability state moves.
+- **One conversation authority.** The `ConversationToolRuntime` owns the
+  `ConversationId`, the canonical mailbox, the authoritative background
+  registry, and the Runtime Client binding identity; the host *derives* its
+  conversation identity from it. `RuntimeClientHostConfig` therefore has no
+  conversation id field of its own — a second configured identity could
+  disagree with the runtime, and a host that coordinates one runtime while
+  naming another conversation would issue `AgentExecutionRequest`s the
+  runtime rejects, after having already admitted the attempt. Structural
+  absence removes that state instead of checking for it. The capability
+  coordinator remains a separate authoritative identity, so it is still
+  validated explicitly against the runtime before the binding claim.
+
+  **Host lifetime is not attachment lifetime.** Reconnect replaces the
+  attachment on the same host (detach, then a fresh `RuntimeClientEndpoint`
+  `initialize` yielding a new `AttachmentId`); it never reconstructs the
+  host. The binding is deliberately not released when the bound host is
+  dropped: rebinding a surviving runtime bundle would require a recovery
+  model for canonical history, pending mailbox projection, and cursor
+  continuity that pre-M8 does not own. Recreating a host over the same
+  runtime bundle is **not** supported v1 recovery — a new host requires a
+  new `ConversationToolRuntime` identity. Observer installation on the
+  mailbox, background registry, and capability coordinator is crate-private
+  for the same reason: it is a runtime coordination seam, not a public
+  extension point.
+- **Ownership: observation edges are non-owning.** The graph is:
+
+  ```text
+  semantic owner ─────────► Arc<HostInner>
+  (RuntimeClientHost and clones, RuntimeAttachment,
+   RuntimeClientEndpoint, EventSubscription, a running attempt task)
+
+  HostInner ──► authoritative subsystems (tool runtime, mailbox,
+                capability coordinator)
+            ──► projection state
+            ──► Arc<PendingObservations>
+
+  authoritative subsystem ──► Arc<HostObserver>
+  HostObserver ─────────────► Weak<HostInner>
+
+  observation worker ───────► Weak<HostInner>
+                       ────► Arc<PendingObservations>
+  ```
+
+  Subsystem observer slots keep owning `Arc<dyn InboundObserver>` and
+  friends; the concrete `HostObserver` is what became non-owning, so
+  installing a seam cannot create the cycle
+  `HostInner -> subsystem -> Arc<HostObserver> -> HostInner`. Each callback
+  upgrades the weak handle and returns without publishing when the upgrade
+  fails — the projection no longer exists, which is never an error for the
+  subsystem. The observation worker likewise holds only a weak host handle
+  plus the queue it waits on, and never a strong handle across an await.
+
+  `HostInner` is therefore destroyed when its last semantic owner is
+  released, not at process exit. `HostInner::drop` closes
+  `PendingObservations`, which is the worker's terminal condition; teardown
+  takes no host lock, joins nothing, and publishes nothing. A running
+  attempt task is a deliberate *bounded* strong owner — an admitted attempt
+  must reach settlement, and the task releases the host when it does.
+  Attachment detach remains unrelated to host lifetime.
+- **Lock order.** The graph is acyclic by construction:
+
+  ```text
+  HostState ──► ConversationInboundMailbox ──► PendingObservations
+      └──────────────────────────────────────► PendingObservations
+  ConversationBackgroundRegistry ────────────► PendingObservations
+  CapabilityCoordinator ─────────────────────► PendingObservations
+  ```
+
+  `PendingObservations` is a leaf (one mutex over a `VecDeque` plus a
+  `Notify`; it calls nothing). Every authoritative subsystem fires its
+  observer *while holding its own lock*, so every such observer only
+  appends an immutable observation to that leaf and wakes the host
+  worker — no subsystem ever acquires `HostState`. The single downward
+  edge `HostState -> mailbox` exists only in `admit_next_attempt`, which
+  drains under the host lock so the drain fact, the history commits, and
+  the attempt publication linearize together. Consequently an
+  authoritative commit never waits on the host lock, and subscriber
+  notification can never block authoritative runtime state. The
+  `AgentExecutionObserver` callbacks apply directly under `HostState`;
+  that adds no incoming edge because `AgentExecution` is owned by its
+  attempt task and holds no lock when it observes. Every host lock
+  acquisition drains the pending queue first, so queued observations fold
+  in enqueue order.
+- **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
+  cursor }` where the snapshot describes all Runtime Client state through
+  cursor C, and a subscription after C observes every subsequently
+  published event or fails explicitly with `resync_required`. This holds
+  by construction (one boundary), not by luck.
+- **RuntimeEvent mapping policy.** Every internal event is classified
+  PROJECT / FOLD INTO CLIENT STATE ONLY / INTERNAL in the projection
+  owner: attempt lifecycle/settlement, streaming output, tool-call
+  assembly, and foreground/background tool lifecycle project; turn
+  counting and final usage fold; model request mechanics and compaction
+  mechanics stay internal. Internal `RuntimeEvent` evolution therefore
+  cannot silently break Runtime Client Protocol v1.
+- **Streaming repair.** The snapshot carries an in-flight agent output
+  view (accumulated blocks) and foreground tool views keyed by the
+  logical tool-call identity, so a client repairing after `resync`
+  reconstructs every client-visible effect without duplicated or missing
+  semantic output. Parallel physical completion never corrupts logical
+  identities.
+- **Bounded pre-M8 replay is the only retained backlog.** A finite
+  in-memory ring (`RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT = 4096`,
+  configurable) holds every retained event; expired or ahead-of-stream
+  cursors fail with `resync_required`. There is no Event Journal, no
+  persistence, and no crash-safe replay claim (M8 owns durability).
+- **Cursor-driven subscriptions (no second backlog).** A subscription is
+  a consumed `RuntimeClientCursor` into that one ring plus an
+  edge-triggered, payload-free wakeup. Publication pushes into the ring,
+  evicts beyond the retention limit, and wakes subscribers; a consumer
+  pulls the next retained entry after its cursor, one per poll. A stalled
+  consumer therefore costs one cursor rather than a queue, total retained
+  memory stays bounded by `replay_limit` no matter how far behind any
+  consumer is, and the publisher never blocks on a slow consumer. A
+  consumer that falls behind retention receives the explicit
+  `EventDelivery::ResyncRequired` — a stable, terminal verdict — instead
+  of a silently non-contiguous stream, so cursor contiguity within a
+  subscription is guaranteed. `EventDelivery` distinguishes `Event`,
+  `Pending`, `Closed`, `ResyncRequired`, and `Exhausted`, which is what
+  lets Issue #38 implement deterministic bounded transport backpressure
+  with no unbounded queue hidden underneath it.
+- **Explicit projection failure.** Cursor allocation uses a checked add:
+  overflow sets an exhausted flag rather than wrapping, publication
+  stops, and every read (`snapshot_get`, `capability_get`, `initialize`,
+  subscribe, and subscription polls) then fails with
+  `projection_exhausted`. A read never hands back a model that silently
+  stopped folding authoritative transitions.
+- **Attachment lifecycle.** Protocol v1 admits at most one active
+  attachment: the first attach succeeds, a second fails with
+  `attachment_in_use` and never evicts the first, detach (explicit or
+  RAII drop) releases ownership, reconnects receive a fresh attachment
+  identity, and request ids are attachment-scoped. Detach changes only
+  attachment state: it never cancels the attempt, never cancels
+  conversation-owned background work, never drains the mailbox, and
+  never mutates canonical history or capability state.
+- **Current-attempt coordination.** The host owns the current-attempt
+  slot and the exact `AgentCancellation` the attempt task runs against;
+  `cancel_current_attempt` requests cancellation under the one boundary
+  and its acceptance response is never terminal settlement (the Agent
+  Loop owns settlement, observed asynchronously). The host does not own a
+  second attempt state machine.
+- **Canonical history: one owner at a time.** Ownership transfers, it is
+  never shared:
+
+  ```text
+  idle        Host owns canonical history
+  admission   the history is moved into the attempt's AgentExecution,
+              which is the sole authority for committed history while the
+              attempt runs (including safe-boundary mailbox drains)
+  running     the Host never mutates a competing copy; asynchronous
+              inbound stays mailbox-owned until the loop commits it, and
+              RuntimeClientSnapshot.messages is projection only
+  settlement  the execution's final `AgentExecutionResult.messages`
+              becomes the Host's canonical history for the next
+              idle/admission boundary
+  ```
+
+  The `debug_assert_eq!` at settlement is a sanity assertion on the
+  projection mirror, not the mechanism that keeps two authorities
+  coherent — there is only ever one.
+- **Admission.** `submit_inbound` stamps runtime-owned metadata
+  (identity, mailbox sequence, timestamp, provenance), enqueues into the
+  authoritative mailbox, and starts an attempt when idle; while busy the
+  message waits for the loop's safe-boundary drain. Success means
+  accepted/admitted, never assistant-finished.
+- **Mailbox diagnostics.** The projection mirrors enqueue/drain facts
+  (pending items in `InboundSequence` order, latest drain watermark and
+  count) from an observation seam fired at the mailbox linearization
+  points; the mailbox observer queues observations (the host drains the
+  mailbox under its own lock) and a worker task plus every lock
+  acquisition applies them in total order. `RuntimeClientCursor` remains
+  a distinct domain from `InboundSequence`; clients can never drain or
+  mutate the mailbox. Background terminal notifications enqueue through
+  the same semantic path as every other mailbox state.
+- **Background projection.** The authoritative
+  `ConversationBackgroundRegistry` is projected through a read-only
+  observation seam: `BackgroundExecutionUpdated` events and the snapshot
+  background section carry execution identity, tool identity/name,
+  lifecycle, latest bounded progress, and terminal result. Detached work
+  survives attempt termination and client detach; protocol
+  `background_status`/`background_cancel` use the registry authority, and
+  cancel acceptance is distinct from terminal settlement.
+- **Capability/tool/Skill inspection.** One semantic projection derives
+  from the active `CapabilitySnapshot`: the revision, a deterministic
+  tool catalog (id, name, description, input schema, execution/
+  concurrency/replay policies, origin builtin/MCP/Python), and a
+  deterministic Skill catalog (identity, version, name, description).
+  Executors, environment paths, package-manager state, and `SKILL.md`
+  bodies never appear; ordering is deterministic; inspection never
+  mutates the capability set.
+- **Agent Status projection: composed exactly once.** One request
+  preparation calls `AgentStatusComposer::compose` exactly once
+  (`AgentExecution::compose_status`), sampling the clock once and
+  invoking each registered provider once. That one `AgentStatus` value
+  fans out to both destinations: `render_agent_status` produces the
+  canonical model-facing attachment, and the same value is handed to
+  `observe_status` for the Runtime Client projection. The client path
+  never calls `compose` again — not even through a cloned composer
+  sharing the same clock and providers — and never parses the rendered
+  prompt text to recover structure.
+- **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
+  `request(id, method + typed params)`, `response(id, result | error)`,
+  and `event(cursor + typed payload)` with no request ids on
+  notifications. Every v1 method is client-initiated
+  (`initialize`, `submit_inbound`, `cancel_current_attempt`,
+  `snapshot_get`, `subscribe_events`, `capability_get`,
+  `background_status`, `background_cancel`, `detach`, `shutdown`).
+  Typed errors distinguish `unsupported_protocol_version`,
+  `attachment_in_use`, `not_attached`, `invalid_request`,
+  `no_current_attempt`, `unknown_background_execution`,
+  `resync_required`, `runtime_shutdown`, `invalid_state`,
+  `projection_exhausted`, and `runtime_failure` — provider SDK errors and
+  internal synchronization failures are never exposed.
+- **Shutdown vs detach.** `shutdown` accepts the narrow local-runtime
+  shutdown (no further inbound admission, current attempt continues to
+  settlement); it is not detach and not cancellation.
+
 
 ## 3. Dependency rule
 

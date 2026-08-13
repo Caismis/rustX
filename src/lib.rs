@@ -12,5 +12,6 @@ pub mod message;
 pub mod model;
 pub mod protocol;
 pub mod runtime;
+pub mod runtime_client;
 pub mod skills;
 pub mod tools;

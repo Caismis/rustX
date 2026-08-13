@@ -78,6 +78,7 @@ use crate::tools::types::{
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
+use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
 use chrono::{DateTime, Utc};
@@ -185,12 +186,21 @@ pub struct AgentExecution<'a> {
     context_runtime: ContextRuntime<'a>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
+    /// The optional live observation seam: when attached, every emitted
+    /// runtime fact, every committed canonical message, and every composed
+    /// Agent Status is observed at its commit linearization point. The
+    /// attempt-local ordered `events` trace remains the authoritative
+    /// record regardless of attachment.
+    observer: Option<&'a dyn AgentExecutionObserver>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
     /// returned "continue", before the generic cancellation check of the
-    /// next model turn; never present outside `#[cfg(test)]`.
+    /// next model turn; never present outside `#[cfg(test)]`. The `Mutex`
+    /// keeps an execution with an installed pause `Sync` (the pause holds
+    /// a `std::sync::mpsc::Receiver`), so host-driven attempt tasks can be
+    /// spawned across threads in tests.
     #[cfg(test)]
-    continuation_pause: Option<test_sync::ContinuationBoundaryPause>,
+    continuation_pause: std::sync::Mutex<Option<test_sync::ContinuationBoundaryPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -300,11 +310,24 @@ impl<'a> AgentExecution<'a> {
             context_runtime,
             observed: None,
             last_request_fingerprint: None,
+            observer: None,
             #[cfg(test)]
-            continuation_pause: None,
+            continuation_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
+    }
+
+    /// Attaches the live observation seam.
+    ///
+    /// The observer is read-only: it observes emitted runtime facts,
+    /// committed canonical messages, and composed Agent Status at their
+    /// commit linearization points, and it never influences execution. It
+    /// must be attached before [`AgentExecution::run`] to observe the whole
+    /// attempt; attaching is optional, and the attempt-local ordered event
+    /// trace in the result is recorded regardless.
+    pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
+        self.observer = Some(observer);
     }
 
     /// Runs the attempt to its single terminal outcome.
@@ -374,7 +397,11 @@ impl<'a> AgentExecution<'a> {
                 // observable deterministically between turns.
                 #[cfg(test)]
                 if terminal.is_none()
-                    && let Some(pause) = &self.continuation_pause
+                    && let Some(pause) = &self
+                        .continuation_pause
+                        .lock()
+                        .expect("continuation pause lock")
+                        .as_ref()
                 {
                     pause.park_at_continuation_boundary();
                 }
@@ -663,6 +690,7 @@ impl<'a> AgentExecution<'a> {
         for item in batch.into_items() {
             message_ids.push(item.message().id.clone());
             self.history.push(MessageBlock::User(item.into_message()));
+            self.observe_committed_last();
         }
         let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
             failure: AttemptFailure::Runtime {
@@ -770,6 +798,14 @@ impl<'a> AgentExecution<'a> {
             background: self.tool_runtime.background().active_snapshot(),
         };
         let status = self.context_runtime.status_composer.compose(&context)?;
+        if let Some(observer) = self.observer {
+            observer.observe_status(&AgentStatusObservation {
+                attempt_id: self.request.attempt_id.clone(),
+                turn: self.turn,
+                target_message_id: target_message_id.clone(),
+                status: status.clone(),
+            });
+        }
         Ok(Some(AgentStatusAttachment {
             target_message_id,
             rendered: crate::context::status::render_agent_status(&status),
@@ -1376,6 +1412,7 @@ impl<'a> AgentExecution<'a> {
                 tool_id: slot.tool_id(),
                 result,
             }));
+            self.observe_committed_last();
         }
         self.emit(RuntimeEvent::TurnCompleted);
     }
@@ -1517,6 +1554,17 @@ impl<'a> AgentExecution<'a> {
             id: message_id.clone(),
             content: content.to_vec(),
         }));
+        self.observe_committed_last();
+    }
+
+    /// Observes the most recently committed canonical message at its
+    /// commit point. The observer observes content, never influences it.
+    fn observe_committed_last(&self) {
+        if let Some(observer) = self.observer
+            && let Some(block) = self.history.last()
+        {
+            observer.observe_committed(&self.request.attempt_id, block);
+        }
     }
 
     /// Emits the runtime events for one non-terminal model event.
@@ -1584,6 +1632,9 @@ impl<'a> AgentExecution<'a> {
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
         );
+        if let Some(observer) = self.observer {
+            observer.observe_event(&self.request.attempt_id, &event);
+        }
         self.events.push(event);
     }
 
@@ -1604,6 +1655,9 @@ impl<'a> AgentExecution<'a> {
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         self.terminal_emitted = true;
+        if let Some(observer) = self.observer {
+            observer.observe_event(&self.request.attempt_id, &event);
+        }
         self.events.push(event);
     }
 }
@@ -2262,7 +2316,7 @@ mod tests {
 
         let tool_runtime = tool_runtime();
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2271,7 +2325,11 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
 
@@ -2349,7 +2407,7 @@ mod tests {
 
         let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2358,7 +2416,11 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
 
@@ -2455,6 +2517,35 @@ mod tests {
         }
     }
 
+    /// The outer liveness guard of the deterministic mailbox-boundary test.
+    ///
+    /// Nothing in that test's ordering proof depends on this value: every
+    /// semantic step is an exact handshake. It bounds only total wall time
+    /// so a genuine regression fails with a message instead of hanging a
+    /// CI job, and it is deliberately far larger than any scheduling delay
+    /// a loaded runner can produce.
+    const LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
+    /// Receives one mailbox-probe token without occupying a Tokio worker
+    /// thread, returning the receiver for the next step.
+    ///
+    /// The wait is exact: no bound participates in the ordering proof. The
+    /// only bounded waits in this test are the outer liveness guards around
+    /// the attempt and the controller.
+    async fn recv_probe_token(
+        receiver: std::sync::mpsc::Receiver<()>,
+        what: &'static str,
+    ) -> std::sync::mpsc::Receiver<()> {
+        tokio::task::spawn_blocking(move || {
+            receiver.recv().unwrap_or_else(|error| {
+                panic!("{what}: the probe channel closed before the token arrived ({error})")
+            });
+            receiver
+        })
+        .await
+        .expect("probe receive task")
+    }
+
     /// Exact mailbox-boundary proof for the background terminal inbound.
     ///
     /// The production finite-snapshot contract under test:
@@ -2494,6 +2585,21 @@ mod tests {
     /// terminal enqueue acquired the same mailbox mutex after drain #1
     /// released it, so no later drain can overtake it while it is parked.
     /// No sleep or scheduler-timing assumption participates in the proof.
+    ///
+    /// # Why the controller receives through the blocking pool
+    ///
+    /// The mailbox probe hooks fire *inside* the mailbox mutex critical
+    /// section, so their channels are necessarily synchronous. Two of the
+    /// parties that send those tokens — the Agent Loop's safe-boundary
+    /// drain and the detached background runner's terminal enqueue — park
+    /// on those channels from Tokio tasks, which blocks their worker
+    /// threads for the duration of each handshake. If the controller also
+    /// waited synchronously from a Tokio task, it would occupy a third
+    /// worker while waiting for a task that still needs one, making
+    /// progress a function of how much CPU the runtime happens to get. Each
+    /// controller receive therefore runs on the blocking pool via
+    /// [`recv_probe_token`], and every step waits exactly rather than for a
+    /// bounded time.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
@@ -2524,9 +2630,7 @@ mod tests {
                 .enqueue(inbound_message("msg-human", "hello"))
                 .expect("enqueue human")
         });
-        computed_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("human enqueue sequence computed");
+        let computed_rx = recv_probe_token(computed_rx, "human enqueue sequence computed").await;
         resume_tx.send(()).expect("release the human enqueue");
         human_task.await.expect("human enqueue task");
 
@@ -2573,9 +2677,7 @@ mod tests {
             // 1. Drain #1 committed its finite snapshot [human] and is
             //    parked inside its critical section, still holding the
             //    mailbox mutex. The first batch is fixed forever.
-            snapshot_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("first drain snapshot committed");
+            let snapshot_rx = recv_probe_token(snapshot_rx, "first drain snapshot committed").await;
             // 2. The detached background runner is provably started; settle
             //    it. Its terminal enqueue can only block on the mailbox
             //    mutex that drain #1 still owns.
@@ -2597,9 +2699,8 @@ mod tests {
             //    is computed and the item is not yet published. This is
             //    provably after drain #1 released the mutex (step 3) and
             //    before any later drain (the loop is parked, step 4).
-            computed_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("terminal enqueue owns the mailbox mutex");
+            let _computed_rx =
+                recv_probe_token(computed_rx, "terminal enqueue owns the mailbox mutex").await;
             // 6. Publish the terminal under that mutex, pre-buffer the
             //    release token for drain #2, and release the Agent Loop:
             //    the next safe-boundary drain must now observe [terminal].
@@ -2611,15 +2712,14 @@ mod tests {
             // 7. Drain #2 committed its finite snapshot [terminal]; release
             //    the second continuation boundary (parked after turn 2) so
             //    the terminal-observing turn can run.
-            snapshot_rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("second drain snapshot committed");
+            let _snapshot_rx =
+                recv_probe_token(snapshot_rx, "second drain snapshot committed").await;
             pause_release
                 .send(())
                 .expect("release the second continuation boundary");
         });
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let mut execution = AgentExecution::new(
+        let execution = AgentExecution::new(
             request(),
             &adapter,
             lease,
@@ -2628,11 +2728,21 @@ mod tests {
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
-        execution.continuation_pause = Some(pause);
-        let _result = tokio::time::timeout(std::time::Duration::from_secs(15), execution.run())
+        execution
+            .continuation_pause
+            .lock()
+            .expect("continuation pause lock")
+            .replace(pause);
+        // Outer liveness guards only: every step above is an exact
+        // handshake, so these bounds never participate in the proof — they
+        // exist so a regression fails loudly instead of hanging.
+        let _result = tokio::time::timeout(LIVENESS_GUARD, execution.run())
             .await
             .expect("the attempt terminates");
-        controller.await.expect("controller task");
+        tokio::time::timeout(LIVENESS_GUARD, controller)
+            .await
+            .expect("the controller terminates")
+            .expect("controller task");
 
         let requests = adapter.requests.lock().expect("requests lock").clone();
         assert_eq!(
