@@ -43,7 +43,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::model::invocation::{RequestParams, RequestParamsLayer, validate_request_params_layer};
 use crate::model::types::ModelProtocol;
@@ -438,8 +439,7 @@ pub enum ResponsesStorageMode {
 /// plugin registry, no translator factory, and no JSON-driven
 /// transformation, and nothing here is ever inferred from a provider name or
 /// a base URL hostname.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ModelCompat {
     /// Chat Completions: which max-token field spelling is legal.
     pub chat_max_tokens_field: ChatMaxTokensField,
@@ -448,6 +448,88 @@ pub struct ModelCompat {
     pub chat_stream_usage: ChatStreamUsage,
     /// Responses: the provider storage/continuation mode.
     pub responses_storage: ResponsesStorageMode,
+    #[doc(hidden)]
+    pub chat_max_tokens_field_explicit: bool,
+    #[doc(hidden)]
+    pub chat_stream_usage_explicit: bool,
+    #[doc(hidden)]
+    pub responses_storage_explicit: bool,
+}
+
+impl PartialEq for ModelCompat {
+    fn eq(&self, other: &Self) -> bool {
+        self.chat_max_tokens_field == other.chat_max_tokens_field
+            && self.chat_stream_usage == other.chat_stream_usage
+            && self.responses_storage == other.responses_storage
+    }
+}
+
+impl Eq for ModelCompat {}
+
+impl Serialize for ModelCompat {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let chat_max_tokens_field_is_non_default =
+            self.chat_max_tokens_field != ChatMaxTokensField::default();
+        let chat_stream_usage_is_non_default = self.chat_stream_usage != ChatStreamUsage::default();
+        let responses_storage_is_non_default =
+            self.responses_storage != ResponsesStorageMode::default();
+        let field_count = usize::from(chat_max_tokens_field_is_non_default)
+            + usize::from(chat_stream_usage_is_non_default)
+            + usize::from(responses_storage_is_non_default);
+        let mut state = serializer.serialize_struct("ModelCompat", field_count)?;
+        if chat_max_tokens_field_is_non_default {
+            state.serialize_field("chatMaxTokensField", &self.chat_max_tokens_field)?;
+        }
+        if chat_stream_usage_is_non_default {
+            state.serialize_field("chatStreamUsage", &self.chat_stream_usage)?;
+        }
+        if responses_storage_is_non_default {
+            state.serialize_field("responsesStorage", &self.responses_storage)?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelCompat {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Document {
+            #[serde(default)]
+            chat_max_tokens_field: Option<ChatMaxTokensField>,
+            #[serde(default)]
+            chat_stream_usage: Option<ChatStreamUsage>,
+            #[serde(default)]
+            responses_storage: Option<ResponsesStorageMode>,
+        }
+        let document = Document::deserialize(deserializer)?;
+        let chat_max_tokens_field_explicit = document.chat_max_tokens_field.is_some();
+        let chat_stream_usage_explicit = document.chat_stream_usage.is_some();
+        let responses_storage_explicit = document.responses_storage.is_some();
+        Ok(Self {
+            chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
+            chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
+            responses_storage: document.responses_storage.unwrap_or_default(),
+            chat_max_tokens_field_explicit,
+            chat_stream_usage_explicit,
+            responses_storage_explicit,
+        })
+    }
+}
+
+impl ModelCompat {
+    fn chat_max_tokens_field_is_explicit(self) -> bool {
+        self.chat_max_tokens_field_explicit
+            || self.chat_max_tokens_field != ChatMaxTokensField::default()
+    }
+
+    fn chat_stream_usage_is_explicit(self) -> bool {
+        self.chat_stream_usage_explicit || self.chat_stream_usage != ChatStreamUsage::default()
+    }
+
+    fn responses_storage_is_explicit(self) -> bool {
+        self.responses_storage_explicit || self.responses_storage != ResponsesStorageMode::default()
+    }
 }
 
 /// Whether a Chat Completions service supports streaming usage options.
@@ -937,17 +1019,16 @@ fn validate_provider(
 /// The check is deliberately structural only: nothing about a hostname ever
 /// changes runtime behaviour.
 fn validate_base_url(provider: &ProviderId, base_url: &str) -> Result<(), ModelCatalogError> {
-    let rest = base_url
-        .strip_prefix("https://")
-        .or_else(|| base_url.strip_prefix("http://"));
-    let invalid = match rest {
-        None => true,
-        Some(rest) => {
-            let host = rest.split('/').next().unwrap_or("");
-            host.is_empty() || host.chars().any(char::is_whitespace)
-        }
-    };
-    if invalid {
+    let valid = url::Url::parse(base_url).is_ok_and(|url| {
+        matches!(url.scheme(), "http" | "https")
+            && url.host().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && !url.cannot_be_a_base()
+    });
+    if !valid {
         return Err(ModelCatalogError::InvalidBaseUrl {
             provider: provider.clone(),
             base_url: base_url.to_owned(),
@@ -994,6 +1075,8 @@ fn validate_model(
         });
     }
 
+    validate_compat(&reference, document.protocol, document.compat)?;
+
     validate_request_params_layer(
         &document.request_params,
         document.protocol,
@@ -1024,6 +1107,31 @@ fn validate_model(
         reasoning: document.reasoning,
         compat: document.compat,
     })
+}
+
+fn validate_compat(
+    reference: &ModelRef,
+    protocol: ModelProtocol,
+    compat: ModelCompat,
+) -> Result<(), ModelCatalogError> {
+    let invalid = match protocol {
+        ModelProtocol::OpenAiChatCompletions => compat.responses_storage_is_explicit(),
+        ModelProtocol::OpenAiResponses => {
+            compat.chat_max_tokens_field_is_explicit() || compat.chat_stream_usage_is_explicit()
+        }
+        ModelProtocol::AnthropicMessages => {
+            compat.chat_max_tokens_field_is_explicit()
+                || compat.chat_stream_usage_is_explicit()
+                || compat.responses_storage_is_explicit()
+        }
+    };
+    if invalid {
+        return Err(ModelCatalogError::InvalidCompat {
+            model: reference.clone(),
+            detail: format!("compat declares fields that do not apply to protocol {protocol:?}"),
+        });
+    }
+    Ok(())
 }
 
 fn validate_reasoning(
@@ -1152,6 +1260,13 @@ pub enum ModelCatalogError {
         /// The failure detail.
         detail: String,
     },
+    /// A model declares bounded compatibility fields for a foreign protocol.
+    InvalidCompat {
+        /// The model.
+        model: ModelRef,
+        /// The validation detail.
+        detail: String,
+    },
     /// A configured request-parameter layer collides with a runtime-owned
     /// protected wire key.
     ProtectedKey {
@@ -1218,6 +1333,9 @@ impl fmt::Display for ModelCatalogError {
             }
             Self::InvalidReasoning { model, detail } => {
                 write!(f, "model {model} declares invalid reasoning: {detail}")
+            }
+            Self::InvalidCompat { model, detail } => {
+                write!(f, "model {model} declares invalid compat: {detail}")
             }
             Self::ProtectedKey { model, key, layer } => write!(
                 f,
@@ -1294,7 +1412,7 @@ pub struct ReasoningProfileView {
 mod tests {
     use super::{
         CredentialSource, CredentialSourceView, MapCredentialEnvironment, ModelCatalog,
-        ModelCatalogError, ModelRef, ProviderId, ResolvedCredential,
+        ModelCatalogDocument, ModelCatalogError, ModelRef, ProviderId, ResolvedCredential,
     };
 
     fn catalog_json(provider_body: &str) -> String {
@@ -1364,7 +1482,16 @@ mod tests {
     /// An unsupported base URL scheme is rejected structurally.
     #[test]
     fn invalid_base_url_fails() {
-        for value in ["", "gateway.example", "ftp://x/y", "https://"] {
+        for value in [
+            "",
+            "gateway.example",
+            "ftp://x/y",
+            "https://",
+            "https://user:password@example.com/v1",
+            "https://example.com/v1?route=chat",
+            "https://example.com/v1#fragment",
+            "https:// example.com/v1",
+        ] {
             let json = catalog_json(&format!(
                 r#"{{"baseUrl":{value:?},"apiKey":"k","models":[{}]}}"#,
                 model_json("")
@@ -1375,6 +1502,70 @@ mod tests {
                 "{value:?} -> {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn always_on_reasoning_without_profiles_resolves_enabled() {
+        let json = catalog_json(
+            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
+                 {"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
+                  "maxOutputTokens":100,
+                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                   "toolCalls":true,"reasoning":true},
+                  "requestParams":{"provider_reasoning":{"mode":"default"}}}]}"#,
+        );
+        let catalog = ModelCatalog::from_json_slice(json.as_bytes()).expect("valid");
+        let resolved = catalog
+            .resolve(&MapCredentialEnvironment::default())
+            .expect("literal credential resolves");
+        let registry = crate::model::invocation::ModelBindingRegistry::new(resolved)
+            .expect("supported adapter binds");
+        let invocation = registry
+            .resolve(&crate::model::invocation::ModelSelection::of(
+                ModelRef::parse("p/m").expect("reference"),
+            ))
+            .expect("always-on model resolves");
+        assert!(invocation.reasoning_enabled());
+        assert_eq!(invocation.reasoning_profile(), None);
+        assert_eq!(
+            invocation.request_params().get("provider_reasoning"),
+            Some(&serde_json::json!({"mode":"default"}))
+        );
+    }
+
+    #[test]
+    fn foreign_protocol_compat_is_rejected_even_for_default_valued_fields() {
+        let chat_with_responses_storage = catalog_json(&format!(
+            r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[{}]}}"#,
+            model_json(r#","compat":{"responsesStorage":"stored"}"#)
+        ));
+        assert!(matches!(
+            ModelCatalog::from_json_slice(chat_with_responses_storage.as_bytes())
+                .expect_err("foreign storage compat must fail"),
+            ModelCatalogError::InvalidCompat { .. }
+        ));
+
+        let anthropic_with_chat_compat = catalog_json(
+            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
+                 {"id":"m","protocol":"anthropic_messages","contextWindow":1000,
+                  "maxOutputTokens":100,
+                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                   "toolCalls":true,"reasoning":false},
+                  "compat":{"chatMaxTokensField":"max_tokens"}}]}"#,
+        );
+        assert!(matches!(
+            ModelCatalog::from_json_slice(anthropic_with_chat_compat.as_bytes())
+                .expect_err("foreign chat compat must fail"),
+            ModelCatalogError::InvalidCompat { .. }
+        ));
+    }
+
+    #[test]
+    fn catalog_round_trip_does_not_create_foreign_default_compat() {
+        let document: ModelCatalogDocument =
+            serde_json::from_str(&valid_catalog()).expect("document parses");
+        let encoded = serde_json::to_vec(&document).expect("document serializes");
+        ModelCatalog::from_json_slice(&encoded).expect("serialized defaults remain valid");
     }
 
     /// `$ENV_VAR` resolves from the environment; a missing variable is a

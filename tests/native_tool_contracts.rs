@@ -750,7 +750,7 @@ async fn run_through_agent_loop(
         request(fixture.runtime.conversation_id().clone(), &model),
         lease,
         &cancellation,
-        context_runtime(),
+        context_runtime(&model),
         &fixture.runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -809,25 +809,22 @@ fn request(
 }
 
 /// A context runtime with no compaction pressure.
-fn context_runtime() -> rustx::context::ContextRuntime {
+fn context_runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
     use rustx::context::{
-        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
-        InMemoryCheckpointStore,
+        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
+    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    ContextRuntime::for_attempt(
+        SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
+            summary_output_cap: None,
         },
         estimator,
-    )
-    .expect("valid context configuration");
-    ContextRuntime::with_summarizer(
-        engine,
-        Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
+    .expect("valid context runtime")
 }

@@ -54,6 +54,7 @@ struct Provider {
     context_window: u64,
     max_output_tokens: u32,
     request_params: serde_json::Value,
+    always_on_reasoning: bool,
 }
 
 impl Provider {
@@ -65,6 +66,7 @@ impl Provider {
             context_window: 1_000_000,
             max_output_tokens: 4096,
             request_params: serde_json::json!({}),
+            always_on_reasoning: false,
         }
     }
 
@@ -83,18 +85,28 @@ impl Provider {
         self
     }
 
+    const fn always_on_reasoning(mut self) -> Self {
+        self.always_on_reasoning = true;
+        self
+    }
+
     fn reference(&self) -> ModelRef {
         ModelRef::parse(&format!("{}/{}", self.id, self.model)).expect("valid fixture reference")
     }
 
     fn fixture_model(&self) -> FixtureModel {
-        FixtureModel::text(
+        let model = FixtureModel::text(
             &format!("{}/{}", self.id, self.model),
             ModelProtocol::OpenAiChatCompletions,
         )
         .with_context_window(self.context_window)
         .with_max_output_tokens(self.max_output_tokens)
-        .with_request_params(self.request_params.clone())
+        .with_request_params(self.request_params.clone());
+        if self.always_on_reasoning {
+            model.always_on_reasoning()
+        } else {
+            model
+        }
     }
 }
 
@@ -124,7 +136,8 @@ fn session_model(providers: &[&Provider], initial: SessionModelConfig) -> Sessio
     let resolved = fixture_catalog(&models)
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    let registry = ModelBindingRegistry::new(resolved, &factory).expect("bindings resolve");
+    let registry =
+        ModelBindingRegistry::new_with_test_factory(resolved, &factory).expect("bindings resolve");
     SessionModelState::new(registry, initial).expect("the initial selection resolves")
 }
 
@@ -932,4 +945,19 @@ async fn a_rejected_model_update_changes_nothing() {
         panic!("model_get returns the session model");
     };
     assert_eq!(model.configured, SessionModelConfig::of(alpha.reference()));
+}
+
+/// A reasoning-capable model without a reasoning profile is semantically
+/// always on, while its session selection has no profile to choose.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_on_reasoning_is_preserved_by_session_resolution() {
+    let always_on = Provider::new(ALPHA, "always-on", vec![one_turn_stop()]).always_on_reasoning();
+    let state = session_model(&[&always_on], SessionModelConfig::of(always_on.reference()));
+
+    let view = state.view();
+    assert_eq!(view.effective.reasoning_profile, None);
+    assert!(view.effective.reasoning_enabled);
+    let snapshot = state.snapshot();
+    assert_eq!(snapshot.primary().reasoning_profile(), None);
+    assert!(snapshot.primary().reasoning_enabled());
 }

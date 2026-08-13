@@ -20,8 +20,8 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    ContextBoundary, ContextCheckpointStore, ContextConfig, ContextEngine, ContextError,
-    ContextErrorKind, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
+    CompactionBudgets, ContextBoundary, ContextCheckpointStore, ContextConfig, ContextEngine,
+    ContextError, ContextErrorKind, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
     InMemoryCheckpointStore, ModelBackedSummarizer, ProjectionItem, ProviderObservedInput,
     SummaryInputItem, SummaryRequest, TokenEstimator, TokenMeasurement, TokenMeasurementSource,
 };
@@ -343,11 +343,12 @@ fn runtime_with(
     summarizer: FakeContextSummarizer,
     store: Arc<InMemoryCheckpointStore>,
 ) -> ContextRuntime {
-    ContextRuntime::with_summarizer(
+    ContextRuntime::with_test_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
         store,
         rustx::context::AgentStatusComposer::default(),
+        CompactionBudgets::new(1, 1),
     )
 }
 
@@ -695,6 +696,79 @@ fn soft_limit_respects_output_budget_and_reserve() {
         engine.soft_input_limit(161).is_err(),
         "window < reserve + output must be rejected"
     );
+}
+
+/// The primary output budget owns the soft input limit while the summary
+/// invocation owns the reservation used by the planner's hard-fit choice.
+/// A smaller summary than the primary leaves the recent-turn boundary viable.
+#[test]
+fn compaction_uses_primary_budget_for_soft_limit_and_smaller_summary_reservation() {
+    let engine = engine(40, 0, 20, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        agent("a2", vec![text_block("y")]),
+    ];
+    let projection = engine
+        .build_projection(&history, None, &[], None, None, None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            CompactionBudgets::new(10, 5),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("plan fits with the smaller summary reservation");
+
+    assert_eq!(plan.summary_reservation, 5);
+    assert_eq!(
+        plan.boundary,
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a1"),
+        }
+    );
+    assert!(plan.planned_estimate_after <= 30);
+}
+
+/// An explicit summary model with a larger output budget can force the
+/// planner to retire a whole additional turn, even though the primary soft
+/// input limit is unchanged. This proves the hard-fit decision uses the
+/// summary reservation rather than merely observing a provider request.
+#[test]
+fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
+    let engine = engine(40, 0, 20, weighted(10, 10, 0));
+    let history = vec![
+        user("u1", ""),
+        agent("a1", vec![text_block("x")]),
+        user("u2", ""),
+        agent("a2", vec![text_block("y")]),
+    ];
+    let projection = engine
+        .build_projection(&history, None, &[], None, None, None)
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(
+            &history,
+            None,
+            &projection,
+            &[],
+            CompactionBudgets::new(10, 25),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("full compaction fits with the larger summary reservation");
+
+    assert_eq!(plan.summary_reservation, 25);
+    assert_eq!(
+        plan.boundary,
+        ContextBoundary::AfterMessage {
+            message_id: MessageId::new("a2"),
+        }
+    );
+    assert!(plan.planned_estimate_after <= 30);
 }
 
 /// Impossible context configurations are rejected explicitly; no fallback
@@ -1308,11 +1382,12 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::with_summarizer(
+    let runtime = ContextRuntime::with_test_summarizer(
         engine(400, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
         rustx::context::AgentStatusComposer::default(),
+        CompactionBudgets::new(1, 1),
     );
     let history = vec![
         user("u1", ""),
@@ -1422,11 +1497,12 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::with_summarizer(
+    let runtime = ContextRuntime::with_test_summarizer(
         engine(500, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
         rustx::context::AgentStatusComposer::default(),
+        CompactionBudgets::new(1, 1),
     );
     let history = vec![
         user("u1", ""),
@@ -3158,11 +3234,12 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         ),
         capability.into_lease(),
         &cancellation,
-        rustx::context::ContextRuntime::with_summarizer(
+        rustx::context::ContextRuntime::with_test_summarizer(
             engine(10_000_000, 0, 0, weighted(10, 10, 10)),
             Arc::new(FakeContextSummarizer::new(Vec::new())),
             store,
             composer,
+            CompactionBudgets::new(1, 1),
         ),
         &tool_runtime,
     )

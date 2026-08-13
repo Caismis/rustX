@@ -56,10 +56,7 @@ use crate::context::{
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
-use crate::model::invocation::{
-    DefaultProviderAdapterFactory, ModelBindingRegistry, ModelInvocationError,
-    ProviderAdapterFactory,
-};
+use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
@@ -101,15 +98,13 @@ impl LocalRuntimePaths {
     }
 }
 
-/// The optional injected dependencies of composition.
+/// The injectable non-model dependencies of composition.
 ///
-/// Production uses the defaults. Deterministic tests inject a provider
-/// adapter factory pointing at a local fixture server, an explicit
-/// credential environment, or a token estimator, without introducing a
-/// second production configuration mode.
+/// Model bindings are deliberately not injectable: production constructs the
+/// supported adapters directly from the validated catalog binding. Tests that
+/// need provider synchronization use an explicit catalog endpoint aimed at a
+/// local HTTP fixture.
 pub struct LocalRuntimeDependencies {
-    /// The provider adapter factory.
-    pub adapter_factory: Arc<dyn ProviderAdapterFactory>,
     /// The credential environment used to resolve `$ENV_VAR` sources.
     pub credentials: Arc<dyn CredentialEnvironment>,
     /// The deterministic token estimator.
@@ -121,7 +116,6 @@ pub struct LocalRuntimeDependencies {
 impl Default for LocalRuntimeDependencies {
     fn default() -> Self {
         Self {
-            adapter_factory: Arc::new(DefaultProviderAdapterFactory),
             credentials: Arc::new(ProcessCredentialEnvironment),
             estimator: Arc::new(DefaultTokenEstimator),
             checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
@@ -176,7 +170,7 @@ impl LocalConversationRuntime {
 
         // 3. Resolve startup credentials and build every model binding.
         let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
-        let registry = ModelBindingRegistry::new(resolved, dependencies.adapter_factory.as_ref())?;
+        let registry = ModelBindingRegistry::new(resolved)?;
 
         // 4. Load and validate the local session configuration.
         let session = LocalSessionConfig::from_json_slice(&session_bytes)?;

@@ -63,10 +63,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::model::adapter::ModelAdapter;
+use crate::model::catalog::ResolvedProvider;
 use crate::model::catalog::{
     CatalogModelView, Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition,
     ModelRef, ProviderId, ReasoningProfileId, ReasoningProfileView, ResolvedModelCatalog,
-    ResolvedProvider,
 };
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::types::ModelProtocol;
@@ -465,9 +465,9 @@ impl ResolvedModelInvocation {
     /// the cap flows through the runtime-owned protected max-output field and
     /// never mutates the reasoning profile or the request parameters.
     #[must_use]
-    pub fn with_output_cap(&self, cap: u32) -> Self {
+    pub(crate) fn with_output_cap(&self, cap: u32) -> Self {
         let mut capped = self.clone();
-        capped.effective_output_tokens = self.effective_output_tokens.min(cap).max(1);
+        capped.effective_output_tokens = self.effective_output_tokens.min(cap);
         capped
     }
 
@@ -663,55 +663,6 @@ impl From<crate::model::catalog::ModelCatalogError> for ModelInvocationError {
     }
 }
 
-/// Builds provider adapters from resolved provider bindings.
-///
-/// Production uses [`DefaultProviderAdapterFactory`]; deterministic tests
-/// inject a factory that points the same real adapters at a local fixture
-/// server, or that substitutes a scripted adapter entirely.
-pub trait ProviderAdapterFactory: Send + Sync {
-    /// Builds one adapter for a provider/protocol pair.
-    ///
-    /// # Errors
-    ///
-    /// Returns a resolution error when the binding cannot be constructed.
-    fn adapter(
-        &self,
-        provider: &ResolvedProvider,
-        protocol: ModelProtocol,
-    ) -> Result<Arc<dyn ModelAdapter>, ModelInvocationError>;
-}
-
-/// The production adapter factory: every adapter is constructed from the
-/// provider's explicit endpoint and bound credential.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultProviderAdapterFactory;
-
-impl ProviderAdapterFactory for DefaultProviderAdapterFactory {
-    fn adapter(
-        &self,
-        provider: &ResolvedProvider,
-        protocol: ModelProtocol,
-    ) -> Result<Arc<dyn ModelAdapter>, ModelInvocationError> {
-        use crate::model::adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
-        use crate::model::adapter::openai::{
-            OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
-        };
-        let key = provider.credential().expose();
-        let base = provider.base_url();
-        Ok(match protocol {
-            ModelProtocol::OpenAiChatCompletions => Arc::new(OpenAiChatCompletionsAdapter::new(
-                OpenAiAdapterConfig::new(key, base),
-            )),
-            ModelProtocol::OpenAiResponses => Arc::new(OpenAiResponsesAdapter::new(
-                OpenAiAdapterConfig::new(key, base),
-            )),
-            ModelProtocol::AnthropicMessages => Arc::new(AnthropicMessagesAdapter::new(
-                AnthropicAdapterConfig::new(key, base),
-            )),
-        })
-    }
-}
-
 /// The runtime's model binding registry: the resolved catalog plus exactly
 /// one adapter per provider/protocol pair it uses.
 ///
@@ -733,14 +684,58 @@ impl fmt::Debug for ModelBindingRegistry {
 }
 
 impl ModelBindingRegistry {
-    /// Builds every adapter binding the catalog's models require.
+    /// Builds every supported adapter binding directly from the resolved
+    /// provider endpoint and credential.
     ///
     /// # Errors
     ///
     /// Returns the first adapter construction failure.
-    pub fn new(
+    pub fn new(catalog: ResolvedModelCatalog) -> Result<Self, ModelInvocationError> {
+        let mut adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>> =
+            BTreeMap::new();
+        for reference in catalog.model_refs().collect::<Vec<_>>() {
+            let (provider, model) = catalog.binding(&reference)?;
+            let key = (provider.id().clone(), model.protocol);
+            if let std::collections::btree_map::Entry::Vacant(slot) = adapters.entry(key) {
+                let credential = provider.credential().expose();
+                let base_url = provider.base_url();
+                let adapter: Arc<dyn ModelAdapter> = match model.protocol {
+                    ModelProtocol::OpenAiChatCompletions => {
+                        use crate::model::adapter::openai::{
+                            OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
+                        };
+                        Arc::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
+                            credential, base_url,
+                        )))
+                    }
+                    ModelProtocol::OpenAiResponses => {
+                        use crate::model::adapter::openai::{
+                            OpenAiAdapterConfig, OpenAiResponsesAdapter,
+                        };
+                        Arc::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
+                            credential, base_url,
+                        )))
+                    }
+                    ModelProtocol::AnthropicMessages => {
+                        use crate::model::adapter::anthropic::{
+                            AnthropicAdapterConfig, AnthropicMessagesAdapter,
+                        };
+                        Arc::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
+                            credential, base_url,
+                        )))
+                    }
+                };
+                slot.insert(adapter);
+            }
+        }
+        Ok(Self { catalog, adapters })
+    }
+
+    /// Test-only binding seam for in-crate deterministic adapter fixtures.
+    #[doc(hidden)]
+    pub fn new_with_test_factory(
         catalog: ResolvedModelCatalog,
-        factory: &dyn ProviderAdapterFactory,
+        factory: &dyn TestProviderAdapterFactory,
     ) -> Result<Self, ModelInvocationError> {
         let mut adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>> =
             BTreeMap::new();
@@ -858,7 +853,14 @@ impl ModelBindingRegistry {
             model_max_output_tokens: model.max_output_tokens,
             effective_output_tokens,
             reasoning_profile: profile_id,
-            reasoning_enabled: profile.is_some_and(|profile| profile.enabled),
+            // A reasoning-capable model without a profile block has
+            // provider-default reasoning semantics: reasoning is always on,
+            // but there is no selectable profile and no synthetic wire field.
+            reasoning_enabled: if model.capabilities.reasoning {
+                profile.is_none_or(|profile| profile.enabled)
+            } else {
+                false
+            },
             request_params,
             capabilities,
             declared_capabilities: model.capabilities.clone(),
@@ -901,6 +903,19 @@ impl ModelBindingRegistry {
         }
         ModelCatalogView { models }
     }
+}
+
+/// Hidden test-only adapter substitution used by deterministic integration
+/// fixtures. Production composition never calls this path; its documented
+/// binding path is [`ModelBindingRegistry::new`], which constructs the three
+/// supported protocol adapters explicitly.
+#[doc(hidden)]
+pub trait TestProviderAdapterFactory: Send + Sync {
+    fn adapter(
+        &self,
+        provider: &ResolvedProvider,
+        protocol: ModelProtocol,
+    ) -> Result<Arc<dyn ModelAdapter>, ModelInvocationError>;
 }
 
 type SelectedProfile<'a> = (

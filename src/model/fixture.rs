@@ -20,7 +20,7 @@ use crate::model::catalog::{
     ResolvedProvider,
 };
 use crate::model::invocation::{
-    ModelBindingRegistry, ModelInvocationError, ProviderAdapterFactory, RequestParams,
+    ModelBindingRegistry, ModelInvocationError, RequestParams, TestProviderAdapterFactory,
 };
 use crate::model::session::{SessionModelConfig, SessionModelState};
 use crate::model::types::ModelProtocol;
@@ -44,7 +44,7 @@ impl ScriptedAdapterFactory {
     }
 }
 
-impl ProviderAdapterFactory for ScriptedAdapterFactory {
+impl TestProviderAdapterFactory for ScriptedAdapterFactory {
     fn adapter(
         &self,
         _provider: &ResolvedProvider,
@@ -70,7 +70,7 @@ where
     }
 }
 
-impl<F> ProviderAdapterFactory for MappedAdapterFactory<F>
+impl<F> TestProviderAdapterFactory for MappedAdapterFactory<F>
 where
     F: Fn(&ProviderId, ModelProtocol) -> Option<Arc<dyn ModelAdapter>> + Send + Sync,
 {
@@ -179,6 +179,14 @@ impl FixtureModel {
         self
     }
 
+    /// Claims provider-default reasoning that is always enabled without
+    /// exposing selectable reasoning profiles.
+    #[must_use]
+    pub const fn always_on_reasoning(mut self) -> Self {
+        self.reasoning_capable = true;
+        self
+    }
+
     /// Sets the compat block.
     #[must_use]
     pub fn with_compat(mut self, compat: serde_json::Value) -> Self {
@@ -281,12 +289,13 @@ pub fn fixture_catalog(models: &[FixtureModel]) -> ModelCatalog {
 #[must_use]
 pub fn fixture_registry(
     models: &[FixtureModel],
-    factory: &dyn ProviderAdapterFactory,
+    factory: &dyn TestProviderAdapterFactory,
 ) -> ModelBindingRegistry {
     let resolved = fixture_catalog(models)
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    ModelBindingRegistry::new(resolved, factory).expect("fixture bindings resolve")
+    ModelBindingRegistry::new_with_test_factory(resolved, factory)
+        .expect("fixture bindings resolve")
 }
 
 /// Builds a session model state selecting one fixture model.
@@ -298,7 +307,7 @@ pub fn fixture_registry(
 pub fn fixture_session_model(
     models: &[FixtureModel],
     selected: &str,
-    factory: &dyn ProviderAdapterFactory,
+    factory: &dyn TestProviderAdapterFactory,
 ) -> SessionModelState {
     let registry = fixture_registry(models, factory);
     SessionModelState::new(

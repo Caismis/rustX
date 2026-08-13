@@ -68,28 +68,25 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
 /// A deterministic context runtime with a window far larger than any
 /// scripted request: the mandatory M4 path is active, but no compaction or
 /// summary activity can ever trigger in these loop-contract tests.
-fn runtime() -> rustx::context::ContextRuntime {
+fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
     use rustx::context::{
-        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
-        InMemoryCheckpointStore,
+        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
+    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    ContextRuntime::for_attempt(
+        SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
+            summary_output_cap: None,
         },
         estimator,
-    )
-    .expect("valid context configuration");
-    ContextRuntime::with_summarizer(
-        engine,
-        std::sync::Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         std::sync::Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
+    .expect("valid context runtime")
 }
 
 async fn run(
@@ -103,7 +100,7 @@ async fn run(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
-        runtime(),
+        runtime(model),
         &tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -2491,7 +2488,7 @@ async fn run_with_mailbox(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
-        runtime(),
+        runtime(model),
         &tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -2513,7 +2510,7 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
         request("attempt-1", &model),
         capability.into_lease(),
         &cancellation,
-        runtime(),
+        runtime(&model),
         &tool_runtime,
     )
     .err()

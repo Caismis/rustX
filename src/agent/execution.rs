@@ -731,10 +731,12 @@ impl<'a> AgentExecution<'a> {
             Ok(projection) => projection,
             Err(terminal) => return Err(terminal),
         };
-        let should_compact = match self.context_runtime.engine.should_compact(
-            &projection,
-            self.request.model.primary().max_output_tokens(),
-        ) {
+        let budgets = self.compaction_budgets();
+        let should_compact = match self
+            .context_runtime
+            .engine
+            .should_compact(&projection, budgets.primary_output_budget)
+        {
             Ok(value) => value,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
@@ -860,6 +862,10 @@ impl<'a> AgentExecution<'a> {
         self.capability.snapshot().skill_catalog_attachment()
     }
 
+    fn compaction_budgets(&self) -> crate::context::CompactionBudgets {
+        self.context_runtime.compaction_budgets
+    }
+
     /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
     fn tool_registry(&self) -> &ToolRegistry {
         self.capability.snapshot().tool_registry()
@@ -967,12 +973,13 @@ impl<'a> AgentExecution<'a> {
             agent_status,
             self.skill_catalog(),
         )?;
+        let budgets = self.compaction_budgets();
         let plan = self.context_runtime.engine.plan_compaction(
             &self.history,
             checkpoint.as_ref(),
             &projection,
             &tools,
-            self.request.model.primary().max_output_tokens(),
+            budgets,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
@@ -1015,10 +1022,11 @@ impl<'a> AgentExecution<'a> {
         )?;
         // The rebuilt projection must fit under the soft input limit; if
         // pinned context and the actual summary cannot fit, fail explicitly.
-        match self.context_runtime.engine.fits_under_soft_limit(
-            &projection,
-            self.request.model.primary().max_output_tokens(),
-        ) {
+        match self
+            .context_runtime
+            .engine
+            .fits_under_soft_limit(&projection, budgets.primary_output_budget)
+        {
             Ok(true) => {}
             Ok(false) => {
                 return Err(ContextError::new(
@@ -1973,8 +1981,9 @@ mod tests {
         }
     }
 
-    /// A deterministic context runtime with a window far larger than any
-    /// scripted request, so no compaction ever triggers in these tests.
+    /// A deterministic context runtime derived from the same immutable model
+    /// snapshot as the execution. The window is far larger than any scripted
+    /// request, so no compaction ever triggers in these tests.
     /// A conversation tool runtime over a temporary workspace.
     fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
         tool_runtime_with_mailbox(None)
@@ -2002,39 +2011,19 @@ mod tests {
         .expect("tool runtime")
     }
 
-    fn runtime() -> ContextRuntime {
-        use crate::context::checkpoint::InMemoryCheckpointStore;
-        use crate::context::summarizer::{ContextSummarizer, SummaryRequest};
-        use crate::context::{
-            ContextConfig, ContextEngine, ContextError, DefaultTokenEstimator, TokenEstimator,
-        };
-        use crate::runtime::cancellation::CancellationSignal;
-        struct NeverSummarizes;
-        impl ContextSummarizer for NeverSummarizes {
-            fn summarize(
-                &self,
-                _request: SummaryRequest,
-                _cancellation: CancellationSignal,
-            ) -> futures_util::future::BoxFuture<'_, Result<String, ContextError>> {
-                unreachable!("no compaction is possible under a huge window")
-            }
-        }
-        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            ContextConfig {
-                context_window_tokens: 10_000_000,
+    fn runtime(adapter: &Arc<ScriptedAdapter>) -> ContextRuntime {
+        ContextRuntime::for_attempt(
+            crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
+                summary_output_cap: None,
             },
-            estimator,
-        )
-        .expect("valid context configuration");
-        ContextRuntime::with_summarizer(
-            engine,
-            Arc::new(NeverSummarizes),
-            Arc::new(InMemoryCheckpointStore::new()),
+            Arc::new(crate::context::DefaultTokenEstimator),
+            Arc::new(crate::context::InMemoryCheckpointStore::new()),
             crate::context::AgentStatusComposer::default(),
+            &request(adapter).model,
         )
+        .expect("valid context runtime")
     }
 
     fn inbound_message(id: &str, text: &str) -> UserMessageBlock {
@@ -2210,7 +2199,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("matching capability owner is accepted");
@@ -2243,7 +2232,7 @@ mod tests {
             other_request,
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &other_runtime,
         );
 
@@ -2280,7 +2269,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &other_runtime,
         );
 
@@ -2328,7 +2317,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
@@ -2418,7 +2407,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
@@ -2729,7 +2718,7 @@ mod tests {
             request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");

@@ -234,10 +234,19 @@ fn validate_context_policy(
     policy: &SessionContextPolicy,
     model: &AttemptModelSnapshot,
 ) -> Result<(), crate::context::ContextError> {
+    if policy.summary_output_cap == Some(0) {
+        return Err(crate::context::ContextError::new(
+            crate::context::ContextErrorKind::InvalidConfiguration,
+            "summary_output_cap must be positive when present",
+        ));
+    }
     policy
         .config_for_window(model.primary().context_window())
         .soft_input_limit(model.primary().max_output_tokens())?;
-    let summary = model.summary_invocation();
+    let summary = match policy.summary_output_cap {
+        Some(cap) => model.summary_invocation().with_output_cap(cap),
+        None => model.summary_invocation().clone(),
+    };
     policy
         .config_for_window(summary.context_window())
         .soft_input_limit(summary.max_output_tokens())?;

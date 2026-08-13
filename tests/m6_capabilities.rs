@@ -1482,20 +1482,18 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         timezone: None,
         model: common::attempt_model(model.clone(), "fake-model"),
     };
-    let runtime = rustx::context::ContextRuntime::with_summarizer(
-        rustx::context::ContextEngine::new(
-            rustx::context::ContextConfig {
-                context_window_tokens: 10_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            Arc::new(rustx::context::DefaultTokenEstimator),
-        )
-        .expect("engine"),
-        Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
+    let runtime = rustx::context::ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        Arc::new(rustx::context::DefaultTokenEstimator),
         Arc::new(rustx::context::InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
-    );
+        &request.model,
+    )
+    .expect("context runtime");
     let result =
         rustx::agent::AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
             .expect("execution")

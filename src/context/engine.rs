@@ -98,6 +98,40 @@ pub struct ContextConfig {
     pub keep_recent_tokens: u64,
 }
 
+/// The two output budgets that compaction planning must keep distinct.
+///
+/// The primary model's budget determines how much input the next primary
+/// request may carry. The frozen summary invocation's effective budget is a
+/// reservation for the summary that will be generated while applying the
+/// plan. Keeping the values named prevents a summary-model override or a
+/// context summary cap from accidentally changing the primary soft limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompactionBudgets {
+    /// The primary invocation's effective maximum output tokens.
+    pub primary_output_budget: u32,
+    /// The frozen/capped summary invocation's effective maximum output tokens.
+    pub summary_output_budget: u32,
+}
+
+impl CompactionBudgets {
+    /// Creates the budgets for one admitted attempt.
+    #[must_use]
+    pub const fn new(primary_output_budget: u32, summary_output_budget: u32) -> Self {
+        Self {
+            primary_output_budget,
+            summary_output_budget,
+        }
+    }
+}
+
+impl From<u32> for CompactionBudgets {
+    /// Compatibility for direct engine callers that have no distinct summary
+    /// invocation. Attempt runtimes always pass the named two-budget value.
+    fn from(primary_output_budget: u32) -> Self {
+        Self::new(primary_output_budget, primary_output_budget)
+    }
+}
+
 impl ContextConfig {
     /// Derives the soft input limit of one request with the given
     /// runtime-resolved output budget, using checked arithmetic.
@@ -467,22 +501,23 @@ impl ContextEngine {
     /// [`ContextErrorKind::CannotFit`] when even full compaction cannot fit
     /// pinned context, the fresh inbound material, and the summary
     /// reservation.
-    pub fn plan_compaction(
+    pub fn plan_compaction<B: Into<CompactionBudgets>>(
         &self,
         history: &[MessageBlock],
         checkpoint: Option<&ContextCheckpoint>,
         current_projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
-        max_output_tokens: u32,
+        budgets: B,
         constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
-        let soft_limit = self.soft_input_limit(max_output_tokens)?;
+        let budgets = budgets.into();
+        let soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
         let index = StructuralIndex::build(history)?;
         let suffix = Self::suffix_items(history, checkpoint, &index)?;
         if suffix.is_empty() {
             return Err(no_progress("the compactable suffix is empty"));
         }
-        let reservation = u64::from(max_output_tokens);
+        let reservation = u64::from(budgets.summary_output_budget);
         let min_cut = continuation_min_cut(&index, constraints.must_cover_through)?;
         let fresh_cut = fresh_retention_cut(&index, constraints.fresh_inbound)?;
         let scope = PlanScope {
@@ -563,7 +598,7 @@ impl ContextEngine {
             }
         };
 
-        self.build_plan(&scope, chosen, current_projection, max_output_tokens)
+        self.build_plan(&scope, chosen, current_projection, budgets)
     }
 
     /// The `SummaryRequest` a plan implies, given the previous checkpoint
@@ -848,7 +883,7 @@ impl ContextEngine {
         scope: &PlanScope<'_>,
         chosen: Chosen,
         current_projection: &ContextProjection,
-        max_output_tokens: u32,
+        budgets: CompactionBudgets,
     ) -> Result<CompactionPlan, ContextError> {
         let (shape, split_turn_prefix) = match chosen {
             Chosen::Whole { count } => (whole_plan_shape(scope, count), None),
@@ -869,7 +904,7 @@ impl ContextEngine {
                 scope.skill_catalog,
             )
             .saturating_add(scope.reservation);
-        if planned_estimate_after > self.soft_input_limit(max_output_tokens)? {
+        if planned_estimate_after > self.soft_input_limit(budgets.primary_output_budget)? {
             return Err(cannot_fit(&self.config));
         }
         Ok(CompactionPlan {

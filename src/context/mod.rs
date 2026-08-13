@@ -36,7 +36,8 @@ pub use checkpoint::{
     summary_message_id,
 };
 pub use engine::{
-    CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine, SessionContextPolicy,
+    CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
+    SessionContextPolicy,
 };
 pub use error::{ContextError, ContextErrorKind};
 pub use projection::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
@@ -64,15 +65,17 @@ pub use tokens::{
 pub struct ContextRuntime {
     /// The deterministic context engine, configured for this attempt's
     /// model context window.
-    pub engine: ContextEngine,
+    pub(crate) engine: ContextEngine,
     /// The provider-neutral summary service.
-    pub summarizer: Arc<dyn ContextSummarizer>,
+    pub(crate) summarizer: Arc<dyn ContextSummarizer>,
     /// The checkpoint persistence abstraction.
-    pub checkpoint_store: Arc<dyn ContextCheckpointStore>,
+    pub(crate) checkpoint_store: Arc<dyn ContextCheckpointStore>,
     /// The Agent Status composer: the structured status sections and the
     /// deterministic renderer that produces the ephemeral attachment. Agent
     /// Status is mandatory for rustX agents and owned by the context plane.
-    pub status_composer: AgentStatusComposer,
+    pub(crate) status_composer: AgentStatusComposer,
+    /// The primary and summary output budgets frozen at attempt admission.
+    pub(crate) compaction_budgets: CompactionBudgets,
 }
 
 impl ContextRuntime {
@@ -95,6 +98,12 @@ impl ContextRuntime {
         status_composer: AgentStatusComposer,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
+        if policy.summary_output_cap == Some(0) {
+            return Err(ContextError::new(
+                ContextErrorKind::InvalidConfiguration,
+                "summary_output_cap must be positive when present",
+            ));
+        }
         let engine = ContextEngine::new(
             policy.config_for_window(model.primary().context_window()),
             estimator,
@@ -103,31 +112,35 @@ impl ContextRuntime {
             Some(cap) => model.summary_invocation().with_output_cap(cap),
             None => model.summary_invocation().clone(),
         };
+        let compaction_budgets = CompactionBudgets::new(
+            model.primary().max_output_tokens(),
+            summary.max_output_tokens(),
+        );
         Ok(Self {
             engine,
             summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
             checkpoint_store,
             status_composer,
+            compaction_budgets,
         })
     }
 
-    /// Creates a context runtime bundle over an explicit summary service.
-    ///
-    /// This is the narrow deterministic seam tests use to observe compaction
-    /// without a provider; it is not a production configuration mode, and
-    /// production composition never calls it.
-    #[must_use]
-    pub fn with_summarizer(
+    /// Temporary deterministic test bridge for the existing integration
+    /// suite. Production composition never calls this path.
+    #[doc(hidden)]
+    pub fn with_test_summarizer(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
         checkpoint_store: Arc<dyn ContextCheckpointStore>,
         status_composer: AgentStatusComposer,
+        compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self {
             engine,
             summarizer,
             checkpoint_store,
             status_composer,
+            compaction_budgets,
         }
     }
 }

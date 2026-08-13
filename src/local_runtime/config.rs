@@ -93,7 +93,7 @@ impl LocalSessionConfig {
                 detail: "conversationId and agentId must be non-empty".to_owned(),
             });
         }
-        if self.context.keep_recent_tokens > 0 && self.context.summary_output_cap == Some(0) {
+        if self.context.summary_output_cap == Some(0) {
             return Err(LocalSessionConfigError::Invalid {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
             });
@@ -456,5 +456,22 @@ mod tests {
         }"#;
         let error = LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
         assert!(error.to_string().contains("duplicate MCP server"));
+    }
+
+    /// A present zero summary cap is a configuration error, even when the
+    /// context would otherwise never need compaction.
+    #[test]
+    fn zero_summary_output_cap_is_rejected() {
+        let json = MINIMAL.replace(
+            r#""keepRecentTokens": 4096"#,
+            r#""keepRecentTokens": 0, "summaryOutputCap": 0"#,
+        );
+        let error = LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
+        assert!(matches!(error, LocalSessionConfigError::Invalid { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("summaryOutputCap must be positive")
+        );
     }
 }

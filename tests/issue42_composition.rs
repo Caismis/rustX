@@ -14,9 +14,8 @@ use std::sync::Arc;
 use rustx::local_runtime::composition::{
     LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
 };
+use rustx::model::ModelProtocol;
 use rustx::model::catalog::MapCredentialEnvironment;
-use rustx::model::fixture::{NullAdapter, ScriptedAdapterFactory};
-use rustx::model::{ModelAdapter, ModelProtocol};
 use rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1;
 use rustx::runtime_client::types::{RequestId, RuntimeClientRequest, RuntimeClientResult};
 
@@ -72,12 +71,11 @@ fn startup(root: &std::path::Path, models: &str, session: &str) -> LocalRuntimeP
     }
 }
 
-/// Composition dependencies with an explicit credential environment and a
-/// scripted adapter, so no network and no process environment is involved.
+/// Composition dependencies with an explicit credential environment. Model
+/// bindings are constructed by production from the catalog's protocol and
+/// endpoint; this test exercises startup without invoking a model turn.
 fn dependencies() -> LocalRuntimeDependencies {
-    let adapter: Arc<dyn ModelAdapter> = Arc::new(NullAdapter);
     LocalRuntimeDependencies {
-        adapter_factory: Arc::new(ScriptedAdapterFactory::new(adapter)),
         credentials: Arc::new(MapCredentialEnvironment::new([(
             "RUSTX_TEST_MODEL_KEY".to_owned(),
             "composed-secret".to_owned(),
@@ -278,7 +276,6 @@ async fn startup_configuration_failures_are_explicit() {
     let error = LocalConversationRuntime::compose(
         &paths,
         &LocalRuntimeDependencies {
-            adapter_factory: Arc::new(ScriptedAdapterFactory::new(Arc::new(NullAdapter))),
             credentials: Arc::new(MapCredentialEnvironment::default()),
             ..LocalRuntimeDependencies::default()
         },

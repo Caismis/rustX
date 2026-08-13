@@ -29,9 +29,9 @@ use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, Ini
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError, AgentStatusFact,
     AgentStatusRenderContext, AgentStatusSectionData, AgentStatusSectionId,
-    AgentStatusSectionProvider, ContextCheckpointStore, ContextConfig, ContextEngine, ContextError,
-    ContextErrorKind, ContextRuntime, InMemoryCheckpointStore, ProviderObservedInput,
-    TokenEstimator, TokenMeasurementSource, render_agent_status,
+    AgentStatusSectionProvider, CompactionBudgets, ContextCheckpointStore, ContextConfig,
+    ContextEngine, ContextError, ContextErrorKind, ContextRuntime, InMemoryCheckpointStore,
+    ProviderObservedInput, TokenEstimator, TokenMeasurementSource, render_agent_status,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -322,11 +322,12 @@ fn runtime(
     store: Arc<InMemoryCheckpointStore>,
     clock: Arc<dyn AgentStatusClock>,
 ) -> ContextRuntime {
-    ContextRuntime::with_summarizer(
+    ContextRuntime::with_test_summarizer(
         engine(window, 0, 0, estimator),
         Arc::new(summarizer),
         store,
         AgentStatusComposer::new(clock),
+        CompactionBudgets::new(1, 1),
     )
 }
 

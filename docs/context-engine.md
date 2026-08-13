@@ -337,9 +337,11 @@ compactable region after the pinned prefix.
 
 ## 12. Summary provenance
 
-The summary service is provider-neutral, and `ContextRuntime::with_summarizer`
-is a narrow test seam — not a production configuration mode. Production
-composition always goes through `ContextRuntime::for_attempt`.
+The summary service is provider-neutral. Production composition always goes
+through `ContextRuntime::for_attempt`, which derives the concrete
+`ModelBackedSummarizer` and both compaction budgets from the immutable attempt
+model snapshot. Deterministic tests may use a hidden fixture-only summary
+seam; it is not a production configuration mode.
 
 ```rust
 pub trait ContextSummarizer: Send + Sync {
@@ -358,6 +360,11 @@ catalog, `continuation = None`, and a deterministic instruction plus the
 serialized input. It is constructed from the attempt's **frozen summary
 policy**, never from an independently injected summarizer — production has
 exactly two modes:
+
+Compaction planning carries a named pair of budgets: the primary effective
+output budget controls the primary soft input limit, while the effective
+output budget of the frozen (and possibly capped) summary invocation is the
+summary reservation recorded in `CompactionPlan.summary_reservation`.
 
 - `session` — the summary uses the attempt's own primary invocation: same
   provider binding, model, protocol, selected reasoning profile, and

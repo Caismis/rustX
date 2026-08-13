@@ -81,6 +81,10 @@ fn fixture_models() -> Vec<FixtureModel> {
         )
         .with_context_window(16_000)
         .with_max_output_tokens(1_024),
+        FixtureModel::text("always/always-on", ModelProtocol::OpenAiChatCompletions)
+            .with_context_window(64_000)
+            .with_max_output_tokens(512)
+            .always_on_reasoning(),
     ]
 }
 
@@ -101,7 +105,8 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
     let resolved = catalog
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    let registry = ModelBindingRegistry::new(resolved, &factory).expect("bindings resolve");
+    let registry =
+        ModelBindingRegistry::new_with_test_factory(resolved, &factory).expect("bindings resolve");
     let state =
         SessionModelState::new(registry, SessionModelConfig::of(model_ref("alpha/model-a")))
             .expect("the initial selection resolves");
@@ -234,7 +239,12 @@ async fn the_catalog_query_exposes_safe_selectable_models() {
         .collect();
     assert_eq!(
         references,
-        vec!["alpha/model-a", "beta/model-b", "summary/summary-model"],
+        vec![
+            "alpha/model-a",
+            "always/always-on",
+            "beta/model-b",
+            "summary/summary-model",
+        ],
         "every selectable model is listed in deterministic reference order"
     );
 
@@ -390,6 +400,39 @@ async fn model_get_returns_the_authoritative_session_state() {
         "a model that declares no profiles selects none"
     );
     assert!(!after.effective.reasoning_enabled);
+}
+
+/// Runtime Client model projections preserve always-on reasoning as enabled
+/// without inventing a selectable profile or a provider wire field.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runtime_client_reports_always_on_reasoning_without_a_profile() {
+    let (_model, host) = runtime(vec![one_turn_stop()]).await;
+    let (attachment, _) = host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(1),
+        config: Box::new(SessionModelConfig::of(model_ref("always/always-on"))),
+    });
+    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
+        panic!("model_set returns the session model: {response:?}");
+    };
+    assert_eq!(model.effective.reasoning_profile, None);
+    assert!(model.effective.reasoning_enabled);
+
+    let catalog_response = attachment.handle_request(RuntimeClientRequest::ModelCatalogGet {
+        id: RequestId::new(2),
+    });
+    let Some(RuntimeClientResult::ModelCatalog { catalog }) = catalog_response.result else {
+        panic!("model_catalog_get returns the catalog: {catalog_response:?}");
+    };
+    let always_on = catalog
+        .models
+        .iter()
+        .find(|model| model.model == model_ref("always/always-on"))
+        .expect("always-on model is listed");
+    assert!(always_on.reasoning_profiles.is_empty());
+    assert_eq!(always_on.default_reasoning_profile, None);
 }
 
 /// A reconnecting client recovers the complete model state from the
