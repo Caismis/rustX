@@ -219,6 +219,31 @@ impl core::fmt::Display for HostConstructionError {
 
 impl std::error::Error for HostConstructionError {}
 
+/// Whether one model snapshot can run under the session context policy.
+///
+/// A model whose context window cannot accommodate the policy reserve plus
+/// the model output budget can never run an attempt. Rejecting it when the
+/// session model is *constructed* or *set* is what keeps the per-attempt
+/// context runtime construction infallible at admission, where there is no
+/// caller left to report a failure to.
+///
+/// # Errors
+///
+/// Returns the engine configuration error.
+fn validate_context_policy(
+    policy: &SessionContextPolicy,
+    model: &AttemptModelSnapshot,
+) -> Result<(), crate::context::ContextError> {
+    policy
+        .config_for_window(model.primary().context_window())
+        .soft_input_limit(model.primary().max_output_tokens())?;
+    let summary = model.summary_invocation();
+    policy
+        .config_for_window(summary.context_window())
+        .soft_input_limit(summary.max_output_tokens())?;
+    Ok(())
+}
+
 /// Projects a model-resolution failure into the protocol error model.
 ///
 /// Resolution errors never carry credential material: the catalog names an
@@ -630,30 +655,6 @@ impl HostInner {
         execution.run().await
     }
 
-    /// Whether one model snapshot is compatible with the session context
-    /// policy.
-    ///
-    /// A model whose context window cannot accommodate the policy reserve
-    /// plus the model's output budget can never run an attempt, so it is
-    /// rejected when the session model is *set*, never discovered at
-    /// admission.
-    fn validate_context_policy(
-        &self,
-        model: &AttemptModelSnapshot,
-    ) -> Result<(), crate::context::ContextError> {
-        let config = self
-            .context
-            .policy
-            .config_for_window(model.primary().context_window());
-        config.soft_input_limit(model.primary().max_output_tokens())?;
-        let summary = model.summary_invocation();
-        self.context
-            .policy
-            .config_for_window(summary.context_window())
-            .soft_input_limit(summary.max_output_tokens())?;
-        Ok(())
-    }
-
     /// The settlement path of one attempt: commit the authoritative
     /// history, clear the current-attempt slot, then admit the next
     /// attempt when the mailbox holds pending work.
@@ -850,6 +851,12 @@ impl RuntimeClientHost {
                 runtime_conversation: conversation_id,
             });
         }
+        // The initial session model must be able to run under the session
+        // context policy. Validating here (and again in `model_set`) is what
+        // makes the per-attempt context runtime construction infallible at
+        // admission, where there is no caller left to report to.
+        validate_context_policy(&config.context.policy, &config.model.snapshot())
+            .map_err(|error| HostConstructionError::Context(error.message))?;
 
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -1298,14 +1305,14 @@ impl RuntimeClientHost {
         candidate
             .apply(config)
             .map_err(|error| invalid_model(&error))?;
-        self.inner
-            .validate_context_policy(&candidate.snapshot())
-            .map_err(|error| RuntimeClientError::InvalidModelConfiguration {
+        validate_context_policy(&self.inner.context.policy, &candidate.snapshot()).map_err(
+            |error| RuntimeClientError::InvalidModelConfiguration {
                 message: format!(
                     "the selected model cannot run under the session context policy: {}",
                     error.message
                 ),
-            })?;
+            },
+        )?;
         let view = candidate.view();
         state.model = candidate;
         state.projection.apply(Observation::SessionModelChanged {
@@ -2217,11 +2224,32 @@ mod tests {
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
         ));
-        assert_eq!(
-            fixture.host.canonical_history(),
-            snapshot.messages,
-            "the projection mirrors the authoritative canonical history"
-        );
+        // The terminal settlement event is emitted by the loop, and the
+        // authoritative canonical history is committed by the host's
+        // settlement path immediately afterwards. Observing the commit is a
+        // wait on that exact condition, never a delay.
+        await_canonical_history(&fixture.host, &snapshot.messages).await;
+    }
+
+    /// Waits until the host's authoritative canonical history equals the
+    /// expected value.
+    ///
+    /// The host commits it in `finish_attempt`, just after the Agent Loop
+    /// emitted the attempt's terminal event, so a test that synchronized on
+    /// the terminal event may still observe the previous value once. This
+    /// yields to the runtime until the commit is visible; the outer timeout
+    /// only bounds a pathological stall.
+    async fn await_canonical_history(host: &RuntimeClientHost, expected: &[MessageBlock]) {
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                if host.canonical_history() == expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the projection mirrors the authoritative canonical history");
     }
 
     /// Submitting while an attempt is running queues the message in the

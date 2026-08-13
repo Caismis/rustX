@@ -843,9 +843,17 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_model_update_changes_nothing() {
     let alpha = Provider::new(ALPHA, "model-a", vec![one_turn_stop()]);
+    // A model whose whole window is consumed by the policy reserve.
+    let tiny = Provider::new(BETA, "tiny", vec![one_turn_stop()])
+        .window(500)
+        .output(100);
     let host = runtime(
-        session_model(&[&alpha], SessionModelConfig::of(alpha.reference())),
-        NO_COMPACTION,
+        session_model(&[&alpha, &tiny], SessionModelConfig::of(alpha.reference())),
+        SessionContextPolicy {
+            reserve_tokens: 1_000,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
     )
     .await;
     let (attachment, _subscription) = attach(&host);
@@ -874,6 +882,21 @@ async fn a_rejected_model_update_changes_nothing() {
                 request_params: rustx::model::RequestParams::new(),
                 max_output_tokens: None,
             },
+            ..SessionModelConfig::of(alpha.reference())
+        },
+        // A protected wire key in the explicit summary overrides.
+        SessionModelConfig {
+            summary_model: SummaryModelPolicy::Explicit {
+                model: alpha.reference(),
+                reasoning_profile: None,
+                request_params: common::request_params(serde_json::json!({"stream": false})),
+                max_output_tokens: None,
+            },
+            ..SessionModelConfig::of(alpha.reference())
+        },
+        // A model whose window cannot run under the session context policy.
+        SessionModelConfig {
+            model: tiny.reference(),
             ..SessionModelConfig::of(alpha.reference())
         },
     ] {
