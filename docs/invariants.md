@@ -1224,6 +1224,115 @@ contracts and provider protocols. These invariants are frozen by M2:
   always constructs requests with `agent_status = None`: summary generation
   is not an inbound agent turn.
 
+## Model selection and session model ownership (Issue #42)
+
+- **No implicit endpoint.** A provider binding is constructible only with an
+  explicit base URL, which always originates from the validated catalog.
+  There is no path by which a provider *name* means an official network
+  endpoint, and neither adapter configuration retains a default URL.
+
+- **Bounded credential syntax.** A provider `apiKey` is exactly a literal
+  string or a `$ENV_VAR` reference. No shell commands, OAuth, keychain,
+  credential plugins, or auth profiles exist. A referenced environment
+  variable that is unset or empty is a startup configuration failure.
+
+- **Credentials are redacted by type, not by discipline.**
+  `ResolvedCredential` has no `Serialize`, a redacted `Debug` and `Display`,
+  and one intentional read boundary used only to construct a provider client.
+  No credential value appears in a `Debug`, an error, a Runtime Client
+  result, an event, a snapshot, a catalog view, or a panic message.
+  Client-facing views carry at most the credential source *kind* and the
+  environment variable *name*.
+
+- **`requestParams` is opaque and never normalized.** Effective parameters
+  resolve as model defaults → selected reasoning profile → session overrides,
+  each a **top-level shallow overlay**: nested objects and arrays are
+  replaced atomically, never deep-merged. Values are preserved exactly.
+  Unknown, non-protected keys are valid.
+
+- **A reasoning profile owns every top-level key it declares.** A session
+  override that also declares one of those keys is a deterministic
+  configuration failure, never resolved by merge order.
+
+- **Reasoning is model-declared named profiles.** The runtime assigns no
+  meaning to a profile name, synthesizes no `off`/`low`/`medium`/`high`
+  profile, and injects no reasoning field of its own. A profile's wire
+  behaviour is exactly its configured `requestParams`. A model declaring
+  `capabilities.reasoning = false` may not declare a profile that
+  semantically enables reasoning.
+
+- **Runtime-owned protected wire keys cannot be overwritten.** Each protocol
+  declares its exact protected set. A collision fails at configuration time
+  *and* again at final request construction, so an invalid internal state can
+  never silently overwrite a runtime field. Provider-owned reasoning and
+  sampling fields are deliberately not protected.
+
+- **Effective capability is an intersection**, never a raw catalog claim:
+  `model-declared ∩ adapter/protocol ∩ current runtime`. Content the
+  effective capability cannot represent is rejected at the invocation
+  boundary before any provider request. Tool definitions are never sent to a
+  model without effective tool-call capability, which remains usable as a
+  text model.
+
+- **`compat` is bounded structural translation behaviour**, disjoint from
+  `requestParams`. Nothing is ever inferred from a provider name or a base
+  URL hostname.
+
+- **One immutable attempt model snapshot.** The snapshot is taken at the same
+  admission linearization boundary that publishes the attempt. Every model
+  turn of the attempt — the first request, every tool→model continuation,
+  every context-overflow retry, every proactive-compaction continuation, and
+  every compaction summary — uses it and never reads live mutable session
+  model state again.
+
+- **Update linearization.** A session model update that linearizes before
+  attempt admission is observed by that attempt; one that linearizes after
+  admission affects only future attempts. Both share the one host lock, so
+  there is no third possibility and no timing assumption.
+
+- **Transactional updates.** A rejected `model_set` changes nothing,
+  allocates no cursor, and publishes no event.
+
+- **Attempt-scoped context window.** The context window belongs to the
+  selected model; the session owns only the static context policy. An attempt
+  on model B never makes compaction decisions with model A's window, and
+  canonical history is never cleared when the session model changes.
+
+- **Two production summary modes only.** `session` uses the admitted
+  attempt's frozen primary invocation; `explicit` uses a separately resolved
+  catalog model, also frozen at admission. There is no production path that
+  injects an arbitrary unrelated summarizer beside the attempt's model, and
+  the context summary output cap flows through the runtime-owned protected
+  max-output field.
+
+## Local runtime process (Issue #42)
+
+- One local runtime process owns one conversation session, and that session
+  owns one authoritative mutable session-model configuration, one
+  `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one
+  context policy/checkpoint domain, and one `RuntimeClientHost`. Runtime
+  Client attachments come and go without replacing those semantic owners.
+
+- A client never assembles provider adapters, model parameters, context
+  engines, tool registries, capability coordinators, or summary models. It
+  owns the child-process lifecycle and nothing else.
+
+- The initial capability candidate is prepared and committed before any
+  protocol input is served. A capability startup failure never leaves a
+  partially initialized protocol server.
+
+- Before serving, stdout is exactly empty. While serving, stdout carries
+  Runtime Client JSONL records and nothing else. Every diagnostic goes to
+  stderr, and `println!` is never used for diagnostics. A startup
+  configuration failure writes a bounded stderr diagnostic, exits non-zero,
+  and leaves zero bytes on stdout.
+
+- Clean input EOF at a record boundary or a peer broken pipe terminates the
+  one-session process successfully; malformed framing or another transport
+  error exits non-zero. Semantic `shutdown` keeps its Issue #38 behaviour and
+  does not close the transport. Transport EOF remains a detach, never an
+  Agent Loop cancellation primitive.
+
 ## Cancellation
 
 Cancellation is hierarchical.

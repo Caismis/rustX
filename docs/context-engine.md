@@ -114,9 +114,26 @@ fix an impossible pinned budget.
 
 ## 5. Context configuration and threshold
 
-`ContextConfig` (mirrored additively into the M1 `ContextManifest` as
-`context_window_tokens`) is runtime-owned; the engine keeps no
-hard-coded model catalog.
+Configuration is split by ownership (Issue #42):
+
+```text
+SessionContextPolicy   session-owned, static
+    reserve_tokens, keep_recent_tokens, summary_output_cap
+                +
+attempt model snapshot  the selected catalog model's context window and
+                        output budget
+                =
+ContextConfig           derived per attempt
+```
+
+The context *window* belongs to the model, not to the process, so a session
+model change between attempts changes the next attempt's compaction
+arithmetic and never the running one's. An attempt on a 32k model never plans
+compaction with a previously selected 128k window, and no window captured at
+process start survives a model change.
+
+`ContextConfig` is runtime-owned; the engine keeps no hard-coded model
+catalog.
 
 ```text
 soft_input_limit = context_window_tokens - reserve_tokens - max_output_tokens
@@ -320,7 +337,9 @@ compactable region after the pinned prefix.
 
 ## 12. Summary provenance
 
-The summary service is provider-neutral and fakeable:
+The summary service is provider-neutral, and `ContextRuntime::with_summarizer`
+is a narrow test seam — not a production configuration mode. Production
+composition always goes through `ContextRuntime::for_attempt`.
 
 ```rust
 pub trait ContextSummarizer: Send + Sync {
@@ -334,11 +353,27 @@ retired complete history, and any split-turn retired prefix; these
 distinctions are never flattened before the API boundary.
 
 The production `ModelBackedSummarizer` uses the canonical `ModelAdapter`
-boundary with a one-off `ModelRequest`: no tools, `continuation = None`,
-the execution's model/protocol/reasoning and runtime `max_output_tokens`,
-and a deterministic instruction plus the serialized input. It never
-recurses into `AgentExecution`, never calls provider SDKs directly, and
-discards any provider continuation the one-off request emits. A refusal, a
+boundary with a one-off `ModelRequest`: no tools, no Agent Status, no Skill
+catalog, `continuation = None`, and a deterministic instruction plus the
+serialized input. It is constructed from the attempt's **frozen summary
+policy**, never from an independently injected summarizer — production has
+exactly two modes:
+
+- `session` — the summary uses the attempt's own primary invocation: same
+  provider binding, model, protocol, selected reasoning profile, and
+  effective request parameters;
+- `explicit` — a separately resolved catalog model, resolved through the same
+  catalog, credential binding, compat handling, reasoning-profile validation,
+  protected-key validation, and shallow overlay as a primary model, and
+  frozen at admission so a later mutation of live session state cannot change
+  an already-admitted attempt's summary model.
+
+The context plane's `summary_output_cap` is applied through the runtime-owned
+protected max-output field of that invocation; it never mutates a reasoning
+profile or a request-parameter object.
+
+It never recurses into `AgentExecution`, never calls provider SDKs directly,
+and discards any provider continuation the one-off request emits. A refusal, a
 tool request, an invalid stream, or a model failure is a compaction
 failure; cancellation aborts the summary. Summary activity is represented
 at the event layer only by `CompactionStarted`/`CompactionCompleted`/

@@ -471,6 +471,19 @@ Exit criteria:
 
 ## Milestone 10 — Local runtime product
 
+The spawnable local runtime *process* and its composition ownership already
+exist (Issue #42): `LocalConversationRuntime::compose` builds one conversation
+session — session model authority, `ConversationToolRuntime`, native
+registry, `CapabilityCoordinator` (prepared and committed before serving),
+context policy/checkpoint pieces, one `RuntimeClientHost` — and serves its
+endpoint over the Issue #38 stdio/JSONL transport with a protocol-only stdout.
+Model catalog and session configuration are explicit file paths.
+
+M10 productizes that established seam. It owns configuration discovery and
+precedence, named profiles, manifest/workspace UX, an interactive config
+editor, durability/recovery UX, and soak testing — **not** the composition
+ownership, which is frozen.
+
 Build an interactive CLI for sustained manual testing.
 
 Suggested commands:
