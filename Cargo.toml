@@ -40,10 +40,16 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "str
 eventsource-stream = "0.2"
 tower = { version = "0.5", features = ["util"] }
 jsonschema = "0.26"
-regex = "1.13.1"
+# The native-search substrate behind Glob and Grep. These are implementation
+# dependencies of the shared traversal and of the Grep engine only: no `rg`
+# executable is ever spawned, and none of their defaults are part of the
+# model-facing tool contract.
 globset = "0.4.19"
-walkdir = "2.5.0"
-nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
+ignore = "0.4.33"
+grep-matcher = "0.1.9"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+nix ={ version = "0.31.3", features = ["signal", "process", "fs"] }
 libc = "0.2"
 serde_yaml = "0.9"
 toml = "0.8"

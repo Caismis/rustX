@@ -14,7 +14,7 @@ use futures_util::future::BoxFuture;
 
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{failed_result, success_json};
+use crate::tools::native::support::{atomic_commit, failed_result, success_json};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -63,8 +63,8 @@ fn run_write(
         Ok(target) => target,
         Err(error) => return failed_result(error.to_string()),
     };
-    let parent = match target.parent() {
-        Some(parent) if parent.exists() && parent.is_dir() => parent,
+    match target.parent() {
+        Some(parent) if parent.exists() && parent.is_dir() => {}
         _ => {
             return failed_result(format!(
                 "the parent directory of {} does not exist; Write never creates directories \
@@ -72,43 +72,12 @@ fn run_write(
                 context.workspace.relative(&target).unwrap_or_default()
             ));
         }
-    };
-    let temp = match create_temp_in(parent) {
-        Ok(temp) => temp,
-        Err(error) => return failed_result(error),
-    };
-    if let Err(error) = std::fs::write(&temp, file_content.as_bytes()) {
-        let _ = std::fs::remove_file(&temp);
-        return failed_result(format!("cannot write {}: {error}", temp.display()));
     }
-    if let Err(error) = std::fs::rename(&temp, &target) {
-        let _ = std::fs::remove_file(&temp);
-        return failed_result(format!("cannot persist {}: {error}", target.display()));
+    if let Err(error) = atomic_commit(&target, file_content.as_bytes()) {
+        return failed_result(error);
     }
     success_json(serde_json::json!({
         "path": context.workspace.relative(&target).unwrap_or_default(),
         "bytes_written": file_content.len(),
     }))
-}
-
-/// Creates a unique temporary file inside `parent` for atomic writeback.
-fn create_temp_in(parent: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".rustx-write-tmp-{}-{attempt}", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => return Ok(candidate),
-            Err(error) if attempt >= 99 => {
-                return Err(format!(
-                    "cannot create a temporary file in {}: {error}",
-                    parent.display()
-                ));
-            }
-            Err(_) => {}
-        }
-    }
-    Err("temporary file creation exhausted its attempts".to_owned())
 }

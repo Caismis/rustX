@@ -1,17 +1,30 @@
 //! M5 native filesystem tool tests.
 //!
 //! Every test runs the native tool plane against an isolated temporary
-//! workspace — never the developer machine's repository. Read/Write/Edit
-//! exercise the workspace boundary (absolute paths, `..` escapes, symlink
-//! escapes), deterministic line slicing, atomic writeback, and bounded
-//! output; Glob/Grep prove deterministic ordering, truncation at the
-//! configured limits, and the directory-symlink traversal policy.
+//! workspace — never the developer machine's repository.
+//!
+//! Read/Write/Edit exercise the workspace boundary (absolute paths, `..`
+//! escapes, symlink escapes), the deterministic `offset`/`limit` line
+//! window, the atomic commit, and bounded output. Edit additionally proves
+//! the atomic multi-edit invariant: every replacement is resolved against
+//! one original file snapshot, the whole range set is validated before any
+//! mutation, and a rejected edit set never touches the file.
+//!
+//! Glob/Grep prove that they observe **one** shared file universe, that the
+//! universe policy (hidden files visible, ignore files not applied, symlinks
+//! never followed, search-root containment) is explicit, and that ordering,
+//! bounds, and truncation are rustX-owned semantics rather than accidents of
+//! the underlying ripgrep crates.
+//!
+//! No test sleeps, races, or depends on anything installed on the machine
+//! running it — in particular, no test depends on an `rg` executable.
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
 mod common;
 
-use common::{native_fixture, run_tool};
+use common::{NativeFixture, native_fixture, run_tool};
+use rustx::tools::limits::{MAX_GLOB_RESULTS, MAX_GREP_LINE_BYTES, MAX_MODEL_TOOL_RESULT_BYTES};
 use rustx::tools::types::ToolExecutionStatus;
 
 /// Runs a tool call and asserts it failed.
@@ -41,27 +54,178 @@ fn text_content(result: &rustx::tools::types::ToolExecutionResult) -> String {
     panic!("expected a text result content block");
 }
 
+/// Executes one native tool **without** the registry preflight, so the
+/// tool's own typed input boundary is what rejects the arguments.
+///
+/// The registry rejects the same arguments against the generated schema
+/// (proved in the native tool contract suite); this path proves the tool
+/// enforces its semantic rules itself, so a direct executor call can never
+/// slip past them.
+async fn run_tool_unchecked(
+    fixture: &NativeFixture,
+    name: &str,
+    arguments: serde_json::Value,
+) -> rustx::tools::types::ToolExecutionResult {
+    use rustx::runtime::identity::ToolCallId;
+    use rustx::tools::executor::ToolExecutionContext;
+    use rustx::tools::types::{ToolInvocation, ToolInvocationMode};
+    let definition = fixture
+        .registry
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == name)
+        .expect("tool registered");
+    let executor = fixture.registry.executor(&definition.id);
+    let reporter = common::NoopProgress;
+    let context = ToolExecutionContext {
+        conversation_id: fixture.runtime.conversation_id(),
+        execution_id: None,
+        cancellation: rustx::runtime::CancellationSignal::new(),
+        workspace: fixture.runtime.workspace(),
+        progress: &reporter,
+        artifacts: fixture.runtime.artifacts(),
+        environment: fixture.runtime.environment(),
+    };
+    executor
+        .execute(
+            ToolInvocation {
+                call_id: ToolCallId::new("call-unchecked"),
+                tool_id: definition.id.clone(),
+                tool_name: name.to_owned(),
+                mode: ToolInvocationMode::Foreground,
+                arguments,
+            },
+            context,
+        )
+        .await
+}
+
+/// Whether any temporary file of the native atomic commit is left behind
+/// anywhere below the workspace root.
+fn stray_temp_files(fixture: &NativeFixture) -> Vec<String> {
+    fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with(".rustx-") {
+                found.push(name);
+            }
+            if entry.path().is_dir() {
+                walk(&entry.path(), found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(fixture.runtime.workspace().root(), &mut found);
+    found
+}
+
+// ---------------------------------------------------------------------------
+// Read: the 1-based offset/limit line window
+// ---------------------------------------------------------------------------
+
+/// An omitted window means the documented defaults: start at line 1 and
+/// return at most 200 lines.
 #[tokio::test]
-async fn read_slices_lines_deterministically() {
+async fn read_defaults_to_the_documented_line_window() {
     let fixture = native_fixture();
-    let file = fixture.runtime.workspace().root().join("sample.txt");
-    std::fs::write(&file, "one\ntwo\nthree\nfour\nfive\n").expect("write sample");
+    let lines: Vec<String> = (1..=250).map(|index| format!("line-{index:03}")).collect();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("many.txt"),
+        format!("{}\n", lines.join("\n")),
+    )
+    .expect("write sample");
+    let result = run_tool(&fixture, "read", serde_json::json!({"path": "many.txt"})).await;
+    let returned: Vec<String> = text_content(&result).lines().map(str::to_owned).collect();
+    assert_eq!(returned.len(), 200, "the default limit is 200 lines");
+    assert_eq!(returned[0], "line-001", "the default offset is line 1");
+    assert_eq!(returned[199], "line-200");
+}
+
+/// `offset` is 1-based and `limit` bounds the window; the two compose into
+/// exactly one deterministic slice of the file.
+#[tokio::test]
+async fn read_offset_is_one_based_and_limit_bounds_the_window() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("sample.txt"),
+        "one\ntwo\nthree\nfour\nfive\n",
+    )
+    .expect("write sample");
     let full = run_tool(&fixture, "read", serde_json::json!({"path": "sample.txt"})).await;
     assert_eq!(text_content(&full), "one\ntwo\nthree\nfour\nfive");
+
+    let first = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"path": "sample.txt", "offset": 1, "limit": 1}),
+    )
+    .await;
+    assert_eq!(
+        text_content(&first),
+        "one",
+        "offset 1 is the first line of the file, never the second"
+    );
+
     let middle = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "start_line": 2, "line_count": 2}),
+        serde_json::json!({"path": "sample.txt", "offset": 2, "limit": 2}),
     )
     .await;
     assert_eq!(text_content(&middle), "two\nthree");
+
+    let to_eof = run_tool(
+        &fixture,
+        "read",
+        serde_json::json!({"path": "sample.txt", "offset": 4, "limit": 1000}),
+    )
+    .await;
+    assert_eq!(
+        text_content(&to_eof),
+        "four\nfive",
+        "a limit reaching past EOF stops at the last line instead of failing"
+    );
+}
+
+/// An offset past the end of the file is an empty window, not an error.
+#[tokio::test]
+async fn read_offset_past_the_end_is_an_empty_window() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("sample.txt"),
+        "one\ntwo\n",
+    )
+    .expect("write sample");
     let past_end = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "sample.txt", "start_line": 99}),
+        serde_json::json!({"path": "sample.txt", "offset": 99}),
     )
     .await;
+    assert_eq!(past_end.status, ToolExecutionStatus::Success);
     assert_eq!(text_content(&past_end), "");
+}
+
+/// A zero `offset` or `limit` is rejected by the tool itself, not only by
+/// the registry preflight: a direct executor call can never read from line
+/// zero or ask for zero lines.
+#[tokio::test]
+async fn read_rejects_a_zero_offset_or_limit_at_the_executor_boundary() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("sample.txt"),
+        "one\n",
+    )
+    .expect("write sample");
+    for arguments in [
+        serde_json::json!({"path": "sample.txt", "offset": 0}),
+        serde_json::json!({"path": "sample.txt", "limit": 0}),
+    ] {
+        assert_failed(&run_tool_unchecked(&fixture, "read", arguments).await);
+    }
 }
 
 #[tokio::test]
@@ -73,11 +237,11 @@ async fn read_output_is_bounded_and_truncated() {
     let result = run_tool(
         &fixture,
         "read",
-        serde_json::json!({"path": "big.txt", "line_count": 1_000_000}),
+        serde_json::json!({"path": "big.txt", "limit": 1000}),
     )
     .await;
     assert!(
-        text_content(&result).len() <= rustx::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES,
+        text_content(&result).len() <= MAX_MODEL_TOOL_RESULT_BYTES,
         "model-facing output stays bounded"
     );
     let truncation = result.truncation.expect("truncation state");
@@ -132,6 +296,10 @@ async fn read_rejects_symlinks_escaping_the_workspace() {
     assert_failed(&run_tool(&fixture, "read", serde_json::json!({"path": "linked.txt"})).await);
 }
 
+// ---------------------------------------------------------------------------
+// Write: unchanged `path` + `content` mutation guarantees
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
 async fn write_creates_and_replaces_atomically() {
     let fixture = native_fixture();
@@ -161,14 +329,12 @@ async fn write_creates_and_replaces_atomically() {
             .expect("read back"),
         "world"
     );
-    // Atomic writeback leaves no temporary files behind.
-    let leftovers: Vec<_> = std::fs::read_dir(fixture.runtime.workspace().root().join("dir"))
-        .expect("read dir")
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(".rustx-"))
-        .collect();
-    assert!(leftovers.is_empty(), "no temp files remain: {leftovers:?}");
+    // The atomic commit leaves no temporary files behind.
+    assert!(
+        stray_temp_files(&fixture).is_empty(),
+        "no temp files remain: {:?}",
+        stray_temp_files(&fixture)
+    );
 }
 
 #[tokio::test]
@@ -188,70 +354,529 @@ async fn write_requires_an_existing_parent_directory() {
 }
 
 #[tokio::test]
-async fn edit_requires_exactly_one_match() {
+async fn write_rejects_absolute_and_escaping_paths() {
     let fixture = native_fixture();
-    std::fs::write(
-        fixture.runtime.workspace().root().join("edit.txt"),
-        "alpha beta alpha",
-    )
-    .expect("write");
-    let single = run_tool(
+    for path in ["/tmp/rustx-escape.txt", "../escape.txt"] {
+        assert_failed(
+            &run_tool(
+                &fixture,
+                "write",
+                serde_json::json!({"path": path, "content": "x"}),
+            )
+            .await,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Edit: one atomic transformation from one original snapshot
+// ---------------------------------------------------------------------------
+
+/// Writes `content` to `edit.txt` and returns its workspace path.
+fn edit_fixture(fixture: &NativeFixture, content: &str) -> std::path::PathBuf {
+    let path = fixture.runtime.workspace().root().join("edit.txt");
+    std::fs::write(&path, content).expect("write edit fixture");
+    path
+}
+
+/// One `edits` entry.
+fn replacement(old_text: &str, new_text: &str) -> serde_json::Value {
+    serde_json::json!({"oldText": old_text, "newText": new_text})
+}
+
+/// Asserts that a failed Edit left the file byte-for-byte unchanged and
+/// committed nothing at all.
+fn assert_unchanged(fixture: &NativeFixture, path: &std::path::Path, original: &str) {
+    assert_eq!(
+        std::fs::read_to_string(path).expect("read back"),
+        original,
+        "a rejected edit set never mutates the file"
+    );
+    assert!(
+        stray_temp_files(fixture).is_empty(),
+        "a rejected edit set never even starts a commit"
+    );
+}
+
+/// A single replacement must identify exactly one place in the file.
+#[tokio::test]
+async fn edit_applies_a_single_unambiguous_replacement() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "alpha beta alpha");
+    let applied = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "old_text": "beta", "new_text": "GAMMA"}),
+        serde_json::json!({"path": "edit.txt", "edits": [replacement("beta", "GAMMA")]}),
     )
     .await;
-    assert_eq!(single.status, ToolExecutionStatus::Success);
-    assert_eq!(json_content(&single)["replacements"], 1);
+    assert_eq!(applied.status, ToolExecutionStatus::Success);
+    assert_eq!(json_content(&applied)["replacements"], 1);
     assert_eq!(
-        std::fs::read_to_string(fixture.runtime.workspace().root().join("edit.txt"))
-            .expect("read back"),
+        std::fs::read_to_string(&path).expect("read back"),
         "alpha GAMMA alpha"
     );
-    let duplicate = run_tool(
-        &fixture,
-        "edit",
-        serde_json::json!({"path": "edit.txt", "old_text": "alpha", "new_text": "x"}),
-    )
-    .await;
-    assert_failed(&duplicate);
-    let zero = run_tool(
-        &fixture,
-        "edit",
-        serde_json::json!({"path": "edit.txt", "old_text": "absent", "new_text": "x"}),
-    )
-    .await;
-    assert_failed(&zero);
+    assert!(stray_temp_files(&fixture).is_empty());
 }
 
+/// An empty edit set describes no transformation, and an empty `oldText`
+/// has no exact-match semantics. Both are rejected by the tool itself, on
+/// the direct executor path that bypasses the registry preflight.
 #[tokio::test]
-async fn edit_replace_all_replaces_every_match_but_fails_on_zero() {
+async fn edit_rejects_an_empty_edit_set_and_an_empty_old_text() {
     let fixture = native_fixture();
-    std::fs::write(fixture.runtime.workspace().root().join("edit.txt"), "a a a").expect("write");
-    let replaced = run_tool(
+    let path = edit_fixture(&fixture, "original");
+
+    let empty_set = run_tool_unchecked(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "old_text": "a", "new_text": "z", "replace_all": true}),
+        serde_json::json!({"path": "edit.txt", "edits": []}),
     )
     .await;
-    assert_eq!(replaced.status, ToolExecutionStatus::Success);
-    assert_eq!(json_content(&replaced)["replacements"], 3);
+    assert_failed(&empty_set);
+    assert_unchanged(&fixture, &path, "original");
+
+    let empty_anchor = run_tool_unchecked(
+        &fixture,
+        "edit",
+        serde_json::json!({"path": "edit.txt", "edits": [replacement("", "x")]}),
+    )
+    .await;
+    assert_failed(&empty_anchor);
+    assert_unchanged(&fixture, &path, "original");
+
+    let empty_anchor_among_valid = run_tool_unchecked(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "edit.txt",
+            "edits": [replacement("orig", "X"), replacement("", "y")]
+        }),
+    )
+    .await;
+    assert_failed(&empty_anchor_among_valid);
+    assert_unchanged(&fixture, &path, "original");
+}
+
+/// A `oldText` that matches nothing is a deterministic failure that mutates
+/// nothing — including when every other edit of the set would have applied.
+#[tokio::test]
+async fn edit_fails_on_zero_matches_without_mutating() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "alpha beta");
+
+    let only = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({"path": "edit.txt", "edits": [replacement("absent", "x")]}),
+    )
+    .await;
+    assert_failed(&only);
+    assert_unchanged(&fixture, &path, "alpha beta");
+
+    let mixed = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "edit.txt",
+            "edits": [replacement("alpha", "A"), replacement("absent", "x")]
+        }),
+    )
+    .await;
+    assert_failed(&mixed);
+    assert_unchanged(&fixture, &path, "alpha beta");
+}
+
+/// A `oldText` that matches more than once is ambiguous: the tool never
+/// guesses which occurrence was meant, and never replaces all of them.
+#[tokio::test]
+async fn edit_fails_on_an_ambiguous_match_without_mutating() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "a a a");
+    let ambiguous = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({"path": "edit.txt", "edits": [replacement("a", "z")]}),
+    )
+    .await;
+    assert_failed(&ambiguous);
+    assert_unchanged(&fixture, &path, "a a a");
+}
+
+/// The core invariant: every `oldText` is matched against the **original**
+/// snapshot, never against the result of an earlier edit of the same call.
+///
+/// With sequential semantics, replacing `A` with `B` first would make the
+/// second edit's `B` anchor ambiguous and the call would fail. With
+/// snapshot semantics the two anchors are disjoint regions of the original
+/// file and the transformation is exactly `AB -> BC`.
+#[tokio::test]
+async fn edit_matches_every_replacement_against_the_original_snapshot() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "AB");
+    let applied = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "edit.txt",
+            "edits": [replacement("A", "B"), replacement("B", "C")]
+        }),
+    )
+    .await;
+    assert_eq!(applied.status, ToolExecutionStatus::Success);
     assert_eq!(
-        std::fs::read_to_string(fixture.runtime.workspace().root().join("edit.txt"))
-            .expect("read back"),
-        "z z z"
+        std::fs::read_to_string(&path).expect("read back"),
+        "BC",
+        "the second anchor matched the original snapshot, not the edited file"
     );
-    let zero = run_tool(
+}
+
+/// Disjoint edits are applied together as one final snapshot, and the
+/// result does not depend on the order the model listed them in.
+#[tokio::test]
+async fn edit_applies_disjoint_edits_independently_of_input_order() {
+    let original = "one two three four";
+    let expected = "1 two 3 four";
+    let forward = [replacement("one", "1"), replacement("three", "3")];
+    let reverse = [replacement("three", "3"), replacement("one", "1")];
+    for edits in [forward, reverse] {
+        let fixture = native_fixture();
+        let path = edit_fixture(&fixture, original);
+        let applied = run_tool(
+            &fixture,
+            "edit",
+            serde_json::json!({"path": "edit.txt", "edits": edits}),
+        )
+        .await;
+        assert_eq!(applied.status, ToolExecutionStatus::Success);
+        assert_eq!(json_content(&applied)["replacements"], 2);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            expected,
+            "input ordering never changes the final snapshot"
+        );
+        assert!(
+            stray_temp_files(&fixture).is_empty(),
+            "the whole edit set commits exactly once"
+        );
+    }
+}
+
+/// Overlapping, nested, and duplicate replacement ranges are all the same
+/// conflict, and all of them leave the file untouched.
+#[tokio::test]
+async fn edit_rejects_conflicting_replacement_ranges() {
+    // (case, original content, edits)
+    let cases: [(&str, &str, [serde_json::Value; 2]); 3] = [
+        (
+            "overlapping",
+            "abcdef",
+            [replacement("abc", "X"), replacement("cde", "Y")],
+        ),
+        (
+            "nested",
+            "abcdef",
+            [replacement("abcd", "X"), replacement("bc", "Y")],
+        ),
+        (
+            "duplicate",
+            "xyz",
+            [replacement("y", "1"), replacement("y", "2")],
+        ),
+    ];
+    for (case, original, edits) in cases {
+        let fixture = native_fixture();
+        let path = edit_fixture(&fixture, original);
+        let rejected = run_tool(
+            &fixture,
+            "edit",
+            serde_json::json!({"path": "edit.txt", "edits": edits}),
+        )
+        .await;
+        assert!(
+            matches!(rejected.status, ToolExecutionStatus::Failed { .. }),
+            "{case} ranges must be rejected, got {:?}",
+            rejected.status
+        );
+        assert_unchanged(&fixture, &path, original);
+    }
+}
+
+/// Adjacent — but not overlapping — replacements are legal: the rule is
+/// that a range may start exactly where the previous one ended.
+#[tokio::test]
+async fn edit_accepts_adjacent_replacement_ranges() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "abcdef");
+    let applied = run_tool(
         &fixture,
         "edit",
-        serde_json::json!({"path": "edit.txt", "old_text": "missing", "new_text": "z", "replace_all": true}),
+        serde_json::json!({
+            "path": "edit.txt",
+            "edits": [replacement("abc", "X"), replacement("def", "Y")]
+        }),
     )
     .await;
-    assert_failed(&zero);
+    assert_eq!(applied.status, ToolExecutionStatus::Success);
+    assert_eq!(std::fs::read_to_string(&path).expect("read back"), "XY");
 }
 
 #[tokio::test]
-async fn glob_is_lexically_ordered_and_workspace_relative() {
+async fn edit_rejects_absolute_and_escaping_paths() {
+    let fixture = native_fixture();
+    for path in ["/etc/hostname", "../escape.txt"] {
+        assert_failed(
+            &run_tool(
+                &fixture,
+                "edit",
+                serde_json::json!({"path": path, "edits": [replacement("a", "b")]}),
+            )
+            .await,
+        );
+    }
+}
+
+#[tokio::test]
+async fn edit_rejects_binary_input() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("binary.bin"),
+        [0xff, 0xfe, 0x00, 0x01],
+    )
+    .expect("write binary");
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "edit",
+            serde_json::json!({"path": "binary.bin", "edits": [replacement("a", "b")]}),
+        )
+        .await,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The shared Glob/Grep file universe
+// ---------------------------------------------------------------------------
+
+/// Builds one controlled tree covering every visibility decision of the
+/// shared search policy, and returns the paths Glob and Grep must both see.
+///
+/// Every file below contains the token `needle`, so the *set of paths* Grep
+/// reports is directly comparable to the set of paths Glob reports.
+#[cfg(unix)]
+fn search_universe_fixture(fixture: &NativeFixture) -> Vec<&'static str> {
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    let outside = fixture.dir().path().join("outside");
+    std::fs::create_dir_all(&outside).expect("outside dir");
+    std::fs::write(outside.join("secret.txt"), "secret needle").expect("outside file");
+
+    std::fs::create_dir_all(root.join("nested")).expect("nested dir");
+    std::fs::create_dir_all(root.join("ignored-dir")).expect("ignored dir");
+    // A real .gitignore that would hide two of the files below if ignore
+    // semantics were applied — they are deliberately not applied.
+    std::fs::write(
+        root.join(".gitignore"),
+        "ignored.txt\nignored-dir/\n# needle\n",
+    )
+    .expect("gitignore");
+    std::fs::write(root.join(".hidden.txt"), "hidden needle").expect("hidden file");
+    std::fs::write(root.join("visible.txt"), "visible needle").expect("visible file");
+    std::fs::write(root.join("ignored.txt"), "ignored needle").expect("ignored file");
+    std::fs::write(root.join("ignored-dir/inside.txt"), "inside needle").expect("ignored nested");
+    std::fs::write(root.join("nested/deep.txt"), "deep needle").expect("nested file");
+    // A file symlink and a directory symlink, both pointing outside the
+    // workspace. Neither may contribute anything to the universe.
+    std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("link.txt"))
+        .expect("file symlink");
+    std::os::unix::fs::symlink(&outside, root.join("linkdir")).expect("directory symlink");
+
+    vec![
+        ".gitignore",
+        ".hidden.txt",
+        "ignored-dir/inside.txt",
+        "ignored.txt",
+        "nested/deep.txt",
+        "visible.txt",
+    ]
+}
+
+/// The sorted distinct paths of a Grep result.
+fn grep_paths(result: &rustx::tools::types::ToolExecutionResult) -> Vec<String> {
+    let content = json_content(result);
+    let mut paths: Vec<String> = content["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .map(|entry| entry["path"].as_str().expect("path").to_owned())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// The results of a Glob call.
+fn glob_results(result: &rustx::tools::types::ToolExecutionResult) -> Vec<String> {
+    json_content(result)["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .map(|entry| entry.as_str().expect("path").to_owned())
+        .collect()
+}
+
+/// The central shared-universe invariant: with no caller filter narrowing
+/// either of them, Glob and Grep observe exactly the same set of files.
+///
+/// The one policy both share is asserted explicitly: hidden files are
+/// visible, `.gitignore` is not applied, and symlinks (file or directory)
+/// are not part of the universe.
+#[cfg(unix)]
+#[tokio::test]
+async fn glob_and_grep_observe_one_shared_file_universe() {
+    let fixture = native_fixture();
+    let expected = search_universe_fixture(&fixture);
+
+    let glob = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*"})).await;
+    assert_eq!(glob.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        glob_results(&glob),
+        expected,
+        "Glob sees hidden files, ignores .gitignore, and never follows symlinks"
+    );
+
+    let grep = run_tool(&fixture, "grep", serde_json::json!({"pattern": "needle"})).await;
+    assert_eq!(grep.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        grep_paths(&grep),
+        expected,
+        "Grep observes exactly the same universe as Glob"
+    );
+}
+
+/// Neither tool follows a directory symlink (which would recurse outside
+/// the workspace) or a file symlink (whose target lives outside it).
+#[cfg(unix)]
+#[tokio::test]
+async fn search_tools_never_follow_symlinks() {
+    let fixture = native_fixture();
+    search_universe_fixture(&fixture);
+
+    let glob = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({"pattern": "**/secret.txt"}),
+    )
+    .await;
+    assert_eq!(
+        glob_results(&glob),
+        Vec::<String>::new(),
+        "a directory symlink is never traversed"
+    );
+    let glob_link = run_tool(&fixture, "glob", serde_json::json!({"pattern": "link.txt"})).await;
+    assert_eq!(
+        glob_results(&glob_link),
+        Vec::<String>::new(),
+        "a file symlink is not part of the universe"
+    );
+    let grep = run_tool(&fixture, "grep", serde_json::json!({"pattern": "secret"})).await;
+    assert_eq!(
+        grep_paths(&grep),
+        Vec::<String>::new(),
+        "no symlinked content is searchable"
+    );
+}
+
+/// An explicit `path` narrows both tools to the same sub-root, and every
+/// reported path is relative to that requested root.
+#[cfg(unix)]
+#[tokio::test]
+async fn search_tools_share_one_explicit_search_root() {
+    let fixture = native_fixture();
+    search_universe_fixture(&fixture);
+
+    let glob = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({"pattern": "**/*", "path": "nested"}),
+    )
+    .await;
+    assert_eq!(
+        glob_results(&glob),
+        vec!["deep.txt".to_owned()],
+        "paths are relative to the requested search root"
+    );
+    let grep = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "needle", "path": "nested"}),
+    )
+    .await;
+    assert_eq!(grep_paths(&grep), vec!["deep.txt".to_owned()]);
+}
+
+/// The search root is contained by the workspace boundary, for both tools.
+#[tokio::test]
+async fn search_root_containment_is_enforced_for_both_tools() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("file.txt"),
+        "content",
+    )
+    .expect("write");
+    for path in ["..", "/etc", "missing-directory", "file.txt"] {
+        assert_failed(
+            &run_tool(
+                &fixture,
+                "glob",
+                serde_json::json!({"pattern": "**/*", "path": path}),
+            )
+            .await,
+        );
+        assert_failed(
+            &run_tool(
+                &fixture,
+                "grep",
+                serde_json::json!({"pattern": "x", "path": path}),
+            )
+            .await,
+        );
+    }
+}
+
+/// Neither search tool ever spawns a process: there is no `rg` executable
+/// dependency to be satisfied by the machine running the tests.
+///
+/// This is a source-level guard rather than a runtime probe, so it cannot
+/// pass merely because `rg` happens to be installed (or absent) here.
+#[test]
+fn the_search_implementation_never_spawns_an_external_process() {
+    let mut checked = 0usize;
+    for relative in [
+        "src/tools/native/search/mod.rs",
+        "src/tools/native/search/traversal.rs",
+        "src/tools/native/glob/mod.rs",
+        "src/tools/native/glob/input.rs",
+        "src/tools/native/grep/mod.rs",
+        "src/tools/native/grep/input.rs",
+    ] {
+        let source = std::fs::read_to_string(relative)
+            .unwrap_or_else(|error| panic!("{relative} is readable: {error}"));
+        for forbidden in ["Command", "std::process", "\"rg\"", "ripgrep\""] {
+            assert!(
+                !source.contains(forbidden),
+                "{relative} must not reference {forbidden}: search is linked, never spawned"
+            );
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 6, "every search source file was inspected");
+}
+
+// ---------------------------------------------------------------------------
+// Glob
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn glob_is_lexically_ordered_and_root_relative() {
     let fixture = native_fixture();
     let root = fixture.runtime.workspace().root().to_path_buf();
     // Creation order is deliberately reversed relative to lexical order.
@@ -259,13 +884,16 @@ async fn glob_is_lexically_ordered_and_workspace_relative() {
     std::fs::write(root.join("zebra.rs"), "z").expect("write");
     std::fs::write(root.join("alpha.rs"), "a").expect("write");
     std::fs::write(root.join("sub/middle.rs"), "m").expect("write");
+    std::fs::write(root.join("skipped.txt"), "t").expect("write");
     let result = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*.rs"})).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(
-        json_content(&result)["results"],
-        serde_json::json!(["alpha.rs", "sub/middle.rs", "zebra.rs"]),
-        "results are lexically sorted workspace-relative paths"
+        glob_results(&result),
+        vec!["alpha.rs", "sub/middle.rs", "zebra.rs"],
+        "results are lexically sorted paths relative to the search root"
     );
+    assert_eq!(json_content(&result)["truncated"], false);
+    assert!(result.truncation.is_none());
 }
 
 #[tokio::test]
@@ -273,7 +901,7 @@ async fn glob_truncates_at_the_result_limit() {
     let fixture = native_fixture();
     let root = fixture.runtime.workspace().root().to_path_buf();
     std::fs::create_dir_all(root.join("many")).expect("dir");
-    for index in 0..(rustx::tools::limits::MAX_GLOB_RESULTS + 50) {
+    for index in 0..(MAX_GLOB_RESULTS + 50) {
         std::fs::write(root.join("many").join(format!("f{index:05}.txt")), "x").expect("write");
     }
     let result = run_tool(
@@ -282,104 +910,396 @@ async fn glob_truncates_at_the_result_limit() {
         serde_json::json!({"pattern": "many/*.txt"}),
     )
     .await;
-    let results = json_content(&result)["results"]
-        .as_array()
-        .expect("results array")
-        .len();
-    assert_eq!(results, rustx::tools::limits::MAX_GLOB_RESULTS);
+    assert_eq!(glob_results(&result).len(), MAX_GLOB_RESULTS);
+    assert_eq!(json_content(&result)["truncated"], true);
     assert!(result.truncation.expect("truncation state").truncated);
 }
 
 #[tokio::test]
-async fn grep_orders_matches_deterministically() {
+async fn glob_truncates_at_the_byte_limit() {
     let fixture = native_fixture();
     let root = fixture.runtime.workspace().root().to_path_buf();
-    std::fs::create_dir_all(root.join("b")).expect("dir b");
-    std::fs::create_dir_all(root.join("a")).expect("dir a");
-    std::fs::write(root.join("b/late.rs"), "fn x() {}\nfn y() {}\n").expect("write");
-    std::fs::write(root.join("a/early.rs"), "fn y() {}\nfn x() {}\n").expect("write");
+    std::fs::create_dir_all(root.join("long")).expect("dir");
+    // Far fewer files than the result cap, but long enough names that the
+    // payload cap is what stops the enumeration.
+    let files = 500usize;
+    for index in 0..files {
+        let name = format!("{index:04}-{}.txt", "n".repeat(190));
+        std::fs::write(root.join("long").join(name), "x").expect("write");
+    }
     let result = run_tool(
         &fixture,
-        "grep",
-        serde_json::json!({"pattern": "fn [xy]", "glob": "**/*.rs"}),
+        "glob",
+        serde_json::json!({"pattern": "long/*.txt"}),
     )
     .await;
-    assert_eq!(result.status, ToolExecutionStatus::Success);
-    let content = json_content(&result);
-    let matches = content["matches"].as_array().expect("matches");
-    let ordered: Vec<(String, u64, u64)> = matches
+    let returned = glob_results(&result);
+    assert!(
+        returned.len() < files && returned.len() < MAX_GLOB_RESULTS,
+        "the byte cap stopped the enumeration before the result cap: {}",
+        returned.len()
+    );
+    assert!(
+        returned.iter().map(String::len).sum::<usize>() <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the model-facing payload stays bounded"
+    );
+    assert_eq!(json_content(&result)["truncated"], true);
+    assert!(result.truncation.expect("truncation state").truncated);
+}
+
+// ---------------------------------------------------------------------------
+// Grep
+// ---------------------------------------------------------------------------
+
+/// The ordered `(path, line, column, text)` tuples of a Grep result.
+fn grep_matches(
+    result: &rustx::tools::types::ToolExecutionResult,
+) -> Vec<(String, u64, u64, String)> {
+    json_content(result)["matches"]
+        .as_array()
+        .expect("matches array")
         .iter()
         .map(|entry| {
             (
                 entry["path"].as_str().expect("path").to_owned(),
-                entry["line_number"].as_u64().expect("line"),
+                entry["line"].as_u64().expect("line"),
                 entry["column"].as_u64().expect("column"),
+                entry["text"].as_str().expect("text").to_owned(),
             )
         })
-        .collect();
+        .collect()
+}
+
+/// The ordered `(path, line, text)` tuples of a Grep result's context.
+fn grep_context(result: &rustx::tools::types::ToolExecutionResult) -> Vec<(String, u64, String)> {
+    json_content(result)["context"]
+        .as_array()
+        .expect("context array")
+        .iter()
+        .map(|entry| {
+            (
+                entry["path"].as_str().expect("path").to_owned(),
+                entry["line"].as_u64().expect("line"),
+                entry["text"].as_str().expect("text").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Matches are ordered by path, then line, then the column of the match
+/// inside the line — and several matches on one line are reported
+/// separately, in column order.
+#[tokio::test]
+async fn grep_orders_matches_by_path_line_and_column() {
+    let fixture = native_fixture();
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    std::fs::create_dir_all(root.join("b")).expect("dir b");
+    std::fs::create_dir_all(root.join("a")).expect("dir a");
+    // Written in reverse lexical order on purpose.
+    std::fs::write(root.join("b/late.rs"), "hit\nhit and hit\n").expect("write");
+    std::fs::write(root.join("a/early.rs"), "hit hit\n").expect("write");
+    let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(
-        ordered,
+        grep_matches(&result),
         vec![
-            ("a/early.rs".to_owned(), 1, 1),
-            ("a/early.rs".to_owned(), 2, 1),
-            ("b/late.rs".to_owned(), 1, 1),
-            ("b/late.rs".to_owned(), 2, 1),
+            ("a/early.rs".to_owned(), 1, 1, "hit hit".to_owned()),
+            ("a/early.rs".to_owned(), 1, 5, "hit hit".to_owned()),
+            ("b/late.rs".to_owned(), 1, 1, "hit".to_owned()),
+            ("b/late.rs".to_owned(), 2, 1, "hit and hit".to_owned()),
+            ("b/late.rs".to_owned(), 2, 9, "hit and hit".to_owned()),
         ],
-        "matches are ordered by relative path, then line, then column"
+        "matches are ordered by path, then line, then column"
     );
 }
 
+/// The pattern is a regular expression by default; `literal = true` matches
+/// the pattern as text, so the model never has to escape metacharacters.
 #[tokio::test]
-async fn grep_rejects_invalid_regex() {
+async fn grep_regex_is_the_default_and_literal_opts_out() {
     let fixture = native_fixture();
-    std::fs::write(fixture.runtime.workspace().root().join("f.txt"), "text").expect("write");
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    std::fs::write(root.join("f.txt"), "value a.c here\nvalue abc here\n").expect("write");
+
+    let regex = run_tool(&fixture, "grep", serde_json::json!({"pattern": "a.c"})).await;
+    assert_eq!(
+        grep_matches(&regex)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![1, 2],
+        "the default regex `a.c` matches both `a.c` and `abc`"
+    );
+
+    let literal = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "a.c", "literal": true}),
+    )
+    .await;
+    assert_eq!(
+        grep_matches(&literal)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "a literal search matches only the literal text"
+    );
+
+    // A pattern that is not a valid regex at all is still a legal literal.
+    let unescaped = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "([unclosed", "literal": true}),
+    )
+    .await;
+    assert_eq!(unescaped.status, ToolExecutionStatus::Success);
+    assert!(grep_matches(&unescaped).is_empty());
+}
+
+/// The search is case-sensitive unless `ignoreCase` explicitly opts in.
+#[tokio::test]
+async fn grep_is_case_sensitive_unless_ignore_case_is_requested() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("f.txt"),
+        "Needle\nneedle\n",
+    )
+    .expect("write");
+
+    let sensitive = run_tool(&fixture, "grep", serde_json::json!({"pattern": "needle"})).await;
+    assert_eq!(
+        grep_matches(&sensitive)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![2],
+        "the default is a case-sensitive search"
+    );
+
+    let insensitive = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "needle", "ignoreCase": true}),
+    )
+    .await;
+    assert_eq!(
+        grep_matches(&insensitive)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+/// The optional `glob` narrows the shared universe and nothing else.
+#[cfg(unix)]
+#[tokio::test]
+async fn grep_glob_only_narrows_the_shared_universe() {
+    let fixture = native_fixture();
+    search_universe_fixture(&fixture);
+    let filtered = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "needle", "glob": "nested/**"}),
+    )
+    .await;
+    assert_eq!(grep_paths(&filtered), vec!["nested/deep.txt".to_owned()]);
+
+    let hidden_only = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "needle", "glob": ".hidden.txt"}),
+    )
+    .await;
+    assert_eq!(grep_paths(&hidden_only), vec![".hidden.txt".to_owned()]);
+}
+
+/// `context = 0` (the default) returns matches only. `context = N` adds the
+/// surrounding lines, and overlapping or adjacent windows merge into one
+/// run of distinct lines: every source line is reported exactly once, and a
+/// matching line is never also reported as context.
+#[tokio::test]
+async fn grep_context_windows_merge_without_duplicating_lines() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("f.txt"),
+        "l1\nl2\nhit one\nl4\nhit two\nl6\nl7\nl8\nhit three\nl10\n",
+    )
+    .expect("write");
+
+    let no_context = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
+    assert_eq!(
+        grep_matches(&no_context)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![3, 5, 9]
+    );
+    assert!(
+        grep_context(&no_context).is_empty(),
+        "context defaults to 0"
+    );
+
+    let with_context = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "hit", "context": 1}),
+    )
+    .await;
+    assert_eq!(
+        grep_matches(&with_context)
+            .iter()
+            .map(|entry| entry.1)
+            .collect::<Vec<_>>(),
+        vec![3, 5, 9],
+        "matching lines stay in matches, never in context"
+    );
+    assert_eq!(
+        grep_context(&with_context)
+            .iter()
+            .map(|entry| (entry.1, entry.2.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (2, "l2".to_owned()),
+            (4, "l4".to_owned()),
+            (6, "l6".to_owned()),
+            (8, "l8".to_owned()),
+            (10, "l10".to_owned()),
+        ],
+        "line 4 belongs to two overlapping windows and is reported exactly once"
+    );
+}
+
+/// `limit` bounds the number of returned matches and truncation is
+/// explicit; the surplus is never dropped silently.
+#[tokio::test]
+async fn grep_limit_bounds_the_matches_with_explicit_truncation() {
+    let fixture = native_fixture();
+    std::fs::write(
+        fixture.runtime.workspace().root().join("f.txt"),
+        "hit\n".repeat(10),
+    )
+    .expect("write");
+
+    let all = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
+    assert_eq!(grep_matches(&all).len(), 10);
+    assert_eq!(json_content(&all)["truncated"], false);
+    assert!(all.truncation.is_none());
+
+    let bounded = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "hit", "limit": 4}),
+    )
+    .await;
+    assert_eq!(grep_matches(&bounded).len(), 4);
+    assert_eq!(json_content(&bounded)["truncated"], true);
+    assert!(bounded.truncation.expect("truncation state").truncated);
+}
+
+/// The payload byte cap is a hard bound that stops the search even before
+/// the match limit is reached, with explicit truncation.
+#[tokio::test]
+async fn grep_truncates_at_the_byte_limit() {
+    let fixture = native_fixture();
+    let line = format!("hit {}\n", "p".repeat(300));
+    std::fs::write(
+        fixture.runtime.workspace().root().join("wide.txt"),
+        line.repeat(300),
+    )
+    .expect("write");
     let result = run_tool(
         &fixture,
         "grep",
-        serde_json::json!({"pattern": "([unclosed"}),
+        serde_json::json!({"pattern": "hit", "limit": 300}),
     )
     .await;
-    assert_failed(&result);
-}
-
-#[tokio::test]
-async fn grep_truncates_at_the_match_limit() {
-    let fixture = native_fixture();
-    let root = fixture.runtime.workspace().root().to_path_buf();
-    let content = "match\n".repeat(rustx::tools::limits::MAX_GREP_MATCHES + 100);
-    std::fs::write(root.join("huge.txt"), content).expect("write");
-    let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "match"})).await;
-    let matches = json_content(&result)["matches"]
-        .as_array()
-        .expect("matches")
-        .len();
-    assert_eq!(matches, rustx::tools::limits::MAX_GREP_MATCHES);
-    assert!(result.truncation.expect("truncation").truncated);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn traversal_tools_do_not_follow_directory_symlinks() {
-    let fixture = native_fixture();
-    let root = fixture.runtime.workspace().root().to_path_buf();
-    let outside = fixture.dir().path().join("outside-dir");
-    std::fs::create_dir_all(&outside).expect("outside dir");
-    std::fs::write(outside.join("secret.rs"), "fn secret() {}").expect("write outside");
-    std::os::unix::fs::symlink(&outside, root.join("linked")).expect("symlink");
-    let glob = run_tool(&fixture, "glob", serde_json::json!({"pattern": "**/*.rs"})).await;
-    assert_eq!(
-        json_content(&glob)["results"],
-        serde_json::json!([]),
-        "directory symlinks are never traversed"
+    let matches = grep_matches(&result);
+    assert!(
+        matches.len() < 300,
+        "the byte cap stopped the search before the match limit: {}",
+        matches.len()
     );
-    let grep = run_tool(&fixture, "grep", serde_json::json!({"pattern": "secret"})).await;
+    assert!(
+        matches.iter().map(|entry| entry.3.len()).sum::<usize>() <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the model-facing payload stays bounded"
+    );
+    assert_eq!(json_content(&result)["truncated"], true);
+    assert!(result.truncation.expect("truncation state").truncated);
+}
+
+/// A very long line is reported with an explicit truncation marker, and the
+/// reported column still refers to the original, untruncated line.
+#[tokio::test]
+async fn grep_bounds_long_lines_explicitly() {
+    let fixture = native_fixture();
+    let prefix = "q".repeat(2_000);
+    std::fs::write(
+        fixture.runtime.workspace().root().join("long.txt"),
+        format!("{prefix}hit{}\n", "z".repeat(2_000)),
+    )
+    .expect("write");
+    let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
+    let matches = grep_matches(&result);
+    assert_eq!(matches.len(), 1);
+    let (_, line, column, text) = &matches[0];
+    assert_eq!(*line, 1);
     assert_eq!(
-        json_content(&grep)["matches"]
-            .as_array()
-            .expect("matches")
-            .len(),
-        0,
-        "grep never descends into directory symlinks"
+        *column,
+        prefix.len() as u64 + 1,
+        "the column refers to the original line, not the shortened one"
+    );
+    assert!(
+        text.len() <= MAX_GREP_LINE_BYTES,
+        "the reported line is bounded: {} bytes",
+        text.len()
+    );
+    assert!(
+        text.contains("truncated"),
+        "the shortening is explicit, never silent: {text}"
+    );
+}
+
+/// A file whose bytes are not valid UTF-8 is not searched: binary content
+/// is never fabricated as text, and it is not an error either.
+#[tokio::test]
+async fn grep_skips_non_utf8_files() {
+    let fixture = native_fixture();
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    std::fs::write(root.join("text.txt"), "hit here\n").expect("write text");
+    // Invalid UTF-8 that nonetheless contains the ASCII pattern bytes.
+    std::fs::write(root.join("binary.bin"), b"\xff\xfehit\x00\x01\xfe").expect("write binary");
+    let result = run_tool(&fixture, "grep", serde_json::json!({"pattern": "hit"})).await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    assert_eq!(
+        grep_paths(&result),
+        vec!["text.txt".to_owned()],
+        "the non-UTF-8 file contributes no matches"
+    );
+}
+
+/// An unparsable regular expression is an explicit business failure of the
+/// tool, not a runtime failure.
+#[tokio::test]
+async fn grep_rejects_an_invalid_regex() {
+    let fixture = native_fixture();
+    std::fs::write(fixture.runtime.workspace().root().join("f.txt"), "text").expect("write");
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "grep",
+            serde_json::json!({"pattern": "([unclosed"}),
+        )
+        .await,
+    );
+    assert_failed(
+        &run_tool(
+            &fixture,
+            "grep",
+            serde_json::json!({"pattern": "x", "glob": "["}),
+        )
+        .await,
     );
 }
 

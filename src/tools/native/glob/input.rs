@@ -5,20 +5,17 @@ use serde::Deserialize;
 
 use crate::tools::native::input::decode;
 
-/// The workspace-relative search root used when `path` is omitted.
-fn default_root() -> String {
-    ".".to_owned()
-}
-
 /// The canonical input contract of the Glob tool.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct GlobInput {
-    /// The glob pattern matched against workspace-relative paths.
+    /// The glob pattern, matched against paths relative to the search root.
+    /// `*` and `?` never match a path separator; use `**` to cross
+    /// directories.
     pub pattern: String,
-    /// The workspace-relative directory the traversal starts from.
-    #[serde(default = "default_root")]
-    pub path: String,
+    /// The workspace-relative directory to search. Defaults to the whole
+    /// workspace.
+    pub path: Option<String>,
 }
 
 impl GlobInput {

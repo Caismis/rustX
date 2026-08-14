@@ -150,7 +150,7 @@ async fn bash_foreground_timeout_is_timed_out() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "sleep 30", "timeout_ms": 200}),
+        serde_json::json!({"command": "sleep 30", "timeout": 1}),
     )
     .await;
     assert_eq!(
@@ -212,7 +212,7 @@ async fn bash_kill_escalates_when_term_is_ignored() {
     let result = run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "trap '' TERM; sleep 30", "timeout_ms": 300}),
+        serde_json::json!({"command": "trap '' TERM; sleep 30", "timeout": 1}),
     )
     .await;
     assert_eq!(
@@ -552,7 +552,7 @@ async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
         run_tool(
             &fixture,
             "bash",
-            serde_json::json!({"command": "sleep 30 & exit 0", "timeout_ms": 300}),
+            serde_json::json!({"command": "sleep 30 & exit 0", "timeout": 1}),
         ),
     )
     .await
@@ -593,7 +593,7 @@ async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
         run_tool(
             &fixture,
             "bash",
-            serde_json::json!({"command": command, "timeout_ms": 500}),
+            serde_json::json!({"command": command, "timeout": 1}),
         ),
     )
     .await
@@ -631,7 +631,7 @@ async fn bash_natural_descendant_completion_settles_success() {
             "bash",
             serde_json::json!({
                 "command": "sleep 0.2 >/dev/null 2>&1 & exit 0",
-                "timeout_ms": 10_000
+                "timeout": 10
             }),
         ),
     )
@@ -671,7 +671,7 @@ async fn bash_descendant_replacement_keeps_the_invocation_active() {
         run_tool(
             &fixture,
             "bash",
-            serde_json::json!({"command": command, "timeout_ms": 800}),
+            serde_json::json!({"command": command, "timeout": 1}),
         ),
     )
     .await

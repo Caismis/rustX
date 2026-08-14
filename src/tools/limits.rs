@@ -12,8 +12,22 @@ pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 /// The maximum number of Glob results returned to the model.
 pub const MAX_GLOB_RESULTS: usize = 2_000;
 
-/// The maximum number of Grep matches returned to the model.
+/// The hard cap on Grep matches returned to the model. A `limit` above it
+/// is a contract violation, not a silently clamped request.
 pub const MAX_GREP_MATCHES: usize = 2_000;
+
+/// The canonical bounded default number of Grep matches, used when the model
+/// omits `limit`.
+pub const DEFAULT_GREP_MATCHES: usize = 200;
+
+/// The maximum number of context lines Grep returns on each side of a
+/// matching line.
+pub const MAX_GREP_CONTEXT_LINES: u32 = 20;
+
+/// The maximum bytes of one line Grep reports. A longer line is shortened
+/// with an explicit truncation marker; the reported column always refers to
+/// the original line.
+pub const MAX_GREP_LINE_BYTES: usize = 512;
 
 /// The maximum length of one progress message text.
 pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;
@@ -31,7 +45,7 @@ pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 /// same duration separately bounds capture only after process terminality.
 pub const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The default foreground Bash timeout when the model omits `timeout_ms`.
+/// The default foreground Bash timeout when the model omits `timeout`.
 pub const DEFAULT_FOREGROUND_BASH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Produces a deterministic bounded preview of `data`.

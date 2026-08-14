@@ -14,10 +14,10 @@ pub(super) struct BashInput {
     /// The command handed to one `/bin/bash -c` invocation.
     #[schemars(length(min = 1))]
     pub command: String,
-    /// The invocation deadline in milliseconds. A foreground invocation
-    /// without one uses the default foreground timeout.
+    /// The invocation deadline in seconds. A foreground invocation without
+    /// one uses the default foreground timeout.
     #[schemars(range(min = 1))]
-    pub timeout_ms: Option<u64>,
+    pub timeout: Option<u64>,
 }
 
 impl BashInput {
@@ -46,10 +46,16 @@ impl BashInput {
         Ok(())
     }
 
-    /// The explicitly requested invocation deadline, if any. The
+    /// The explicitly requested invocation deadline, if any.
+    ///
+    /// This is the one unit boundary of the Bash tool: the model-facing
+    /// contract is measured in **seconds**, and it is converted to the
+    /// internal [`Duration`] representation here, at the tool boundary. The
+    /// executor, the supervisor, and the whole process plane below it keep
+    /// working in [`Duration`] and never see the model-facing unit. The
     /// mode-dependent default remains an execution-policy decision of the
     /// executor.
     pub(super) fn explicit_timeout(&self) -> Option<Duration> {
-        self.timeout_ms.map(Duration::from_millis)
+        self.timeout.map(Duration::from_secs)
     }
 }
