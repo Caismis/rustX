@@ -413,6 +413,11 @@ enum AnthropicBlockState {
         tool_id: ToolId,
         name: String,
         argument_buffer: String,
+        /// Whether `content_block_start.input` already carried a non-empty,
+        /// complete input object. Such a block must not also stream partial
+        /// JSON for the same value.
+        initial_input_complete: bool,
+        saw_input_delta: bool,
         completed: bool,
     },
 }
@@ -451,6 +456,16 @@ impl AnthropicStreamNormalizer {
             .map_err(|e| provider_error(format!("malformed Anthropic stream event: {e}")))?;
         match event {
             WireEvent::MessageStart { message } => {
+                if message
+                    .content
+                    .as_ref()
+                    .is_some_and(|content| !content.is_empty())
+                {
+                    return Err(provider_error(
+                        "Anthropic message_start unexpectedly contains output blocks; streaming blocks would be ambiguous"
+                            .to_owned(),
+                    ));
+                }
                 self.message_start_usage = message.usage;
                 Ok(Vec::new())
             }
@@ -466,7 +481,7 @@ impl AnthropicStreamNormalizer {
                 usage,
                 stop_details,
             } => {
-                if let Some(stop_reason) = delta.stop_reason {
+                if let Some(stop_reason) = delta.reason {
                     self.stop_reason = Some(stop_reason);
                 }
                 if stop_details.is_some() {
@@ -479,20 +494,25 @@ impl AnthropicStreamNormalizer {
             }
             WireEvent::MessageStop => self.terminal(),
             WireEvent::Ping | WireEvent::Unknown => Ok(Vec::new()),
-            WireEvent::Error { error } => Err(ModelError {
-                kind: ModelErrorKind::ProviderError,
-                message: format!(
-                    "Anthropic stream error{}: {}",
-                    error
-                        .error_type
-                        .as_deref()
-                        .map(|t| format!(" ({t})"))
-                        .unwrap_or_default(),
-                    error.message.as_deref().unwrap_or("unknown")
-                ),
-                retry_after_ms: None,
-                provider_code: error.error_type,
-            }),
+            WireEvent::Error { error } => {
+                let provider_code = error
+                    .precise_error_type
+                    .clone()
+                    .or_else(|| error.error_type.clone());
+                Err(ModelError {
+                    kind: stream_error_kind(provider_code.as_deref(), error.message.as_deref()),
+                    message: format!(
+                        "Anthropic stream error{}: {}",
+                        provider_code
+                            .as_deref()
+                            .map(|t| format!(" ({t})"))
+                            .unwrap_or_default(),
+                        error.message.as_deref().unwrap_or("unknown")
+                    ),
+                    retry_after_ms: None,
+                    provider_code,
+                })
+            }
         }
     }
 
@@ -501,81 +521,16 @@ impl AnthropicStreamNormalizer {
         index: u32,
         block: &super::wire::WireContentBlock,
     ) -> Result<Vec<ModelEvent>, ModelError> {
+        if self.block_states.contains_key(&index) {
+            return Err(provider_error(format!(
+                "duplicate content block start for index {index}"
+            )));
+        }
         match block.block_type.as_deref() {
-            Some("text") => {
-                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-                self.block_states
-                    .insert(index, AnthropicBlockState::Text { canonical_index });
-                Ok(Vec::new())
-            }
-            Some("thinking") => {
-                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-                self.block_states.insert(
-                    index,
-                    AnthropicBlockState::Thinking {
-                        canonical_index,
-                        buffer: block.thinking.clone().unwrap_or_default(),
-                        signature: block.signature.clone(),
-                        state_emitted: false,
-                    },
-                );
-                Ok(Vec::new())
-            }
-            Some("redacted_thinking") => {
-                // `data` is the block's required opaque content; a block
-                // without it cannot be preserved or replayed losslessly, so
-                // it is a provider protocol error rather than an empty
-                // fabricated opaque value.
-                let Some(data) = block.data.clone() else {
-                    return Err(provider_error(
-                        "provider redacted_thinking block lacks the opaque data field".to_owned(),
-                    ));
-                };
-                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-                self.block_states.insert(
-                    index,
-                    AnthropicBlockState::RedactedThinking {
-                        canonical_index,
-                        data,
-                        state_emitted: false,
-                    },
-                );
-                Ok(Vec::new())
-            }
-            Some("tool_use") => {
-                let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
-                let Some(id) = block.id.clone().filter(|id| !id.is_empty()) else {
-                    return Err(provider_error(
-                        "provider tool_use block lacks an invocation id".to_owned(),
-                    ));
-                };
-                let Some(name) = block.name.clone() else {
-                    return Err(provider_error(
-                        "provider tool_use block lacks a tool name".to_owned(),
-                    ));
-                };
-                let tool_id = resolve_tool(&self.tools, &name)?;
-                let call = ToolCallStart {
-                    id: ToolCallId::new(id.clone()),
-                    tool_id: tool_id.clone(),
-                    name: name.clone(),
-                };
-                self.block_states.insert(
-                    index,
-                    AnthropicBlockState::ToolUse {
-                        canonical_index,
-                        call_id: ToolCallId::new(id),
-                        tool_id,
-                        name,
-                        argument_buffer: String::new(),
-                        completed: false,
-                    },
-                );
-                Ok(vec![ModelEvent::ToolCallStarted {
-                    block_index: canonical_index,
-                    call,
-                }])
-            }
+            Some("text") => self.start_text_block(index, block),
+            Some("thinking") => Ok(self.start_thinking_block(index, block)),
+            Some("redacted_thinking") => self.start_redacted_thinking_block(index, block),
+            Some("tool_use") => self.start_tool_use_block(index, block),
             Some("fallback") => {
                 // A provider `fallback` block is not disposable transport
                 // metadata: it carries provider positional/replay semantics
@@ -605,94 +560,152 @@ impl AnthropicStreamNormalizer {
         }
     }
 
+    fn start_text_block(
+        &mut self,
+        index: u32,
+        block: &super::wire::WireContentBlock,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        if block
+            .citations
+            .as_ref()
+            .is_some_and(|citations| !citations.is_empty())
+        {
+            return Err(unsupported(
+                "Anthropic text citations have no canonical representation",
+            ));
+        }
+        let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
+        self.block_states
+            .insert(index, AnthropicBlockState::Text { canonical_index });
+        Ok(block
+            .text
+            .clone()
+            .filter(|text| !text.is_empty())
+            .map_or_else(Vec::new, |text| {
+                vec![ModelEvent::TextDelta {
+                    block_index: canonical_index,
+                    text,
+                }]
+            }))
+    }
+
+    fn start_thinking_block(
+        &mut self,
+        index: u32,
+        block: &super::wire::WireContentBlock,
+    ) -> Vec<ModelEvent> {
+        let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
+        let initial_thinking = block.thinking.clone().unwrap_or_default();
+        self.block_states.insert(
+            index,
+            AnthropicBlockState::Thinking {
+                canonical_index,
+                buffer: initial_thinking.clone(),
+                signature: block.signature.clone(),
+                state_emitted: false,
+            },
+        );
+        if initial_thinking.is_empty() {
+            Vec::new()
+        } else {
+            vec![ModelEvent::ReasoningDelta {
+                block_index: canonical_index,
+                text: initial_thinking,
+            }]
+        }
+    }
+
+    fn start_redacted_thinking_block(
+        &mut self,
+        index: u32,
+        block: &super::wire::WireContentBlock,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let data = block.data.clone().ok_or_else(|| {
+            provider_error(
+                "provider redacted_thinking block lacks the opaque data field".to_owned(),
+            )
+        })?;
+        let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
+        self.block_states.insert(
+            index,
+            AnthropicBlockState::RedactedThinking {
+                canonical_index,
+                data,
+                state_emitted: false,
+            },
+        );
+        Ok(Vec::new())
+    }
+
+    fn start_tool_use_block(
+        &mut self,
+        index: u32,
+        block: &super::wire::WireContentBlock,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let canonical_index = self.blocks.allocate(AnthropicBlockKey::Provider(index));
+        let id = block
+            .id
+            .clone()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| {
+                provider_error("provider tool_use block lacks an invocation id".to_owned())
+            })?;
+        let name = block.name.clone().ok_or_else(|| {
+            provider_error("provider tool_use block lacks a tool name".to_owned())
+        })?;
+        let tool_id = resolve_tool(&self.tools, &name)?;
+        let call_id = ToolCallId::new(id);
+        let call = ToolCallStart {
+            id: call_id.clone(),
+            tool_id: tool_id.clone(),
+            name: name.clone(),
+        };
+        let initial_input = block.input.clone().unwrap_or_else(|| serde_json::json!({}));
+        let initial_input_complete = initial_input
+            .as_object()
+            .is_none_or(|object| !object.is_empty());
+        let argument_buffer = serde_json::to_string(&initial_input).map_err(|error| {
+            provider_error(format!(
+                "tool_use initial input is not serializable: {error}"
+            ))
+        })?;
+        self.block_states.insert(
+            index,
+            AnthropicBlockState::ToolUse {
+                canonical_index,
+                call_id: call_id.clone(),
+                tool_id,
+                name,
+                argument_buffer: argument_buffer.clone(),
+                initial_input_complete,
+                saw_input_delta: false,
+                completed: false,
+            },
+        );
+        let mut events = vec![ModelEvent::ToolCallStarted {
+            block_index: canonical_index,
+            call,
+        }];
+        if initial_input_complete {
+            events.push(ModelEvent::ToolCallArgumentsDelta {
+                block_index: canonical_index,
+                call_id,
+                arguments_delta: argument_buffer,
+            });
+        }
+        Ok(events)
+    }
+
     fn push_content_block_delta(
         &mut self,
         index: u32,
         delta: &super::wire::WireDelta,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         match delta.delta_type.as_deref() {
-            Some("text_delta") => {
-                let state = self.block_states.get_mut(&index).ok_or_else(|| {
-                    provider_error(format!("text delta for unknown block index {index}"))
-                })?;
-                let AnthropicBlockState::Text { canonical_index } = state else {
-                    return Err(provider_error(format!(
-                        "text delta for non-text block index {index}"
-                    )));
-                };
-                let text = delta.text.clone().unwrap_or_default();
-                if text.is_empty() {
-                    return Ok(Vec::new());
-                }
-                Ok(vec![ModelEvent::TextDelta {
-                    block_index: *canonical_index,
-                    text,
-                }])
-            }
-            Some("thinking_delta") => {
-                let state = self.block_states.get_mut(&index).ok_or_else(|| {
-                    provider_error(format!("thinking delta for unknown block index {index}"))
-                })?;
-                let AnthropicBlockState::Thinking {
-                    canonical_index,
-                    buffer,
-                    ..
-                } = state
-                else {
-                    return Err(provider_error(format!(
-                        "thinking delta for non-thinking block index {index}"
-                    )));
-                };
-                let text = delta.thinking.clone().unwrap_or_default();
-                buffer.push_str(&text);
-                if text.is_empty() {
-                    return Ok(Vec::new());
-                }
-                Ok(vec![ModelEvent::ReasoningDelta {
-                    block_index: *canonical_index,
-                    text,
-                }])
-            }
-            Some("signature_delta") => {
-                let state = self.block_states.get_mut(&index).ok_or_else(|| {
-                    provider_error(format!("signature delta for unknown block index {index}"))
-                })?;
-                let AnthropicBlockState::Thinking { signature, .. } = state else {
-                    return Err(provider_error(format!(
-                        "signature delta for non-thinking block index {index}"
-                    )));
-                };
-                if let Some(new_signature) = delta.signature.clone() {
-                    *signature = Some(new_signature);
-                }
-                Ok(Vec::new())
-            }
-            Some("input_json_delta") => {
-                let state = self.block_states.get_mut(&index).ok_or_else(|| {
-                    provider_error(format!("input delta for unknown block index {index}"))
-                })?;
-                let AnthropicBlockState::ToolUse {
-                    canonical_index,
-                    call_id,
-                    argument_buffer,
-                    ..
-                } = state
-                else {
-                    return Err(provider_error(format!(
-                        "input delta for non-tool block index {index}"
-                    )));
-                };
-                let partial = delta.partial_json.clone().unwrap_or_default();
-                argument_buffer.push_str(&partial);
-                if partial.is_empty() {
-                    return Ok(Vec::new());
-                }
-                Ok(vec![ModelEvent::ToolCallArgumentsDelta {
-                    block_index: *canonical_index,
-                    call_id: call_id.clone(),
-                    arguments_delta: partial,
-                }])
-            }
+            Some("text_delta") => self.push_text_delta(index, delta),
+            Some("thinking_delta") => self.push_thinking_delta(index, delta),
+            Some("signature_delta") => self.push_signature_delta(index, delta),
+            Some("input_json_delta") => self.push_input_json_delta(index, delta),
             Some(other) => Err(unsupported(format!(
                 "unsupported content block delta type {other:?}"
             ))),
@@ -702,13 +715,130 @@ impl AnthropicStreamNormalizer {
         }
     }
 
-    fn push_content_block_stop(&mut self, index: u32) -> Result<Vec<ModelEvent>, ModelError> {
-        let Some(state) = self.block_states.get_mut(&index) else {
-            // A stop for a block that never opened a canonical state (for
-            // example a provider control block) has nothing to finalize.
-            return Ok(Vec::new());
+    fn push_text_delta(
+        &mut self,
+        index: u32,
+        delta: &super::wire::WireDelta,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let state = self
+            .block_states
+            .get_mut(&index)
+            .ok_or_else(|| provider_error(format!("text delta for unknown block index {index}")))?;
+        let AnthropicBlockState::Text { canonical_index } = state else {
+            return Err(provider_error(format!(
+                "text delta for non-text block index {index}"
+            )));
         };
-        match state {
+        Ok(delta
+            .text
+            .clone()
+            .filter(|text| !text.is_empty())
+            .map_or_else(Vec::new, |text| {
+                vec![ModelEvent::TextDelta {
+                    block_index: *canonical_index,
+                    text,
+                }]
+            }))
+    }
+
+    fn push_thinking_delta(
+        &mut self,
+        index: u32,
+        delta: &super::wire::WireDelta,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let state = self.block_states.get_mut(&index).ok_or_else(|| {
+            provider_error(format!("thinking delta for unknown block index {index}"))
+        })?;
+        let AnthropicBlockState::Thinking {
+            canonical_index,
+            buffer,
+            ..
+        } = state
+        else {
+            return Err(provider_error(format!(
+                "thinking delta for non-thinking block index {index}"
+            )));
+        };
+        let text = delta.thinking.clone().unwrap_or_default();
+        buffer.push_str(&text);
+        Ok(if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ModelEvent::ReasoningDelta {
+                block_index: *canonical_index,
+                text,
+            }]
+        })
+    }
+
+    fn push_signature_delta(
+        &mut self,
+        index: u32,
+        delta: &super::wire::WireDelta,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let state = self.block_states.get_mut(&index).ok_or_else(|| {
+            provider_error(format!("signature delta for unknown block index {index}"))
+        })?;
+        let AnthropicBlockState::Thinking { signature, .. } = state else {
+            return Err(provider_error(format!(
+                "signature delta for non-thinking block index {index}"
+            )));
+        };
+        if let Some(new_signature) = delta.signature.clone() {
+            *signature = Some(new_signature);
+        }
+        Ok(Vec::new())
+    }
+
+    fn push_input_json_delta(
+        &mut self,
+        index: u32,
+        delta: &super::wire::WireDelta,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let state = self.block_states.get_mut(&index).ok_or_else(|| {
+            provider_error(format!("input delta for unknown block index {index}"))
+        })?;
+        let AnthropicBlockState::ToolUse {
+            canonical_index,
+            call_id,
+            argument_buffer,
+            initial_input_complete,
+            saw_input_delta,
+            ..
+        } = state
+        else {
+            return Err(provider_error(format!(
+                "input delta for non-tool block index {index}"
+            )));
+        };
+        let partial = delta.partial_json.clone().unwrap_or_default();
+        if partial.is_empty() {
+            return Ok(Vec::new());
+        }
+        if *initial_input_complete {
+            return Err(provider_error(format!(
+                "tool block index {index} streamed partial JSON after providing complete initial input"
+            )));
+        }
+        if !*saw_input_delta {
+            argument_buffer.clear();
+            *saw_input_delta = true;
+        }
+        argument_buffer.push_str(&partial);
+        Ok(vec![ModelEvent::ToolCallArgumentsDelta {
+            block_index: *canonical_index,
+            call_id: call_id.clone(),
+            arguments_delta: partial,
+        }])
+    }
+
+    fn push_content_block_stop(&mut self, index: u32) -> Result<Vec<ModelEvent>, ModelError> {
+        let Some(mut state) = self.block_states.remove(&index) else {
+            return Err(provider_error(format!(
+                "content block stop for unknown index {index}"
+            )));
+        };
+        match &mut state {
             AnthropicBlockState::Text { .. } => Ok(Vec::new()),
             AnthropicBlockState::Thinking {
                 canonical_index,
@@ -773,6 +903,7 @@ impl AnthropicStreamNormalizer {
                 name,
                 argument_buffer,
                 completed,
+                ..
             } => {
                 if *completed {
                     return Ok(Vec::new());
@@ -807,6 +938,12 @@ impl AnthropicStreamNormalizer {
     fn terminal(&mut self) -> Result<Vec<ModelEvent>, ModelError> {
         if self.terminal_emitted {
             return Ok(Vec::new());
+        }
+        if !self.block_states.is_empty() {
+            return Err(provider_error(format!(
+                "provider reached message_stop with unclosed content block indexes {:?}",
+                self.block_states.keys().collect::<Vec<_>>()
+            )));
         }
         self.terminal_emitted = true;
         let stop_reason = self.stop_reason.clone().ok_or_else(|| {
@@ -859,6 +996,39 @@ fn provider_error(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+    }
+}
+
+fn stream_error_kind(error_type: Option<&str>, message: Option<&str>) -> ModelErrorKind {
+    match error_type {
+        Some(
+            "authentication" | "authentication_error" | "permission_denied" | "permission_error",
+        ) => ModelErrorKind::Authentication,
+        Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
+        Some(
+            "context_length_exceeded"
+            | "max_tokens_exceeded"
+            | "token_limit_exceeded"
+            | "string_too_long",
+        ) => ModelErrorKind::ContextWindowExceeded,
+        Some(
+            "invalid_request"
+            | "invalid_prompt"
+            | "invalid_request_error"
+            | "request_too_large"
+            | "not_found_error",
+        ) => {
+            let message = message.unwrap_or_default().to_ascii_lowercase();
+            if message.contains("context window")
+                || message.contains("prompt is too long")
+                || message.contains("context length")
+            {
+                ModelErrorKind::ContextWindowExceeded
+            } else {
+                ModelErrorKind::InvalidRequest
+            }
+        }
+        _ => ModelErrorKind::ProviderError,
     }
 }
 

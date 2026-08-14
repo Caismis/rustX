@@ -440,6 +440,33 @@ pub enum ResponsesStorageMode {
     Stateless,
 }
 
+/// Assistant-message field used to replay canonical reasoning through an
+/// OpenAI-compatible Chat Completions dialect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatReasoningReplay {
+    /// vLLM and `OpenRouter`'s plaintext reasoning field.
+    #[default]
+    Reasoning,
+    /// `DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.
+    ReasoningContent,
+    /// Providers such as the legacy `deepseek-reasoner` that require prior
+    /// reasoning to be omitted outside an active tool-call continuation.
+    Omit,
+}
+
+impl ChatReasoningReplay {
+    /// Returns the assistant-message wire field, if reasoning is replayed.
+    #[must_use]
+    pub const fn wire_name(self) -> Option<&'static str> {
+        match self {
+            Self::Reasoning => Some("reasoning"),
+            Self::ReasoningContent => Some("reasoning_content"),
+            Self::Omit => None,
+        }
+    }
+}
+
 /// The bounded structural protocol-translation metadata of one model.
 ///
 /// Every field here corresponds to a translation branch the current
@@ -454,20 +481,21 @@ pub struct ModelCompat {
     /// Chat Completions: whether the service supports
     /// `stream_options.include_usage`.
     pub chat_stream_usage: ChatStreamUsage,
+    /// Chat Completions: how previous assistant reasoning is replayed.
+    pub chat_reasoning_replay: ChatReasoningReplay,
     /// Responses: the provider storage/continuation mode.
     pub responses_storage: ResponsesStorageMode,
+    /// Bitset recording which compat fields were explicitly present in the
+    /// catalog, including fields equal to their defaults.
     #[doc(hidden)]
-    pub chat_max_tokens_field_explicit: bool,
-    #[doc(hidden)]
-    pub chat_stream_usage_explicit: bool,
-    #[doc(hidden)]
-    pub responses_storage_explicit: bool,
+    pub explicit_fields: u8,
 }
 
 impl PartialEq for ModelCompat {
     fn eq(&self, other: &Self) -> bool {
         self.chat_max_tokens_field == other.chat_max_tokens_field
             && self.chat_stream_usage == other.chat_stream_usage
+            && self.chat_reasoning_replay == other.chat_reasoning_replay
             && self.responses_storage == other.responses_storage
     }
 }
@@ -479,10 +507,13 @@ impl Serialize for ModelCompat {
         let chat_max_tokens_field_is_non_default =
             self.chat_max_tokens_field != ChatMaxTokensField::default();
         let chat_stream_usage_is_non_default = self.chat_stream_usage != ChatStreamUsage::default();
+        let chat_reasoning_replay_is_non_default =
+            self.chat_reasoning_replay != ChatReasoningReplay::default();
         let responses_storage_is_non_default =
             self.responses_storage != ResponsesStorageMode::default();
         let field_count = usize::from(chat_max_tokens_field_is_non_default)
             + usize::from(chat_stream_usage_is_non_default)
+            + usize::from(chat_reasoning_replay_is_non_default)
             + usize::from(responses_storage_is_non_default);
         let mut state = serializer.serialize_struct("ModelCompat", field_count)?;
         if chat_max_tokens_field_is_non_default {
@@ -490,6 +521,9 @@ impl Serialize for ModelCompat {
         }
         if chat_stream_usage_is_non_default {
             state.serialize_field("chatStreamUsage", &self.chat_stream_usage)?;
+        }
+        if chat_reasoning_replay_is_non_default {
+            state.serialize_field("chatReasoningReplay", &self.chat_reasoning_replay)?;
         }
         if responses_storage_is_non_default {
             state.serialize_field("responsesStorage", &self.responses_storage)?;
@@ -508,35 +542,49 @@ impl<'de> Deserialize<'de> for ModelCompat {
             #[serde(default)]
             chat_stream_usage: Option<ChatStreamUsage>,
             #[serde(default)]
+            chat_reasoning_replay: Option<ChatReasoningReplay>,
+            #[serde(default)]
             responses_storage: Option<ResponsesStorageMode>,
         }
         let document = Document::deserialize(deserializer)?;
-        let chat_max_tokens_field_explicit = document.chat_max_tokens_field.is_some();
-        let chat_stream_usage_explicit = document.chat_stream_usage.is_some();
-        let responses_storage_explicit = document.responses_storage.is_some();
+        let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
+            | (u8::from(document.chat_stream_usage.is_some()) << 1)
+            | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
+            | (u8::from(document.responses_storage.is_some()) << 3);
         Ok(Self {
             chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
             chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
+            chat_reasoning_replay: document.chat_reasoning_replay.unwrap_or_default(),
             responses_storage: document.responses_storage.unwrap_or_default(),
-            chat_max_tokens_field_explicit,
-            chat_stream_usage_explicit,
-            responses_storage_explicit,
+            explicit_fields,
         })
     }
 }
 
 impl ModelCompat {
+    const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
+    const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
+    const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
+    const RESPONSES_STORAGE_EXPLICIT: u8 = 1 << 3;
+
     fn chat_max_tokens_field_is_explicit(self) -> bool {
-        self.chat_max_tokens_field_explicit
+        self.explicit_fields & Self::CHAT_MAX_TOKENS_EXPLICIT != 0
             || self.chat_max_tokens_field != ChatMaxTokensField::default()
     }
 
     fn chat_stream_usage_is_explicit(self) -> bool {
-        self.chat_stream_usage_explicit || self.chat_stream_usage != ChatStreamUsage::default()
+        self.explicit_fields & Self::CHAT_STREAM_USAGE_EXPLICIT != 0
+            || self.chat_stream_usage != ChatStreamUsage::default()
+    }
+
+    fn chat_reasoning_replay_is_explicit(self) -> bool {
+        self.explicit_fields & Self::CHAT_REASONING_REPLAY_EXPLICIT != 0
+            || self.chat_reasoning_replay != ChatReasoningReplay::default()
     }
 
     fn responses_storage_is_explicit(self) -> bool {
-        self.responses_storage_explicit || self.responses_storage != ResponsesStorageMode::default()
+        self.explicit_fields & Self::RESPONSES_STORAGE_EXPLICIT != 0
+            || self.responses_storage != ResponsesStorageMode::default()
     }
 }
 
@@ -1125,11 +1173,14 @@ fn validate_compat(
     let invalid = match protocol {
         ModelProtocol::OpenAiChatCompletions => compat.responses_storage_is_explicit(),
         ModelProtocol::OpenAiResponses => {
-            compat.chat_max_tokens_field_is_explicit() || compat.chat_stream_usage_is_explicit()
+            compat.chat_max_tokens_field_is_explicit()
+                || compat.chat_stream_usage_is_explicit()
+                || compat.chat_reasoning_replay_is_explicit()
         }
         ModelProtocol::AnthropicMessages => {
             compat.chat_max_tokens_field_is_explicit()
                 || compat.chat_stream_usage_is_explicit()
+                || compat.chat_reasoning_replay_is_explicit()
                 || compat.responses_storage_is_explicit()
         }
     };

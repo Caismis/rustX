@@ -11,9 +11,9 @@ use rustx::message::types::{
     SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
-    ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ChatReasoningReplay, ModelAdapter,
+    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
+    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
 use rustx::runtime::identity::MessageId;
 use rustx::runtime::identity::{ArtifactId, ToolCallId, ToolId};
@@ -169,10 +169,10 @@ async fn image_references_are_unsupported() {
     }
 }
 
-/// Chat Completions rejects previous reasoning blocks in history instead of
-/// flattening them into text.
+/// Chat Completions replays previous reasoning through vLLM's dedicated
+/// assistant-message field instead of flattening it into visible text.
 #[tokio::test]
-async fn chat_rejects_previous_reasoning() {
+async fn chat_replays_previous_reasoning() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
@@ -190,12 +190,81 @@ async fn chat_rejects_previous_reasoning() {
             )],
         }),
     );
-    unsupported_rejected(
-        &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
-        request,
-        &server,
-    )
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    let events = common::collect_events(&adapter, request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let reasoning_message = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["reasoning"] == "Think.")
+        .expect("assistant reasoning is replayed");
+    assert_eq!(reasoning_message["role"], "assistant");
+    assert!(
+        reasoning_message["content"]
+            .as_array()
+            .expect("assistant content array")
+            .is_empty(),
+        "reasoning is not flattened into visible assistant content"
+    );
+}
+
+/// The catalog selects the assistant reasoning replay dialect explicitly:
+/// vLLM/OpenRouter, preserved-thinking APIs, or providers that require it to
+/// be omitted from later ordinary turns.
+#[tokio::test]
+async fn chat_reasoning_replay_dialects_are_explicit() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
     .await;
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    for (attempt, (dialect, field)) in [
+        (ChatReasoningReplay::Reasoning, Some("reasoning")),
+        (
+            ChatReasoningReplay::ReasoningContent,
+            Some("reasoning_content"),
+        ),
+        (ChatReasoningReplay::Omit, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+        request.invocation.compat.chat_reasoning_replay = dialect;
+        request.messages.insert(
+            2,
+            MessageBlock::Agent(AgentMessageBlock {
+                id: MessageId::new(format!("msg-r-{attempt}")),
+                content: vec![AgentContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: Some("Think.".to_owned()),
+                        provider_state: None,
+                    },
+                )],
+            }),
+        );
+        let events = common::collect_events(&adapter, request).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let body: serde_json::Value =
+            serde_json::from_str(&server.request_body(attempt)).expect("request body is JSON");
+        let reasoning_message = body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("assistant message");
+        if let Some(field) = field {
+            assert_eq!(reasoning_message[field], "Think.");
+        } else {
+            assert!(reasoning_message.get("reasoning").is_none());
+            assert!(reasoning_message.get("reasoning_content").is_none());
+        }
+    }
 }
 
 /// Chat Completions translates a full canonical history (system, user, agent

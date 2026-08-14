@@ -124,11 +124,12 @@ pub(crate) fn parse_event(data: &str) -> Result<WireEvent, WireParseError> {
                 .cloned()
                 .map(serde_json::from_value)
                 .transpose()?;
-            let stop_details: Option<WireStopDetails> = value
+            let top_level_stop_details: Option<WireStopDetails> = value
                 .get("stop_details")
                 .cloned()
                 .map(serde_json::from_value)
                 .transpose()?;
+            let stop_details = delta.details.clone().or(top_level_stop_details);
             Ok(WireEvent::MessageDelta {
                 delta,
                 usage,
@@ -170,6 +171,8 @@ pub(crate) struct WireMessage {
     pub id: Option<String>,
     #[serde(default)]
     pub usage: Option<WireUsage>,
+    #[serde(default)]
+    pub content: Option<Vec<serde_json::Value>>,
 }
 
 /// The `content_block` object of `content_block_start`.
@@ -195,6 +198,8 @@ pub(crate) struct WireContentBlock {
     pub signature: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub citations: Option<Vec<serde_json::Value>>,
     /// Opaque encrypted provider state of `redacted_thinking` blocks.
     #[serde(default)]
     pub data: Option<String>,
@@ -218,12 +223,14 @@ pub(crate) struct WireDelta {
 /// The `delta` object of `message_delta`, plus the top-level `stop_details`
 /// carried by refusal terminations.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // `stop_sequence` preserved for wire-shape fidelity
+#[allow(dead_code)] // `sequence` preserved for wire-shape fidelity
 pub(crate) struct WireMessageDelta {
-    #[serde(default)]
-    pub stop_reason: Option<String>,
-    #[serde(default)]
-    pub stop_sequence: Option<String>,
+    #[serde(default, rename = "stop_reason")]
+    pub reason: Option<String>,
+    #[serde(default, rename = "stop_sequence")]
+    pub sequence: Option<String>,
+    #[serde(default, rename = "stop_details")]
+    pub details: Option<WireStopDetails>,
 }
 
 /// The `stop_details` object of a refusal `message_delta`.
@@ -273,6 +280,9 @@ pub(crate) struct WireOutputTokensDetails {
 pub(crate) struct WireError {
     #[serde(rename = "type", default)]
     pub error_type: Option<String>,
+    /// `OpenRouter`'s stable cross-protocol error classification.
+    #[serde(default, rename = "error_type")]
+    pub precise_error_type: Option<String>,
     #[serde(default)]
     pub message: Option<String>,
 }

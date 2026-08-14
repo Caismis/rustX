@@ -36,6 +36,7 @@
           },
           "compat": {
             "chatMaxTokensField": "max_completion_tokens",
+            "chatReasoningReplay": "reasoning",
             "chatStreamUsage": "supported"
           }
         }

@@ -1,0 +1,5 @@
+event: error
+data: {"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}
+
+event: ping
+data: {"type":"ping"}

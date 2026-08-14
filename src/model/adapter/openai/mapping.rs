@@ -190,7 +190,7 @@ pub(crate) fn map_chat_finish_reason(reason: Option<&str>) -> ModelFinishReason 
         Some("stop") => ModelFinishReason::Stop,
         Some("tool_calls") => ModelFinishReason::ToolCalls,
         Some("length") => ModelFinishReason::Length,
-        Some("content_filter") => ModelFinishReason::ContentFilter,
+        Some("content_filter" | "sensitive") => ModelFinishReason::ContentFilter,
         Some("function_call") => ModelFinishReason::Other {
             reason: "function_call".to_owned(),
         },
@@ -286,6 +286,7 @@ mod tests {
             (Some("tool_calls"), ModelFinishReason::ToolCalls),
             (Some("length"), ModelFinishReason::Length),
             (Some("content_filter"), ModelFinishReason::ContentFilter),
+            (Some("sensitive"), ModelFinishReason::ContentFilter),
             (
                 Some("function_call"),
                 ModelFinishReason::Other {

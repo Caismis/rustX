@@ -100,6 +100,66 @@ async fn text_stream_normalizes() {
     assert_eq!(events.len(), 4, "{}", describe_events(&events));
 }
 
+/// Non-empty text/thinking values in `content_block_start` are real output,
+/// not placeholders, and are emitted before later deltas.
+#[tokio::test]
+async fn content_block_start_values_are_not_lost() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "initial_text_thinking.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let visible: Vec<(&str, &str)> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(("text", text.as_str())),
+            ModelEvent::ReasoningDelta { text, .. } => Some(("reasoning", text.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        visible,
+        vec![
+            ("text", "Initial "),
+            ("text", "text."),
+            ("reasoning", "Initial thinking."),
+        ]
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ModelEvent::ContinuationState { block_index, .. } if block_index.get() == 1
+    )));
+}
+
+/// A complete tool input carried by `content_block_start` produces the same
+/// canonical start/delta/completion lifecycle without requiring JSON deltas.
+#[tokio::test]
+async fn initial_tool_input_is_mapped_completely() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "initial_tool_input.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("List")).await;
+    assert!(matches!(
+        &events[1],
+        ModelEvent::ToolCallStarted { call, .. } if call.id == ToolCallId::new("toolu_initial")
+    ));
+    assert!(matches!(
+        &events[2],
+        ModelEvent::ToolCallArgumentsDelta { arguments_delta, .. }
+            if arguments_delta == "{\"path\":\".\"}"
+    ));
+    assert!(matches!(
+        &events[3],
+        ModelEvent::ToolCallCompleted { call, .. }
+            if call.arguments == serde_json::json!({"path": "."})
+    ));
+}
+
 /// Multiple text blocks keep distinct canonical indexes.
 #[tokio::test]
 async fn multiple_text_blocks_keep_separate_indexes() {
@@ -634,6 +694,97 @@ async fn error_event_fails_with_provider_code() {
     assert_eq!(error.kind, ModelErrorKind::ProviderError);
     assert_eq!(error.provider_code.as_deref(), Some("overloaded_error"));
     assert!(error.message.contains("Overloaded"));
+}
+
+/// Streaming error discriminators map to canonical error kinds just like
+/// HTTP errors, while preserving the provider code.
+#[tokio::test]
+async fn rate_limit_stream_error_maps_semantically() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "rate_limit_error_event.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::RateLimit);
+    assert_eq!(error.provider_code.as_deref(), Some("rate_limit_error"));
+}
+
+/// `OpenRouter`'s stable `error_type` wins over the lossy Anthropic-native
+/// `api_error` wrapper and remains available as the provider code.
+#[tokio::test]
+async fn openrouter_anthropic_error_type_maps_semantically() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "openrouter_typed_error.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "router/claude", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::Authentication);
+    assert_eq!(error.provider_code.as_deref(), Some("authentication"));
+}
+
+/// Current Anthropic responses carry refusal `stop_details` inside the message
+/// delta object; the explanation becomes canonical refusal text.
+#[tokio::test]
+async fn nested_refusal_stop_details_are_mapped() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("anthropic", "nested_refusal.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+    )
+    .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ModelEvent::RefusalDelta { text, .. } if text == "Request declined."
+    )));
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Refusal,
+            ..
+        })
+    ));
+}
+
+/// Known citation semantics are not silently erased, and malformed block
+/// lifecycles fail as provider protocol errors.
+#[tokio::test]
+async fn citations_and_invalid_block_lifecycles_fail_explicitly() {
+    let cases = [
+        ("citation_delta.sse", ModelErrorKind::Unsupported),
+        ("stop_without_start.sse", ModelErrorKind::ProviderError),
+        ("unclosed_block.sse", ModelErrorKind::ProviderError),
+        ("nonempty_message_start.sse", ModelErrorKind::ProviderError),
+    ];
+    for (fixture, expected) in cases {
+        let response_fixture = fixture.to_owned();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("anthropic", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi"),
+        )
+        .await;
+        assert_terminal_failed(&events, &expected);
+    }
 }
 
 /// Unknown top-level events and pings do not crash the parser; output after

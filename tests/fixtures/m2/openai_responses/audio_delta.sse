@@ -1,0 +1,3 @@
+data: {"type":"response.audio.delta","sequence_number":1,"delta":"AAAA"}
+
+data: [DONE]

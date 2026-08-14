@@ -911,9 +911,10 @@ Governing rules:
   There is no invented `extra_body` nesting level and no second HTTP path.
 - **Bounded compat.** `compat` configures only structural translation the
   adapters actually branch on — the legal Chat max-token spelling, whether
-  streaming usage options are supported, and the Responses storage /
-  continuation mode. It is not a strategy framework, and nothing is ever
-  inferred from a hostname.
+  streaming usage options are supported, whether previous assistant reasoning
+  is replayed as `reasoning`, `reasoning_content`, or omitted, and the
+  Responses storage / continuation mode. It is not a strategy framework, and
+  nothing is ever inferred from a hostname.
 - **Effective capabilities.** The client-visible capability is
   `model-declared ∩ adapter/protocol ∩ current runtime`. Because no adapter
   can transmit canonical image or file references yet, a catalog claiming
@@ -1907,6 +1908,7 @@ only for local development):
           "requestParams": { "min_p": 0.05, "repetition_penalty": 1.1 },
           "compat": {
             "chatMaxTokensField": "max_tokens",
+            "chatReasoningReplay": "omit",
             "chatStreamUsage": "unsupported"
           }
         }

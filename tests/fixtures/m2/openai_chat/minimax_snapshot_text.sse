@@ -1,0 +1,5 @@
+data: {"id":"minimax-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"minimax-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4},"base_resp":{"status_code":0,"status_msg":""}}
+
+data: [DONE]

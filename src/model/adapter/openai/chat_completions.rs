@@ -19,8 +19,11 @@
 //! streaming entry point, so there is exactly one HTTP implementation and no
 //! invented `extra_body` nesting level.
 //!
-//! No reasoning field is ever synthesized: whatever the selected reasoning
-//! profile configured is exactly what appears on the wire.
+//! No request-level reasoning control is ever synthesized: whatever the
+//! selected reasoning profile configured is exactly what appears on the
+//! wire. Previous assistant reasoning is replayed through vLLM's
+//! provider-specific `reasoning` message field rather than flattened into
+//! visible assistant text.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -48,7 +51,8 @@ use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{
-    map_chat_finish_reason, normalize_chat_usage, normalize_error, resolve_tool,
+    is_context_window_message, map_chat_finish_reason, normalize_chat_usage, normalize_error,
+    resolve_tool,
 };
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
@@ -312,12 +316,44 @@ struct ChatChunkWire {
     choices: Vec<ChatChoiceWire>,
     #[serde(default)]
     usage: Option<CompletionUsage>,
+    /// Moderation carries output semantics that the canonical event model
+    /// cannot represent losslessly.
+    #[serde(default)]
+    moderation: Option<serde_json::Value>,
+    #[serde(default)]
+    video_result: Option<serde_json::Value>,
+    #[serde(default)]
+    web_search: Option<serde_json::Value>,
+    #[serde(default)]
+    content_filter: Option<serde_json::Value>,
+    #[serde(default)]
+    input_sensitive: Option<bool>,
+    #[serde(default)]
+    output_sensitive: Option<bool>,
+    #[serde(default)]
+    input_sensitive_type: Option<i64>,
+    #[serde(default)]
+    output_sensitive_type: Option<i64>,
+    #[serde(default)]
+    base_resp: Option<ChatBaseResponseWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatBaseResponseWire {
+    #[serde(default)]
+    status_code: Option<i64>,
+    #[serde(default)]
+    status_msg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatChoiceWire {
     #[serde(default)]
-    delta: ChatDeltaWire,
+    index: Option<u32>,
+    #[serde(default)]
+    delta: Option<ChatDeltaWire>,
+    #[serde(default)]
+    message: Option<ChatMessageSnapshotWire>,
     #[serde(default)]
     finish_reason: Option<String>,
 }
@@ -329,10 +365,104 @@ struct ChatDeltaWire {
     /// Qwen/vLLM exposes enabled thinking as `delta.reasoning`.
     #[serde(default)]
     reasoning: Option<String>,
+    /// `DeepSeek` exposes enabled thinking as `delta.reasoning_content`.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    /// `OpenRouter`'s structured reasoning blocks carry signatures and opaque
+    /// data that cannot be flattened into canonical visible reasoning.
+    #[serde(default)]
+    reasoning_details: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    refusal: Option<String>,
+    /// Deprecated pre-tool-calls function shape. It has no provider call id,
+    /// so it cannot become a canonical `ToolCallId` without fabrication.
+    #[serde(default)]
+    function_call: Option<serde_json::Value>,
+    #[serde(default)]
+    audio: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ChatToolCallChunkWire>>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ChatMessageSnapshotWire {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning_details: Option<Vec<serde_json::Value>>,
     #[serde(default)]
     refusal: Option<String>,
     #[serde(default)]
-    tool_calls: Vec<ChatToolCallChunkWire>,
+    audio: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ChatToolCallSnapshotWire>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatToolCallSnapshotWire {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(rename = "type", default)]
+    tool_type: Option<String>,
+    #[serde(default)]
+    function: Option<ChatFunctionChunkWire>,
+    #[serde(default)]
+    custom: Option<serde_json::Value>,
+    #[serde(default)]
+    mcp: Option<serde_json::Value>,
+}
+
+impl ChatDeltaWire {
+    /// Returns the provider's reasoning fragment across the two established
+    /// OpenAI-compatible spellings. Conflicting simultaneous values are a
+    /// protocol error rather than a reason to silently discard one.
+    fn reasoning_delta(&self) -> Result<Option<&str>, ModelError> {
+        let reasoning = self.reasoning.as_deref().filter(|text| !text.is_empty());
+        let reasoning_content = self
+            .reasoning_content
+            .as_deref()
+            .filter(|text| !text.is_empty());
+        match (reasoning, reasoning_content) {
+            (Some(reasoning), Some(reasoning_content)) if reasoning != reasoning_content => {
+                Err(provider_error(
+                    "chat chunk contains conflicting reasoning and reasoning_content deltas"
+                        .to_owned(),
+                ))
+            }
+            (Some(reasoning), _) => Ok(Some(reasoning)),
+            (_, Some(reasoning_content)) => Ok(Some(reasoning_content)),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+impl ChatMessageSnapshotWire {
+    fn reasoning_value(&self) -> Result<Option<&str>, ModelError> {
+        reasoning_value(self.reasoning.as_deref(), self.reasoning_content.as_deref())
+    }
+}
+
+fn reasoning_value<'a>(
+    reasoning: Option<&'a str>,
+    reasoning_content: Option<&'a str>,
+) -> Result<Option<&'a str>, ModelError> {
+    let reasoning = reasoning.filter(|text| !text.is_empty());
+    let reasoning_content = reasoning_content.filter(|text| !text.is_empty());
+    match (reasoning, reasoning_content) {
+        (Some(reasoning), Some(reasoning_content)) if reasoning != reasoning_content => {
+            Err(provider_error(
+                "chat message contains conflicting reasoning and reasoning_content values"
+                    .to_owned(),
+            ))
+        }
+        (Some(reasoning), _) => Ok(Some(reasoning)),
+        (_, Some(reasoning_content)) => Ok(Some(reasoning_content)),
+        (None, None) => Ok(None),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,11 +470,17 @@ struct ChatToolCallChunkWire {
     index: u32,
     #[serde(default)]
     id: Option<String>,
+    #[serde(rename = "type", default)]
+    tool_type: Option<String>,
+    #[serde(default)]
+    custom: Option<serde_json::Value>,
+    #[serde(default)]
+    mcp: Option<serde_json::Value>,
     #[serde(default)]
     function: Option<ChatFunctionChunkWire>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 struct ChatFunctionChunkWire {
     #[serde(default)]
     name: Option<String>,
@@ -370,6 +506,9 @@ struct ChatStreamNormalizer {
     tool_calls: BTreeMap<u32, ToolAssembly>,
     usage: Option<ModelUsage>,
     finish_reason: Option<crate::model::finish::ModelFinishReason>,
+    text_emitted: bool,
+    reasoning_emitted: bool,
+    refusal_emitted: bool,
 }
 
 impl ChatStreamNormalizer {
@@ -380,22 +519,50 @@ impl ChatStreamNormalizer {
             tool_calls: BTreeMap::new(),
             usage: None,
             finish_reason: None,
+            text_emitted: false,
+            reasoning_emitted: false,
+            refusal_emitted: false,
         }
     }
 
     /// Processes one raw chunk, returning the normalized events.
     fn push(&mut self, chunk: &serde_json::Value) -> Result<Vec<ModelEvent>, ModelError> {
         if let Some(error) = chunk.get("error") {
-            return Err(provider_error(format!(
-                "OpenAI stream error: {}",
-                error
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown")
-            )));
+            return Err(chat_stream_error(error));
         }
         let chunk: ChatChunkWire = serde_json::from_value(chunk.clone())
             .map_err(|e| provider_error(format!("malformed chat chunk: {e}")))?;
+        if value_has_output(chunk.moderation.as_ref())
+            || value_has_output(chunk.video_result.as_ref())
+            || value_has_output(chunk.web_search.as_ref())
+            || value_has_output(chunk.content_filter.as_ref())
+            || chunk.input_sensitive == Some(true)
+            || chunk.output_sensitive == Some(true)
+            || chunk.input_sensitive_type.is_some_and(|kind| kind != 0)
+            || chunk.output_sensitive_type.is_some_and(|kind| kind != 0)
+        {
+            return Err(unsupported(
+                "Chat Completions moderation, search, video, or sensitive-output data has no canonical representation",
+            ));
+        }
+        if let Some(base) = &chunk.base_resp
+            && base.status_code.is_some_and(|code| code != 0)
+        {
+            return Err(ModelError {
+                kind: ModelErrorKind::ProviderError,
+                message: base
+                    .status_msg
+                    .clone()
+                    .unwrap_or_else(|| "provider reported an unsuccessful base_resp".to_owned()),
+                retry_after_ms: None,
+                provider_code: base.status_code.map(|code| code.to_string()),
+            });
+        }
+        if chunk.choices.len() > 1 {
+            return Err(unsupported(
+                "multiple Chat Completions choices cannot be represented as one canonical agent turn",
+            ));
+        }
         let mut events = Vec::new();
         if let Some(usage) = chunk.usage {
             let usage = normalize_chat_usage(&usage);
@@ -403,41 +570,214 @@ impl ChatStreamNormalizer {
             events.push(ModelEvent::UsageUpdate { usage });
         }
         if let Some(choice) = chunk.choices.first() {
-            if let Some(reasoning) = &choice.delta.reasoning
-                && !reasoning.is_empty()
-            {
-                let block_index = self.blocks.allocate(ChatBlockKey::Reasoning);
-                events.push(ModelEvent::ReasoningDelta {
-                    block_index,
-                    text: reasoning.clone(),
-                });
+            let choice_index = choice.index.ok_or_else(|| {
+                provider_error("Chat Completions choice lacks an index".to_owned())
+            })?;
+            if choice_index != 0 {
+                return Err(unsupported(format!(
+                    "Chat Completions choice index {choice_index} cannot be represented as the single canonical agent turn"
+                )));
             }
-            if let Some(text) = &choice.delta.content
-                && !text.is_empty()
-            {
-                let block_index = self.blocks.allocate(ChatBlockKey::Text);
-                events.push(ModelEvent::TextDelta {
-                    block_index,
-                    text: text.clone(),
-                });
+            if let Some(delta) = &choice.delta {
+                self.push_delta(delta, &mut events)?;
             }
-            if let Some(refusal) = &choice.delta.refusal
-                && !refusal.is_empty()
-            {
-                let block_index = self.blocks.allocate(ChatBlockKey::Refusal);
-                events.push(ModelEvent::RefusalDelta {
-                    block_index,
-                    text: refusal.clone(),
-                });
-            }
-            for tool_chunk in &choice.delta.tool_calls {
-                self.push_tool_call_chunk(tool_chunk, &mut events)?;
+            if let Some(message) = &choice.message {
+                self.push_message_snapshot(message, &mut events)?;
             }
             if let Some(reason) = &choice.finish_reason {
+                if reason == "function_call" {
+                    return Err(unsupported(
+                        "deprecated Chat Completions function_call finish semantics lack a canonical invocation id",
+                    ));
+                }
+                if matches!(
+                    reason.as_str(),
+                    "error" | "network_error" | "insufficient_system_resource" | "abort"
+                ) {
+                    return Err(ModelError {
+                        kind: ModelErrorKind::ProviderError,
+                        message: format!(
+                            "provider terminated Chat Completions generation with {reason:?}"
+                        ),
+                        retry_after_ms: None,
+                        provider_code: Some(reason.clone()),
+                    });
+                }
                 self.finish_reason = Some(map_chat_finish_reason(Some(reason)));
             }
         }
         Ok(events)
+    }
+
+    fn push_delta(
+        &mut self,
+        delta: &ChatDeltaWire,
+        events: &mut Vec<ModelEvent>,
+    ) -> Result<(), ModelError> {
+        if delta.function_call.is_some() {
+            return Err(unsupported(
+                "deprecated Chat Completions function_call deltas lack a stable invocation id",
+            ));
+        }
+        if delta.audio.as_ref().is_some_and(non_null_value) {
+            return Err(unsupported(
+                "Chat Completions audio deltas have no canonical representation",
+            ));
+        }
+        if delta
+            .reasoning_details
+            .as_ref()
+            .is_some_and(|details| !details.is_empty())
+        {
+            return Err(unsupported(
+                "structured Chat Completions reasoning_details require lossless replay state",
+            ));
+        }
+        if let Some(reasoning) = delta.reasoning_delta()? {
+            self.reasoning_emitted = true;
+            events.push(ModelEvent::ReasoningDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Reasoning),
+                text: reasoning.to_owned(),
+            });
+        }
+        if let Some(text) = &delta.content
+            && !text.is_empty()
+        {
+            self.text_emitted = true;
+            events.push(ModelEvent::TextDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Text),
+                text: text.clone(),
+            });
+        }
+        if let Some(refusal) = &delta.refusal
+            && !refusal.is_empty()
+        {
+            self.refusal_emitted = true;
+            events.push(ModelEvent::RefusalDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Refusal),
+                text: refusal.clone(),
+            });
+        }
+        for tool_chunk in delta.tool_calls.as_deref().unwrap_or_default() {
+            self.push_tool_call_chunk(tool_chunk, events)?;
+        }
+        Ok(())
+    }
+
+    fn push_message_snapshot(
+        &mut self,
+        message: &ChatMessageSnapshotWire,
+        events: &mut Vec<ModelEvent>,
+    ) -> Result<(), ModelError> {
+        if message.audio.as_ref().is_some_and(non_null_value) {
+            return Err(unsupported(
+                "Chat Completions audio output has no canonical representation",
+            ));
+        }
+        if message
+            .reasoning_details
+            .as_ref()
+            .is_some_and(|details| !details.is_empty())
+        {
+            return Err(unsupported(
+                "structured Chat Completions reasoning_details require lossless replay state",
+            ));
+        }
+        if !self.reasoning_emitted
+            && let Some(reasoning) = message.reasoning_value()?
+        {
+            self.reasoning_emitted = true;
+            events.push(ModelEvent::ReasoningDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Reasoning),
+                text: reasoning.to_owned(),
+            });
+        }
+        if !self.text_emitted
+            && let Some(text) = message.content.as_ref().filter(|text| !text.is_empty())
+        {
+            self.text_emitted = true;
+            events.push(ModelEvent::TextDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Text),
+                text: text.clone(),
+            });
+        }
+        if !self.refusal_emitted
+            && let Some(refusal) = message.refusal.as_ref().filter(|text| !text.is_empty())
+        {
+            self.refusal_emitted = true;
+            events.push(ModelEvent::RefusalDelta {
+                block_index: self.blocks.allocate(ChatBlockKey::Refusal),
+                text: refusal.clone(),
+            });
+        }
+        for (index, snapshot) in message
+            .tool_calls
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .enumerate()
+        {
+            let index = u32::try_from(index)
+                .map_err(|_| provider_error("too many tool call snapshots".to_owned()))?;
+            self.push_tool_call_snapshot(index, snapshot, events)?;
+        }
+        Ok(())
+    }
+
+    fn push_tool_call_snapshot(
+        &mut self,
+        index: u32,
+        snapshot: &ChatToolCallSnapshotWire,
+        events: &mut Vec<ModelEvent>,
+    ) -> Result<(), ModelError> {
+        if snapshot.mcp.as_ref().is_some_and(non_null_value) {
+            return Err(unsupported(
+                "provider-hosted MCP calls are not canonical rustX function calls",
+            ));
+        }
+        if let Some(existing) = self.tool_calls.get(&index) {
+            let snapshot_id = snapshot.id.as_deref().filter(|id| !id.is_empty());
+            if snapshot_id.is_some_and(|id| {
+                existing
+                    .call_id
+                    .as_ref()
+                    .is_some_and(|known| known.as_str() != id)
+            }) {
+                return Err(provider_error(format!(
+                    "tool call snapshot changed the invocation id at index {index}"
+                )));
+            }
+            if let Some(function) = &snapshot.function {
+                if function
+                    .name
+                    .as_ref()
+                    .is_some_and(|name| existing.name.as_ref().is_some_and(|known| known != name))
+                {
+                    return Err(provider_error(format!(
+                        "tool call snapshot changed the function name at index {index}"
+                    )));
+                }
+                if function.arguments.as_ref().is_some_and(|arguments| {
+                    !existing.arguments.is_empty() && existing.arguments != *arguments
+                }) {
+                    return Err(provider_error(format!(
+                        "tool call snapshot disagrees with streamed arguments at index {index}"
+                    )));
+                }
+            }
+            return Ok(());
+        }
+        self.push_tool_call_chunk(
+            &ChatToolCallChunkWire {
+                index,
+                id: snapshot.id.clone(),
+                tool_type: snapshot.tool_type.clone(),
+                custom: snapshot.custom.clone(),
+                mcp: snapshot.mcp.clone(),
+                function: snapshot.function.clone(),
+            },
+            events,
+        )
     }
 
     fn push_tool_call_chunk(
@@ -445,6 +785,17 @@ impl ChatStreamNormalizer {
         chunk: &ChatToolCallChunkWire,
         events: &mut Vec<ModelEvent>,
     ) -> Result<(), ModelError> {
+        if chunk
+            .tool_type
+            .as_deref()
+            .is_some_and(|kind| kind != "function")
+            || chunk.custom.as_ref().is_some_and(non_null_value)
+            || chunk.mcp.as_ref().is_some_and(non_null_value)
+        {
+            return Err(unsupported(
+                "custom Chat Completions tool calls cannot be represented as canonical JSON function calls",
+            ));
+        }
         let assembly = self
             .tool_calls
             .entry(chunk.index)
@@ -456,16 +807,30 @@ impl ChatStreamNormalizer {
                 started: false,
             });
         if let Some(id) = &chunk.id {
-            assembly.call_id = Some(ToolCallId::new(id.clone()));
+            let id = ToolCallId::new(id.clone());
+            if assembly.call_id.as_ref().is_some_and(|known| known != &id) {
+                return Err(provider_error(format!(
+                    "provider changed the invocation id of tool call index {}",
+                    chunk.index
+                )));
+            }
+            assembly.call_id = Some(id);
         }
         if let Some(function) = &chunk.function {
             if let Some(name) = &function.name {
+                if assembly.name.as_ref().is_some_and(|known| known != name) {
+                    return Err(provider_error(format!(
+                        "provider changed the function name of tool call index {}",
+                        chunk.index
+                    )));
+                }
                 assembly.name = Some(name.clone());
             }
             if let Some(arguments) = &function.arguments {
                 assembly.arguments.push_str(arguments);
             }
         }
+        let mut started_now = false;
         if !assembly.started {
             let Some(call_id) = &assembly.call_id else {
                 // Identity is not yet known; argument fragments stay buffered
@@ -482,20 +847,30 @@ impl ChatStreamNormalizer {
                 name: name.clone(),
             };
             assembly.started = true;
+            started_now = true;
             events.push(ModelEvent::ToolCallStarted {
                 block_index: assembly.block_index,
                 call: start,
             });
         }
-        if let Some(function) = &chunk.function
-            && let Some(arguments) = &function.arguments
-            && !arguments.is_empty()
-        {
+        let arguments_delta = if started_now {
+            // Identity can arrive after one or more argument chunks. Emit the
+            // complete buffered prefix exactly once when the call becomes
+            // attributable.
+            assembly.arguments.clone()
+        } else {
+            chunk
+                .function
+                .as_ref()
+                .and_then(|function| function.arguments.clone())
+                .unwrap_or_default()
+        };
+        if !arguments_delta.is_empty() {
             let call_id = assembly.call_id.clone().expect("call id known after start");
             events.push(ModelEvent::ToolCallArgumentsDelta {
                 block_index: assembly.block_index,
                 call_id,
-                arguments_delta: arguments.clone(),
+                arguments_delta,
             });
         }
         Ok(())
@@ -565,6 +940,76 @@ fn provider_error(message: String) -> ModelError {
     }
 }
 
+fn non_null_value(value: &serde_json::Value) -> bool {
+    !value.is_null()
+}
+
+fn value_has_output(value: Option<&serde_json::Value>) -> bool {
+    value.is_some_and(|value| match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Array(values) => !values.is_empty(),
+        serde_json::Value::Object(values) => !values.is_empty(),
+        serde_json::Value::String(value) => !value.is_empty(),
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::Number(_) => true,
+    })
+}
+
+fn chat_stream_error(error: &serde_json::Value) -> ModelError {
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown OpenAI-compatible stream error");
+    let metadata = error.get("metadata");
+    let error_type = metadata
+        .and_then(|value| value.get("error_type"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| error.get("type").and_then(serde_json::Value::as_str));
+    let numeric_code = error.get("code").and_then(serde_json::Value::as_u64);
+    let kind = match error_type {
+        Some("authentication" | "authentication_error" | "permission_error") => {
+            ModelErrorKind::Authentication
+        }
+        Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
+        Some(
+            "context_length_exceeded"
+            | "max_tokens_exceeded"
+            | "token_limit_exceeded"
+            | "string_too_long",
+        ) => ModelErrorKind::ContextWindowExceeded,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error") => {
+            ModelErrorKind::InvalidRequest
+        }
+        Some("timeout") => ModelErrorKind::Timeout,
+        _ if is_context_window_message(message) => ModelErrorKind::ContextWindowExceeded,
+        _ => match numeric_code {
+            Some(400) => ModelErrorKind::InvalidRequest,
+            Some(401 | 403) => ModelErrorKind::Authentication,
+            Some(408) => ModelErrorKind::Timeout,
+            Some(429) => ModelErrorKind::RateLimit,
+            _ => ModelErrorKind::ProviderError,
+        },
+    };
+    let provider_code = metadata
+        .and_then(|value| value.get("provider_code"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| error_type.map(str::to_owned))
+        .or_else(|| {
+            error.get("code").and_then(|code| match code {
+                serde_json::Value::String(code) => Some(code.clone()),
+                serde_json::Value::Number(code) => Some(code.to_string()),
+                _ => None,
+            })
+        });
+    ModelError {
+        kind,
+        message: format!("OpenAI-compatible stream error: {message}"),
+        retry_after_ms: None,
+        provider_code,
+    }
+}
+
 /// Translates a canonical request into the final Chat Completions request
 /// JSON.
 ///
@@ -575,8 +1020,17 @@ fn provider_error(message: String) -> ModelError {
 /// protected-key contract.
 fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelError> {
     let messages = translate_messages(request)?;
+    let assistant_reasoning: Vec<Option<String>> = messages
+        .iter()
+        .map(|message| message.reasoning.clone())
+        .collect();
     let mut builder = CreateChatCompletionRequestArgs::default();
-    builder.model(request.model().to_owned()).messages(messages);
+    builder.model(request.model().to_owned()).messages(
+        messages
+            .into_iter()
+            .map(|message| message.message)
+            .collect::<Vec<_>>(),
+    );
     if request.invocation.compat.chat_stream_usage == ChatStreamUsage::Supported {
         builder.stream_options(ChatCompletionStreamOptions {
             include_usage: Some(true),
@@ -607,6 +1061,37 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
         retry_after_ms: None,
         provider_code: None,
     })?;
+    let wire_messages = value
+        .get_mut("messages")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| ModelError {
+            kind: ModelErrorKind::InvalidRequest,
+            message: "serialized Chat Completions request has no message array".to_owned(),
+            retry_after_ms: None,
+            provider_code: None,
+        })?;
+    if wire_messages.len() != assistant_reasoning.len() {
+        return Err(ModelError {
+            kind: ModelErrorKind::InvalidRequest,
+            message: "serialized Chat Completions message count changed unexpectedly".to_owned(),
+            retry_after_ms: None,
+            provider_code: None,
+        });
+    }
+    for (wire_message, reasoning) in wire_messages.iter_mut().zip(assistant_reasoning) {
+        let Some(reasoning) = reasoning else {
+            continue;
+        };
+        let object = wire_message.as_object_mut().ok_or_else(|| ModelError {
+            kind: ModelErrorKind::InvalidRequest,
+            message: "serialized Chat Completions message is not an object".to_owned(),
+            retry_after_ms: None,
+            provider_code: None,
+        })?;
+        if let Some(field) = request.invocation.compat.chat_reasoning_replay.wire_name() {
+            object.insert(field.to_owned(), reasoning.into());
+        }
+    }
     // Runtime-owned structural fields: streaming is always on, and exactly
     // one max-token spelling is written, chosen by the model's compat
     // metadata. Both spellings are protected, so no request parameter can add
@@ -624,13 +1109,16 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
 /// Translates the canonical message list into typed Chat Completions
 /// messages, rejecting canonical content the protocol cannot represent
 /// without changing its meaning.
-fn translate_messages(
-    request: &ModelRequest,
-) -> Result<Vec<ChatCompletionRequestMessage>, ModelError> {
+struct TranslatedChatMessage {
+    message: ChatCompletionRequestMessage,
+    reasoning: Option<String>,
+}
+
+fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
     let mut system_messages = Vec::new();
     let mut transcript_messages = Vec::new();
     for block in &request.messages {
-        let translated = match block {
+        let (translated, reasoning) = match block {
             MessageBlock::System(system) => {
                 let texts: Vec<String> = system
                     .content
@@ -652,10 +1140,13 @@ fn translate_messages(
                             .collect(),
                     ),
                 };
-                ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-                    content,
-                    name: None,
-                })
+                (
+                    ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
+                        content,
+                        name: None,
+                    }),
+                    None,
+                )
             }
             MessageBlock::User(user) => {
                 let mut parts = Vec::new();
@@ -691,19 +1182,28 @@ fn translate_messages(
                         },
                     ));
                 }
-                ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-                    content: ChatCompletionRequestUserMessageContent::Array(parts),
-                    name: None,
-                })
+                (
+                    ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+                        content: ChatCompletionRequestUserMessageContent::Array(parts),
+                        name: None,
+                    }),
+                    None,
+                )
             }
             MessageBlock::Agent(agent) => {
-                ChatCompletionRequestMessage::Assistant(translate_agent_message(agent)?)
+                let (message, reasoning) = translate_agent_message(agent)?;
+                (ChatCompletionRequestMessage::Assistant(message), reasoning)
             }
-            MessageBlock::Tool(tool_message) => {
-                ChatCompletionRequestMessage::Tool(translate_tool_message(tool_message)?)
-            }
+            MessageBlock::Tool(tool_message) => (
+                ChatCompletionRequestMessage::Tool(translate_tool_message(tool_message)?),
+                None,
+            ),
         };
-        if matches!(&translated, ChatCompletionRequestMessage::System(_)) {
+        let translated = TranslatedChatMessage {
+            message: translated,
+            reasoning,
+        };
+        if matches!(&translated.message, ChatCompletionRequestMessage::System(_)) {
             system_messages.push(translated);
         } else {
             transcript_messages.push(translated);
@@ -714,35 +1214,48 @@ fn translate_messages(
     // canonical trusted system context, as one deterministic system message
     // after the canonical system messages. It is never attached to a user
     // message.
-    if let Some(catalog) = &request.skill_catalog {
-        system_messages.push(ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessage {
-                content: ChatCompletionRequestSystemMessageContent::Text(catalog.rendered.clone()),
-                name: None,
-            },
-        ));
-    }
+    append_skill_catalog(request, &mut system_messages);
     let mut messages = system_messages;
     messages.extend(transcript_messages);
     if messages.is_empty() {
-        return Err(ModelError {
-            kind: ModelErrorKind::InvalidRequest,
-            message: "a Chat Completions request requires at least one message".to_owned(),
-            retry_after_ms: None,
-            provider_code: None,
-        });
+        return Err(invalid_request(
+            "a Chat Completions request requires at least one message",
+        ));
     }
     Ok(messages)
 }
 
-/// Translates one canonical agent message into an assistant message,
-/// rejecting previous reasoning (which Chat Completions cannot represent
-/// without flattening it into text) and generated images.
+fn append_skill_catalog(request: &ModelRequest, messages: &mut Vec<TranslatedChatMessage>) {
+    let Some(catalog) = &request.skill_catalog else {
+        return;
+    };
+    messages.push(TranslatedChatMessage {
+        message: ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
+            content: ChatCompletionRequestSystemMessageContent::Text(catalog.rendered.clone()),
+            name: None,
+        }),
+        reasoning: None,
+    });
+}
+
+/// Translates one canonical agent message into an assistant message.
+///
+/// vLLM represents one previous reasoning block in its provider-specific
+/// `reasoning` field. The typed `OpenAI` SDK message and that extension value
+/// stay separate until the final BYOT JSON is assembled. Shapes that cannot
+/// be represented losslessly remain unsupported.
 fn translate_agent_message(
     agent: &crate::message::types::AgentMessageBlock,
-) -> Result<async_openai::types::chat::ChatCompletionRequestAssistantMessage, ModelError> {
+) -> Result<
+    (
+        async_openai::types::chat::ChatCompletionRequestAssistantMessage,
+        Option<String>,
+    ),
+    ModelError,
+> {
     let mut parts = Vec::new();
     let mut tool_calls = Vec::new();
+    let mut reasoning = None;
     for content in &agent.content {
         match content {
             AgentContentBlock::Text(text) => {
@@ -775,11 +1288,19 @@ fn translate_agent_message(
                     },
                 ));
             }
-            AgentContentBlock::Reasoning(_) => {
-                return Err(unsupported(
-                    "OpenAI Chat Completions cannot represent previous reasoning blocks; \
-                     refusing to flatten reasoning into text",
-                ));
+            AgentContentBlock::Reasoning(block) => {
+                let text = block.text.as_ref().ok_or_else(|| {
+                    unsupported(
+                        "OpenAI Chat Completions cannot replay a previous reasoning block \
+                         whose text was not exposed by the provider",
+                    )
+                })?;
+                if reasoning.replace(text.clone()).is_some() {
+                    return Err(unsupported(
+                        "OpenAI Chat Completions cannot losslessly represent multiple \
+                         reasoning blocks in one assistant message",
+                    ));
+                }
             }
             AgentContentBlock::Image(_) => {
                 return Err(unsupported(
@@ -788,13 +1309,14 @@ fn translate_agent_message(
             }
         }
     }
-    Ok(
+    Ok((
         async_openai::types::chat::ChatCompletionRequestAssistantMessage {
             content: Some(ChatCompletionRequestAssistantMessageContent::Array(parts)),
             tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
             ..Default::default()
         },
-    )
+        reasoning,
+    ))
 }
 
 /// Translates a canonical tool result into a provider tool message. Only the
@@ -859,6 +1381,15 @@ fn unsupported(message: impl Into<String>) -> ModelError {
     ModelError {
         kind: ModelErrorKind::Unsupported,
         message,
+        retry_after_ms: None,
+        provider_code: None,
+    }
+}
+
+fn invalid_request(message: &str) -> ModelError {
+    ModelError {
+        kind: ModelErrorKind::InvalidRequest,
+        message: message.to_owned(),
         retry_after_ms: None,
         provider_code: None,
     }

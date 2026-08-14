@@ -58,6 +58,18 @@ such as `Qwen/Qwen3` is referenced as `example/Qwen/Qwen3` in the session.
 model-level provider wire parameter. It is opaque to rustX and is not a
 universal sampling-parameter schema; adapt it to the selected provider.
 
+`compat.chatReasoningReplay` selects the assistant-history spelling required
+by the concrete OpenAI-compatible service:
+
+| Value | Typical services | Behavior |
+| --- | --- | --- |
+| `reasoning` | vLLM, OpenRouter plaintext reasoning | Replays prior reasoning as `message.reasoning`. |
+| `reasoning_content` | DeepSeek V4 thinking/tool turns, GLM preserved thinking, Qwen preserved thinking | Replays prior reasoning as `message.reasoning_content`. |
+| `omit` | Legacy `deepseek-reasoner` ordinary multi-turn conversations | Does not send prior reasoning. |
+
+This must follow the selected model's documentation; rustX deliberately does
+not infer it from the provider name, hostname, or model ID.
+
 The named `off` and `on` reasoning profiles likewise have no built-in meaning
 from their names. Their exact `enabled` state and provider-owned
 `requestParams` are the contract. The illustrative `reasoning_effort` value

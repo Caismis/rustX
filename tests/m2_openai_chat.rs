@@ -159,6 +159,75 @@ async fn reasoning_deltas_normalize_as_reasoning() {
     );
 }
 
+/// `DeepSeek`'s `reasoning_content` spelling maps to the same canonical
+/// reasoning block and remains distinct from the visible answer.
+#[tokio::test]
+async fn deepseek_reasoning_content_normalizes_as_reasoning() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "deepseek_reasoning_then_text.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(
+            ModelProtocol::OpenAiChatCompletions,
+            "deepseek-v4-flash",
+            "Answer",
+        ),
+    )
+    .await;
+    let expected = vec![
+        ModelEvent::Started,
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "Plan".to_owned(),
+        },
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: " first.".to_owned(),
+        },
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(1),
+            text: "Answer".to_owned(),
+        },
+        ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    ];
+    assert_eq!(
+        events,
+        expected,
+        "event stream mismatch:\n{}",
+        describe_events(&events)
+    );
+}
+
+/// Qwen emits explicit JSON nulls for optional delta fields and a final
+/// choices-empty usage chunk; both are valid protocol values.
+#[tokio::test]
+async fn qwen_null_fields_and_usage_chunk_are_supported() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "qwen_null_fields.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "qwen-plus", "hi"),
+    )
+    .await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ModelEvent::TextDelta { text, .. } if text == "Hello"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ModelEvent::UsageUpdate { usage }
+            if usage.input_tokens == 2 && usage.output_tokens == 1 && usage.total_tokens == 3
+    )));
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+}
+
 /// Refusal deltas stream as refusal content, never as plain text.
 #[tokio::test]
 async fn refusal_deltas_normalize_as_refusal() {
@@ -293,6 +362,98 @@ async fn multiple_interleaved_tool_calls_normalize() {
     ));
 }
 
+/// Argument fragments that precede the provider call id/name are buffered,
+/// then emitted exactly once when the call becomes attributable.
+#[tokio::test]
+async fn tool_arguments_before_identity_are_not_lost() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "tool_arguments_before_identity.sse")
+    })
+    .await;
+    let events = collect_events(&adapter(&server), request_with_tools("List")).await;
+    assert!(matches!(
+        &events[1],
+        ModelEvent::ToolCallStarted { call, .. }
+            if call.id == ToolCallId::new("call-late") && call.name == "list_directory"
+    ));
+    assert!(matches!(
+        &events[2],
+        ModelEvent::ToolCallArgumentsDelta { arguments_delta, .. }
+            if arguments_delta == "{\"path\":\".\"}"
+    ));
+    assert!(matches!(
+        &events[3],
+        ModelEvent::ToolCallCompleted { call, .. }
+            if call.arguments == serde_json::json!({"path": "."})
+    ));
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+}
+
+/// `MiniMax` may terminate with `delta: null` and a cumulative `message`
+/// snapshot. Streamed text is not duplicated, while snapshot-only tool calls
+/// are recovered into the ordinary canonical tool lifecycle.
+#[tokio::test]
+async fn minimax_terminal_message_snapshots_are_normalized() {
+    let text_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "minimax_snapshot_text.sse")
+    })
+    .await;
+    let text_events = collect_events(
+        &adapter(&text_server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "MiniMax-M2", "hi"),
+    )
+    .await;
+    assert_eq!(
+        text_events
+            .iter()
+            .filter(|event| matches!(event, ModelEvent::TextDelta { .. }))
+            .count(),
+        1,
+        "terminal snapshot must not duplicate streamed text"
+    );
+
+    let tool_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "minimax_snapshot_tool.sse")
+    })
+    .await;
+    let tool_events = collect_events(&adapter(&tool_server), request_with_tools("List")).await;
+    assert!(tool_events.iter().any(|event| matches!(
+        event,
+        ModelEvent::ToolCallStarted { call, .. }
+            if call.id == ToolCallId::new("call_minimax")
+    )));
+    assert!(tool_events.iter().any(|event| matches!(
+        event,
+        ModelEvent::ToolCallCompleted { call, .. }
+            if call.arguments == serde_json::json!({"path": "."})
+    )));
+}
+
+/// Stream shapes with output semantics that cannot fit one canonical agent
+/// turn fail explicitly instead of being partially consumed.
+#[tokio::test]
+async fn unsupported_chat_stream_shapes_fail_explicitly() {
+    for fixture in [
+        "multiple_choices.sse",
+        "legacy_function_call.sse",
+        "custom_tool_call.sse",
+        "moderation.sse",
+        "reasoning_details.sse",
+        "qwen_audio.sse",
+        "glm_web_search.sse",
+    ] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", &response_fixture)
+        })
+        .await;
+        let events = collect_events(&adapter(&server), request_with_tools("hi")).await;
+        assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+        assert_eq!(server.attempt_count(), 1, "fixture {fixture}");
+    }
+}
+
 /// Text and tool calls order by canonical block index.
 #[tokio::test]
 async fn text_then_tool_call_orders_by_block() {
@@ -356,6 +517,52 @@ async fn stream_error_fails() {
     .await;
     assert_eq!(events[0], ModelEvent::Started);
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+}
+
+/// `OpenRouter`'s typed in-band errors retain their stable classification and
+/// upstream provider code instead of collapsing to a generic stream failure.
+#[tokio::test]
+async fn openrouter_stream_errors_map_semantically() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "openrouter_rate_limit.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "router/model", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::RateLimit);
+    assert_eq!(
+        error.provider_code.as_deref(),
+        Some("upstream_rate_limited")
+    );
+}
+
+/// Provider-specific failure finish reasons are failures, not successful
+/// completions carrying an opaque `Other` reason.
+#[tokio::test]
+async fn provider_failure_finish_reasons_fail() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "deepseek_resource_failure.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "deepseek-v4", "hi"),
+    )
+    .await;
+    let ModelEvent::Failed { error } = events.last().expect("terminal") else {
+        panic!("expected Failed");
+    };
+    assert_eq!(error.kind, ModelErrorKind::ProviderError);
+    assert_eq!(
+        error.provider_code.as_deref(),
+        Some("insufficient_system_resource")
+    );
 }
 
 /// A stream ending without a finish reason is a normalized failure.
