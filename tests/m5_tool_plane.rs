@@ -612,9 +612,14 @@ async fn edit_rejects_conflicting_replacement_ranges() {
 #[tokio::test]
 async fn edit_rejects_an_anchor_with_overlapping_candidate_placements() {
     // (original content, anchor, the two placements that make it ambiguous)
-    let cases: [(&str, &str, &str); 2] = [
+    //
+    // The multibyte case also proves the scan advances by whole characters:
+    // each `α` is two bytes, so a byte-wise cursor would slice through a code
+    // point and panic.
+    let cases: [(&str, &str, &str); 3] = [
         ("aaa", "aa", "0..2 and 1..3"),
         ("ababa", "aba", "0..3 and 2..5"),
+        ("ααα", "αα", "0..4 and 2..6"),
     ];
     for (original, anchor, placements) in cases {
         let fixture = native_fixture();
@@ -666,20 +671,29 @@ async fn an_ambiguous_overlapping_anchor_blocks_every_edit_of_the_invocation() {
 /// character that could overlap in a longer file.
 #[tokio::test]
 async fn edit_still_accepts_an_anchor_with_one_possible_placement() {
-    let fixture = native_fixture();
-    let path = edit_fixture(&fixture, "aab");
-    let applied = run_tool(
-        &fixture,
-        "edit",
-        serde_json::json!({"path": "edit.txt", "edits": [replacement("aa", "X")]}),
-    )
-    .await;
-    assert_eq!(
-        applied.status,
-        ToolExecutionStatus::Success,
-        "`aa` can only be placed at 0..2 in `aab`"
-    );
-    assert_eq!(std::fs::read_to_string(&path).expect("read back"), "Xb");
+    // (original, anchor, replacement, expected result)
+    let cases: [(&str, &str, &str, &str); 2] = [
+        ("aab", "aa", "X", "Xb"),
+        // The multibyte counterpart: exactly one placement, and the byte
+        // range it resolves to must land on character boundaries.
+        ("ααβ", "αα", "X", "Xβ"),
+    ];
+    for (original, anchor, new_text, expected) in cases {
+        let fixture = native_fixture();
+        let path = edit_fixture(&fixture, original);
+        let applied = run_tool(
+            &fixture,
+            "edit",
+            serde_json::json!({"path": "edit.txt", "edits": [replacement(anchor, new_text)]}),
+        )
+        .await;
+        assert_eq!(
+            applied.status,
+            ToolExecutionStatus::Success,
+            "{anchor:?} has exactly one possible placement in {original:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("read back"), expected);
+    }
 }
 
 /// Adjacent — but not overlapping — replacements are legal: the rule is
