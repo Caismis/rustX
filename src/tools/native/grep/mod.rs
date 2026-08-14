@@ -481,16 +481,25 @@ mod tests {
     /// The failure is provoked at the file-search boundary with an
     /// enumerated entry whose path does not exist, so the test depends on no
     /// permission semantics, no umask, and no filesystem-specific behavior.
+    ///
+    /// The fixture owns the directory the missing file would live in: the
+    /// directory provably exists and the test provably never creates the
+    /// child, so the read failure is a property of the fixture rather than
+    /// an assumption about some shared path being absent.
     #[test]
     fn an_enumerated_file_that_cannot_be_read_fails_explicitly() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let missing_path = directory.path().join("gone.txt");
+        assert!(
+            !missing_path.exists(),
+            "the fixture never creates the file it enumerates"
+        );
         let mut searcher = SearcherBuilder::new().line_number(true).build();
         let matcher = build_matcher("hit", false, false).expect("valid pattern");
         let mut collector = Collector::new(10);
         let missing = SearchFile {
             relative: "gone.txt".to_owned(),
-            absolute: std::env::temp_dir()
-                .join("rustx-grep-missing-fixture")
-                .join("gone.txt"),
+            absolute: missing_path,
         };
 
         let error = search_file(&mut searcher, &matcher, &missing, &mut collector)
