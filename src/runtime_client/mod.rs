@@ -92,8 +92,8 @@ pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
     InFlightAgentMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
     RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
-    RuntimeClientSkill, RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection,
-    RuntimeClientTool,
+    RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSkill,
+    RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection, RuntimeClientTool,
 };
 pub use types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientCursor,

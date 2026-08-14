@@ -531,6 +531,24 @@ export interface CapabilityView {
   skills?: RuntimeClientSkill[];
 }
 
+export type TokenMeasurementSource = "provider_reported" | "estimated";
+
+export interface TokenMeasurement {
+  input_tokens: number;
+  source: TokenMeasurementSource;
+}
+
+export interface RuntimeClientCompactionView {
+  generation: number;
+  tokens_before: TokenMeasurement;
+  estimated_tokens_after: number;
+}
+
+export interface RuntimeClientContextView {
+  compaction_count: number;
+  latest_compaction?: RuntimeClientCompactionView;
+}
+
 export interface RuntimeClientSnapshot {
   conversation_id: ConversationId;
   shutting_down: boolean;
@@ -539,6 +557,7 @@ export interface RuntimeClientSnapshot {
   inbound: InboundDiagnostics;
   background?: RuntimeClientBackgroundExecution[];
   status?: AgentStatusView;
+  context: RuntimeClientContextView;
   capabilities: CapabilityView;
   /** The session's *desired* model. Never the running attempt's model. */
   model: SessionModelView;
@@ -573,6 +592,11 @@ export type RuntimeClientEvent =
       type: "attempt_usage_updated";
       attempt_id: AttemptId;
       usage: ModelUsage;
+    }
+  | {
+      type: "context_compacted";
+      attempt_id: AttemptId;
+      context: RuntimeClientContextView;
     }
   | {
       type: "assistant_message_started";
@@ -815,6 +839,7 @@ export function isKnownRuntimeClientEvent(
     case "attempt_settled":
     case "attempt_turn_updated":
     case "attempt_usage_updated":
+    case "context_compacted":
     case "assistant_message_started":
     case "assistant_text_delta":
     case "assistant_reasoning_delta":

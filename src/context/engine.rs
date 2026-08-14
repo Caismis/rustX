@@ -22,9 +22,7 @@ use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::{ContextProjection, ProjectionItem};
 use crate::context::structure::StructuralIndex;
 use crate::context::summarizer::{SplitTurnSummaryInput, SummaryInputItem, SummaryRequest};
-use crate::context::tokens::{
-    ProviderObservedInput, TokenEstimator, TokenMeasurement, TokenMeasurementSource,
-};
+use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
 use crate::message::content::TextBlock;
 use crate::message::types::{
     ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -32,6 +30,7 @@ use crate::message::types::{
 use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
 use crate::runtime::inbound::FreshInboundTurn;
+use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use crate::tools::types::ModelToolDefinition;
 
 /// The static session-owned context policy.

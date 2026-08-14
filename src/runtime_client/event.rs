@@ -22,7 +22,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::snapshot::{AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution};
+use super::snapshot::{
+    AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
+};
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::error::ModelErrorKind;
@@ -82,6 +84,18 @@ pub enum RuntimeClientEvent {
         attempt_id: AttemptId,
         /// The exact normalized usage folded into the attempt view.
         usage: crate::model::types::ModelUsage,
+    },
+    /// A context checkpoint was committed after automatic compaction.
+    ///
+    /// This is the semantic completion fact for clients: the checkpoint is
+    /// already saved, and the carried snapshot metadata is sufficient to
+    /// observe generation advancement and token-measurement provenance
+    /// without exposing summary text or provider credentials.
+    ContextCompacted {
+        /// The attempt that committed the checkpoint.
+        attempt_id: AttemptId,
+        /// The context diagnostics after this committed checkpoint.
+        context: RuntimeClientContextView,
     },
 
     /// Assembly of a canonical agent message began.

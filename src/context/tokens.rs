@@ -9,32 +9,10 @@
 //! summed.
 //!
 //! [`ModelUsage`]: crate::model::types::ModelUsage
-
-use serde::{Deserialize, Serialize};
+//! [`TokenMeasurementSource`]: crate::runtime::types::TokenMeasurementSource
 
 use crate::context::projection::ContextProjection;
 use crate::tools::types::ModelToolDefinition;
-
-/// A token measurement of a model input, with explicit provenance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TokenMeasurement {
-    /// The measured or estimated input token count.
-    pub input_tokens: u64,
-    /// How the measurement was obtained.
-    pub source: TokenMeasurementSource,
-}
-
-/// Where a [`TokenMeasurement`] came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TokenMeasurementSource {
-    /// The provider reported usage for exactly this projection
-    /// (`ModelUsage.input_tokens` of the completed request). Never
-    /// fabricated, never a sum of cumulative snapshots.
-    ProviderReported,
-    /// A deterministic runtime-owned estimate.
-    Estimated,
-}
 
 /// An observed provider-reported input measurement, tied to the exact
 /// projection it measured.
@@ -232,9 +210,9 @@ mod tests {
             items: Vec::new(),
             agent_status: None,
             skill_catalog: None,
-            estimated_input: crate::context::tokens::TokenMeasurement {
+            estimated_input: crate::runtime::types::TokenMeasurement {
                 input_tokens: 0,
-                source: crate::context::tokens::TokenMeasurementSource::Estimated,
+                source: crate::runtime::types::TokenMeasurementSource::Estimated,
             },
             checkpoint_generation: None,
         };

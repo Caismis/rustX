@@ -62,7 +62,7 @@ use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::types::{CancellationReason, RuntimeError};
+use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
@@ -294,8 +294,15 @@ pub enum RuntimeEvent {
 
     /// Context compaction started (compaction itself is a later milestone).
     CompactionStarted,
-    /// Context compaction completed.
-    CompactionCompleted,
+    /// Context compaction completed and its checkpoint is committed.
+    CompactionCompleted {
+        /// The committed checkpoint generation.
+        generation: u64,
+        /// The pre-compaction measurement, preserving its provenance.
+        tokens_before: TokenMeasurement,
+        /// The deterministic estimate of the rebuilt projection.
+        estimated_tokens_after: u64,
+    },
     /// Context compaction failed.
     CompactionFailed {
         /// Human-readable failure message.
@@ -409,7 +416,7 @@ mod tests {
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::finish::ModelFinishReason;
     use crate::runtime::identity::{AttemptId, ConversationId, EventId, ToolCallId, ToolId};
-    use crate::runtime::types::CancellationReason;
+    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
     use chrono::{DateTime, TimeZone, Utc};
 
@@ -589,7 +596,14 @@ mod tests {
             RuntimeEvent::AgentMessageCommitted {
                 message_id: crate::runtime::identity::MessageId::new("msg-1"),
             },
-            RuntimeEvent::CompactionCompleted,
+            RuntimeEvent::CompactionCompleted {
+                generation: 1,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 100,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 50,
+            },
         ];
         for event in non_terminal {
             assert_eq!(

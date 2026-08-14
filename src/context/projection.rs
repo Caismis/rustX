@@ -20,14 +20,14 @@
 //! - the projected input measurement carries explicit provenance
 //!   ([`TokenMeasurement`]).
 //!
-//! [`TokenMeasurement`]: crate::context::tokens::TokenMeasurement
+//! [`TokenMeasurement`]: crate::runtime::types::TokenMeasurement
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{AgentContentBlock, MessageBlock};
 use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
 use crate::runtime::identity::MessageId;
+use crate::runtime::types::TokenMeasurement;
 
 /// One ordered model-visible projection item.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,11 +182,11 @@ fn compile_item(item: &ProjectionItem) -> MessageBlock {
 mod tests {
     use super::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
     use crate::context::status::{AgentStatusFact, AgentStatusSectionData, AgentStatusSectionId};
-    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::message::content::TextBlock;
     use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
     use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
     use crate::runtime::identity::MessageId;
+    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 
     fn projection() -> ContextProjection {
         ContextProjection {

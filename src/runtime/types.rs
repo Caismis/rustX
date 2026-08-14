@@ -1,10 +1,38 @@
-//! Runtime-owned shared semantics: cancellation reasons and runtime errors.
+//! Runtime-owned shared semantics: token measurements, cancellation reasons,
+//! and runtime errors.
 //!
-//! These types are shared by tool, model, and event contracts. They are plain
-//! runtime-owned data and never reference provider SDK or storage types.
+//! These types are shared by context, tool, model, and event contracts. They
+//! are plain runtime-owned data and never reference provider SDK or storage
+//! types.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// A token measurement of a model input, with explicit provenance.
+///
+/// This is a Layer 0 value contract. The Context Engine owns the accounting
+/// behavior that decides when a measurement is valid, but the measurement
+/// itself is shared by runtime events, checkpoints, projections, and the
+/// Runtime Client read model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenMeasurement {
+    /// The measured or estimated input token count.
+    pub input_tokens: u64,
+    /// How the measurement was obtained.
+    pub source: TokenMeasurementSource,
+}
+
+/// Where a [`TokenMeasurement`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenMeasurementSource {
+    /// The provider reported usage for exactly this projection
+    /// (`ModelUsage.input_tokens` of the completed request). Never
+    /// fabricated, never a sum of cumulative snapshots.
+    ProviderReported,
+    /// A deterministic runtime-owned estimate.
+    Estimated,
+}
 
 /// Why an operation was cancelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

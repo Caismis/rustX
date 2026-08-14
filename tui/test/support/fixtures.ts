@@ -109,6 +109,7 @@ export function snapshot(
     messages: [],
     inbound: { pending: [] },
     background: [],
+    context: { compaction_count: 0 },
     capabilities: capabilities(1),
     model: sessionModel("alpha/model-a"),
     ...overrides,

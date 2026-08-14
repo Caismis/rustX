@@ -47,6 +47,7 @@
 use futures_util::StreamExt;
 
 use crate::capabilities::AttemptCapabilityLease;
+use crate::context::checkpoint::ContextCheckpoint;
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
@@ -925,7 +926,13 @@ impl<'a> AgentExecution<'a> {
             .run_compaction(must_cover_through, fresh_inbound, agent_status)
             .await
         {
-            Ok(()) => {}
+            Ok(checkpoint) => {
+                self.emit(RuntimeEvent::CompactionCompleted {
+                    generation: checkpoint.generation,
+                    tokens_before: checkpoint.tokens_before,
+                    estimated_tokens_after: checkpoint.estimated_tokens_after,
+                });
+            }
             // Cancellation never becomes a compaction failure: no
             // `CompactionFailed` event is emitted and the attempt settles
             // cancelled.
@@ -936,7 +943,6 @@ impl<'a> AgentExecution<'a> {
             }
             Err(error) => return Err(self.compaction_failure(&error, overflow)),
         }
-        self.emit(RuntimeEvent::CompactionCompleted);
         Ok(())
     }
 
@@ -953,7 +959,7 @@ impl<'a> AgentExecution<'a> {
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         agent_status: Option<&AgentStatusAttachment>,
-    ) -> Result<(), ContextError> {
+    ) -> Result<ContextCheckpoint, ContextError> {
         if self.cancellation.is_cancelled() {
             return Err(ContextError::new(
                 ContextErrorKind::Cancelled,
@@ -1040,7 +1046,7 @@ impl<'a> AgentExecution<'a> {
         // CompactionCompleted, so the event means the new checkpoint is
         // committed to the M4 checkpoint store.
         self.context_runtime.checkpoint_store.save(&checkpoint)?;
-        Ok(())
+        Ok(checkpoint)
     }
 
     /// Emits `CompactionFailed` with the diagnostic and returns the

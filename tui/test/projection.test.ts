@@ -74,6 +74,33 @@ describe("presentation projection", () => {
     assert.equal(state.attempt, undefined);
   });
 
+  it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {
+    const state = fold(initial(), [
+      {
+        type: "context_compacted",
+        attempt_id: "a1",
+        context: {
+          compaction_count: 2,
+          latest_compaction: {
+            generation: 2,
+            tokens_before: { input_tokens: 4_700, source: "estimated" },
+            estimated_tokens_after: 1_800,
+          },
+        },
+      },
+    ]);
+
+    assert.equal(state.context.compaction_count, 2);
+    assert.equal(state.context.latest_compaction?.generation, 2);
+    assert.equal(
+      replaceFromSnapshot(
+        snapshot({ context: state.context }),
+        state.cursor,
+      ).context.latest_compaction?.tokens_before.source,
+      "estimated",
+    );
+  });
+
   it("rebuilds a mid-stream assistant message from the snapshot alone", () => {
     const state = replaceFromSnapshot(
       snapshot({

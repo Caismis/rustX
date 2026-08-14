@@ -62,4 +62,7 @@ pub use identity::{
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
-pub use types::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
+pub use types::{
+    CancellationReason, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,
+    TokenMeasurementSource,
+};
