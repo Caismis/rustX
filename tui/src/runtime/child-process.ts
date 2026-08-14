@@ -17,7 +17,6 @@
  */
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { once } from "node:events";
 import type { Readable, Writable } from "node:stream";
 
 /** How many stderr bytes to retain for diagnostics. Never unbounded. */
@@ -188,22 +187,26 @@ export class ChildRuntimeProcess {
     return this.#exited;
   }
 
-  async #awaitExit(): Promise<ChildExit> {
-    const settled = await Promise.race([
-      once(this.#child, "exit").then(
-        ([code, signal]) =>
-          ({
-            code: code as number | null,
-            signal: signal as NodeJS.Signals | null,
-          }) satisfies ChildExit,
-      ),
-      // A spawn failure never emits `exit`; it emits `error`.
-      once(this.#child, "error").then(
-        () => ({ code: null, signal: null }) satisfies ChildExit,
-      ),
-    ]);
-    this.#exit = settled;
-    return settled;
+  #awaitExit(): Promise<ChildExit> {
+    return new Promise<ChildExit>((resolve) => {
+      const settle = (exit: ChildExit) => {
+        if (this.#exit !== undefined) {
+          return;
+        }
+        this.#exit = exit;
+        resolve(exit);
+      };
+      this.#child.on("exit", (code, signal) => {
+        settle({ code, signal });
+      });
+      // A spawn failure (a missing or non-executable binary) emits `error`
+      // and never `exit`. Listening explicitly keeps the failure a resolved
+      // exit rather than an unhandled rejection, so callers waiting on the
+      // process still settle.
+      this.#child.on("error", () => {
+        settle({ code: null, signal: null });
+      });
+    });
   }
 
   #appendStderr(chunk: Buffer): void {
