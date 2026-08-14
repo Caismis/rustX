@@ -48,10 +48,15 @@ rustX Runtime semantics
 > presentation reduction, model state, tool state, background state, and
 > command semantics remain valid?
 
-Yes. Pi is imported by exactly one file (`src/ui/app.ts`) plus the
-`AutocompleteProvider` interface in `src/commands/autocomplete.ts`. Everything
-below that is plain TypeScript over protocol values, and every suite except
-the renderer's own runs without a terminal.
+Yes. Pi is imported by exactly two files: `src/ui/app.ts`, and
+`src/commands/autocomplete.ts` for the `AutocompleteProvider` interface it
+implements. Everything below that is plain TypeScript over protocol values.
+
+Eight of the nine test suites — framing, RPC, presentation projection, session
+lifecycle, the model invariant, rendering, the process owner, and the real
+`rustx` integration — do not reach `@earendil-works/pi-tui` at all, directly or
+transitively. The ninth (`commands.test.ts`) touches it only through the
+autocomplete interface and `fuzzyFilter`. No suite needs a terminal.
 
 ## Requirements
 

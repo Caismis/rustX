@@ -2070,6 +2070,13 @@ transport against a local SSE provider fixture, exercising spawn, initialize,
 subscribe, model and capability inspection, inbound submission, streaming and
 commit, attempt settlement, resync, shutdown, stdin EOF, and clean exit.
 
+The layering is checkable rather than asserted: `@earendil-works/pi-tui` is
+imported by exactly two files, and eight of the nine client suites — framing,
+RPC, presentation projection, session lifecycle, the model invariant,
+rendering, the process owner, and the real-binary integration — never reach it
+directly or transitively. Replacing the terminal library would leave every one
+of them valid.
+
 CI runs the TUI as a separate job on the nvm LTS line, so the Rust suites
 never depend on Node being present.
 
