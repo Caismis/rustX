@@ -1315,7 +1315,6 @@ mod tests {
     use crate::agent::{
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
-    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::context::{
         AgentStatusComposer, CompactionBudgets, ContextCheckpoint, ContextCheckpointStore,
         ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
@@ -1335,7 +1334,7 @@ mod tests {
         AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
-    use crate::runtime::types::CancellationReason;
+    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,

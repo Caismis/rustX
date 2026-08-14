@@ -1438,9 +1438,10 @@ fn background_status_accounting() {
         AgentStatus, AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId,
         render_agent_status,
     };
-    use rustx::context::tokens::{DefaultTokenEstimator, TokenMeasurement, TokenMeasurementSource};
+    use rustx::context::tokens::DefaultTokenEstimator;
     use rustx::context::{ContextEngine, TokenEstimator as _};
     use rustx::model::types::AgentStatusAttachment;
+    use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let engine = ContextEngine::new(
         ContextConfig {

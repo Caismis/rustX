@@ -18,7 +18,7 @@ use rustx::context::{
     CompactionBudgets, ContextBoundary, ContextCheckpointStore, ContextConfig, ContextEngine,
     ContextError, ContextErrorKind, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
     InMemoryCheckpointStore, ModelBackedSummarizer, ProjectionItem, ProviderObservedInput,
-    SummaryInputItem, SummaryRequest, TokenEstimator, TokenMeasurement, TokenMeasurementSource,
+    SummaryInputItem, SummaryRequest, TokenEstimator,
 };
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -34,7 +34,7 @@ use rustx::runtime::continuation::{
 };
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::runtime::inbound::ConversationInboundMailbox;
-use rustx::runtime::types::CancellationReason;
+use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};

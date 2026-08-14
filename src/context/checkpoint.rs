@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::context::error::{ContextError, ContextErrorKind};
-use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{ContentBlockIndex, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
+use crate::runtime::types::TokenMeasurement;
 
 /// Where one checkpoint's coverage ends.
 ///
@@ -163,12 +163,12 @@ pub fn summary_message_id(conversation_id: &ConversationId, generation: u64) -> 
 mod tests {
     use super::{ContextBoundary, ContextCheckpoint, InMemoryCheckpointStore, summary_message_id};
     use crate::context::checkpoint::ContextCheckpointStore;
-    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         ContentBlockIndex, InboundKind, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId};
+    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 
     fn checkpoint(conversation: &ConversationId, generation: u64) -> ContextCheckpoint {
         ContextCheckpoint {

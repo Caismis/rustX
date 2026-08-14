@@ -35,7 +35,8 @@ runtime/cancellation.rs   CancellationSignal: the one runtime-owned
                            cancellation primitive shared by model adapters,
                            compaction, foreground tool execution, and
                            background work
-runtime/types.rs           CancellationReason, RuntimeError, RuntimeClock
+runtime/types.rs           TokenMeasurement, TokenMeasurementSource,
+                           CancellationReason, RuntimeError, RuntimeClock
 runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            in-memory coordination contract): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
@@ -412,6 +413,11 @@ Key contracts:
   (`ProviderReported`/`Estimated`); provider-reported `input_tokens` apply
   only to the exact measured projection (deterministic fingerprint), and
   estimates never become provider usage.
+- `TokenMeasurement` and `TokenMeasurementSource` are Layer 0 value contracts
+  owned by `runtime/types.rs`. The Context Engine owns the estimator,
+  provider-observation validity, provenance application, and compaction
+  accounting behavior in `context/tokens.rs`; it does not own the shared
+  measurement data type.
 - Cut selection is structural: a deterministic index of tool-call/result
   edges rejects orphan tool messages and never separates a call from its
   result; whole-turn boundaries are preferred, and oversized turns are

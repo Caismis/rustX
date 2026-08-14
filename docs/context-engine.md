@@ -160,6 +160,12 @@ pub struct TokenMeasurement {
 }
 ```
 
+`TokenMeasurement` and `TokenMeasurementSource` are Layer 0 runtime-owned
+value contracts in `src/runtime/types.rs`. The Context Engine still owns the
+behavior around them: `ProviderObservedInput`, deterministic estimators,
+projection fingerprint matching, provenance application, and compaction
+threshold accounting remain in `src/context/tokens.rs` and the context plane.
+
 - **Provider-reported**: when a completed provider request reports
   `ModelUsage`, `ModelUsage.input_tokens` is the authoritative observed
   input measurement for that exact request. The observation is tied to a

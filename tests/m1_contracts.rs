@@ -5,7 +5,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rustx::context::tokens::{TokenMeasurement, TokenMeasurementSource};
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
     AgentContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
@@ -13,6 +12,7 @@ use rustx::message::types::{
 use rustx::protocol::manifest::RuntimeManifest;
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{CapabilityRevision, EventId, MessageId};
+use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -421,6 +421,26 @@ fn additional_event_variants_round_trip() {
         },
         estimated_tokens_after: 1700,
     };
+    let encoded = serde_json::to_value(&compaction).expect("serialize compaction");
+    assert_eq!(
+        encoded["tokens_before"],
+        serde_json::json!({
+            "input_tokens": 4800,
+            "source": "provider_reported"
+        })
+    );
+    let estimated = serde_json::to_value(TokenMeasurement {
+        input_tokens: 4800,
+        source: TokenMeasurementSource::Estimated,
+    })
+    .expect("serialize estimated measurement");
+    assert_eq!(
+        estimated,
+        serde_json::json!({
+            "input_tokens": 4800,
+            "source": "estimated"
+        })
+    );
     let decoded: RuntimeEvent =
         serde_json::from_str(&serde_json::to_string(&compaction).expect("serialize"))
             .expect("deserialize");

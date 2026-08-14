@@ -26,7 +26,6 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
-use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
@@ -35,6 +34,7 @@ use crate::runtime::identity::{
     ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::types::TokenMeasurement;
 use crate::tools::background::BackgroundLifecycle;
 use crate::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionResult, ToolOrigin, ToolProgress,

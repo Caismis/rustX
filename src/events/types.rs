@@ -55,7 +55,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::context::tokens::TokenMeasurement;
 use crate::message::types::ContentBlockIndex;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
@@ -63,7 +62,7 @@ use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
     AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
-use crate::runtime::types::{CancellationReason, RuntimeError};
+use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
 /// The current schema version of [`RuntimeEventEnvelope`].
@@ -414,11 +413,10 @@ pub enum AttemptLimit {
 #[cfg(test)]
 mod tests {
     use super::{AttemptFailure, AttemptLimit, AttemptOutcome, RuntimeEvent, RuntimeEventEnvelope};
-    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::finish::ModelFinishReason;
     use crate::runtime::identity::{AttemptId, ConversationId, EventId, ToolCallId, ToolId};
-    use crate::runtime::types::CancellationReason;
+    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
     use chrono::{DateTime, TimeZone, Utc};
 
