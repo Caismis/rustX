@@ -21,7 +21,9 @@ use crate::message::types::{AgentContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
-use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
+use crate::model::adapter::openai::mapping::{
+    is_context_window_message, normalize_error, resolve_tool,
+};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
@@ -281,12 +283,24 @@ enum ResponsesPhase {
 }
 
 /// Adapter-local canonical block keys for Responses output coordinates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum ResponsesBlockKey {
     /// A message content part identified by output item and part index.
     ItemPart(u32, u32),
     /// A whole output item (reasoning or function call) by output index.
     Item(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponsesContentKind {
+    Text,
+    Refusal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ReasoningPartKey {
+    Summary(u32, u32),
+    Content(u32, u32),
 }
 
 /// Per-function-call assembly state keyed by the provider output index.
@@ -307,7 +321,10 @@ struct ResponsesNormalizer {
     blocks: BlockAllocator<ResponsesBlockKey>,
     tool_calls: BTreeMap<u32, ToolAssembly>,
     usage: Option<ModelUsage>,
-    reasoning_emitted: BTreeSet<u32>,
+    content_parts: BTreeMap<(u32, u32), ResponsesContentKind>,
+    content_buffers: BTreeMap<(u32, u32), String>,
+    reasoning_buffers: BTreeMap<ReasoningPartKey, String>,
+    output_items_done: BTreeSet<u32>,
     terminal_emitted: bool,
     response_id: Option<String>,
 }
@@ -320,7 +337,10 @@ impl ResponsesNormalizer {
             blocks: BlockAllocator::new(),
             tool_calls: BTreeMap::new(),
             usage: None,
-            reasoning_emitted: BTreeSet::new(),
+            content_parts: BTreeMap::new(),
+            content_buffers: BTreeMap::new(),
+            reasoning_buffers: BTreeMap::new(),
+            output_items_done: BTreeSet::new(),
             terminal_emitted: false,
             response_id: None,
         }
@@ -333,44 +353,59 @@ impl ResponsesNormalizer {
             "response.created"
             | "response.in_progress"
             | "response.queued"
-            | "response.content_part.added"
-            | "response.content_part.done"
-            | "response.output_text.done"
-            | "response.refusal.done"
-            | "response.reasoning_summary_text.done"
-            | "response.reasoning_text.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_part.done"
             | "response.function_call_arguments.done" => Ok(Vec::new()),
             "response.output_item.added" => self.push_output_item_added(event),
             "response.output_item.done" => self.push_output_item_done(event),
+            "response.content_part.added" => self.push_content_part_added(event),
+            "response.content_part.done" => self.push_content_part_done(event),
             "response.output_text.delta" => {
-                let block_index = self.blocks.allocate(ResponsesBlockKey::ItemPart(
-                    u32_field(event, "output_index")?,
-                    u32_field(event, "content_index")?,
-                ));
+                let output_index = u32_field(event, "output_index")?;
+                let content_index = u32_field(event, "content_index")?;
+                let block_index =
+                    self.content_block(output_index, content_index, ResponsesContentKind::Text)?;
+                let text = required_str_field(event, "delta")?;
+                if text.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.content_buffers
+                    .entry((output_index, content_index))
+                    .or_default()
+                    .push_str(text);
                 Ok(vec![ModelEvent::TextDelta {
                     block_index,
-                    text: str_field(event, "delta").unwrap_or_default().to_owned(),
+                    text: text.to_owned(),
                 }])
+            }
+            "response.output_text.done" => {
+                self.push_content_done(event, ResponsesContentKind::Text)
             }
             "response.refusal.delta" => {
-                let block_index = self.blocks.allocate(ResponsesBlockKey::ItemPart(
-                    u32_field(event, "output_index")?,
-                    u32_field(event, "content_index")?,
-                ));
+                let output_index = u32_field(event, "output_index")?;
+                let content_index = u32_field(event, "content_index")?;
+                let block_index =
+                    self.content_block(output_index, content_index, ResponsesContentKind::Refusal)?;
+                let text = required_str_field(event, "delta")?;
+                if text.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.content_buffers
+                    .entry((output_index, content_index))
+                    .or_default()
+                    .push_str(text);
                 Ok(vec![ModelEvent::RefusalDelta {
                     block_index,
-                    text: str_field(event, "delta").unwrap_or_default().to_owned(),
+                    text: text.to_owned(),
                 }])
             }
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                let output_index = u32_field(event, "output_index")?;
-                let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
-                self.reasoning_emitted.insert(output_index);
-                Ok(vec![ModelEvent::ReasoningDelta {
-                    block_index,
-                    text: str_field(event, "delta").unwrap_or_default().to_owned(),
-                }])
-            }
+            "response.refusal.done" => self.push_content_done(event, ResponsesContentKind::Refusal),
+            "response.reasoning_summary_text.delta" => self.push_reasoning_delta(event, true),
+            "response.reasoning_text.delta" => self.push_reasoning_delta(event, false),
+            "response.reasoning.delta" => self.push_openrouter_reasoning(event, false),
+            "response.reasoning_summary_text.done" => self.push_reasoning_done(event, true),
+            "response.reasoning_text.done" => self.push_reasoning_done(event, false),
+            "response.reasoning.done" => self.push_openrouter_reasoning(event, true),
             "response.function_call_arguments.delta" => {
                 let output_index = u32_field(event, "output_index")?;
                 let assembly = self.tool_assembly(output_index);
@@ -399,18 +434,275 @@ impl ResponsesNormalizer {
                 self.finish_terminal(event, event_type == "response.incomplete")
             }
             "response.failed" => Ok(self.push_response_failed(event)),
-            "error" => Err(provider_error(
-                event
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
-                    .map_or_else(|| "OpenAI stream error".to_owned(), str::to_owned),
-            )),
+            event_type if unsupported_response_event(event_type) => Err(unsupported(format!(
+                "Responses stream event {event_type:?} has output semantics with no canonical representation"
+            ))),
+            "response.error" | "error" => Err(responses_stream_error(event)),
             _ => {
                 // Unknown top-level events carry no known output semantics
                 // and must not crash the parser.
                 Ok(Vec::new())
             }
         }
+    }
+
+    fn content_block(
+        &mut self,
+        output_index: u32,
+        content_index: u32,
+        kind: ResponsesContentKind,
+    ) -> Result<ContentBlockIndex, ModelError> {
+        self.register_content_part(output_index, content_index, kind)?;
+        Ok(self
+            .blocks
+            .allocate(ResponsesBlockKey::ItemPart(output_index, content_index)))
+    }
+
+    fn register_content_part(
+        &mut self,
+        output_index: u32,
+        content_index: u32,
+        kind: ResponsesContentKind,
+    ) -> Result<(), ModelError> {
+        let coordinate = (output_index, content_index);
+        if let Some(known) = self.content_parts.get(&coordinate)
+            && *known != kind
+        {
+            return Err(provider_error(format!(
+                "Responses content part {output_index}:{content_index} changed kind"
+            )));
+        }
+        self.content_parts.insert(coordinate, kind);
+        Ok(())
+    }
+
+    fn push_content_part_added(
+        &mut self,
+        event: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let content_index = u32_field(event, "content_index")?;
+        let part = event
+            .get("part")
+            .ok_or_else(|| provider_error("content_part.added lacks a part".to_owned()))?;
+        match str_field(part, "type") {
+            Some("output_text") => {
+                self.register_content_part(
+                    output_index,
+                    content_index,
+                    ResponsesContentKind::Text,
+                )?;
+            }
+            Some("refusal") => {
+                self.register_content_part(
+                    output_index,
+                    content_index,
+                    ResponsesContentKind::Refusal,
+                )?;
+            }
+            Some("reasoning_text") => {}
+            Some(other) => {
+                return Err(unsupported(format!(
+                    "Responses content part type {other:?} has no canonical representation"
+                )));
+            }
+            None => return Err(provider_error("content part lacks a type".to_owned())),
+        }
+        Ok(Vec::new())
+    }
+
+    fn push_content_part_done(
+        &mut self,
+        event: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let part = event
+            .get("part")
+            .ok_or_else(|| provider_error("content_part.done lacks a part".to_owned()))?;
+        match str_field(part, "type") {
+            Some("output_text") => self.push_content_value(
+                u32_field(event, "output_index")?,
+                u32_field(event, "content_index")?,
+                ResponsesContentKind::Text,
+                required_str_field(part, "text")?,
+                part,
+            ),
+            Some("refusal") => self.push_content_value(
+                u32_field(event, "output_index")?,
+                u32_field(event, "content_index")?,
+                ResponsesContentKind::Refusal,
+                required_str_field(part, "refusal")?,
+                part,
+            ),
+            Some("reasoning_text") => self.push_reasoning_value(
+                u32_field(event, "output_index")?,
+                ReasoningPartKey::Content(
+                    u32_field(event, "output_index")?,
+                    u32_field(event, "content_index")?,
+                ),
+                required_str_field(part, "text")?,
+            ),
+            Some(other) => Err(unsupported(format!(
+                "Responses content part type {other:?} has no canonical representation"
+            ))),
+            None => Err(provider_error("content part lacks a type".to_owned())),
+        }
+    }
+
+    fn push_content_done(
+        &mut self,
+        event: &serde_json::Value,
+        kind: ResponsesContentKind,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let text_field = match kind {
+            ResponsesContentKind::Text => "text",
+            ResponsesContentKind::Refusal => "refusal",
+        };
+        self.push_content_value(
+            u32_field(event, "output_index")?,
+            u32_field(event, "content_index")?,
+            kind,
+            required_str_field(event, text_field)?,
+            event,
+        )
+    }
+
+    fn push_content_value(
+        &mut self,
+        output_index: u32,
+        content_index: u32,
+        kind: ResponsesContentKind,
+        text: &str,
+        source: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        if source
+            .get("annotations")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|annotations| !annotations.is_empty())
+        {
+            return Err(unsupported(
+                "Responses output text annotations have no canonical representation",
+            ));
+        }
+        let block_index = self.content_block(output_index, content_index, kind)?;
+        let key = (output_index, content_index);
+        if let Some(streamed) = self.content_buffers.get(&key) {
+            if streamed != text {
+                let semantic = match kind {
+                    ResponsesContentKind::Text => "text",
+                    ResponsesContentKind::Refusal => "refusal",
+                };
+                return Err(provider_error(format!(
+                    "Responses cumulative {semantic} value disagrees with streamed {semantic} for output {output_index} content {content_index}"
+                )));
+            }
+            return Ok(Vec::new());
+        }
+        self.content_buffers.insert(key, text.to_owned());
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![match kind {
+            ResponsesContentKind::Text => ModelEvent::TextDelta {
+                block_index,
+                text: text.to_owned(),
+            },
+            ResponsesContentKind::Refusal => ModelEvent::RefusalDelta {
+                block_index,
+                text: text.to_owned(),
+            },
+        }])
+    }
+
+    fn push_reasoning_delta(
+        &mut self,
+        event: &serde_json::Value,
+        summary: bool,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let part = if summary {
+            ReasoningPartKey::Summary(output_index, u32_field(event, "summary_index")?)
+        } else {
+            ReasoningPartKey::Content(output_index, u32_field(event, "content_index")?)
+        };
+        let text = required_str_field(event, "delta")?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.reasoning_buffers
+            .entry(part)
+            .or_default()
+            .push_str(text);
+        let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
+        Ok(vec![ModelEvent::ReasoningDelta {
+            block_index,
+            text: text.to_owned(),
+        }])
+    }
+
+    fn push_reasoning_done(
+        &mut self,
+        event: &serde_json::Value,
+        summary: bool,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let part = if summary {
+            ReasoningPartKey::Summary(output_index, u32_field(event, "summary_index")?)
+        } else {
+            ReasoningPartKey::Content(output_index, u32_field(event, "content_index")?)
+        };
+        self.push_reasoning_value(output_index, part, required_str_field(event, "text")?)
+    }
+
+    fn push_openrouter_reasoning(
+        &mut self,
+        event: &serde_json::Value,
+        done: bool,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = optional_u32_field(event, "output_index")?.unwrap_or(0);
+        let part = ReasoningPartKey::Content(output_index, 0);
+        if done {
+            let text = str_field(event, "text")
+                .or_else(|| str_field(event, "delta"))
+                .unwrap_or_default();
+            return self.push_reasoning_value(output_index, part, text);
+        }
+        let text = required_str_field(event, "delta")?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.reasoning_buffers
+            .entry(part)
+            .or_default()
+            .push_str(text);
+        Ok(vec![ModelEvent::ReasoningDelta {
+            block_index: self.blocks.allocate(ResponsesBlockKey::Item(output_index)),
+            text: text.to_owned(),
+        }])
+    }
+
+    fn push_reasoning_value(
+        &mut self,
+        output_index: u32,
+        part: ReasoningPartKey,
+        text: &str,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        if let Some(streamed) = self.reasoning_buffers.get(&part) {
+            if streamed != text {
+                return Err(provider_error(format!(
+                    "Responses cumulative reasoning value disagrees with streamed reasoning for output {output_index} part {part:?}"
+                )));
+            }
+            return Ok(Vec::new());
+        }
+        self.reasoning_buffers.insert(part, text.to_owned());
+        let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![ModelEvent::ReasoningDelta {
+            block_index,
+            text: text.to_owned(),
+        }])
     }
 
     fn tool_assembly(&mut self, output_index: u32) -> &mut ToolAssembly {
@@ -430,12 +722,12 @@ impl ResponsesNormalizer {
         &mut self,
         event: &serde_json::Value,
     ) -> Result<Vec<ModelEvent>, ModelError> {
-        let Some(item) = event.get("item") else {
-            return Ok(Vec::new());
-        };
-        let item_type = str_field(item, "type").unwrap_or("");
+        let item = event
+            .get("item")
+            .ok_or_else(|| provider_error("output_item.added lacks an item".to_owned()))?;
+        let item_type = required_str_field(item, "type")?;
         match item_type {
-            "message" | "reasoning" | "function_call_output" => Ok(Vec::new()),
+            "message" | "function_call_output" | "reasoning" => Ok(Vec::new()),
             "function_call" => {
                 let output_index = u32_field(event, "output_index")?;
                 let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
@@ -482,58 +774,135 @@ impl ResponsesNormalizer {
         &mut self,
         event: &serde_json::Value,
     ) -> Result<Vec<ModelEvent>, ModelError> {
-        let Some(item) = event.get("item") else {
-            return Ok(Vec::new());
-        };
-        let item_type = str_field(item, "type").unwrap_or("");
-        match item_type {
+        let output_index = u32_field(event, "output_index")?;
+        let item = event
+            .get("item")
+            .ok_or_else(|| provider_error("output_item.done lacks an item".to_owned()))?;
+        let item_type = required_str_field(item, "type")?;
+        if self.output_items_done.contains(&output_index) {
+            return match item_type {
+                "message" => self.push_message_item_done(event, item),
+                "reasoning" => self.push_reasoning_item_done(event, item),
+                "function_call" | "function_call_output" => Ok(Vec::new()),
+                other => Err(unsupported(format!(
+                    "Responses output item type {other:?} has no canonical representation"
+                ))),
+            };
+        }
+        let result = match item_type {
             "function_call" => self.complete_function_call(event, item),
-            "reasoning" => {
-                let output_index = u32_field(event, "output_index")?;
-                // Done events finalize adapter state; they never replay text
-                // already emitted by delta events. When no delta was emitted
-                // for this item at all, the done summary is the only source
-                // of visible reasoning and is emitted once.
-                if self.reasoning_emitted.contains(&output_index) {
-                    return Ok(Vec::new());
-                }
-                let summary = item
-                    .get("summary")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|parts| {
-                        parts
-                            .iter()
-                            .filter_map(|part| {
-                                part.get("text")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::to_owned)
-                            })
-                            .collect::<Vec<String>>()
-                            .concat()
-                    })
-                    .unwrap_or_default();
-                if summary.is_empty() {
-                    return Ok(Vec::new());
-                }
-                let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
-                self.reasoning_emitted.insert(output_index);
-                Ok(vec![ModelEvent::ReasoningDelta {
-                    block_index,
-                    text: summary,
-                }])
-            }
-            "message"
-            | "function_call_output"
-            | "file_search_call"
+            "reasoning" => self.push_reasoning_item_done(event, item),
+            "message" => self.push_message_item_done(event, item),
+            "function_call_output" => Ok(Vec::new()),
+            "file_search_call"
             | "web_search_call"
             | "computer_call"
             | "computer_call_output"
             | "code_interpreter_call"
             | "mcp_call"
             | "custom_tool_call"
-            | "image_generation_call" => Ok(Vec::new()),
-            _other => Ok(Vec::new()),
+            | "image_generation_call" => Err(unsupported(format!(
+                "provider-hosted output item type {item_type:?} has no canonical representation"
+            ))),
+            other => Err(unsupported(format!(
+                "Responses output item type {other:?} has no canonical representation"
+            ))),
+        };
+        if result.is_ok() {
+            self.output_items_done.insert(output_index);
         }
+        result
+    }
+
+    fn push_message_item_done(
+        &mut self,
+        event: &serde_json::Value,
+        item: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let Some(parts) = item.get("content").and_then(serde_json::Value::as_array) else {
+            return Ok(Vec::new());
+        };
+        let mut events = Vec::new();
+        for (content_index, part) in parts.iter().enumerate() {
+            let content_index = u32::try_from(content_index)
+                .map_err(|_| provider_error("too many response content parts".to_owned()))?;
+            let mut next = match str_field(part, "type") {
+                Some("output_text") => self.push_content_value(
+                    output_index,
+                    content_index,
+                    ResponsesContentKind::Text,
+                    required_str_field(part, "text")?,
+                    part,
+                )?,
+                Some("refusal") => self.push_content_value(
+                    output_index,
+                    content_index,
+                    ResponsesContentKind::Refusal,
+                    required_str_field(part, "refusal")?,
+                    part,
+                )?,
+                Some(other) => {
+                    return Err(unsupported(format!(
+                        "Responses message content part type {other:?} has no canonical representation"
+                    )));
+                }
+                None => {
+                    return Err(provider_error(
+                        "message content part lacks a type".to_owned(),
+                    ));
+                }
+            };
+            events.append(&mut next);
+        }
+        Ok(events)
+    }
+
+    fn push_reasoning_item_done(
+        &mut self,
+        event: &serde_json::Value,
+        item: &serde_json::Value,
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        let output_index = u32_field(event, "output_index")?;
+        let mut events = Vec::new();
+        for (summary_index, part) in item
+            .get("summary")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let summary_index = u32::try_from(summary_index)
+                .map_err(|_| provider_error("too many reasoning summary parts".to_owned()))?;
+            let mut next = self.push_reasoning_value(
+                output_index,
+                ReasoningPartKey::Summary(output_index, summary_index),
+                required_str_field(part, "text")?,
+            )?;
+            events.append(&mut next);
+        }
+        for (content_index, part) in item
+            .get("content")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let content_index = u32::try_from(content_index)
+                .map_err(|_| provider_error("too many reasoning content parts".to_owned()))?;
+            if !matches!(str_field(part, "type"), Some("reasoning_text")) {
+                return Err(unsupported(
+                    "Responses reasoning item contains a non-reasoning content part",
+                ));
+            }
+            let mut next = self.push_reasoning_value(
+                output_index,
+                ReasoningPartKey::Content(output_index, content_index),
+                required_str_field(part, "text")?,
+            )?;
+            events.append(&mut next);
+        }
+        Ok(events)
     }
 
     fn complete_function_call(
@@ -593,6 +962,21 @@ impl ResponsesNormalizer {
         if let Some(usage) = response.get("usage") {
             self.usage = parse_usage(usage);
         }
+        // The terminal response is the authoritative complete output. Most
+        // providers send output_item.done first; validating every item here
+        // both recovers content that only appears at terminal time and checks
+        // repeated cumulative content without duplicating completed items.
+        let mut finalized_output = Vec::new();
+        if let Some(output) = response.get("output").and_then(serde_json::Value::as_array) {
+            for (output_index, item) in output.iter().enumerate() {
+                let output_index = u32::try_from(output_index)
+                    .map_err(|_| provider_error("too many response output items".to_owned()))?;
+                finalized_output.extend(self.push_output_item_done(&serde_json::json!({
+                    "output_index": output_index,
+                    "item": item,
+                }))?);
+            }
+        }
         let finish_reason = if incomplete {
             let reason = response
                 .get("incomplete_details")
@@ -624,12 +1008,13 @@ impl ResponsesNormalizer {
         };
         let block_index = self.blocks.peek_next();
         self.terminal_emitted = true;
-        let mut events = vec![ModelEvent::ContinuationState {
+        let mut events = finalized_output;
+        events.push(ModelEvent::ContinuationState {
             block_index,
             state: crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
                 continuation,
             ),
-        }];
+        });
         events.push(ModelEvent::Completed {
             finish_reason,
             usage: self.usage.take(),
@@ -639,23 +1024,8 @@ impl ResponsesNormalizer {
 
     fn push_response_failed(&mut self, event: &serde_json::Value) -> Vec<ModelEvent> {
         self.terminal_emitted = true;
-        let response = event.get("response");
-        let error = response.and_then(|r| r.get("error"));
-        let message = error
-            .and_then(|e| e.get("message"))
-            .and_then(serde_json::Value::as_str)
-            .map_or_else(|| "OpenAI response failed".to_owned(), str::to_owned);
-        let provider_code = error
-            .and_then(|e| e.get("code"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
         vec![ModelEvent::Failed {
-            error: ModelError {
-                kind: ModelErrorKind::ProviderError,
-                message,
-                retry_after_ms: None,
-                provider_code,
-            },
+            error: responses_stream_error(event),
         }]
     }
 
@@ -718,6 +1088,42 @@ fn derive_completed_finish_reason(response: &serde_json::Value) -> ModelFinishRe
             ModelFinishReason::Stop
         }
     }
+}
+
+fn unsupported_response_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "response.audio.delta"
+            | "response.audio.done"
+            | "response.audio.transcript.delta"
+            | "response.audio.transcript.done"
+            | "response.file_search_call.in_progress"
+            | "response.file_search_call.searching"
+            | "response.file_search_call.completed"
+            | "response.web_search_call.in_progress"
+            | "response.web_search_call.searching"
+            | "response.web_search_call.completed"
+            | "response.image_generation_call.in_progress"
+            | "response.image_generation_call.generating"
+            | "response.image_generation_call.partial_image"
+            | "response.image_generation_call.completed"
+            | "response.code_interpreter_call.in_progress"
+            | "response.code_interpreter_call.interpreting"
+            | "response.code_interpreter_call.completed"
+            | "response.code_interpreter_call_code.delta"
+            | "response.code_interpreter_call_code.done"
+            | "response.mcp_call_arguments.delta"
+            | "response.mcp_call_arguments.done"
+            | "response.mcp_call.in_progress"
+            | "response.mcp_call.completed"
+            | "response.mcp_call.failed"
+            | "response.mcp_list_tools.in_progress"
+            | "response.mcp_list_tools.completed"
+            | "response.mcp_list_tools.failed"
+            | "response.output_text.annotation.added"
+            | "response.custom_tool_call_input.delta"
+            | "response.custom_tool_call_input.done"
+    )
 }
 
 fn parse_usage(usage: &serde_json::Value) -> Option<ModelUsage> {
@@ -1063,6 +1469,17 @@ fn str_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
     value.get(field).and_then(serde_json::Value::as_str)
 }
 
+fn required_str_field<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a str, ModelError> {
+    str_field(value, field).ok_or_else(|| {
+        provider_error(format!(
+            "provider stream event lacks a string {field:?} field"
+        ))
+    })
+}
+
 fn u32_field(value: &serde_json::Value, field: &str) -> Result<u32, ModelError> {
     value
         .get(field)
@@ -1071,6 +1488,20 @@ fn u32_field(value: &serde_json::Value, field: &str) -> Result<u32, ModelError> 
         .ok_or_else(|| {
             provider_error(format!(
                 "provider stream event lacks an integer {field:?} field"
+            ))
+        })
+}
+
+fn optional_u32_field(value: &serde_json::Value, field: &str) -> Result<Option<u32>, ModelError> {
+    let Some(raw) = value.get(field) else {
+        return Ok(None);
+    };
+    raw.as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+        .map(Some)
+        .ok_or_else(|| {
+            provider_error(format!(
+                "provider stream event has a non-integer {field:?} field"
             ))
         })
 }
@@ -1085,6 +1516,42 @@ fn provider_error(message: String) -> ModelError {
         message,
         retry_after_ms: None,
         provider_code: None,
+    }
+}
+
+fn responses_stream_error(event: &serde_json::Value) -> ModelError {
+    let response = event.get("response").unwrap_or(event);
+    let error = response.get("error").unwrap_or(response);
+    let message = str_field(error, "message")
+        .or_else(|| str_field(event, "message"))
+        .unwrap_or("OpenAI-compatible Responses stream error");
+    let error_type = str_field(response, "error_type")
+        .or_else(|| str_field(event, "error_type"))
+        .or_else(|| str_field(error, "error_type"));
+    let code = str_field(error, "code").or_else(|| str_field(event, "code"));
+    let kind = match error_type.or(code) {
+        Some("authentication" | "authentication_error" | "invalid_api_key") => {
+            ModelErrorKind::Authentication
+        }
+        Some("rate_limit_exceeded" | "rate_limit_error") => ModelErrorKind::RateLimit,
+        Some(
+            "context_length_exceeded"
+            | "max_tokens_exceeded"
+            | "token_limit_exceeded"
+            | "string_too_long",
+        ) => ModelErrorKind::ContextWindowExceeded,
+        Some("invalid_request" | "invalid_prompt" | "invalid_request_error") => {
+            ModelErrorKind::InvalidRequest
+        }
+        Some("timeout") => ModelErrorKind::Timeout,
+        _ if is_context_window_message(message) => ModelErrorKind::ContextWindowExceeded,
+        _ => ModelErrorKind::ProviderError,
+    };
+    ModelError {
+        kind,
+        message: message.to_owned(),
+        retry_after_ms: None,
+        provider_code: error_type.or(code).map(str::to_owned),
     }
 }
 

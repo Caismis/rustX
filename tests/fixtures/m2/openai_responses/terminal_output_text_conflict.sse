@@ -1,0 +1,13 @@
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_terminal_conflict","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[]}}
+
+data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hello"}
+
+data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"Hello","annotations":[]}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_terminal_conflict","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello","annotations":[]}]}}
+
+data: {"type":"response.completed","response":{"id":"resp_terminal_conflict","status":"completed","output":[{"id":"msg_terminal_conflict","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Goodbye","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+
+data: [DONE]

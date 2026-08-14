@@ -36,7 +36,9 @@
 //! `requestParams`; the runtime assigns no meaning to a profile name.
 //! Structural translation behaviour lives in the bounded [`ModelCompat`],
 //! which is deliberately *not* a strategy framework and is never inferred
-//! from a hostname.
+//! from a hostname. Historical Chat reasoning replay is an explicit
+//! model/provider wire contract; it is not a generation-time reasoning
+//! control.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -75,7 +77,7 @@ pub struct ModelId(String);
 pub struct ReasoningProfileId(String);
 
 macro_rules! catalog_identity {
-    ($name:ident, $what:literal) => {
+    ($name:ident, $what:literal, $reject_slash:literal, $require_non_empty_segments:literal) => {
         impl $name {
             /// Creates the identity without validation.
             ///
@@ -93,10 +95,14 @@ macro_rules! catalog_identity {
             ///
             /// Returns [`ModelCatalogError::InvalidIdentity`] when the value
             /// is empty, contains whitespace, or contains the `/` reference
-            /// separator.
+            /// separator when this identity type reserves it. Model IDs may
+            /// use `/`, but every segment must be non-empty.
             pub fn parse(value: impl Into<String>) -> Result<Self, ModelCatalogError> {
                 let value = value.into();
-                if value.is_empty() || value.contains('/') || value.chars().any(char::is_whitespace)
+                if value.is_empty()
+                    || ($reject_slash && value.contains('/'))
+                    || ($require_non_empty_segments && value.split('/').any(str::is_empty))
+                    || value.chars().any(char::is_whitespace)
                 {
                     return Err(ModelCatalogError::InvalidIdentity { kind: $what, value });
                 }
@@ -118,11 +124,15 @@ macro_rules! catalog_identity {
     };
 }
 
-catalog_identity!(ProviderId, "provider");
-catalog_identity!(ModelId, "model");
-catalog_identity!(ReasoningProfileId, "reasoning profile");
+catalog_identity!(ProviderId, "provider", true, false);
+catalog_identity!(ModelId, "model", false, true);
+catalog_identity!(ReasoningProfileId, "reasoning profile", true, false);
 
 /// A fully qualified catalog model reference: `provider-id/model-id`.
+///
+/// The first `/` separates the provider from the model. The model ID itself
+/// may contain additional `/` characters, as is common for Hugging Face
+/// identities such as `Qwen/Qwen3`, but no model-ID segment may be empty.
 ///
 /// This is the explicit model-identity domain of the runtime. Concatenated
 /// strings never travel through the runtime in its place: a reference either
@@ -142,10 +152,12 @@ impl ModelRef {
 
     /// Parses the canonical `provider-id/model-id` form.
     ///
+    /// The first `/` separates the provider; the remainder is the model ID.
+    ///
     /// # Errors
     ///
     /// Returns [`ModelCatalogError::InvalidModelRef`] when the value does
-    /// not contain exactly one `/` separating two valid identities.
+    /// not contain a `/` separating two valid identities.
     pub fn parse(value: &str) -> Result<Self, ModelCatalogError> {
         let mut parts = value.splitn(2, '/');
         let (Some(provider), Some(model)) = (parts.next(), parts.next()) else {
@@ -432,6 +444,31 @@ pub enum ResponsesStorageMode {
     Stateless,
 }
 
+/// Assistant-message field used to replay canonical reasoning through an
+/// OpenAI-compatible Chat Completions dialect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatReasoningReplay {
+    /// vLLM and `OpenRouter`'s plaintext reasoning field.
+    Reasoning,
+    /// `DeepSeek` V4, GLM, Qwen, and compatible preserved-thinking APIs.
+    ReasoningContent,
+    /// Do not replay historical canonical reasoning to the provider.
+    Omit,
+}
+
+impl ChatReasoningReplay {
+    /// Returns the assistant-message wire field, if reasoning is replayed.
+    #[must_use]
+    pub const fn wire_name(self) -> Option<&'static str> {
+        match self {
+            Self::Reasoning => Some("reasoning"),
+            Self::ReasoningContent => Some("reasoning_content"),
+            Self::Omit => None,
+        }
+    }
+}
+
 /// The bounded structural protocol-translation metadata of one model.
 ///
 /// Every field here corresponds to a translation branch the current
@@ -446,20 +483,23 @@ pub struct ModelCompat {
     /// Chat Completions: whether the service supports
     /// `stream_options.include_usage`.
     pub chat_stream_usage: ChatStreamUsage,
+    /// Chat Completions: how previous assistant reasoning is replayed. This
+    /// is required for catalog models using Chat Completions and is absent
+    /// for models whose protocol does not use this dialect.
+    pub chat_reasoning_replay: Option<ChatReasoningReplay>,
     /// Responses: the provider storage/continuation mode.
     pub responses_storage: ResponsesStorageMode,
+    /// Bitset recording which compat fields were explicitly present in the
+    /// catalog, including fields equal to their defaults.
     #[doc(hidden)]
-    pub chat_max_tokens_field_explicit: bool,
-    #[doc(hidden)]
-    pub chat_stream_usage_explicit: bool,
-    #[doc(hidden)]
-    pub responses_storage_explicit: bool,
+    pub explicit_fields: u8,
 }
 
 impl PartialEq for ModelCompat {
     fn eq(&self, other: &Self) -> bool {
         self.chat_max_tokens_field == other.chat_max_tokens_field
             && self.chat_stream_usage == other.chat_stream_usage
+            && self.chat_reasoning_replay == other.chat_reasoning_replay
             && self.responses_storage == other.responses_storage
     }
 }
@@ -468,22 +508,25 @@ impl Eq for ModelCompat {}
 
 impl Serialize for ModelCompat {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let chat_max_tokens_field_is_non_default =
-            self.chat_max_tokens_field != ChatMaxTokensField::default();
-        let chat_stream_usage_is_non_default = self.chat_stream_usage != ChatStreamUsage::default();
-        let responses_storage_is_non_default =
-            self.responses_storage != ResponsesStorageMode::default();
-        let field_count = usize::from(chat_max_tokens_field_is_non_default)
-            + usize::from(chat_stream_usage_is_non_default)
-            + usize::from(responses_storage_is_non_default);
+        let chat_max_tokens_field_is_present = self.chat_max_tokens_field_is_explicit();
+        let chat_stream_usage_is_present = self.chat_stream_usage_is_explicit();
+        let chat_reasoning_replay_is_present = self.chat_reasoning_replay.is_some();
+        let responses_storage_is_present = self.responses_storage_is_explicit();
+        let field_count = usize::from(chat_max_tokens_field_is_present)
+            + usize::from(chat_stream_usage_is_present)
+            + usize::from(chat_reasoning_replay_is_present)
+            + usize::from(responses_storage_is_present);
         let mut state = serializer.serialize_struct("ModelCompat", field_count)?;
-        if chat_max_tokens_field_is_non_default {
+        if chat_max_tokens_field_is_present {
             state.serialize_field("chatMaxTokensField", &self.chat_max_tokens_field)?;
         }
-        if chat_stream_usage_is_non_default {
+        if chat_stream_usage_is_present {
             state.serialize_field("chatStreamUsage", &self.chat_stream_usage)?;
         }
-        if responses_storage_is_non_default {
+        if let Some(chat_reasoning_replay) = self.chat_reasoning_replay {
+            state.serialize_field("chatReasoningReplay", &chat_reasoning_replay)?;
+        }
+        if responses_storage_is_present {
             state.serialize_field("responsesStorage", &self.responses_storage)?;
         }
         state.end()
@@ -500,35 +543,49 @@ impl<'de> Deserialize<'de> for ModelCompat {
             #[serde(default)]
             chat_stream_usage: Option<ChatStreamUsage>,
             #[serde(default)]
+            chat_reasoning_replay: Option<ChatReasoningReplay>,
+            #[serde(default)]
             responses_storage: Option<ResponsesStorageMode>,
         }
         let document = Document::deserialize(deserializer)?;
-        let chat_max_tokens_field_explicit = document.chat_max_tokens_field.is_some();
-        let chat_stream_usage_explicit = document.chat_stream_usage.is_some();
-        let responses_storage_explicit = document.responses_storage.is_some();
+        let explicit_fields = u8::from(document.chat_max_tokens_field.is_some())
+            | (u8::from(document.chat_stream_usage.is_some()) << 1)
+            | (u8::from(document.chat_reasoning_replay.is_some()) << 2)
+            | (u8::from(document.responses_storage.is_some()) << 3);
         Ok(Self {
             chat_max_tokens_field: document.chat_max_tokens_field.unwrap_or_default(),
             chat_stream_usage: document.chat_stream_usage.unwrap_or_default(),
+            chat_reasoning_replay: document.chat_reasoning_replay,
             responses_storage: document.responses_storage.unwrap_or_default(),
-            chat_max_tokens_field_explicit,
-            chat_stream_usage_explicit,
-            responses_storage_explicit,
+            explicit_fields,
         })
     }
 }
 
 impl ModelCompat {
+    const CHAT_MAX_TOKENS_EXPLICIT: u8 = 1;
+    const CHAT_STREAM_USAGE_EXPLICIT: u8 = 1 << 1;
+    const CHAT_REASONING_REPLAY_EXPLICIT: u8 = 1 << 2;
+    const RESPONSES_STORAGE_EXPLICIT: u8 = 1 << 3;
+
     fn chat_max_tokens_field_is_explicit(self) -> bool {
-        self.chat_max_tokens_field_explicit
+        self.explicit_fields & Self::CHAT_MAX_TOKENS_EXPLICIT != 0
             || self.chat_max_tokens_field != ChatMaxTokensField::default()
     }
 
     fn chat_stream_usage_is_explicit(self) -> bool {
-        self.chat_stream_usage_explicit || self.chat_stream_usage != ChatStreamUsage::default()
+        self.explicit_fields & Self::CHAT_STREAM_USAGE_EXPLICIT != 0
+            || self.chat_stream_usage != ChatStreamUsage::default()
+    }
+
+    fn chat_reasoning_replay_is_explicit(self) -> bool {
+        self.explicit_fields & Self::CHAT_REASONING_REPLAY_EXPLICIT != 0
+            || self.chat_reasoning_replay.is_some()
     }
 
     fn responses_storage_is_explicit(self) -> bool {
-        self.responses_storage_explicit || self.responses_storage != ResponsesStorageMode::default()
+        self.explicit_fields & Self::RESPONSES_STORAGE_EXPLICIT != 0
+            || self.responses_storage != ResponsesStorageMode::default()
     }
 }
 
@@ -1114,21 +1171,41 @@ fn validate_compat(
     protocol: ModelProtocol,
     compat: ModelCompat,
 ) -> Result<(), ModelCatalogError> {
-    let invalid = match protocol {
-        ModelProtocol::OpenAiChatCompletions => compat.responses_storage_is_explicit(),
-        ModelProtocol::OpenAiResponses => {
-            compat.chat_max_tokens_field_is_explicit() || compat.chat_stream_usage_is_explicit()
-        }
-        ModelProtocol::AnthropicMessages => {
-            compat.chat_max_tokens_field_is_explicit()
+    let invalid_detail = match protocol {
+        ModelProtocol::OpenAiChatCompletions if compat.chat_reasoning_replay.is_none() => Some(
+            "compat.chatReasoningReplay is required for openai_chat_completions and must be one of reasoning, reasoning_content, or omit"
+                .to_owned(),
+        ),
+        ModelProtocol::OpenAiChatCompletions if compat.responses_storage_is_explicit() => Some(
+            format!("compat declares fields that do not apply to protocol {protocol:?}"),
+        ),
+        ModelProtocol::OpenAiResponses
+            if compat.chat_max_tokens_field_is_explicit()
                 || compat.chat_stream_usage_is_explicit()
-                || compat.responses_storage_is_explicit()
+                || compat.chat_reasoning_replay_is_explicit() =>
+        {
+            Some(format!(
+                "compat declares fields that do not apply to protocol {protocol:?}"
+            ))
         }
+        ModelProtocol::AnthropicMessages
+            if compat.chat_max_tokens_field_is_explicit()
+                || compat.chat_stream_usage_is_explicit()
+                || compat.chat_reasoning_replay_is_explicit()
+                || compat.responses_storage_is_explicit() =>
+        {
+            Some(format!(
+                "compat declares fields that do not apply to protocol {protocol:?}"
+            ))
+        }
+        ModelProtocol::OpenAiChatCompletions
+        | ModelProtocol::OpenAiResponses
+        | ModelProtocol::AnthropicMessages => None,
     };
-    if invalid {
+    if let Some(detail) = invalid_detail {
         return Err(ModelCatalogError::InvalidCompat {
             model: reference.clone(),
-            detail: format!("compat declares fields that do not apply to protocol {protocol:?}"),
+            detail,
         });
     }
     Ok(())
@@ -1203,7 +1280,10 @@ pub enum ModelCatalogError {
     },
     /// The catalog declares no provider.
     EmptyCatalog,
-    /// An identity is empty, contains whitespace, or contains `/`.
+    /// A provider or reasoning-profile identity is empty, contains whitespace,
+    /// or contains `/`. Model identities may contain `/` because the first
+    /// slash in a model reference is the provider separator, but their
+    /// slash-separated segments must be non-empty.
     InvalidIdentity {
         /// What kind of identity failed.
         kind: &'static str,
@@ -1411,8 +1491,9 @@ pub struct ReasoningProfileView {
 #[cfg(test)]
 mod tests {
     use super::{
-        CredentialSource, CredentialSourceView, MapCredentialEnvironment, ModelCatalog,
-        ModelCatalogDocument, ModelCatalogError, ModelRef, ProviderId, ResolvedCredential,
+        ChatReasoningReplay, CredentialSource, CredentialSourceView, MapCredentialEnvironment,
+        ModelCatalog, ModelCatalogDocument, ModelCatalogError, ModelCompat, ModelRef, ProviderId,
+        ResolvedCredential,
     };
 
     fn catalog_json(provider_body: &str) -> String {
@@ -1420,11 +1501,16 @@ mod tests {
     }
 
     fn model_json(extra: &str) -> String {
+        let compat = if extra.contains("\"compat\"") {
+            String::new()
+        } else {
+            r#", "compat":{"chatReasoningReplay":"omit"}"#.to_owned()
+        };
         format!(
             r#"{{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
                  "maxOutputTokens":100,
                  "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
-                                  "toolCalls":true,"reasoning":false}}{extra}}}"#
+                                  "toolCalls":true,"reasoning":false}}{compat}{extra}}}"#
         )
     }
 
@@ -1509,9 +1595,10 @@ mod tests {
         let json = catalog_json(
             r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
                  {"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
-                  "maxOutputTokens":100,
-                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                 "maxOutputTokens":100,
+                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
                                    "toolCalls":true,"reasoning":true},
+                  "compat":{"chatReasoningReplay":"omit"},
                   "requestParams":{"provider_reasoning":{"mode":"default"}}}]}"#,
         );
         let catalog = ModelCatalog::from_json_slice(json.as_bytes()).expect("valid");
@@ -1777,8 +1864,9 @@ mod tests {
         assert!(error.to_string().contains("max_tokens"));
     }
 
-    /// A model reference resolves unambiguously to exactly one model, and an
-    /// unknown reference fails explicitly.
+    /// A model reference resolves unambiguously to exactly one model, including
+    /// a model ID containing additional `/` characters, and an unknown
+    /// reference fails explicitly.
     #[test]
     fn model_references_resolve_unambiguously() {
         let catalog = ModelCatalog::from_json_slice(valid_catalog().as_bytes()).expect("valid");
@@ -1801,7 +1889,110 @@ mod tests {
             ModelCatalogError::UnknownProvider { .. }
         ));
         assert!(ModelRef::parse("no-separator").is_err());
-        assert!(ModelRef::parse("a/b/c").is_err());
+        let nested = ModelRef::parse("a/b/c").expect("the model ID may contain slashes");
+        assert_eq!(nested.provider().as_str(), "a");
+        assert_eq!(nested.model().as_str(), "b/c");
+        assert_eq!(nested.to_string(), "a/b/c");
+    }
+
+    #[test]
+    fn model_reference_grammar_rejects_empty_model_segments() {
+        for value in ["a/b", "a/b/c"] {
+            assert!(ModelRef::parse(value).is_ok(), "{value:?} should parse");
+        }
+        for value in ["a/", "/b", "a//b", "a/b/"] {
+            assert!(ModelRef::parse(value).is_err(), "{value:?} should fail");
+        }
+    }
+
+    #[test]
+    fn openai_chat_requires_explicit_reasoning_replay() {
+        let json = catalog_json(
+            r#"{"baseUrl":"https://a.example","apiKey":"k","models":[
+                 {"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
+                  "maxOutputTokens":100,
+                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                  "toolCalls":true,"reasoning":false}}]}"#,
+        );
+        let error = ModelCatalog::from_json_slice(json.as_bytes()).expect_err("must fail");
+        assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
+        assert!(error.to_string().contains("chatReasoningReplay"));
+        assert!(error.to_string().contains("p/m"));
+    }
+
+    #[test]
+    fn chat_reasoning_replay_values_are_explicit_and_round_trip() {
+        for (wire, expected) in [
+            ("reasoning", ChatReasoningReplay::Reasoning),
+            ("reasoning_content", ChatReasoningReplay::ReasoningContent),
+            ("omit", ChatReasoningReplay::Omit),
+        ] {
+            let json = catalog_json(&format!(
+                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
+                     {{"id":"m","protocol":"openai_chat_completions","contextWindow":1000,
+                      "maxOutputTokens":100,
+                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
+                                      "toolCalls":true,"reasoning":false}},
+                      "compat":{{"chatReasoningReplay":"{wire}"}}}}]}}"#
+            ));
+            let catalog = ModelCatalog::from_json_slice(json.as_bytes()).expect("valid catalog");
+            let compat = catalog
+                .model(&ModelRef::parse("p/m").expect("reference"))
+                .expect("model")
+                .compat;
+            assert_eq!(compat.chat_reasoning_replay, Some(expected));
+            let serialized = serde_json::to_value(compat).expect("serialize compat");
+            assert_eq!(serialized["chatReasoningReplay"], wire);
+            let decoded: ModelCompat = serde_json::from_value(serialized).expect("decode compat");
+            assert_eq!(decoded, compat);
+        }
+    }
+
+    #[test]
+    fn chat_reasoning_replay_is_invalid_for_non_chat_protocols() {
+        for protocol in ["openai_responses", "anthropic_messages"] {
+            let json = catalog_json(&format!(
+                r#"{{"baseUrl":"https://a.example","apiKey":"k","models":[
+                     {{"id":"m","protocol":"{protocol}","contextWindow":1000,
+                      "maxOutputTokens":100,
+                      "capabilities":{{"inputModalities":["text"],"outputModalities":["text"],
+                                      "toolCalls":true,"reasoning":false}},
+                      "compat":{{"chatReasoningReplay":"omit"}}}}]}}"#
+            ));
+            let error = ModelCatalog::from_json_slice(json.as_bytes()).expect_err("must fail");
+            assert!(matches!(error, ModelCatalogError::InvalidCompat { .. }));
+        }
+    }
+
+    /// A provider can publish a model whose provider-facing identity contains
+    /// slashes, and the resolved invocation preserves that identity for the
+    /// request body.
+    #[test]
+    fn slash_bearing_model_ids_reach_the_provider_request() {
+        let json = catalog_json(
+            r#"{"baseUrl":"https://gateway.example/v1","apiKey":"k","models":[
+                 {"id":"Qwen/Qwen3","protocol":"openai_chat_completions","contextWindow":1000,
+                 "maxOutputTokens":100,
+                 "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                  "toolCalls":true,"reasoning":false},
+                 "compat":{"chatReasoningReplay":"omit"}}]}"#,
+        );
+        let catalog = ModelCatalog::from_json_slice(json.as_bytes()).expect("valid");
+        let reference = ModelRef::parse("p/Qwen/Qwen3").expect("reference");
+        assert_eq!(
+            catalog.model(&reference).expect("model exists").id.as_str(),
+            "Qwen/Qwen3"
+        );
+
+        let resolved = catalog
+            .resolve(&MapCredentialEnvironment::default())
+            .expect("literal credential resolves");
+        let registry = crate::model::invocation::ModelBindingRegistry::new(resolved)
+            .expect("supported adapter binds");
+        let invocation = registry
+            .resolve(&crate::model::invocation::ModelSelection::of(reference))
+            .expect("model resolves");
+        assert_eq!(invocation.invocation_config().model, "Qwen/Qwen3");
     }
 
     /// Unknown catalog fields are rejected rather than silently ignored.

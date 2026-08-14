@@ -23,10 +23,10 @@ pub use adapter::openai::{
 };
 pub use adapter::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};
 pub use catalog::{
-    ChatMaxTokensField, ChatStreamUsage, CredentialSource, CredentialSourceView, Modality,
-    ModelCapabilities, ModelCatalog, ModelCatalogError, ModelCatalogView, ModelCompat,
-    ModelDefinition, ModelId, ModelRef, ProviderId, ReasoningProfile, ReasoningProfileId,
-    ResolvedModelCatalog, ResponsesStorageMode,
+    ChatMaxTokensField, ChatReasoningReplay, ChatStreamUsage, CredentialSource,
+    CredentialSourceView, Modality, ModelCapabilities, ModelCatalog, ModelCatalogError,
+    ModelCatalogView, ModelCompat, ModelDefinition, ModelId, ModelRef, ProviderId,
+    ReasoningProfile, ReasoningProfileId, ResolvedModelCatalog, ResponsesStorageMode,
 };
 pub use error::{ModelError, ModelErrorKind};
 pub use event::ModelEvent;

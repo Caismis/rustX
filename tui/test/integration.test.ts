@@ -70,6 +70,7 @@ function modelsJson(baseUrl: string): string {
               toolCalls: true,
               reasoning: false,
             },
+            compat: { chatReasoningReplay: "omit" },
             requestParams: { temperature: 0.25 },
           },
           {
@@ -83,6 +84,7 @@ function modelsJson(baseUrl: string): string {
               toolCalls: true,
               reasoning: false,
             },
+            compat: { chatReasoningReplay: "omit" },
           },
         ],
       },

@@ -1,0 +1,3 @@
+data: {"id":"gen-error","object":"chat.completion.chunk","provider":"Example","error":{"code":429,"message":"Rate limit exceeded","metadata":{"error_type":"rate_limit_exceeded","provider_code":"upstream_rate_limited"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}
+
+data: [DONE]

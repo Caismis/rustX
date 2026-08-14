@@ -1161,6 +1161,13 @@ contracts and provider protocols. These invariants are frozen by M2:
   partial output after a refusal) is owned by the future Agent Loop, never
   by M2.
 
+- When a provider emits both incremental deltas and a cumulative terminal
+  snapshot for the same semantic content, the adapter compares the exact
+  cumulative value with its accumulated deltas. Matching snapshots are
+  deduplicated, snapshot-only values are recovered, and contradictory values
+  fail as provider protocol errors; no suffix repair or last-value-wins rule
+  exists.
+
 - Provider content-block indexes are required for deterministic block
   association: a missing, negative, non-integer, or overflowing `index` on
   `content_block_start` / `content_block_delta` / `content_block_stop` is a
@@ -1254,6 +1261,11 @@ contracts and provider protocols. These invariants are frozen by M2:
   override that also declares one of those keys is a deterministic
   configuration failure, never resolved by merge order.
 
+- **Model references are deterministic.** `provider/model-id` splits at the
+  first slash only. Provider IDs and reasoning-profile IDs reject `/`; model
+  IDs preserve the full remainder but reject empty slash-separated segments.
+  Thus `a/b` and `a/b/c` are valid, while `a/`, `/b`, and `a//b` are not.
+
 - **Reasoning is model-declared named profiles.** The runtime assigns no
   meaning to a profile name, synthesizes no `off`/`low`/`medium`/`high`
   profile, and injects no reasoning field of its own. A profile's wire
@@ -1275,8 +1287,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   text model.
 
 - **`compat` is bounded structural translation behaviour**, disjoint from
-  `requestParams`. Nothing is ever inferred from a provider name or a base
-  URL hostname.
+  `requestParams`. Chat Completions models must explicitly declare
+  `chatReasoningReplay` as `reasoning`, `reasoning_content`, or `omit`; there
+  is no universal dialect default. `omit` is applied while translating
+  canonical history, so unavailable or multiple historical reasoning blocks
+  are ignored without inspecting provider continuation state. Nothing is
+  inferred from a provider name or a base URL hostname.
 
 - **One immutable attempt model snapshot.** The snapshot is taken at the same
   admission linearization boundary that publishes the attempt. Every model

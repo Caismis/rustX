@@ -1,0 +1,5 @@
+data: {"id":"reasoning-snapshot-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Plan"},"finish_reason":null}]}
+
+data: {"id":"reasoning-snapshot-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","reasoning":"Plan"},"finish_reason":"stop"}]}
+
+data: [DONE]

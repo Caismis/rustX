@@ -1,0 +1,9 @@
+data: {"type":"response.created","response":{"id":"resp_or","status":"in_progress"}}
+
+data: {"type":"response.reasoning.delta","output_index":0,"delta":"Think carefully."}
+
+data: {"type":"response.reasoning.done","output_index":0,"text":"Think carefully."}
+
+data: {"type":"response.completed","response":{"id":"resp_or","status":"completed","output":[],"usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}
+
+data: [DONE]

@@ -274,6 +274,141 @@ async fn refusal_derives_refusal_finish() {
     ));
 }
 
+/// Output-text done values must equal the accumulated deltas; a longer
+/// prefix is still a contradiction rather than an opportunity for repair.
+#[tokio::test]
+async fn responses_conflicting_text_done_values_fail() {
+    for fixture in [
+        "output_text_done_conflict.sse",
+        "output_text_done_prefix_conflict.sse",
+    ] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_responses", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            with_storage(
+                simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+                ResponsesStorageMode::Stored,
+            ),
+        )
+        .await;
+        assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Failed { error })
+                if error.message.contains("cumulative text value")
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::Completed { .. })),
+            "fixture {fixture} must not complete after a cumulative contradiction"
+        );
+    }
+}
+
+#[tokio::test]
+async fn responses_refusal_done_values_are_consistent() {
+    let matching_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "refusal_done_matching.sse")
+    })
+    .await;
+    let matching_events = collect_events(
+        &adapter(&matching_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    let refusals: Vec<&str> = matching_events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::RefusalDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals, vec!["I cannot"]);
+    assert!(matches!(
+        matching_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+
+    let conflict_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "refusal_done_conflict.sse")
+    })
+    .await;
+    let conflict_events = collect_events(
+        &adapter(&conflict_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&conflict_events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        conflict_events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative refusal value")
+    ));
+}
+
+#[tokio::test]
+async fn responses_conflicting_reasoning_done_fails_explicitly() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "reasoning_done_conflict.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative reasoning value")
+    ));
+}
+
+/// A terminal response snapshot is checked even after its output item was
+/// already completed, so a contradiction cannot settle as Completed.
+#[tokio::test]
+async fn responses_terminal_cumulative_conflict_prevents_completion() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "terminal_output_text_conflict.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative text value")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Completed { .. }))
+    );
+}
+
 /// Incomplete responses map their incomplete reason to Length or
 /// `ContentFilter` and still emit continuation state before `Completed`.
 #[tokio::test]
@@ -350,6 +485,50 @@ async fn stream_error_event_fails() {
     )
     .await;
     assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error }) if error.provider_code.as_deref() == Some("server_error")
+    ));
+}
+
+/// `OpenRouter`'s Responses dialect exposes compact reasoning events and a
+/// nested `response.error` event; both are normalized without silent loss.
+#[tokio::test]
+async fn openrouter_responses_dialect_is_normalized() {
+    let reasoning_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "openrouter_reasoning.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&reasoning_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "router/model", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, ModelEvent::ReasoningDelta { .. }))
+            .count(),
+        1,
+        "done snapshot must not duplicate the reasoning delta"
+    );
+
+    let error_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "openrouter_response_error.sse")
+    })
+    .await;
+    let error_events = collect_events(
+        &adapter(&error_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "router/model", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&error_events, &ModelErrorKind::RateLimit);
 }
 
 /// A stream ending without a terminal response event is a normalized failure.
@@ -417,6 +596,92 @@ async fn reasoning_done_only_is_emitted_once() {
         })
         .collect();
     assert_eq!(reasoning, vec!["Only in done."]);
+}
+
+/// Done events are authoritative fallbacks when a provider emits no deltas;
+/// output-item and terminal snapshots do not duplicate the recovered text.
+#[tokio::test]
+async fn done_only_parts_are_recovered_once() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "done_only_parts.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    let visible: Vec<(&str, &str)> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ReasoningDelta { text, .. } => Some(("reasoning", text.as_str())),
+            ModelEvent::TextDelta { text, .. } => Some(("text", text.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        visible,
+        vec![
+            ("reasoning", "Summary only in done."),
+            ("reasoning", "Detail only in done."),
+            ("text", "Answer only in done."),
+        ]
+    );
+}
+
+/// The terminal response object recovers output when intermediate item/done
+/// events were omitted, preserving provider output order.
+#[tokio::test]
+async fn terminal_response_recovers_missing_output_events() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "terminal_only_output.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert!(matches!(
+        &events[1],
+        ModelEvent::ReasoningDelta { block_index, text }
+            if block_index.get() == 0 && text == "Recovered reasoning."
+    ));
+    assert!(matches!(
+        &events[2],
+        ModelEvent::TextDelta { block_index, text }
+            if block_index.get() == 1 && text == "Recovered answer."
+    ));
+}
+
+/// Known stream families whose semantics do not fit the canonical model fail
+/// explicitly; they are not treated as harmless future metadata.
+#[tokio::test]
+async fn known_unsupported_response_events_fail_explicitly() {
+    for fixture in ["audio_delta.sse", "annotation_added.sse"] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_responses", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            with_storage(
+                simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+                ResponsesStorageMode::Stored,
+            ),
+        )
+        .await;
+        assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+        assert_eq!(server.attempt_count(), 1, "fixture {fixture}");
+    }
 }
 
 /// Stateless mode: the fresh request sets store=false, requests encrypted

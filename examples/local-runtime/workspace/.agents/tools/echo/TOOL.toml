@@ -1,0 +1,6 @@
+schema_version = 1
+name = "echo"
+description = "Return the message supplied to the example tool."
+entrypoint = "tool:main"
+execution = "foreground_only"
+concurrency = "sequential"

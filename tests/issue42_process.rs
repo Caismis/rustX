@@ -49,6 +49,7 @@ fn models_json(base_url: &str) -> String {
             "toolCalls": true,
             "reasoning": false
           }},
+          "compat": {{"chatReasoningReplay": "omit"}},
           "requestParams": {{"temperature": 0.11}}
         }}
       ]

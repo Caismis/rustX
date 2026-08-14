@@ -1,0 +1,5 @@
+event: error
+data: {"type":"error","error":{"type":"api_error","error_type":"authentication","message":"Invalid credentials"}}
+
+event: ping
+data: {"type":"ping"}

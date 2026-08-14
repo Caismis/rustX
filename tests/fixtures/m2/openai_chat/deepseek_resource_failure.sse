@@ -1,0 +1,3 @@
+data: {"id":"deepseek-failure","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":""},"finish_reason":"insufficient_system_resource"}]}
+
+data: [DONE]

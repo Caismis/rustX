@@ -66,10 +66,11 @@ fn live_session_model(base_url: &str, model: &str, window: u64) -> SessionModelS
                     "maxOutputTokens": 64,
                     "capabilities": {
                         "inputModalities": ["text"],
-                        "outputModalities": ["text"],
-                        "toolCalls": true,
-                        "reasoning": false
-                    }
+                    "outputModalities": ["text"],
+                    "toolCalls": true,
+                    "reasoning": false
+                    },
+                    "compat": {"chatReasoningReplay": "omit"}
                 }]
             }
         }

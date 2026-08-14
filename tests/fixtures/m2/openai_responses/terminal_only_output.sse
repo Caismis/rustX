@@ -1,0 +1,3 @@
+data: {"type":"response.completed","sequence_number":1,"response":{"id":"resp_terminal","object":"response","status":"completed","model":"gpt-test","output":[{"id":"rs_terminal","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"Recovered reasoning."}]},{"id":"msg_terminal","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Recovered answer.","annotations":[]}]}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}
+
+data: [DONE]

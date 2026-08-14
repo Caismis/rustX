@@ -53,7 +53,7 @@ import type { RuntimeClientSession } from "../runtime/session.ts";
 import type { CatalogModelView } from "../protocol/types.ts";
 import {
   renderBackgroundSection,
-  renderEntry,
+  renderEntryBlocks,
   renderFooter,
   renderForegroundTool,
 } from "./render.ts";
@@ -317,12 +317,22 @@ export class RustxTuiApp {
   #renderState(state: PresentationState): void {
     this.#transcript.clear();
     for (const entry of state.transcript) {
-      const body = renderEntry(entry);
-      if (body.length === 0) {
+      const blocks = renderEntryBlocks(entry);
+      if (blocks.length === 0) {
         continue;
       }
-      this.#transcript.addChild(new Markdown(body, 1, 0, markdownTheme));
-      this.#transcript.addChild(new Spacer(1));
+      for (const block of blocks) {
+        this.#transcript.addChild(
+          new Markdown(
+            block.markdown,
+            1,
+            0,
+            markdownTheme,
+            block.defaultTextStyle,
+          ),
+        );
+        this.#transcript.addChild(new Spacer(1));
+      }
     }
 
     for (const pending of state.pendingSubmissions) {

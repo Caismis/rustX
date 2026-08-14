@@ -11,9 +11,9 @@ use rustx::message::types::{
     SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelErrorKind, ModelEvent,
-    ModelProtocol, ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter,
-    OpenAiResponsesAdapter,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ChatReasoningReplay, ModelAdapter,
+    ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
+    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
 use rustx::runtime::identity::MessageId;
 use rustx::runtime::identity::{ArtifactId, ToolCallId, ToolId};
@@ -169,15 +169,16 @@ async fn image_references_are_unsupported() {
     }
 }
 
-/// Chat Completions rejects previous reasoning blocks in history instead of
-/// flattening them into text.
+/// Chat Completions replays previous reasoning through vLLM's dedicated
+/// assistant-message field instead of flattening it into visible text.
 #[tokio::test]
-async fn chat_rejects_previous_reasoning() {
+async fn chat_replays_previous_reasoning() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
     .await;
     let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+    request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Reasoning);
     request.messages.insert(
         2,
         MessageBlock::Agent(AgentMessageBlock {
@@ -190,12 +191,263 @@ async fn chat_rejects_previous_reasoning() {
             )],
         }),
     );
-    unsupported_rejected(
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    let events = common::collect_events(&adapter, request).await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let reasoning_message = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["reasoning"] == "Think.")
+        .expect("assistant reasoning is replayed");
+    assert_eq!(reasoning_message["role"], "assistant");
+    assert!(
+        reasoning_message["content"]
+            .as_array()
+            .expect("assistant content array")
+            .is_empty(),
+        "reasoning is not flattened into visible assistant content"
+    );
+}
+
+/// The catalog selects the assistant reasoning replay dialect explicitly:
+/// vLLM/OpenRouter, preserved-thinking APIs, or providers that require it to
+/// be omitted from later ordinary turns.
+#[tokio::test]
+async fn chat_reasoning_replay_dialects_are_explicit() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let adapter =
+        OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1")));
+    for (attempt, (dialect, field)) in [
+        (ChatReasoningReplay::Reasoning, Some("reasoning")),
+        (
+            ChatReasoningReplay::ReasoningContent,
+            Some("reasoning_content"),
+        ),
+        (ChatReasoningReplay::Omit, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.messages.insert(
+            2,
+            MessageBlock::Agent(AgentMessageBlock {
+                id: MessageId::new(format!("msg-r-{attempt}")),
+                content: vec![AgentContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: Some("Think.".to_owned()),
+                        provider_state: None,
+                    },
+                )],
+            }),
+        );
+        let events = common::collect_events(&adapter, request).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let body: serde_json::Value =
+            serde_json::from_str(&server.request_body(attempt)).expect("request body is JSON");
+        let reasoning_message = body["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("assistant message");
+        if let Some(field) = field {
+            assert_eq!(reasoning_message[field], "Think.");
+        } else {
+            assert!(reasoning_message.get("reasoning").is_none());
+            assert!(reasoning_message.get("reasoning_content").is_none());
+        }
+    }
+}
+
+/// Omission is decided while translating canonical content, so an
+/// unexposed reasoning block does not need a fabricated text value or
+/// provider-state conversion.
+#[tokio::test]
+async fn chat_omit_ignores_unavailable_reasoning() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+    request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
+    request.messages.insert(
+        2,
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-r-omit-unavailable"),
+            content: vec![
+                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    text: None,
+                    provider_state: Some(
+                        rustx::runtime::continuation::ProviderContinuationState::Anthropic(
+                            rustx::runtime::continuation::AnthropicContinuation {
+                                opaque: serde_json::json!({"signature": "opaque"}),
+                            },
+                        ),
+                    ),
+                }),
+                AgentContentBlock::Text(TextBlock {
+                    text: "Visible answer.".to_owned(),
+                }),
+            ],
+        }),
+    );
+
+    let events = common::collect_events(
         &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
         request,
-        &server,
     )
     .await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let message = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["content"][0]["text"] == "Visible answer.")
+        .expect("visible assistant content is preserved");
+    assert!(message.get("reasoning").is_none());
+    assert!(message.get("reasoning_content").is_none());
+}
+
+/// Omission ignores every historical reasoning block, even when one
+/// assistant message contains more than the Chat dialect can represent.
+#[tokio::test]
+async fn chat_omit_ignores_multiple_reasoning_blocks() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+    request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
+    request.messages.insert(
+        2,
+        MessageBlock::Agent(AgentMessageBlock {
+            id: MessageId::new("msg-r-omit-multiple"),
+            content: vec![
+                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    text: Some("first".to_owned()),
+                    provider_state: None,
+                }),
+                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    text: None,
+                    provider_state: None,
+                }),
+                AgentContentBlock::Text(TextBlock {
+                    text: "Keep this text.".to_owned(),
+                }),
+                AgentContentBlock::ToolCall(rustx::tools::types::ToolCall {
+                    id: ToolCallId::new("call-omit"),
+                    tool_id: ToolId::new("tool-list"),
+                    name: "list_directory".to_owned(),
+                    arguments: serde_json::json!({"path": "."}),
+                }),
+            ],
+        }),
+    );
+
+    let events = common::collect_events(
+        &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
+        request,
+    )
+    .await;
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+
+    let body: serde_json::Value =
+        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    let message = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .find(|message| message["content"][0]["text"] == "Keep this text.")
+        .expect("visible assistant content is preserved");
+    assert!(message.get("reasoning").is_none());
+    assert!(message.get("reasoning_content").is_none());
+    assert_eq!(message["tool_calls"][0]["id"], "call-omit");
+}
+
+/// Replay modes fail before network execution when the canonical reasoning
+/// text was not exposed by the provider.
+#[tokio::test]
+async fn chat_replay_modes_reject_unavailable_reasoning_text() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    for dialect in [
+        ChatReasoningReplay::Reasoning,
+        ChatReasoningReplay::ReasoningContent,
+    ] {
+        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.messages.insert(
+            2,
+            MessageBlock::Agent(AgentMessageBlock {
+                id: MessageId::new(format!("msg-r-unavailable-{dialect:?}")),
+                content: vec![AgentContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: None,
+                        provider_state: None,
+                    },
+                )],
+            }),
+        );
+        unsupported_rejected(
+            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
+            request,
+            &server,
+        )
+        .await;
+    }
+}
+
+/// Replay modes fail explicitly rather than silently selecting, merging, or
+/// dropping one of multiple canonical reasoning blocks.
+#[tokio::test]
+async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    for dialect in [
+        ChatReasoningReplay::Reasoning,
+        ChatReasoningReplay::ReasoningContent,
+    ] {
+        let mut request = history_request(ModelProtocol::OpenAiChatCompletions, "gpt-test");
+        request.invocation.compat.chat_reasoning_replay = Some(dialect);
+        request.messages.insert(
+            2,
+            MessageBlock::Agent(AgentMessageBlock {
+                id: MessageId::new(format!("msg-r-multiple-{dialect:?}")),
+                content: vec![
+                    AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                        text: Some("first".to_owned()),
+                        provider_state: None,
+                    }),
+                    AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                        text: Some("second".to_owned()),
+                        provider_state: None,
+                    }),
+                ],
+            }),
+        );
+        unsupported_rejected(
+            &OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("k", server.url("/v1"))),
+            request,
+            &server,
+        )
+        .await;
+    }
 }
 
 /// Chat Completions translates a full canonical history (system, user, agent

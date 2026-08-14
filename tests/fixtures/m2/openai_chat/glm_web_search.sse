@@ -1,0 +1,3 @@
+data: {"id":"glm-search","object":"chat.completion.chunk","choices":[],"web_search":[{"title":"Result","link":"https://example.com","content":"Evidence"}]}
+
+data: [DONE]

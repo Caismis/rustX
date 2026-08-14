@@ -8,16 +8,19 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { Markdown } from "@earendil-works/pi-tui";
 
 import { replaceFromSnapshot, reduce } from "../src/presentation/projection.ts";
 import {
   renderBackgroundSection,
   renderEntry,
+  renderEntryBlocks,
   renderFooter,
   renderForegroundTool,
 } from "../src/ui/render.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
 import type { ForegroundToolExecution } from "../src/protocol/types.ts";
+import { markdownTheme } from "../src/ui/theme.ts";
 import {
   agentMessage,
   attemptModel,
@@ -73,8 +76,46 @@ describe("transcript rendering", () => {
     const rendered = plain(renderEntry(state.transcript[0]!));
 
     assert.match(rendered, /▌ reasoning\ninternal/);
+    assert.match(rendered, /▌ answer\nthe answer/);
     assert.match(rendered, /▌ refusal\nI cannot help with that/);
-    assert.match(rendered, /the answer/);
+    const [reasoning, answer] = renderEntryBlocks(state.transcript[0]!);
+    assert.equal(
+      reasoning?.defaultTextStyle?.color?.("internal"),
+      "\u001b[90minternal\u001b[0m",
+    );
+    assert.equal(answer?.defaultTextStyle, undefined);
+  });
+
+  it("reapplies reasoning style after nested Markdown resets ANSI", () => {
+    const state = base({
+      messages: [
+        {
+          role: "agent",
+          id: "m1",
+          content: [
+            {
+              type: "reasoning",
+              text: "before **bold** after `code` tail",
+            },
+          ],
+        },
+      ],
+    });
+    const [reasoning] = renderEntryBlocks(state.transcript[0]!);
+    assert.ok(reasoning);
+
+    const rendered = new Markdown(
+      reasoning.markdown,
+      0,
+      0,
+      markdownTheme,
+      reasoning.defaultTextStyle,
+    )
+      .render(100)
+      .join("\n");
+
+    assert.match(rendered, /\u001b\[90m after/);
+    assert.match(rendered, /\u001b\[90m tail/);
   });
 
   it("renders reasoning the provider did not expose without inventing text", () => {
@@ -104,12 +145,15 @@ describe("transcript rendering", () => {
     ]) {
       state = reduce(state, { cursor: state.cursor + 1, event });
     }
-    assert.equal(plain(renderEntry(state.transcript[0]!)), "partial");
+    assert.equal(plain(renderEntry(state.transcript[0]!)), "▌ answer\npartial");
   });
 
   it("renders a committed assistant message after the stream", () => {
     const state = base({ messages: [agentMessage("m1", "final answer")] });
-    assert.equal(plain(renderEntry(state.transcript[0]!)), "final answer");
+    assert.equal(
+      plain(renderEntry(state.transcript[0]!)),
+      "▌ answer\nfinal answer",
+    );
   });
 });
 

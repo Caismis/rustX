@@ -139,6 +139,14 @@ impl FixtureModel {
     /// A plain text-only tool-calling model with a large window.
     #[must_use]
     pub fn text(reference: &str, protocol: ModelProtocol) -> Self {
+        let compat = match protocol {
+            ModelProtocol::OpenAiChatCompletions => {
+                serde_json::json!({"chatReasoningReplay": "omit"})
+            }
+            ModelProtocol::OpenAiResponses | ModelProtocol::AnthropicMessages => {
+                serde_json::json!({})
+            }
+        };
         Self {
             reference: reference.to_owned(),
             protocol,
@@ -146,7 +154,7 @@ impl FixtureModel {
             max_output_tokens: 4096,
             request_params: serde_json::json!({}),
             reasoning: None,
-            compat: serde_json::json!({}),
+            compat,
             tool_calls: true,
             reasoning_capable: false,
             extra_input_modalities: Vec::new(),

@@ -11,6 +11,8 @@
  * semantics belong to Rust.
  */
 
+import type { DefaultTextStyle } from "@earendil-works/pi-tui";
+
 import {
   activeBackground,
   isBackgroundTerminal,
@@ -33,12 +35,30 @@ import type {
 
 /** The Markdown body of one transcript entry. */
 export function renderEntry(entry: TranscriptEntry): string {
+  return renderEntryBlocks(entry)
+    .map((block) => block.markdown)
+    .join("\n\n");
+}
+
+/**
+ * One semantic transcript block rendered by its own Markdown component.
+ *
+ * Applying reasoning style through Markdown's default text style makes the
+ * renderer reapply it after nested Markdown spans reset their ANSI styling.
+ */
+export interface RenderedEntryBlock {
+  markdown: string;
+  defaultTextStyle?: DefaultTextStyle;
+}
+
+/** The independently styled Markdown blocks of one transcript entry. */
+export function renderEntryBlocks(entry: TranscriptEntry): RenderedEntryBlock[] {
   return entry.kind === "streaming"
     ? renderStreaming(entry)
     : renderCommitted(entry);
 }
 
-function renderCommitted(entry: TranscriptCommitted): string {
+function renderCommitted(entry: TranscriptCommitted): RenderedEntryBlock[] {
   const message = entry.message;
   switch (message.role) {
     case "user": {
@@ -57,7 +77,7 @@ function renderCommitted(entry: TranscriptCommitted): string {
         .join("\n");
       const kind =
         message.kind === "compaction_summary" ? " · compaction summary" : "";
-      return `${style.cyan(`▌ ${label}${kind}`)}\n${body}`;
+      return [{ markdown: `${style.cyan(`▌ ${label}${kind}`)}\n${body}` }];
     }
 
     case "agent":
@@ -65,61 +85,88 @@ function renderCommitted(entry: TranscriptCommitted): string {
         .map((block) => {
           switch (block.type) {
             case "text":
-              return block.text;
+              return {
+                markdown: `${style.grey("▌ answer")}\n${block.text}`,
+              };
             case "reasoning":
               // Reasoning stays reasoning; it is never presented as an answer.
               return block.text === undefined
-                ? style.grey("▌ reasoning (not exposed by the provider)")
-                : `${style.grey("▌ reasoning")}\n${style.dim(block.text)}`;
+                ? {
+                    markdown: "▌ reasoning (not exposed by the provider)",
+                    defaultTextStyle: { color: style.grey },
+                  }
+                : {
+                    markdown: `▌ reasoning\n${block.text}`,
+                    defaultTextStyle: { color: style.grey },
+                  };
             case "refusal":
               // Refusal stays refusal.
-              return `${style.yellow("▌ refusal")}\n${block.text}`;
+              return {
+                markdown: `${style.yellow("▌ refusal")}\n${block.text}`,
+              };
             case "tool_call":
-              return `${style.magenta(`▌ tool call ${block.name}`)}\n${fence(
-                stringifyArguments(block.arguments),
-              )}`;
+              return {
+                markdown: `${style.magenta(`▌ tool call ${block.name}`)}\n${fence(
+                  stringifyArguments(block.arguments),
+                )}`,
+              };
             case "image":
-              return style.grey("▌ image");
+              return { markdown: style.grey("▌ image") };
             default:
-              return "";
+              return undefined;
           }
         })
-        .filter((text) => text.length > 0)
-        .join("\n\n");
+        .filter((block) => block !== undefined);
 
     case "tool":
-      return `${style.magenta(`▌ tool result ${message.tool_id}`)}\n${renderResult(message.result)}`;
+      return [
+        {
+          markdown: `${style.magenta(`▌ tool result ${message.tool_id}`)}\n${renderResult(message.result)}`,
+        },
+      ];
 
     case "system":
-      return `${style.grey(`▌ system (${message.authority})`)}\n${style.dim(
-        message.content.map((block) => block.text).join("\n"),
-      )}`;
+      return [
+        {
+          markdown: `${style.grey(`▌ system (${message.authority})`)}\n${style.dim(
+            message.content.map((block) => block.text).join("\n"),
+          )}`,
+        },
+      ];
 
     default:
-      return "";
+      return [];
   }
 }
 
-function renderStreaming(entry: StreamingMessage): string {
+function renderStreaming(entry: StreamingMessage): RenderedEntryBlock[] {
   return entry.blocks
     .map((block) => {
       switch (block.kind) {
         case "text":
-          return block.text;
+          return {
+            markdown: `${style.grey("▌ answer")}\n${block.text}`,
+          };
         case "reasoning":
-          return `${style.grey("▌ reasoning")}\n${style.dim(block.text)}`;
+          return {
+            markdown: `▌ reasoning\n${block.text}`,
+            defaultTextStyle: { color: style.grey },
+          };
         case "refusal":
-          return `${style.yellow("▌ refusal")}\n${block.text}`;
+          return {
+            markdown: `${style.yellow("▌ refusal")}\n${block.text}`,
+          };
         case "tool_call":
-          return `${style.magenta(`▌ tool call ${block.name}`)}\n${fence(
-            block.argumentsText,
-          )}`;
+          return {
+            markdown: `${style.magenta(`▌ tool call ${block.name}`)}\n${fence(
+              block.argumentsText,
+            )}`,
+          };
         default:
-          return "";
+          return undefined;
       }
     })
-    .filter((text) => text.length > 0)
-    .join("\n\n");
+    .filter((block) => block !== undefined);
 }
 
 /**

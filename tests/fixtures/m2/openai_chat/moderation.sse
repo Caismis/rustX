@@ -1,0 +1,3 @@
+data: {"id":"chatcmpl-moderated","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[],"moderation":{"input":{"type":"moderation_results","model":"omni-moderation","results":[]},"output":{"type":"moderation_results","model":"omni-moderation","results":[]}}}
+
+data: [DONE]
