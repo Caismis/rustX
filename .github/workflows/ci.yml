@@ -61,22 +61,30 @@ jobs:
           nvm install --lts
           nvm use --lts
           corepack enable
+          # Cache the exact pnpm from tui/package.json's `packageManager` so
+          # the later steps resolve it without hitting the network.
+          (cd tui && corepack install)
           node --version
-          pnpm --version
           # Put the resolved LTS bin directory ahead of the runner's
           # preinstalled Node for every later step.
           dirname "$(command -v node)" >> "$GITHUB_PATH"
 
+      # The pnpm steps run with `tui` as the working directory on purpose:
+      # Corepack resolves `packageManager` from the manifest in the current
+      # directory, and from the repository root it cannot see tui's.
       - name: Report the resolved toolchain
+        working-directory: tui
         run: |
           node --version
           pnpm --version
 
       - name: Install dependencies
-        run: pnpm --dir tui install --frozen-lockfile
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: pnpm --dir tui typecheck
+        working-directory: tui
+        run: pnpm typecheck
 
       # The integration suite drives the real binary over the real stdio
       # transport, so it must exist before the tests run.
@@ -84,4 +92,5 @@ jobs:
         run: cargo build --bin rustx
 
       - name: Test
-        run: pnpm --dir tui test
+        working-directory: tui
+        run: pnpm test
