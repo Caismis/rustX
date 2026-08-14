@@ -21,8 +21,7 @@
 //! `watch`, and every wait is a barrier. The one time bound is an outer
 //! liveness guard that no assertion depends on.
 
-#[path = "common/mod.rs"]
-mod common;
+use super::support;
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -30,8 +29,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-use common::fake::{FakeStep, model_release};
-use common::runtime_client_fixture::RuntimeClientFixture;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::event::ModelEvent;
@@ -45,6 +42,8 @@ use rustx::runtime_client::{
     RuntimeClientHost, RuntimeClientOutcome, RuntimeClientProtocolEvent, RuntimeClientResponse,
     RuntimeClientResult,
 };
+use support::fake::{FakeStep, model_release};
+use support::runtime_client_fixture::RuntimeClientFixture;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _, ReadBuf};
 use tokio::sync::watch;
 
@@ -935,7 +934,7 @@ async fn an_oversized_outbound_record_terminates_without_truncating() {
     // be framed.
     let huge = "y".repeat(STDIO_JSONL_MAX_RECORD_BYTES + 1024);
     let fixture = RuntimeClientFixture::builder("conv-38-huge-output")
-        .initial_messages(vec![MessageBlock::User(common::fake::inbound_message(
+        .initial_messages(vec![MessageBlock::User(support::fake::inbound_message(
             "seed",
             &huge,
             UserSource::Human,

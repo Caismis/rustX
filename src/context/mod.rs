@@ -125,10 +125,14 @@ impl ContextRuntime {
         })
     }
 
-    /// Temporary deterministic test bridge for the existing integration
-    /// suite. Production composition never calls this path.
-    #[doc(hidden)]
-    pub fn with_test_summarizer(
+    /// The in-crate deterministic summarizer seam.
+    ///
+    /// It exists only under `cfg(test)` and is `pub(crate)`, so it is not
+    /// part of the published API: [`ContextRuntime::for_attempt`] is the one
+    /// constructor a consumer of this library can call, and it derives the
+    /// summarizer from the attempt's frozen model snapshot.
+    #[cfg(test)]
+    pub(crate) fn with_scripted_summarizer(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
         checkpoint_store: Arc<dyn ContextCheckpointStore>,

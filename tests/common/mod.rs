@@ -9,10 +9,6 @@
 
 #![allow(dead_code)] // every helper is used only by some test binaries
 
-pub mod context;
-pub mod fake;
-pub mod runtime_client_fixture;
-
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -281,41 +277,6 @@ pub fn describe_events(events: &[rustx::model::ModelEvent]) -> String {
         .map(|event| serde_json::to_string(event).expect("serialize event"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// The immutable attempt model snapshot of a loop test.
-///
-/// The binding is resolved through a real fixture catalog — explicit
-/// endpoint, explicit credential, validated limits and capabilities — so a
-/// loop test exercises the same selection path production uses; only the
-/// adapter behind it is scripted.
-pub fn attempt_model(
-    adapter: std::sync::Arc<dyn rustx::model::ModelAdapter>,
-    model: &str,
-) -> rustx::model::AttemptModelSnapshot {
-    attempt_model_with_window(adapter, model, 10_000_000, 512)
-}
-
-/// The attempt model snapshot of a loop test with explicit limits.
-pub fn attempt_model_with_window(
-    adapter: std::sync::Arc<dyn rustx::model::ModelAdapter>,
-    model: &str,
-    context_window: u64,
-    max_output_tokens: u32,
-) -> rustx::model::AttemptModelSnapshot {
-    use rustx::model::fixture::{FixtureModel, ScriptedAdapterFactory, fixture_session_model};
-    let reference = format!("fixture/{model}");
-    fixture_session_model(
-        &[FixtureModel::text(
-            &reference,
-            rustx::model::ModelProtocol::OpenAiChatCompletions,
-        )
-        .with_context_window(context_window)
-        .with_max_output_tokens(max_output_tokens)],
-        &reference,
-        &ScriptedAdapterFactory::new(adapter),
-    )
-    .snapshot()
 }
 
 /// A `requestParams` object literal.

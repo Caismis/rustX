@@ -1,16 +1,19 @@
-//! Deterministic model-catalog fixtures for tests.
+//! Deterministic model-catalog fixtures.
 //!
-//! This module exists so tests can build a *real* session model authority —
+//! This module exists so a suite can build a *real* session model authority —
 //! a validated catalog, resolved credentials, real adapter bindings, and a
 //! resolved [`SessionModelState`] — without a network and without a second
 //! production configuration mode. Everything here goes through the ordinary
-//! public catalog/invocation path; nothing bypasses validation.
+//! public catalog/invocation path; nothing bypasses validation. The single
+//! substitution is the adapter behind an already-validated binding, through
+//! the `cfg(test)`-only
+//! [`ScriptedProviderAdapterFactory`](crate::model::invocation::ScriptedProviderAdapterFactory)
+//! seam.
 //!
-//! It is ordinary library code (integration tests link the library, so a
-//! `#[cfg(test)]` gate would hide it from them), but it is *fixture
-//! construction only*: it introduces no runtime behaviour, no alternative
-//! validation path, and no production configuration mode. Production
-//! composition never references it.
+//! It is *fixture construction only*: it introduces no runtime behaviour, no
+//! alternative validation path, and no production configuration mode. It is
+//! compiled only into this crate's test build, so it is not part of the
+//! published API and production composition can never reference it.
 
 use std::sync::Arc;
 
@@ -20,7 +23,7 @@ use crate::model::catalog::{
     ResolvedProvider,
 };
 use crate::model::invocation::{
-    ModelBindingRegistry, ModelInvocationError, RequestParams, TestProviderAdapterFactory,
+    ModelBindingRegistry, ModelInvocationError, RequestParams, ScriptedProviderAdapterFactory,
 };
 use crate::model::session::{SessionModelConfig, SessionModelState};
 use crate::model::types::ModelProtocol;
@@ -44,7 +47,7 @@ impl ScriptedAdapterFactory {
     }
 }
 
-impl TestProviderAdapterFactory for ScriptedAdapterFactory {
+impl ScriptedProviderAdapterFactory for ScriptedAdapterFactory {
     fn adapter(
         &self,
         _provider: &ResolvedProvider,
@@ -70,7 +73,7 @@ where
     }
 }
 
-impl<F> TestProviderAdapterFactory for MappedAdapterFactory<F>
+impl<F> ScriptedProviderAdapterFactory for MappedAdapterFactory<F>
 where
     F: Fn(&ProviderId, ModelProtocol) -> Option<Arc<dyn ModelAdapter>> + Send + Sync,
 {
@@ -289,12 +292,12 @@ pub fn fixture_catalog(models: &[FixtureModel]) -> ModelCatalog {
 #[must_use]
 pub fn fixture_registry(
     models: &[FixtureModel],
-    factory: &dyn TestProviderAdapterFactory,
+    factory: &dyn ScriptedProviderAdapterFactory,
 ) -> ModelBindingRegistry {
     let resolved = fixture_catalog(models)
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    ModelBindingRegistry::new_with_test_factory(resolved, factory)
+    ModelBindingRegistry::new_with_scripted_adapters(resolved, factory)
         .expect("fixture bindings resolve")
 }
 
@@ -307,7 +310,7 @@ pub fn fixture_registry(
 pub fn fixture_session_model(
     models: &[FixtureModel],
     selected: &str,
-    factory: &dyn TestProviderAdapterFactory,
+    factory: &dyn ScriptedProviderAdapterFactory,
 ) -> SessionModelState {
     let registry = fixture_registry(models, factory);
     SessionModelState::new(

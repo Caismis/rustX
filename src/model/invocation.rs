@@ -63,6 +63,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::model::adapter::ModelAdapter;
+#[cfg(test)]
 use crate::model::catalog::ResolvedProvider;
 use crate::model::catalog::{
     CatalogModelView, Modality, ModelCapabilities, ModelCatalogView, ModelCompat, ModelDefinition,
@@ -731,11 +732,16 @@ impl ModelBindingRegistry {
         Ok(Self { catalog, adapters })
     }
 
-    /// Test-only binding seam for in-crate deterministic adapter fixtures.
-    #[doc(hidden)]
-    pub fn new_with_test_factory(
+    /// The in-crate deterministic binding seam.
+    ///
+    /// It exists only under `cfg(test)` and is `pub(crate)`, so it is not
+    /// part of the published API: [`ModelBindingRegistry::new`] is the one
+    /// binding path a consumer of this library can call, and it constructs
+    /// the three supported protocol adapters directly.
+    #[cfg(test)]
+    pub(crate) fn new_with_scripted_adapters(
         catalog: ResolvedModelCatalog,
-        factory: &dyn TestProviderAdapterFactory,
+        factory: &dyn ScriptedProviderAdapterFactory,
     ) -> Result<Self, ModelInvocationError> {
         let mut adapters: BTreeMap<(ProviderId, ModelProtocol), Arc<dyn ModelAdapter>> =
             BTreeMap::new();
@@ -905,12 +911,14 @@ impl ModelBindingRegistry {
     }
 }
 
-/// Hidden test-only adapter substitution used by deterministic integration
-/// fixtures. Production composition never calls this path; its documented
-/// binding path is [`ModelBindingRegistry::new`], which constructs the three
-/// supported protocol adapters explicitly.
-#[doc(hidden)]
-pub trait TestProviderAdapterFactory: Send + Sync {
+/// The adapter substitution used by the crate's own deterministic suites.
+///
+/// It exists only under `cfg(test)`, so no consumer of this library can
+/// substitute an arbitrary [`ModelAdapter`] for a validated catalog binding.
+/// The one binding path is [`ModelBindingRegistry::new`], which constructs
+/// the three supported protocol adapters explicitly.
+#[cfg(test)]
+pub(crate) trait ScriptedProviderAdapterFactory: Send + Sync {
     fn adapter(
         &self,
         provider: &ResolvedProvider,

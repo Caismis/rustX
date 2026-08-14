@@ -1299,8 +1299,8 @@ mod tests {
 
     /// A deterministic session model view for projection unit tests.
     fn model_view() -> crate::model::session::SessionModelView {
-        crate::model::fixture::scripted_session_model(std::sync::Arc::new(
-            crate::model::fixture::NullAdapter,
+        crate::scripted_suites::support::model::scripted_session_model(std::sync::Arc::new(
+            crate::scripted_suites::support::model::NullAdapter,
         ))
         .view()
     }

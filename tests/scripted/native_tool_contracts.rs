@@ -26,11 +26,10 @@
 //! canonical event ordering, and a rejected native input stays a normal
 //! failed result slot.
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -48,6 +47,7 @@ use rustx::tools::types::{
     ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
     ToolInvocationMode,
 };
+use support::fake::{FakeModel, FakeStep, ScriptedCall, fake_model, tool_call_events};
 
 /// The explicitly composed native tool plane.
 const NATIVE_TOOL_NAMES: [&str; 7] = [
@@ -804,7 +804,7 @@ fn request(
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: common::attempt_model(model.clone(), "fake-model"),
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
@@ -814,7 +814,7 @@ fn context_runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::Context
         ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
         SessionContextPolicy {
             reserve_tokens: 0,

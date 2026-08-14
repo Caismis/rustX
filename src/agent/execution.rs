@@ -1863,7 +1863,6 @@ mod tests {
     use crate::model::chat_protocol;
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
-    use crate::model::fixture::scripted_session_model;
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
@@ -1871,6 +1870,7 @@ mod tests {
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::types::CancellationReason;
+    use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::{ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,

@@ -282,7 +282,7 @@ async fn responses_continuation_keeps_sending_the_catalog() {
 /// compaction progress comparison.
 #[test]
 fn large_catalog_contributes_to_cannot_fit() {
-    use rustx::context::{ContextConfig, ContextEngine, ContextRuntime};
+    use rustx::context::{CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime};
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(rustx::context::DefaultTokenEstimator);
     let engine = ContextEngine::new(
@@ -346,7 +346,7 @@ fn large_catalog_contributes_to_cannot_fit() {
             None,
             &with_catalog,
             &[],
-            512,
+            CompactionBudgets::new(512, 512),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("the huge catalog cannot fit");
@@ -371,7 +371,7 @@ fn large_catalog_contributes_to_cannot_fit() {
             None,
             &with_moderate,
             &[],
-            512,
+            CompactionBudgets::new(512, 512),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");

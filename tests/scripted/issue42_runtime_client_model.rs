@@ -5,11 +5,10 @@
 //! inferring "which model is this attempt actually using" from event
 //! ordering. It must also never expose a credential.
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep};
 use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
@@ -17,7 +16,6 @@ use rustx::model::catalog::{
     CredentialSourceView, MapCredentialEnvironment, ModelCatalog, ModelRef, ProviderId,
     ReasoningProfileId,
 };
-use rustx::model::fixture::{FixtureModel, MappedAdapterFactory, fixture_catalog_document};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelView};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
@@ -26,6 +24,8 @@ use rustx::runtime_client::{
     EventDelivery, EventSubscription, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor,
     RuntimeClientError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
 };
+use support::fake::{FakeModel, FakeStep};
+use support::model::{FixtureModel, MappedAdapterFactory, fixture_catalog_document};
 
 const LIVENESS: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -105,8 +105,8 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
     let resolved = catalog
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    let registry =
-        ModelBindingRegistry::new_with_test_factory(resolved, &factory).expect("bindings resolve");
+    let registry = ModelBindingRegistry::new_with_scripted_adapters(resolved, &factory)
+        .expect("bindings resolve");
     let state =
         SessionModelState::new(registry, SessionModelConfig::of(model_ref("alpha/model-a")))
             .expect("the initial selection resolves");
@@ -115,7 +115,7 @@ fn session_model(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, SessionModelSt
 
 async fn runtime(scripts: Vec<Vec<FakeStep>>) -> (Arc<FakeModel>, RuntimeClientHost) {
     let (handle, model) = session_model(scripts);
-    let host = common::runtime_client_fixture::RuntimeClientFixture::builder("conv-42-rc")
+    let host = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-42-rc")
         .session_model(model)
         .context_policy(NO_COMPACTION)
         .build()

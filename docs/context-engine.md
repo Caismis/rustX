@@ -365,6 +365,11 @@ Compaction planning carries a named pair of budgets: the primary effective
 output budget controls the primary soft input limit, while the effective
 output budget of the frozen (and possibly capped) summary invocation is the
 summary reservation recorded in `CompactionPlan.summary_reservation`.
+`plan_compaction` takes that pair as an explicit `CompactionBudgets` value
+and there is no conversion from a single number, so every call site names
+both budgets — `CompactionBudgets::new(value, value)` where they
+intentionally coincide. The two remain distinct concepts even when their
+current numeric values are equal.
 
 - `session` — the summary uses the attempt's own primary invocation: same
   provider binding, model, protocol, selected reasoning profile, and

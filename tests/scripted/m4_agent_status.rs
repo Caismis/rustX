@@ -16,15 +16,13 @@
 //! - provider adapters own wire placement;
 //! - the status never enters canonical history, checkpoints, or results.
 
-mod common;
+use super::{common, support};
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
-use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
-use common::fake::{FakeModel, FakeStep, fake_model, model_release};
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, InitialTurnTrigger};
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError, AgentStatusFact,
@@ -48,6 +46,8 @@ use rustx::runtime::inbound::{ConversationInboundMailbox, FreshInboundTurn};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
+use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
+use support::fake::{FakeModel, FakeStep, fake_model, model_release};
 
 // ---------------------------------------------------------------------------
 // Deterministic clocks and composition fixtures
@@ -290,7 +290,12 @@ fn request(
         initial_messages,
         initial_turn_trigger: trigger,
         timezone,
-        model: common::attempt_model_with_window(model.clone(), "fake-status-model", 10_000_000, 1),
+        model: support::attempt_model_with_window(
+            model.clone(),
+            "fake-status-model",
+            10_000_000,
+            1,
+        ),
     }
 }
 
@@ -322,7 +327,7 @@ fn runtime(
     store: Arc<InMemoryCheckpointStore>,
     clock: Arc<dyn AgentStatusClock>,
 ) -> ContextRuntime {
-    ContextRuntime::with_test_summarizer(
+    ContextRuntime::with_scripted_summarizer(
         engine(window, 0, 0, estimator),
         Arc::new(summarizer),
         store,
@@ -1327,8 +1332,8 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
 /// no mailbox batch was drained afterward.
 #[tokio::test]
 async fn foreground_tool_continuation_has_no_status() {
-    use common::fake::ScriptedCall;
-    use common::fake::tool_call_events;
+    use support::fake::ScriptedCall;
+    use support::fake::tool_call_events;
     let call = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -1341,9 +1346,9 @@ async fn foreground_tool_continuation_has_no_status() {
     tool_script.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
     let model = fake_model(vec![tool_script, stop_script()]);
     let mut tools = ToolRegistry::new();
-    common::fake::FakeTool::new(
+    support::fake::FakeTool::new(
         common::tool("alpha", "tool-alpha"),
-        common::fake::success_result("ok"),
+        support::fake::success_result("ok"),
     )
     .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -1514,7 +1519,7 @@ fn unobservable_fresh_inbound_yields_cannot_fit_not_summary() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
@@ -1927,7 +1932,7 @@ async fn chat_completions_continuation_without_status_has_no_footer() {
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
         rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
-    let call = common::fake::ScriptedCall {
+    let call = support::fake::ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
         name: "alpha",
@@ -2216,6 +2221,47 @@ fn model_layer_has_no_context_dependency() {
             "src/model must never depend on the context layer: {}",
             file.display()
         );
+    }
+}
+
+/// No adapter or summarizer test seam is published API.
+///
+/// The two files that own the seams — the context runtime bundle and the
+/// model binding registry — declare no `#[doc(hidden)]` item at all, so a
+/// seam cannot be reintroduced as a hidden-but-callable one, and `src/`
+/// declares no fixture module outside the feature-gated MCP server fixture.
+/// Substituting a provider adapter or a summary service is `#[cfg(test)]
+/// pub(crate)` and reachable only from this crate's own test build.
+#[test]
+fn no_published_adapter_or_summarizer_seam_exists() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for owner in [
+        std::path::Path::new("context").join("mod.rs"),
+        std::path::Path::new("model").join("invocation.rs"),
+    ] {
+        let source = std::fs::read_to_string(src.join(&owner)).expect("read seam owner");
+        assert!(
+            !source.contains("doc(hidden)"),
+            "src/{} must not hide a public item: a test seam is \
+             #[cfg(test)] pub(crate), never #[doc(hidden)] pub",
+            owner.display()
+        );
+    }
+
+    let mut files = Vec::new();
+    collect_rs_files(&src, &mut files);
+    assert!(!files.is_empty(), "runtime sources must exist");
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("read runtime source");
+        for declaration in ["pub mod fixture;", "pub(crate) mod fixture;"] {
+            assert!(
+                // The MCP fixture is a feature-gated protocol *server*, not an
+                // injection seam, and stays out of every default build.
+                !source.contains(declaration) || file.ends_with("tools/mcp/mod.rs"),
+                "{} declares a fixture module in the runtime sources",
+                file.display()
+            );
+        }
     }
 }
 

@@ -9,14 +9,10 @@
 //! interleavings driven by explicit synchronization (never wall-clock
 //! timing).
 
-mod common;
+use super::{common, support};
 
 use std::path::Path;
 
-use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
-    tool_call_events,
-};
 use common::replay_execution_states;
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult, ExecutionState,
@@ -36,6 +32,10 @@ use rustx::runtime::inbound::{ConversationInboundMailbox, MailboxError};
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionStatus};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
+    tool_call_events,
+};
 
 /// A scripted model handle shared with its attempt model snapshot.
 fn fake(scripts: Vec<Vec<FakeStep>>) -> std::sync::Arc<FakeModel> {
@@ -61,7 +61,7 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: common::attempt_model(model.clone(), "fake-model"),
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
@@ -74,7 +74,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
     };
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
-    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
         SessionContextPolicy {
             reserve_tokens: 0,

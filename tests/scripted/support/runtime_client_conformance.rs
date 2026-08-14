@@ -63,8 +63,8 @@ use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
-use crate::common;
-use crate::common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result};
+use super::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result};
+use crate::scripted_suites::common;
 
 /// The outer liveness guard of one whole wait.
 ///
@@ -340,10 +340,10 @@ pub fn all_driver_factories() -> Vec<Box<dyn DriverFactory>> {
 
 /// The shared Runtime Client host fixture the scenarios build runtimes with.
 ///
-/// Construction lives in [`crate::common::runtime_client_fixture`] and is
+/// Construction lives in [`crate::scripted_suites::support::runtime_client_fixture`] and is
 /// shared with the Issue #37 semantic tests, so a scenario and its #37
 /// counterpart always exercise an identically built runtime.
-pub use crate::common::runtime_client_fixture::{
+pub use crate::scripted_suites::support::runtime_client_fixture::{
     RuntimeClientFixture as ConformanceFixture, uv_available, write_python_package, write_skill,
 };
 
@@ -801,7 +801,7 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
 /// A successful submission is acceptance, never settlement: the attempt
 /// starts, streams, and settles exactly once, asynchronously.
 pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory) {
-    let (release, release_rx) = common::fake::model_release();
+    let (release, release_rx) = super::fake::model_release();
     let fixture = ConformanceFixture::builder(&conversation(factory, "accept"))
         .script(vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -891,7 +891,7 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
 /// Submitting while busy queues the message; the runtime drains it into the
 /// next turn and both the pending view and the drain are runtime-originated.
 pub async fn inbound_batches_and_drains(factory: &dyn DriverFactory) {
-    let (release, release_rx) = common::fake::model_release();
+    let (release, release_rx) = super::fake::model_release();
     let fixture = ConformanceFixture::builder(&conversation(factory, "batch"))
         .script(vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -1034,7 +1034,7 @@ pub async fn cancellation_is_acceptance_not_settlement(factory: &dyn DriverFacto
 pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     let call = scripted_call("call-1", "tool-alpha", "alpha", serde_json::json!({"n": 1}));
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
-    for event in common::fake::tool_call_events(0, &call) {
+    for event in super::fake::tool_call_events(0, &call) {
         first.push(FakeStep::Emit(event));
     }
     first.push(FakeStep::Emit(ModelEvent::Completed {
@@ -1134,7 +1134,7 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
     for (block, call) in [&call_a, &call_b].into_iter().enumerate() {
         let block = u32::try_from(block).expect("fits");
-        for event in common::fake::tool_call_events(block, call) {
+        for event in super::fake::tool_call_events(block, call) {
             first.push(FakeStep::Emit(event));
         }
     }
@@ -1241,7 +1241,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
         serde_json::json!({"__rustx_execution": "background"}),
     );
     let mut first = vec![FakeStep::Emit(ModelEvent::Started)];
-    for event in common::fake::tool_call_events(0, &call) {
+    for event in super::fake::tool_call_events(0, &call) {
         first.push(FakeStep::Emit(event));
     }
     first.push(FakeStep::Emit(ModelEvent::Completed {
@@ -1603,7 +1603,7 @@ pub async fn capability_projection_covers_mcp_origins(
 /// Snapshot and cursor are linearized together, and subscribing after a
 /// snapshot cursor observes exactly the later events, contiguously.
 pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
-    let (release, release_rx) = common::fake::model_release();
+    let (release, release_rx) = super::fake::model_release();
     let fixture = ConformanceFixture::builder(&conversation(factory, "cursor"))
         .script(vec![
             FakeStep::ParkUntilReleased(release_rx),
@@ -1651,7 +1651,7 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
 /// authoritative snapshot repairs the client, and resuming after the
 /// repaired cursor continues contiguously.
 pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
-    let (release, release_rx) = common::fake::model_release();
+    let (release, release_rx) = super::fake::model_release();
     let fixture = ConformanceFixture::builder(&conversation(factory, "resync"))
         // A deliberately tiny replay ring: the admission burst evicts the
         // events an old cursor would still need.

@@ -13,12 +13,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::model::scripted_session_model;
 use rustx::context::{
     AgentStatusComposer, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     TokenEstimator,
 };
 use rustx::message::types::MessageBlock;
-use rustx::model::fixture::scripted_session_model;
 use rustx::model::session::SessionModelState;
 use rustx::runtime::identity::{AgentId, ConversationId};
 use rustx::runtime_client::{
@@ -227,7 +227,7 @@ impl RuntimeClientFixtureBuilder {
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),
             },
-            Arc::new(super::FakeSkillEnvironmentBackend::new()),
+            Arc::new(crate::scripted_suites::common::FakeSkillEnvironmentBackend::new()),
         )
         .expect("capability coordinator");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");

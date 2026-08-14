@@ -17,16 +17,14 @@
 //! - each provider binding is a *distinct* scripted model, so "which model
 //!   did this request go to" is answered by which handle recorded it.
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
 use rustx::context::SessionContextPolicy;
 use rustx::message::content::TextBlock;
 use rustx::message::types::{ContentBlockIndex, UserContentBlock};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef, ProviderId, ReasoningProfileId};
-use rustx::model::fixture::{FixtureModel, MappedAdapterFactory, fixture_catalog};
 use rustx::model::invocation::ModelBindingRegistry;
 use rustx::model::session::{SessionModelConfig, SessionModelState, SummaryModelPolicy};
 use rustx::model::{ModelAdapter, ModelEvent, ModelFinishReason, ModelProtocol};
@@ -36,6 +34,10 @@ use rustx::runtime_client::{
     RuntimeClientEvent, RuntimeClientHost, RuntimeClientProtocolEvent,
 };
 use rustx::tools::executor::ToolRegistry;
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events,
+};
+use support::model::{FixtureModel, MappedAdapterFactory, fixture_catalog};
 
 /// The outer liveness guard: waiting is exact (watch channels and the
 /// observation stream), so this only bounds a pathological stall.
@@ -136,8 +138,8 @@ fn session_model(providers: &[&Provider], initial: SessionModelConfig) -> Sessio
     let resolved = fixture_catalog(&models)
         .resolve(&MapCredentialEnvironment::default())
         .expect("literal fixture credentials resolve");
-    let registry =
-        ModelBindingRegistry::new_with_test_factory(resolved, &factory).expect("bindings resolve");
+    let registry = ModelBindingRegistry::new_with_scripted_adapters(resolved, &factory)
+        .expect("bindings resolve");
     SessionModelState::new(registry, initial).expect("the initial selection resolves")
 }
 
@@ -222,7 +224,7 @@ const ALPHA_CALL: ScriptedCall = ScriptedCall {
 async fn runtime(model: SessionModelState, policy: SessionContextPolicy) -> RuntimeClientHost {
     let mut tools = ToolRegistry::new();
     FakeTool::new(common::tool("alpha", "tool-alpha"), success_result("ok")).register(&mut tools);
-    common::runtime_client_fixture::RuntimeClientFixture::builder("conv-42")
+    support::runtime_client_fixture::RuntimeClientFixture::builder("conv-42")
         .tools(tools)
         .session_model(model)
         .context_policy(policy)
@@ -277,7 +279,7 @@ fn submit(attachment: &rustx::runtime_client::RuntimeAttachment, id: u64, value:
 /// must use B.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_update_after_admission_affects_only_future_attempts() {
-    let (release, receiver) = common::fake::model_release();
+    let (release, receiver) = support::fake::model_release();
     let alpha = Provider::new(
         ALPHA,
         "model-a",
@@ -605,7 +607,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
 /// the attempt cannot change that attempt's summary model.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
-    let (release, receiver) = common::fake::model_release();
+    let (release, receiver) = support::fake::model_release();
     // The attempt: a parked tool turn, then a continuation that overflows and
     // triggers compaction, then the retry.
     let alpha = Provider::new(
@@ -745,9 +747,9 @@ fn reasoning_profiles_resolve_to_their_exact_configured_parameters() {
             }
         }),
     );
-    let handle: Arc<dyn ModelAdapter> = Arc::new(rustx::model::fixture::NullAdapter);
-    let factory = rustx::model::fixture::ScriptedAdapterFactory::new(handle);
-    let registry = rustx::model::fixture::fixture_registry(&[model], &factory);
+    let handle: Arc<dyn ModelAdapter> = Arc::new(support::model::NullAdapter);
+    let factory = support::model::ScriptedAdapterFactory::new(handle);
+    let registry = support::model::fixture_registry(&[model], &factory);
     let reference = ModelRef::parse("p/reasoner").expect("reference");
 
     // The declared default is selected when the session chooses nothing.
@@ -820,9 +822,9 @@ fn a_session_override_may_not_claim_a_profile_owned_key() {
             }
         }),
     );
-    let handle: Arc<dyn ModelAdapter> = Arc::new(rustx::model::fixture::NullAdapter);
-    let factory = rustx::model::fixture::ScriptedAdapterFactory::new(handle);
-    let registry = rustx::model::fixture::fixture_registry(&[model], &factory);
+    let handle: Arc<dyn ModelAdapter> = Arc::new(support::model::NullAdapter);
+    let factory = support::model::ScriptedAdapterFactory::new(handle);
+    let registry = support::model::fixture_registry(&[model], &factory);
     let reference = ModelRef::parse("p/reasoner").expect("reference");
 
     let error = registry

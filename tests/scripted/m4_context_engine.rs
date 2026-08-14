@@ -7,15 +7,10 @@
 //! recorded `RuntimeEvent` trace, the platform outcome, the committed
 //! canonical history, and the recorded requests.
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
-use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, model_release, success_result,
-    tool_call_events,
-};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -42,6 +37,11 @@ use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus};
+use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, model_release, success_result,
+    tool_call_events,
+};
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -219,7 +219,7 @@ fn request(
         initial_messages,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: common::attempt_model_with_window(
+        model: support::attempt_model_with_window(
             model.clone(),
             "fake-model",
             10_000_000,
@@ -324,7 +324,7 @@ fn summary_invocation(
     model: &Arc<FakeModel>,
     max_output_tokens: u32,
 ) -> rustx::model::ResolvedModelInvocation {
-    common::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, max_output_tokens)
+    support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, max_output_tokens)
         .summary_invocation()
         .clone()
 }
@@ -343,7 +343,7 @@ fn runtime_with(
     summarizer: FakeContextSummarizer,
     store: Arc<InMemoryCheckpointStore>,
 ) -> ContextRuntime {
-    ContextRuntime::with_test_summarizer(
+    ContextRuntime::with_scripted_summarizer(
         engine(window, reserve, keep_recent, estimator),
         Arc::new(summarizer),
         store,
@@ -518,7 +518,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             None,
             &projection_cheap,
             &tools,
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -528,7 +528,7 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
             None,
             &projection_expensive,
             &tools,
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -839,7 +839,7 @@ fn simple_complete_turn_boundary() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -874,7 +874,7 @@ fn multiple_tool_calls_stay_with_their_results() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -942,7 +942,7 @@ fn no_edge_crosses_the_chosen_cut() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -987,7 +987,7 @@ fn candidate_selection_is_deterministic() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -997,7 +997,7 @@ fn candidate_selection_is_deterministic() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan again");
@@ -1020,7 +1020,7 @@ fn message_count_alone_does_not_control_the_cut() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1055,7 +1055,7 @@ fn retained_suffix_approximates_the_recent_target() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1089,7 +1089,7 @@ fn structural_rule_may_force_extra_retention() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1124,7 +1124,7 @@ fn token_target_may_retain_fewer_messages_than_recent() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1164,7 +1164,7 @@ fn system_messages_are_pinned_and_never_summarized() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1318,7 +1318,7 @@ fn fresh_checkpoint_is_established_after_absorption() {
             Some(&previous),
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1382,7 +1382,7 @@ async fn absorbed_checkpoint_never_leaks_its_summary_into_the_next_compaction() 
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::with_test_summarizer(
+    let runtime = ContextRuntime::with_scripted_summarizer(
         engine(400, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
@@ -1497,7 +1497,7 @@ async fn absorbed_inside_agent_checkpoint_never_leaks_its_summary() {
     let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
         "fresh-suffix-summary".to_owned(),
     )]));
-    let runtime = ContextRuntime::with_test_summarizer(
+    let runtime = ContextRuntime::with_scripted_summarizer(
         engine(500, 0, 0, weighted(100, 10, 0)),
         summarizer.clone(),
         store.clone(),
@@ -1590,7 +1590,7 @@ fn pinned_context_alone_cannot_fit_fails_explicitly() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("cannot fit");
@@ -1631,7 +1631,7 @@ fn oversized_turn_splits_inside_the_agent_message() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1717,7 +1717,7 @@ fn whole_turn_preference_wins_over_splitting_the_latest_turn() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1755,7 +1755,7 @@ fn no_safe_split_falls_back_to_a_whole_turn_cut() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1802,7 +1802,7 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("first plan");
@@ -1834,7 +1834,7 @@ fn repeated_compaction_after_an_inside_agent_checkpoint() {
             Some(&checkpoint1),
             &projection2,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("second plan");
@@ -1894,7 +1894,7 @@ fn first_checkpoint_is_committed_with_full_metadata() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -1945,7 +1945,7 @@ fn incremental_second_checkpoint_receives_only_new_material() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("first plan");
@@ -1968,7 +1968,7 @@ fn incremental_second_checkpoint_receives_only_new_material() {
             Some(&checkpoint1),
             &projection2,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("second plan");
@@ -2019,7 +2019,7 @@ fn no_progress_compaction_is_rejected() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2068,7 +2068,7 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2127,7 +2127,7 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2173,7 +2173,7 @@ fn empty_and_whitespace_summaries_are_rejected() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
@@ -2208,7 +2208,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -2259,7 +2259,7 @@ fn continuation_owner_is_never_split() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -2297,7 +2297,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -2326,7 +2326,7 @@ fn pinned_continuation_owner_makes_the_constraint_unsatisfiable() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
@@ -3188,7 +3188,7 @@ fn fresh_request(
                 .expect("valid fresh turn"),
         ),
         timezone: None,
-        model: common::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 1),
+        model: support::attempt_model_with_window(model.clone(), "fake-model", 10_000_000, 1),
     }
 }
 
@@ -3234,7 +3234,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         ),
         capability.into_lease(),
         &cancellation,
-        rustx::context::ContextRuntime::with_test_summarizer(
+        rustx::context::ContextRuntime::with_scripted_summarizer(
             engine(10_000_000, 0, 0, weighted(10, 10, 10)),
             Arc::new(FakeContextSummarizer::new(Vec::new())),
             store,
@@ -3974,7 +3974,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     // One attempt snapshot drives both the loop and the summary: the
     // production `for_attempt` path derives the engine window and the summary
     // invocation from exactly the model the attempt was admitted with.
-    let snapshot = common::attempt_model_with_window(model.clone(), "fake-model", 500, 1);
+    let snapshot = support::attempt_model_with_window(model.clone(), "fake-model", 500, 1);
     let runtime = ContextRuntime::for_attempt(
         rustx::context::SessionContextPolicy {
             reserve_tokens: 0,

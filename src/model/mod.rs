@@ -13,8 +13,6 @@ pub mod catalog;
 pub mod error;
 pub mod event;
 pub mod finish;
-#[doc(hidden)]
-pub mod fixture;
 pub mod invocation;
 pub mod session;
 pub mod types;

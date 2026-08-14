@@ -11,13 +11,10 @@
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
-};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -31,6 +28,9 @@ use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
+};
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
@@ -48,7 +48,7 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: common::attempt_model(model.clone(), "fake-model"),
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
@@ -57,7 +57,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
         ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
         SessionContextPolicy {
             reserve_tokens: 0,

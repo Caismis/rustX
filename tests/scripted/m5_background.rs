@@ -12,14 +12,11 @@
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
-};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -47,6 +44,9 @@ use rustx::tools::types::{
     ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
 };
 use rustx::tools::workspace::Workspace;
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
+};
 
 /// A fixed runtime clock.
 #[derive(Debug, Clone, Copy)]
@@ -652,7 +652,7 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: common::attempt_model(model.clone(), "fake-model"),
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
@@ -661,7 +661,7 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
         ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let snapshot = common::attempt_model(model.clone(), "fake-model");
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
         SessionContextPolicy {
             reserve_tokens: 0,
@@ -1241,7 +1241,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         "b2",
         serde_json::json!({"__rustx_execution": "background"}),
     );
-    let (model_release_tx, model_release_rx) = common::fake::model_release();
+    let (model_release_tx, model_release_rx) = support::fake::model_release();
     let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),

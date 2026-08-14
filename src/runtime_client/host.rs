@@ -1690,7 +1690,6 @@ mod tests {
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
-    use crate::model::fixture::scripted_session_model;
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
@@ -1701,6 +1700,7 @@ mod tests {
         RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest,
         RuntimeClientResult,
     };
+    use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::background::{BackgroundDispatchOutcome, BackgroundLifecycle};
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
@@ -3933,7 +3933,9 @@ mod tests {
         let host = RuntimeClientHost::with_probe(
             RuntimeClientHostConfig {
                 agent_id: AgentId::new("agent-a"),
-                model: crate::model::fixture::scripted_session_model(adapter.clone()),
+                model: crate::scripted_suites::support::model::scripted_session_model(
+                    adapter.clone(),
+                ),
                 timezone: None,
                 context: RuntimeClientContextConfig {
                     policy: crate::context::SessionContextPolicy {

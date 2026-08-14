@@ -19,8 +19,7 @@
 //!
 //! All synchronization is exact; no sleep participates in any proof.
 
-#[path = "common/mod.rs"]
-mod common;
+use super::support;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -40,7 +39,7 @@ use rustx::runtime_client::{
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::runtime::ConversationToolRuntime;
 
-use common::fake::{FakeModel, FakeStep};
+use support::fake::{FakeModel, FakeStep};
 
 /// One independently constructed runtime bundle: a fresh runtime identity
 /// with its own workspace, plus a coordinator over it.
@@ -87,7 +86,7 @@ fn config(
     let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
     RuntimeClientHostConfig {
         agent_id: AgentId::new("agent-a"),
-        model: rustx::model::fixture::scripted_session_model(model),
+        model: support::model::scripted_session_model(model),
         timezone: None,
         context: RuntimeClientContextConfig {
             policy: rustx::context::SessionContextPolicy {

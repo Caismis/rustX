@@ -319,6 +319,28 @@ The M3 test suite drives the loop with scripted fixture models and tools
 `RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
 execution phases from traces (`tests/common/mod.rs`).
 
+### Test seams are not published API
+
+Substituting a runtime-owned dependency is a `#[cfg(test)] pub(crate)`
+seam, never a published item:
+
+```text
+ModelBindingRegistry::new         one binding path; builds the three
+                                  supported protocol adapters directly
+ContextRuntime::for_attempt       one context-runtime constructor; derives
+                                  the summarizer from the frozen snapshot
+```
+
+An external test binary can only reach `pub` items, so a seam usable from
+`tests/*.rs` is necessarily a seam a consumer can call; `#[doc(hidden)]`
+hides it from documentation without removing it. The suites that need a
+scripted `ModelAdapter` or a scripted `ContextSummarizer` therefore compile
+into the crate's own test build through `src/lib.rs`, with their sources
+under `tests/scripted/` so `src/` carries production code only. The
+remaining `tests/*.rs` binaries use published API exclusively; fixtures
+shared by both live in `tests/common/`, and fixtures that need a seam live
+in `tests/scripted/support/`.
+
 The Issue #22 inbound batching integration is canonical:
 `ConversationToolRuntime` owns the one conversation inbound mailbox, and at
 every safe turn boundary the loop performs exactly one finite
@@ -1719,7 +1741,7 @@ means adding a sibling module there; no semantic module moves.
   operator logging to its output sink — failures are returned to the
   caller for a process-composition layer to report.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
-  (`tests/common/runtime_client_conformance.rs`) drives one set of
+  (`tests/scripted/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
   driver. Issue #36 adds a WebSocket driver and inherits every scenario
   unchanged; byte-level framing tests stay transport-specific.

@@ -105,6 +105,11 @@ pub struct ContextConfig {
 /// reservation for the summary that will be generated while applying the
 /// plan. Keeping the values named prevents a summary-model override or a
 /// context summary cap from accidentally changing the primary soft limit.
+///
+/// There is deliberately no conversion from a single number: the two
+/// budgets are two concepts even when their current numeric values happen to
+/// be equal, and a call site that means "both budgets are this value" must
+/// say so with [`CompactionBudgets::new(value, value)`](CompactionBudgets::new).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionBudgets {
     /// The primary invocation's effective maximum output tokens.
@@ -121,14 +126,6 @@ impl CompactionBudgets {
             primary_output_budget,
             summary_output_budget,
         }
-    }
-}
-
-impl From<u32> for CompactionBudgets {
-    /// Compatibility for direct engine callers that have no distinct summary
-    /// invocation. Attempt runtimes always pass the named two-budget value.
-    fn from(primary_output_budget: u32) -> Self {
-        Self::new(primary_output_budget, primary_output_budget)
     }
 }
 
@@ -501,16 +498,15 @@ impl ContextEngine {
     /// [`ContextErrorKind::CannotFit`] when even full compaction cannot fit
     /// pinned context, the fresh inbound material, and the summary
     /// reservation.
-    pub fn plan_compaction<B: Into<CompactionBudgets>>(
+    pub fn plan_compaction(
         &self,
         history: &[MessageBlock],
         checkpoint: Option<&ContextCheckpoint>,
         current_projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
-        budgets: B,
+        budgets: CompactionBudgets,
         constraints: &CompactionConstraints<'_>,
     ) -> Result<CompactionPlan, ContextError> {
-        let budgets = budgets.into();
         let soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
         let index = StructuralIndex::build(history)?;
         let suffix = Self::suffix_items(history, checkpoint, &index)?;
