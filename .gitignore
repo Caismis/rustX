@@ -8,6 +8,7 @@
 
 # Local runtime state
 /.rustx
+/examples/local-runtime/.rustx
 /runtime-data
 /workspace
 

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "conversationId": "local-runtime-example",
+  "agentId": "default-agent",
+  "model": {
+    "model": "example/demo-model",
+    "reasoningProfile": "off",
+    "requestParams": {
+      "temperature": 0.1
+    },
+    "maxOutputTokens": 2048,
+    "summaryModel": {
+      "mode": "session"
+    }
+  },
+  "timezone": "Asia/Shanghai",
+  "context": {
+    "reserveTokens": 4096,
+    "keepRecentTokens": 12000,
+    "summaryOutputCap": 1024
+  },
+  "nativeTools": {
+    "read": {
+      "execution": "foreground_only",
+      "concurrency": "parallel"
+    },
+    "write": {
+      "execution": "foreground_only",
+      "concurrency": "sequential"
+    },
+    "edit": {
+      "execution": "foreground_only",
+      "concurrency": "sequential"
+    },
+    "glob": {
+      "execution": "foreground_only",
+      "concurrency": "parallel"
+    },
+    "grep": {
+      "execution": "foreground_only",
+      "concurrency": "parallel"
+    },
+    "bash": {
+      "execution": "model_selectable",
+      "concurrency": "sequential"
+    }
+  },
+  "mcpServers": [],
+  "environment": {
+    "RUSTX_EXAMPLE_MODE": "local-runtime"
+  }
+}

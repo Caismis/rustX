@@ -44,6 +44,9 @@ rustx --models /path/to/models.json \
 
 stdout carries protocol records only; every diagnostic goes to stderr, and a startup configuration failure exits non-zero having written zero bytes to stdout. A client owns the child-process lifecycle and nothing else — the process itself owns the session model, tool runtime, capability coordinator, context policy, and Runtime Client host.
 
+For a complete copyable model/session/MCP/Python-tool configuration, see
+[`examples/local-runtime/README.md`](examples/local-runtime/README.md).
+
 ## Capability model
 
 The runtime capability set consists of:
@@ -122,13 +125,16 @@ pnpm --dir tui install --frozen-lockfile
 
 pnpm --dir tui start -- \
   --binary "$PWD/target/debug/rustx" \
-  --models "$PWD/models.json" --session "$PWD/session.json" \
-  --workspace "$PWD/workspace" --runtime-root "$PWD/.rustx"
+  --models "$PWD/examples/local-runtime/models.json" \
+  --session "$PWD/examples/local-runtime/session.json" \
+  --workspace "$PWD/examples/local-runtime/workspace" \
+  --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
 Pi TUI is the terminal input/output projection of rustX and nothing more: all
 agent, session, model, tool, capability, and background semantics stay inside
-the Rust runtime. See [`tui/README.md`](tui/README.md).
+the Rust runtime. See [`tui/README.md`](tui/README.md) and the
+[`examples/local-runtime/README.md`](examples/local-runtime/README.md).
 
 See [Architecture](docs/architecture.md), [Development Plan](docs/development-plan.md), [Runtime Invariants](docs/invariants.md), and [Repository Policy](docs/repository-policy.md).
 
