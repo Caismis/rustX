@@ -10,3 +10,6 @@
 /.rustx
 /runtime-data
 /workspace
+
+# TUI client
+/tui/node_modules

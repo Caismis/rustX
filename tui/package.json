@@ -1,0 +1,27 @@
+{
+  "name": "@rustx/tui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The rustX reference terminal client: a Pi-TUI presentation layer over Runtime Client Protocol v1.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "rustx-tui": "./src/main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "0.82.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.2",
+    "typescript": "5.9.3"
+  }
+}
