@@ -223,6 +223,28 @@ describe("RuntimeClientSession", () => {
     assert.equal(session.state?.transcript.length, 1);
   });
 
+  it("carries an observed shutdown across an authoritative repair", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session, snapshot(), 0);
+
+    peer.emit(1, { type: "runtime_shutdown" });
+    await until(
+      () => session.state?.runtimeShutdown === true,
+      "shutdown observed",
+    );
+
+    const repairing = session.resync();
+    await peer.awaitRequests(3);
+    peer.respond(3, { type: "snapshot", snapshot: snapshot(), cursor: 60 });
+    await peer.awaitRequests(4);
+    peer.respond(4, { type: "subscribed", after_cursor: 60 });
+    await repairing;
+
+    // Shutdown is absorbing and the snapshot has no field for it. Dropping it
+    // would make the UI claim the runtime still admits inbound work.
+    assert.equal(session.state?.runtimeShutdown, true);
+  });
+
   it("classifies resync_required distinctly from other protocol errors", async () => {
     const { peer, session } = connect();
     await attach(peer, session);

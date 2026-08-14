@@ -70,7 +70,12 @@ export function emptyPresentationState(
 export function replaceFromSnapshot(
   snapshot: RuntimeClientSnapshot,
   cursor: RuntimeClientCursor,
-  carry?: Pick<PresentationState, "notices" | "pendingSubmissions">,
+  carry?: Partial<
+    Pick<
+      PresentationState,
+      "notices" | "pendingSubmissions" | "runtimeShutdown"
+    >
+  >,
 ): PresentationState {
   const transcript: TranscriptEntry[] = snapshot.messages.map(
     (message, index) => ({
@@ -134,9 +139,10 @@ export function replaceFromSnapshot(
     status: snapshot.status,
     capabilities: snapshot.capabilities,
     sessionModel: snapshot.model,
-    // Shutdown is an event-stream fact with no snapshot field; a repaired
-    // client re-learns it from the stream or from a rejected submission.
-    runtimeShutdown: false,
+    // Shutdown is an absorbing stream fact that the snapshot has no field
+    // for. Dropping it on repair would make the UI claim the runtime still
+    // admits inbound work, so an already-observed shutdown is carried.
+    runtimeShutdown: carry?.runtimeShutdown ?? false,
     pendingSubmissions: carry?.pendingSubmissions ?? [],
     notices: carry?.notices ?? [],
   };

@@ -329,6 +329,7 @@ export class RuntimeClientSession {
         : {
             notices: this.#state.notices,
             pendingSubmissions: this.#state.pendingSubmissions,
+            runtimeShutdown: this.#state.runtimeShutdown,
           },
     );
     this.#publish();

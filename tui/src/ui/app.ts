@@ -33,7 +33,6 @@ import {
   Text,
   TUI,
   matchesKey,
-  type Component,
   type OverlayHandle,
 } from "@earendil-works/pi-tui";
 
@@ -319,7 +318,7 @@ export class RustxTuiApp {
     } else {
       this.#loader.setMessage(working);
       this.#loader.start();
-      this.#activity.addChild(this.#loader as unknown as Component);
+      this.#activity.addChild(this.#loader);
     }
 
     this.#notices.clear();
