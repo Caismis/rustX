@@ -403,14 +403,18 @@ async fn minimax_terminal_message_snapshots_are_normalized() {
         simple_request(ModelProtocol::OpenAiChatCompletions, "MiniMax-M2", "hi"),
     )
     .await;
-    assert_eq!(
-        text_events
-            .iter()
-            .filter(|event| matches!(event, ModelEvent::TextDelta { .. }))
-            .count(),
-        1,
-        "terminal snapshot must not duplicate streamed text"
-    );
+    let text_deltas: Vec<&str> = text_events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas, vec!["Hello"]);
+    assert!(matches!(
+        text_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
 
     let tool_server = common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "minimax_snapshot_tool.sse")
@@ -427,6 +431,180 @@ async fn minimax_terminal_message_snapshots_are_normalized() {
         ModelEvent::ToolCallCompleted { call, .. }
             if call.arguments == serde_json::json!({"path": "."})
     )));
+}
+
+/// A cumulative Chat snapshot corroborates every streamed text fragment; it
+/// is not a suffix-repair opportunity and never creates a duplicate delta.
+#[tokio::test]
+async fn chat_text_snapshot_must_match_all_streamed_deltas() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "minimax_snapshot_text_multi_delta.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "MiniMax-M2", "hi"),
+    )
+    .await;
+    let text_deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas, vec!["Hel", "lo"]);
+    assert_eq!(text_deltas.concat(), "Hello");
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+}
+
+/// A cumulative Chat text snapshot that conflicts with streamed content,
+/// including a longer prefix, fails instead of guessing a missing suffix.
+#[tokio::test]
+async fn chat_conflicting_text_snapshots_fail_explicitly() {
+    for fixture in [
+        "minimax_snapshot_text_conflict.sse",
+        "minimax_snapshot_text_prefix_conflict.sse",
+    ] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            simple_request(ModelProtocol::OpenAiChatCompletions, "MiniMax-M2", "hi"),
+        )
+        .await;
+        assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Failed { error })
+                if error.message.contains("cumulative text snapshot")
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::Completed { .. })),
+            "fixture {fixture} must not complete after a snapshot contradiction"
+        );
+    }
+}
+
+/// A Chat response that contains only a cumulative message snapshot is
+/// recovered as one canonical delta and then completes normally.
+#[tokio::test]
+async fn chat_snapshot_only_text_is_recovered_once() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "snapshot_only_text.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi"),
+    )
+    .await;
+    let text_deltas: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text_deltas, vec!["Hello"]);
+    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+}
+
+/// Reasoning aliases normalize before cumulative comparison, and a snapshot
+/// can recover reasoning when no delta was streamed.
+#[tokio::test]
+async fn chat_reasoning_snapshots_are_consistent() {
+    for (fixture, expected) in [
+        ("reasoning_snapshot_matching.sse", "Plan"),
+        ("reasoning_snapshot_only.sse", "Only in snapshot."),
+    ] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_chat", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi"),
+        )
+        .await;
+        let reasoning: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                ModelEvent::ReasoningDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasoning, vec![expected], "fixture {fixture}");
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+    }
+}
+
+#[tokio::test]
+async fn chat_conflicting_reasoning_snapshot_fails_explicitly() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "reasoning_snapshot_conflict.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi"),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative reasoning snapshot")
+    ));
+}
+
+#[tokio::test]
+async fn chat_refusal_snapshots_are_consistent() {
+    let matching_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "refusal_snapshot_matching.sse")
+    })
+    .await;
+    let matching_events = collect_events(
+        &adapter(&matching_server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi"),
+    )
+    .await;
+    let refusals: Vec<&str> = matching_events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::RefusalDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals, vec!["I cannot"]);
+    assert!(matches!(
+        matching_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+
+    let conflict_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "refusal_snapshot_conflict.sse")
+    })
+    .await;
+    let conflict_events = collect_events(
+        &adapter(&conflict_server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "hi"),
+    )
+    .await;
+    assert_terminal_failed(&conflict_events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        conflict_events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative refusal snapshot")
+    ));
 }
 
 /// Stream shapes with output semantics that cannot fit one canonical agent

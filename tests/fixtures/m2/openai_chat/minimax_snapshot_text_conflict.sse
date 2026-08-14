@@ -1,0 +1,5 @@
+data: {"id":"minimax-conflict-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+
+data: {"id":"minimax-conflict-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","content":"Goodbye"},"finish_reason":"stop"}]}
+
+data: [DONE]

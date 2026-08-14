@@ -1,0 +1,7 @@
+data: {"id":"minimax-multi-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}
+
+data: {"id":"minimax-multi-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}]}
+
+data: {"id":"minimax-multi-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}]}
+
+data: [DONE]

@@ -450,19 +450,45 @@ fn reasoning_value<'a>(
     reasoning: Option<&'a str>,
     reasoning_content: Option<&'a str>,
 ) -> Result<Option<&'a str>, ModelError> {
-    let reasoning = reasoning.filter(|text| !text.is_empty());
-    let reasoning_content = reasoning_content.filter(|text| !text.is_empty());
     match (reasoning, reasoning_content) {
-        (Some(reasoning), Some(reasoning_content)) if reasoning != reasoning_content => {
+        (Some(reasoning), Some(reasoning_content))
+            if !reasoning.is_empty()
+                && !reasoning_content.is_empty()
+                && reasoning != reasoning_content =>
+        {
             Err(provider_error(
                 "chat message contains conflicting reasoning and reasoning_content values"
                     .to_owned(),
             ))
         }
+        (Some(reasoning), Some(_reasoning_content)) if !reasoning.is_empty() => Ok(Some(reasoning)),
+        (Some(_), Some(reasoning_content)) if !reasoning_content.is_empty() => {
+            Ok(Some(reasoning_content))
+        }
         (Some(reasoning), _) => Ok(Some(reasoning)),
         (_, Some(reasoning_content)) => Ok(Some(reasoning_content)),
         (None, None) => Ok(None),
     }
+}
+
+fn append_streamed(buffer: &mut Option<String>, text: &str) {
+    buffer.get_or_insert_with(String::new).push_str(text);
+}
+
+fn validate_snapshot(
+    buffer: Option<&str>,
+    snapshot: Option<&str>,
+    semantic: &str,
+) -> Result<(), ModelError> {
+    let Some(snapshot) = snapshot else {
+        return Ok(());
+    };
+    if buffer.is_some_and(|streamed| streamed != snapshot) {
+        return Err(provider_error(format!(
+            "Chat cumulative {semantic} snapshot disagrees with streamed {semantic}"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,9 +532,9 @@ struct ChatStreamNormalizer {
     tool_calls: BTreeMap<u32, ToolAssembly>,
     usage: Option<ModelUsage>,
     finish_reason: Option<crate::model::finish::ModelFinishReason>,
-    text_emitted: bool,
-    reasoning_emitted: bool,
-    refusal_emitted: bool,
+    text_buffer: Option<String>,
+    reasoning_buffer: Option<String>,
+    refusal_buffer: Option<String>,
 }
 
 impl ChatStreamNormalizer {
@@ -519,9 +545,9 @@ impl ChatStreamNormalizer {
             tool_calls: BTreeMap::new(),
             usage: None,
             finish_reason: None,
-            text_emitted: false,
-            reasoning_emitted: false,
-            refusal_emitted: false,
+            text_buffer: None,
+            reasoning_buffer: None,
+            refusal_buffer: None,
         }
     }
 
@@ -634,7 +660,7 @@ impl ChatStreamNormalizer {
             ));
         }
         if let Some(reasoning) = delta.reasoning_delta()? {
-            self.reasoning_emitted = true;
+            append_streamed(&mut self.reasoning_buffer, reasoning);
             events.push(ModelEvent::ReasoningDelta {
                 block_index: self.blocks.allocate(ChatBlockKey::Reasoning),
                 text: reasoning.to_owned(),
@@ -643,7 +669,7 @@ impl ChatStreamNormalizer {
         if let Some(text) = &delta.content
             && !text.is_empty()
         {
-            self.text_emitted = true;
+            append_streamed(&mut self.text_buffer, text);
             events.push(ModelEvent::TextDelta {
                 block_index: self.blocks.allocate(ChatBlockKey::Text),
                 text: text.clone(),
@@ -652,7 +678,7 @@ impl ChatStreamNormalizer {
         if let Some(refusal) = &delta.refusal
             && !refusal.is_empty()
         {
-            self.refusal_emitted = true;
+            append_streamed(&mut self.refusal_buffer, refusal);
             events.push(ModelEvent::RefusalDelta {
                 block_index: self.blocks.allocate(ChatBlockKey::Refusal),
                 text: refusal.clone(),
@@ -683,32 +709,45 @@ impl ChatStreamNormalizer {
                 "structured Chat Completions reasoning_details require lossless replay state",
             ));
         }
-        if !self.reasoning_emitted
-            && let Some(reasoning) = message.reasoning_value()?
+        let reasoning = message.reasoning_value()?;
+        let text = message.content.as_deref();
+        let refusal = message.refusal.as_deref();
+        validate_snapshot(self.reasoning_buffer.as_deref(), reasoning, "reasoning")?;
+        validate_snapshot(self.text_buffer.as_deref(), text, "text")?;
+        validate_snapshot(self.refusal_buffer.as_deref(), refusal, "refusal")?;
+
+        if let Some(reasoning) = reasoning
+            && self.reasoning_buffer.is_none()
         {
-            self.reasoning_emitted = true;
-            events.push(ModelEvent::ReasoningDelta {
-                block_index: self.blocks.allocate(ChatBlockKey::Reasoning),
-                text: reasoning.to_owned(),
-            });
+            self.reasoning_buffer = Some(reasoning.to_owned());
+            if !reasoning.is_empty() {
+                events.push(ModelEvent::ReasoningDelta {
+                    block_index: self.blocks.allocate(ChatBlockKey::Reasoning),
+                    text: reasoning.to_owned(),
+                });
+            }
         }
-        if !self.text_emitted
-            && let Some(text) = message.content.as_ref().filter(|text| !text.is_empty())
+        if let Some(text) = text
+            && self.text_buffer.is_none()
         {
-            self.text_emitted = true;
-            events.push(ModelEvent::TextDelta {
-                block_index: self.blocks.allocate(ChatBlockKey::Text),
-                text: text.clone(),
-            });
+            self.text_buffer = Some(text.to_owned());
+            if !text.is_empty() {
+                events.push(ModelEvent::TextDelta {
+                    block_index: self.blocks.allocate(ChatBlockKey::Text),
+                    text: text.to_owned(),
+                });
+            }
         }
-        if !self.refusal_emitted
-            && let Some(refusal) = message.refusal.as_ref().filter(|text| !text.is_empty())
+        if let Some(refusal) = refusal
+            && self.refusal_buffer.is_none()
         {
-            self.refusal_emitted = true;
-            events.push(ModelEvent::RefusalDelta {
-                block_index: self.blocks.allocate(ChatBlockKey::Refusal),
-                text: refusal.clone(),
-            });
+            self.refusal_buffer = Some(refusal.to_owned());
+            if !refusal.is_empty() {
+                events.push(ModelEvent::RefusalDelta {
+                    block_index: self.blocks.allocate(ChatBlockKey::Refusal),
+                    text: refusal.to_owned(),
+                });
+            }
         }
         for (index, snapshot) in message
             .tool_calls

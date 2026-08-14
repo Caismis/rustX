@@ -1013,6 +1013,11 @@ adapter-local terminal buffering exists for Anthropic text or thinking.
 - Tool argument fragments stream raw (`ToolCallArgumentsDelta`) and the
   complete JSON is parsed exactly once at completion. Malformed completed
   JSON terminates the invocation with a normalized failure.
+- When a provider emits both incremental deltas and a cumulative snapshot for
+  the same semantic text, reasoning, or refusal value, the adapter accumulates
+  the exact streamed value and requires the snapshot to match it. Matching
+  snapshots are deduplicated; snapshot-only values are recovered; a
+  contradiction fails the invocation rather than being repaired heuristically.
 - Continuation state is emitted through the canonical
   `ProviderContinuationState` boundary, never kept in hidden adapter memory.
   OpenAI Responses supports both `Stored` (provider storage,

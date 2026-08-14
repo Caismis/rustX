@@ -1,0 +1,3 @@
+data: {"id":"snapshot-only-text-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}]}
+
+data: [DONE]

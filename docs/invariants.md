@@ -1161,6 +1161,13 @@ contracts and provider protocols. These invariants are frozen by M2:
   partial output after a refusal) is owned by the future Agent Loop, never
   by M2.
 
+- When a provider emits both incremental deltas and a cumulative terminal
+  snapshot for the same semantic content, the adapter compares the exact
+  cumulative value with its accumulated deltas. Matching snapshots are
+  deduplicated, snapshot-only values are recovered, and contradictory values
+  fail as provider protocol errors; no suffix repair or last-value-wins rule
+  exists.
+
 - Provider content-block indexes are required for deterministic block
   association: a missing, negative, non-integer, or overflowing `index` on
   `content_block_start` / `content_block_delta` / `content_block_stop` is a

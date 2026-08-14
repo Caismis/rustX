@@ -274,6 +274,141 @@ async fn refusal_derives_refusal_finish() {
     ));
 }
 
+/// Output-text done values must equal the accumulated deltas; a longer
+/// prefix is still a contradiction rather than an opportunity for repair.
+#[tokio::test]
+async fn responses_conflicting_text_done_values_fail() {
+    for fixture in [
+        "output_text_done_conflict.sse",
+        "output_text_done_prefix_conflict.sse",
+    ] {
+        let fixture = fixture.to_owned();
+        let response_fixture = fixture.clone();
+        let server = common::FixtureServer::start(move |_attempt, _head| {
+            sse_fixture("openai_responses", &response_fixture)
+        })
+        .await;
+        let events = collect_events(
+            &adapter(&server),
+            with_storage(
+                simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+                ResponsesStorageMode::Stored,
+            ),
+        )
+        .await;
+        assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Failed { error })
+                if error.message.contains("cumulative text value")
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::Completed { .. })),
+            "fixture {fixture} must not complete after a cumulative contradiction"
+        );
+    }
+}
+
+#[tokio::test]
+async fn responses_refusal_done_values_are_consistent() {
+    let matching_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "refusal_done_matching.sse")
+    })
+    .await;
+    let matching_events = collect_events(
+        &adapter(&matching_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    let refusals: Vec<&str> = matching_events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::RefusalDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refusals, vec!["I cannot"]);
+    assert!(matches!(
+        matching_events.last(),
+        Some(ModelEvent::Completed { .. })
+    ));
+
+    let conflict_server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "refusal_done_conflict.sse")
+    })
+    .await;
+    let conflict_events = collect_events(
+        &adapter(&conflict_server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&conflict_events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        conflict_events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative refusal value")
+    ));
+}
+
+#[tokio::test]
+async fn responses_conflicting_reasoning_done_fails_explicitly() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "reasoning_done_conflict.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative reasoning value")
+    ));
+}
+
+/// A terminal response snapshot is checked even after its output item was
+/// already completed, so a contradiction cannot settle as Completed.
+#[tokio::test]
+async fn responses_terminal_cumulative_conflict_prevents_completion() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_responses", "terminal_output_text_conflict.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        with_storage(
+            simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi"),
+            ResponsesStorageMode::Stored,
+        ),
+    )
+    .await;
+    assert_terminal_failed(&events, &ModelErrorKind::ProviderError);
+    assert!(matches!(
+        events.last(),
+        Some(ModelEvent::Failed { error })
+            if error.message.contains("cumulative text value")
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, ModelEvent::Completed { .. }))
+    );
+}
+
 /// Incomplete responses map their incomplete reason to Length or
 /// `ContentFilter` and still emit continuation state before `Completed`.
 #[tokio::test]

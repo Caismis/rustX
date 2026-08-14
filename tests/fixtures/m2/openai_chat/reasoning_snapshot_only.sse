@@ -1,0 +1,3 @@
+data: {"id":"reasoning-only-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","reasoning_content":"Only in snapshot."},"finish_reason":"stop"}]}
+
+data: [DONE]

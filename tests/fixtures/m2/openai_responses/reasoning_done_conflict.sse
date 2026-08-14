@@ -1,0 +1,7 @@
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_conflict","type":"reasoning","status":"in_progress","summary":[]}}
+
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"Plan"}
+
+data: {"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":0,"text":"Different"}
+
+data: [DONE]

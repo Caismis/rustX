@@ -1,0 +1,5 @@
+data: {"id":"refusal-conflict-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I cannot"},"finish_reason":null}]}
+
+data: {"id":"refusal-conflict-1","object":"chat.completion","choices":[{"index":0,"delta":null,"message":{"role":"assistant","refusal":"I will not"},"finish_reason":"stop"}]}
+
+data: [DONE]

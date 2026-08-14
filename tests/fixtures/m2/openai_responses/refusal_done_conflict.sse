@@ -1,0 +1,9 @@
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_refusal_conflict","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"refusal","refusal":""}}
+
+data: {"type":"response.refusal.delta","output_index":0,"content_index":0,"delta":"I cannot"}
+
+data: {"type":"response.refusal.done","output_index":0,"content_index":0,"refusal":"I will not"}
+
+data: [DONE]

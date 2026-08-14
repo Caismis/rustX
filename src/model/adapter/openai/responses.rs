@@ -322,8 +322,8 @@ struct ResponsesNormalizer {
     tool_calls: BTreeMap<u32, ToolAssembly>,
     usage: Option<ModelUsage>,
     content_parts: BTreeMap<(u32, u32), ResponsesContentKind>,
-    content_emitted: BTreeSet<ResponsesBlockKey>,
-    reasoning_parts_emitted: BTreeSet<ReasoningPartKey>,
+    content_buffers: BTreeMap<(u32, u32), String>,
+    reasoning_buffers: BTreeMap<ReasoningPartKey, String>,
     output_items_done: BTreeSet<u32>,
     terminal_emitted: bool,
     response_id: Option<String>,
@@ -338,8 +338,8 @@ impl ResponsesNormalizer {
             tool_calls: BTreeMap::new(),
             usage: None,
             content_parts: BTreeMap::new(),
-            content_emitted: BTreeSet::new(),
-            reasoning_parts_emitted: BTreeSet::new(),
+            content_buffers: BTreeMap::new(),
+            reasoning_buffers: BTreeMap::new(),
             output_items_done: BTreeSet::new(),
             terminal_emitted: false,
             response_id: None,
@@ -369,8 +369,10 @@ impl ResponsesNormalizer {
                 if text.is_empty() {
                     return Ok(Vec::new());
                 }
-                self.content_emitted
-                    .insert(ResponsesBlockKey::ItemPart(output_index, content_index));
+                self.content_buffers
+                    .entry((output_index, content_index))
+                    .or_default()
+                    .push_str(text);
                 Ok(vec![ModelEvent::TextDelta {
                     block_index,
                     text: text.to_owned(),
@@ -388,8 +390,10 @@ impl ResponsesNormalizer {
                 if text.is_empty() {
                     return Ok(Vec::new());
                 }
-                self.content_emitted
-                    .insert(ResponsesBlockKey::ItemPart(output_index, content_index));
+                self.content_buffers
+                    .entry((output_index, content_index))
+                    .or_default()
+                    .push_str(text);
                 Ok(vec![ModelEvent::RefusalDelta {
                     block_index,
                     text: text.to_owned(),
@@ -529,14 +533,14 @@ impl ResponsesNormalizer {
                 required_str_field(part, "refusal")?,
                 part,
             ),
-            Some("reasoning_text") => Ok(self.push_reasoning_value(
+            Some("reasoning_text") => self.push_reasoning_value(
                 u32_field(event, "output_index")?,
                 ReasoningPartKey::Content(
                     u32_field(event, "output_index")?,
                     u32_field(event, "content_index")?,
                 ),
                 required_str_field(part, "text")?,
-            )),
+            ),
             Some(other) => Err(unsupported(format!(
                 "Responses content part type {other:?} has no canonical representation"
             ))),
@@ -580,11 +584,23 @@ impl ResponsesNormalizer {
             ));
         }
         let block_index = self.content_block(output_index, content_index, kind)?;
-        let key = ResponsesBlockKey::ItemPart(output_index, content_index);
-        if text.is_empty() || self.content_emitted.contains(&key) {
+        let key = (output_index, content_index);
+        if let Some(streamed) = self.content_buffers.get(&key) {
+            if streamed != text {
+                let semantic = match kind {
+                    ResponsesContentKind::Text => "text",
+                    ResponsesContentKind::Refusal => "refusal",
+                };
+                return Err(provider_error(format!(
+                    "Responses cumulative {semantic} value disagrees with streamed {semantic} for output {output_index} content {content_index}"
+                )));
+            }
             return Ok(Vec::new());
         }
-        self.content_emitted.insert(key);
+        self.content_buffers.insert(key, text.to_owned());
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
         Ok(vec![match kind {
             ResponsesContentKind::Text => ModelEvent::TextDelta {
                 block_index,
@@ -612,7 +628,10 @@ impl ResponsesNormalizer {
         if text.is_empty() {
             return Ok(Vec::new());
         }
-        self.reasoning_parts_emitted.insert(part);
+        self.reasoning_buffers
+            .entry(part)
+            .or_default()
+            .push_str(text);
         let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
         Ok(vec![ModelEvent::ReasoningDelta {
             block_index,
@@ -631,7 +650,7 @@ impl ResponsesNormalizer {
         } else {
             ReasoningPartKey::Content(output_index, u32_field(event, "content_index")?)
         };
-        Ok(self.push_reasoning_value(output_index, part, required_str_field(event, "text")?))
+        self.push_reasoning_value(output_index, part, required_str_field(event, "text")?)
     }
 
     fn push_openrouter_reasoning(
@@ -645,13 +664,16 @@ impl ResponsesNormalizer {
             let text = str_field(event, "text")
                 .or_else(|| str_field(event, "delta"))
                 .unwrap_or_default();
-            return Ok(self.push_reasoning_value(output_index, part, text));
+            return self.push_reasoning_value(output_index, part, text);
         }
         let text = required_str_field(event, "delta")?;
         if text.is_empty() {
             return Ok(Vec::new());
         }
-        self.reasoning_parts_emitted.insert(part);
+        self.reasoning_buffers
+            .entry(part)
+            .or_default()
+            .push_str(text);
         Ok(vec![ModelEvent::ReasoningDelta {
             block_index: self.blocks.allocate(ResponsesBlockKey::Item(output_index)),
             text: text.to_owned(),
@@ -663,16 +685,24 @@ impl ResponsesNormalizer {
         output_index: u32,
         part: ReasoningPartKey,
         text: &str,
-    ) -> Vec<ModelEvent> {
-        let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
-        if text.is_empty() || self.reasoning_parts_emitted.contains(&part) {
-            return Vec::new();
+    ) -> Result<Vec<ModelEvent>, ModelError> {
+        if let Some(streamed) = self.reasoning_buffers.get(&part) {
+            if streamed != text {
+                return Err(provider_error(format!(
+                    "Responses cumulative reasoning value disagrees with streamed reasoning for output {output_index} part {part:?}"
+                )));
+            }
+            return Ok(Vec::new());
         }
-        self.reasoning_parts_emitted.insert(part);
-        vec![ModelEvent::ReasoningDelta {
+        self.reasoning_buffers.insert(part, text.to_owned());
+        let block_index = self.blocks.allocate(ResponsesBlockKey::Item(output_index));
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![ModelEvent::ReasoningDelta {
             block_index,
             text: text.to_owned(),
-        }]
+        }])
     }
 
     fn tool_assembly(&mut self, output_index: u32) -> &mut ToolAssembly {
@@ -745,13 +775,20 @@ impl ResponsesNormalizer {
         event: &serde_json::Value,
     ) -> Result<Vec<ModelEvent>, ModelError> {
         let output_index = u32_field(event, "output_index")?;
-        if self.output_items_done.contains(&output_index) {
-            return Ok(Vec::new());
-        }
         let item = event
             .get("item")
             .ok_or_else(|| provider_error("output_item.done lacks an item".to_owned()))?;
         let item_type = required_str_field(item, "type")?;
+        if self.output_items_done.contains(&output_index) {
+            return match item_type {
+                "message" => self.push_message_item_done(event, item),
+                "reasoning" => self.push_reasoning_item_done(event, item),
+                "function_call" | "function_call_output" => Ok(Vec::new()),
+                other => Err(unsupported(format!(
+                    "Responses output item type {other:?} has no canonical representation"
+                ))),
+            };
+        }
         let result = match item_type {
             "function_call" => self.complete_function_call(event, item),
             "reasoning" => self.push_reasoning_item_done(event, item),
@@ -841,7 +878,7 @@ impl ResponsesNormalizer {
                 output_index,
                 ReasoningPartKey::Summary(output_index, summary_index),
                 required_str_field(part, "text")?,
-            );
+            )?;
             events.append(&mut next);
         }
         for (content_index, part) in item
@@ -862,7 +899,7 @@ impl ResponsesNormalizer {
                 output_index,
                 ReasoningPartKey::Content(output_index, content_index),
                 required_str_field(part, "text")?,
-            );
+            )?;
             events.append(&mut next);
         }
         Ok(events)
@@ -926,17 +963,14 @@ impl ResponsesNormalizer {
             self.usage = parse_usage(usage);
         }
         // The terminal response is the authoritative complete output. Most
-        // providers send output_item.done first; finalizing any missing item
-        // here preserves valid streams that only expose content at terminal
-        // time without duplicating items already completed.
+        // providers send output_item.done first; validating every item here
+        // both recovers content that only appears at terminal time and checks
+        // repeated cumulative content without duplicating completed items.
         let mut finalized_output = Vec::new();
         if let Some(output) = response.get("output").and_then(serde_json::Value::as_array) {
             for (output_index, item) in output.iter().enumerate() {
                 let output_index = u32::try_from(output_index)
                     .map_err(|_| provider_error("too many response output items".to_owned()))?;
-                if self.output_items_done.contains(&output_index) {
-                    continue;
-                }
                 finalized_output.extend(self.push_output_item_done(&serde_json::json!({
                     "output_index": output_index,
                     "item": item,
