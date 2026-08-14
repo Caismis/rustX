@@ -134,7 +134,9 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     });
     void child
       .wait()
-      .then((exit) => connection.reportProcessExit(exit.code, exit.signal));
+      .then((exit) =>
+        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
+      );
 
     const session = new RuntimeClientSession({ connection });
     harness = { child, connection, session, provider };

@@ -48,6 +48,14 @@ export interface ChildRuntimeProcessOptions {
 export interface ChildExit {
   code: number | null;
   signal: NodeJS.Signals | null;
+  /**
+   * Why the process never started, when it never started.
+   *
+   * A spawn failure (a missing or non-executable binary) produces no exit
+   * code and no signal, so without this the failure would be indistinguishable
+   * from an unexplained disappearance.
+   */
+  spawnError?: string;
 }
 
 /**
@@ -202,9 +210,9 @@ export class ChildRuntimeProcess {
       // A spawn failure (a missing or non-executable binary) emits `error`
       // and never `exit`. Listening explicitly keeps the failure a resolved
       // exit rather than an unhandled rejection, so callers waiting on the
-      // process still settle.
-      this.#child.on("error", () => {
-        settle({ code: null, signal: null });
+      // process still settle — and the reason survives for the diagnostic.
+      this.#child.on("error", (cause: Error) => {
+        settle({ code: null, signal: null, spawnError: cause.message });
       });
     });
   }

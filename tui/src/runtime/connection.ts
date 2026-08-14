@@ -215,11 +215,17 @@ export class RuntimeClientConnection {
    * The process owner calls this so pending requests fail with the real
    * cause instead of a bare EOF.
    */
-  reportProcessExit(code: number | null, signal: string | null): void {
+  reportProcessExit(
+    code: number | null,
+    signal: string | null,
+    spawnError?: string,
+  ): void {
     this.#close(
       new ConnectionClosedError(
         "process_exit",
-        `the runtime process exited (code ${code ?? "none"}, signal ${signal ?? "none"})`,
+        spawnError === undefined
+          ? `the runtime process exited (code ${code ?? "none"}, signal ${signal ?? "none"})`
+          : `the runtime process could not be started: ${spawnError}`,
       ),
     );
   }

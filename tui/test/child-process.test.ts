@@ -124,13 +124,19 @@ describe("ChildRuntimeProcess", () => {
     assert.equal(exit.signal, null, "no escalation was needed");
   });
 
-  it("reports a spawn failure as an exit rather than hanging", async () => {
+  it("reports a spawn failure as an exit, with the reason", async () => {
     const child = ChildRuntimeProcess.spawn({
       binary: "/definitely/not/a/binary",
       paths: PATHS,
       env: process.env,
     });
-    assert.equal((await child.wait()).code, null);
+    const exit = await child.wait();
+
+    assert.equal(exit.code, null, "a failed spawn has no exit code");
+    assert.equal(exit.signal, null);
+    // Without the reason a spawn failure would be indistinguishable from an
+    // unexplained disappearance, and the startup diagnostic would be useless.
+    assert.match(exit.spawnError ?? "", /ENOENT/);
   });
 
   it("closing stdin is idempotent", async () => {

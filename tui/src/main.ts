@@ -49,19 +49,21 @@ async function main(argv: readonly string[]): Promise<number> {
   // A process that dies mid-request must fail that request with the real
   // cause rather than a bare EOF.
   void child.wait().then((exit) => {
-    connection.reportProcessExit(exit.code, exit.signal);
+    connection.reportProcessExit(exit.code, exit.signal, exit.spawnError);
   });
 
   const session = new RuntimeClientSession({ connection });
   try {
     await session.attach();
   } catch (error) {
-    const stderr = child.stderrTail();
     process.stderr.write(
       `rustx-tui: could not attach to the runtime: ${(error as Error).message}\n`,
     );
-    if (stderr.text.length > 0) {
-      process.stderr.write(`rustx: ${stderr.text}\n`);
+    // The runtime's own bounded startup diagnostic is usually the real cause,
+    // and it already carries its own `rustx: ` prefix.
+    const stderr = child.stderrTail().text.trim();
+    if (stderr.length > 0) {
+      process.stderr.write(`${stderr}\n`);
     }
     child.closeStdin();
     await child.waitOrTerminate();
