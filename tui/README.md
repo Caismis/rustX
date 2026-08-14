@@ -85,7 +85,7 @@ configuration paths:
 ```sh
 cargo build --bin rustx
 
-pnpm --dir tui start -- \
+pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models  "$PWD/examples/local-runtime/models.json" \
   --session "$PWD/examples/local-runtime/session.json" \

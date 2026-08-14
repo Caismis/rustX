@@ -156,7 +156,7 @@ four runtime paths:
 ```sh
 pnpm --dir tui install --frozen-lockfile
 
-pnpm --dir tui start -- \
+pnpm --dir tui start \
   --binary "$PWD/target/debug/rustx" \
   --models "$PWD/examples/local-runtime/models.json" \
   --session "$PWD/examples/local-runtime/session.json" \
