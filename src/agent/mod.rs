@@ -25,5 +25,5 @@ pub mod state;
 pub use crate::runtime::inbound::InitialTurnTrigger;
 pub use cancellation::AgentCancellation;
 pub use execution::{AgentExecution, AgentExecutionRequest, AgentExecutionResult};
-pub use observer::{AgentExecutionObserver, AgentStatusObservation};
+pub use observer::{AgentExecutionObserver, AgentStatusObservation, ContextCompactionObservation};
 pub use state::{ExecutionState, ExecutionStateMachine};

@@ -93,10 +93,11 @@ use super::snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
     InFlightAgentMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
     RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
-    RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection,
+    RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSnapshot,
+    RuntimeClientStatusFact, RuntimeClientStatusSection,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
-use crate::agent::observer::AgentStatusObservation;
+use crate::agent::observer::{AgentStatusObservation, ContextCompactionObservation};
 use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
@@ -137,6 +138,8 @@ pub(crate) enum Observation {
     },
     /// One composed Agent Status observation.
     Status(AgentStatusObservation),
+    /// One checkpoint committed by context compaction.
+    ContextCompacted(ContextCompactionObservation),
     /// One mailbox enqueue (authoritative item + sequence).
     InboundEnqueued(InboundItem),
     /// One mailbox finite drain (authoritative batch).
@@ -265,6 +268,7 @@ impl RuntimeClientProjection {
                 },
                 background: Vec::new(),
                 status: None,
+                context: RuntimeClientContextView::default(),
                 capabilities: initial_capabilities,
                 model: initial_model,
             },
@@ -308,6 +312,7 @@ impl RuntimeClientProjection {
 
     /// Folds one observation into the read model and returns the external
     /// events the observation publishes.
+    #[allow(clippy::too_many_lines)]
     fn fold(&mut self, observation: Observation) -> Vec<RuntimeClientEvent> {
         match observation {
             Observation::Event { attempt_id, event } => self.fold_event(&attempt_id, &event),
@@ -331,6 +336,20 @@ impl RuntimeClientProjection {
                     turn: observation.turn,
                     target_message_id: observation.target_message_id.clone(),
                     status: view,
+                }]
+            }
+            Observation::ContextCompacted(observation) => {
+                let compaction = RuntimeClientCompactionView {
+                    generation: observation.generation,
+                    tokens_before: observation.tokens_before,
+                    estimated_tokens_after: observation.estimated_tokens_after,
+                };
+                self.snapshot.context.compaction_count =
+                    self.snapshot.context.compaction_count.saturating_add(1);
+                self.snapshot.context.latest_compaction = Some(compaction);
+                vec![RuntimeClientEvent::ContextCompacted {
+                    attempt_id: observation.attempt_id,
+                    context: self.snapshot.context.clone(),
                 }]
             }
             Observation::InboundEnqueued(item) => {
@@ -1287,6 +1306,8 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 #[cfg(test)]
 mod tests {
     use super::{Observation, RuntimeClientProjection, SubscriberPoll};
+    use crate::agent::observer::ContextCompactionObservation;
+    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1356,6 +1377,66 @@ mod tests {
         }
         projection.remove_subscriber(id);
         events
+    }
+
+    /// Checkpoint observations advance the external context view exactly once
+    /// per committed generation and preserve token-measurement provenance.
+    #[test]
+    fn committed_compactions_are_visible_without_exposing_summary_content() {
+        let mut projection = projection();
+        projection.apply(Observation::ContextCompacted(
+            ContextCompactionObservation {
+                attempt_id: attempt(),
+                generation: 1,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 4800,
+                    source: TokenMeasurementSource::ProviderReported,
+                },
+                estimated_tokens_after: 1700,
+            },
+        ));
+        projection.apply(Observation::ContextCompacted(
+            ContextCompactionObservation {
+                attempt_id: attempt(),
+                generation: 2,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 4700,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 1800,
+            },
+        ));
+
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.messages, Vec::new());
+        assert_eq!(snapshot.context.compaction_count, 2);
+        let latest = snapshot
+            .context
+            .latest_compaction
+            .expect("latest compaction");
+        assert_eq!(latest.generation, 2);
+        assert_eq!(
+            latest.tokens_before.source,
+            TokenMeasurementSource::Estimated
+        );
+        assert_eq!(latest.estimated_tokens_after, 1800);
+
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0].event,
+            RuntimeClientEvent::ContextCompacted { attempt_id, context }
+                if attempt_id == &attempt()
+                    && context.compaction_count == 1
+                    && context.latest_compaction.as_ref().is_some_and(|view| view.generation == 1)
+        ));
+        assert!(matches!(
+            &events[1].event,
+            RuntimeClientEvent::ContextCompacted { context, .. }
+                if context.compaction_count == 2
+                    && context.latest_compaction.as_ref().is_some_and(|view| view.generation == 2)
+        ));
+        assert_eq!(cursor, RuntimeClientCursor::new(2));
     }
 
     fn success_result() -> ToolExecutionResult {

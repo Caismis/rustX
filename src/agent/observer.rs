@@ -27,6 +27,7 @@
 //! This module defines the seam only; it owns no state and no consumer.
 
 use crate::context::status::AgentStatus;
+use crate::context::tokens::TokenMeasurement;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::{AttemptId, MessageId};
@@ -48,6 +49,24 @@ pub struct AgentStatusObservation {
     pub target_message_id: MessageId,
     /// The one composed structured status.
     pub status: AgentStatus,
+}
+
+/// The committed result of one context compaction.
+///
+/// The checkpoint has already been saved when this observation is delivered.
+/// Only checkpoint metadata crosses the observation seam: the summary text
+/// and boundary remain context-owned and are never copied into a client
+/// diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextCompactionObservation {
+    /// The attempt that committed the checkpoint.
+    pub attempt_id: AttemptId,
+    /// The monotonically increasing checkpoint generation.
+    pub generation: u64,
+    /// The measurement of the projection before compaction, with provenance.
+    pub tokens_before: TokenMeasurement,
+    /// The deterministic estimate of the rebuilt projection.
+    pub estimated_tokens_after: u64,
 }
 
 /// The live observation seam of one agent attempt execution.
@@ -77,4 +96,7 @@ pub trait AgentExecutionObserver: Sync {
 
     /// Observes the one composed Agent Status of a request preparation.
     fn observe_status(&self, observation: &AgentStatusObservation);
+
+    /// Observes one checkpoint after its save commit.
+    fn observe_compaction(&self, observation: &ContextCompactionObservation);
 }

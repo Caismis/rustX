@@ -31,6 +31,7 @@ import type {
   ModelUsage,
   RuntimeClientAttemptPhase,
   RuntimeClientBackgroundExecution,
+  RuntimeClientContextView,
   RuntimeClientCursor,
   SessionModelView,
   ToolCallId,
@@ -122,6 +123,7 @@ export interface PresentationState {
   inbound: InboundDiagnostics;
   background: RuntimeClientBackgroundExecution[];
   status?: AgentStatusView;
+  context: RuntimeClientContextView;
   capabilities: CapabilityView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView;

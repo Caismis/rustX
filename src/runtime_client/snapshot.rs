@@ -26,6 +26,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
+use crate::context::tokens::TokenMeasurement;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
@@ -73,6 +74,11 @@ pub struct RuntimeClientSnapshot {
     /// The latest composed Agent Status observation, when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatusView>,
+    /// Runtime-owned context-compaction diagnostics. The values describe
+    /// committed checkpoint observations; they never replace canonical
+    /// history or expose summary content.
+    #[serde(default)]
+    pub context: RuntimeClientContextView,
     /// The active capability projection.
     pub capabilities: CapabilityView,
     /// The redacted session model state: the authoritative *desired*
@@ -87,6 +93,29 @@ pub struct RuntimeClientSnapshot {
     /// No credential, adapter object, provider HTTP client, or
     /// synchronization identity appears here.
     pub model: SessionModelView,
+}
+
+/// The context diagnostics carried by the Runtime Client snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientContextView {
+    /// The number of checkpoints committed while this runtime was observed.
+    pub compaction_count: u64,
+    /// The latest committed checkpoint metadata, when compaction occurred.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_compaction: Option<RuntimeClientCompactionView>,
+}
+
+/// Public metadata for one committed context checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientCompactionView {
+    /// The monotonically increasing checkpoint generation.
+    pub generation: u64,
+    /// The pre-compaction input measurement and its provenance.
+    pub tokens_before: TokenMeasurement,
+    /// The deterministic estimate of the rebuilt projection.
+    pub estimated_tokens_after: u64,
 }
 
 /// The external attempt view of the Runtime Client projection.

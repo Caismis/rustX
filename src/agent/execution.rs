@@ -78,7 +78,9 @@ use crate::tools::types::{
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
-use super::observer::{AgentExecutionObserver, AgentStatusObservation};
+use super::observer::{
+    AgentExecutionObserver, AgentStatusObservation, ContextCompactionObservation,
+};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
 use chrono::{DateTime, Utc};
@@ -925,7 +927,11 @@ impl<'a> AgentExecution<'a> {
             .run_compaction(must_cover_through, fresh_inbound, agent_status)
             .await
         {
-            Ok(()) => {}
+            Ok(observation) => {
+                if let Some(observer) = self.observer {
+                    observer.observe_compaction(&observation);
+                }
+            }
             // Cancellation never becomes a compaction failure: no
             // `CompactionFailed` event is emitted and the attempt settles
             // cancelled.
@@ -953,7 +959,7 @@ impl<'a> AgentExecution<'a> {
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         agent_status: Option<&AgentStatusAttachment>,
-    ) -> Result<(), ContextError> {
+    ) -> Result<ContextCompactionObservation, ContextError> {
         if self.cancellation.is_cancelled() {
             return Err(ContextError::new(
                 ContextErrorKind::Cancelled,
@@ -1040,7 +1046,12 @@ impl<'a> AgentExecution<'a> {
         // CompactionCompleted, so the event means the new checkpoint is
         // committed to the M4 checkpoint store.
         self.context_runtime.checkpoint_store.save(&checkpoint)?;
-        Ok(())
+        Ok(ContextCompactionObservation {
+            attempt_id: self.request.attempt_id.clone(),
+            generation: checkpoint.generation,
+            tokens_before: checkpoint.tokens_before,
+            estimated_tokens_after: checkpoint.estimated_tokens_after,
+        })
     }
 
     /// Emits `CompactionFailed` with the diagnostic and returns the

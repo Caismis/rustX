@@ -52,6 +52,7 @@ export function emptyPresentationState(
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
     background: [],
+    context: { compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
     sessionModel,
     runtimeShutdown: false,
@@ -137,6 +138,7 @@ export function replaceFromSnapshot(
     },
     background: [...(snapshot.background ?? [])],
     status: snapshot.status,
+    context: snapshot.context,
     capabilities: snapshot.capabilities,
     sessionModel: snapshot.model,
     runtimeShutdown: snapshot.shutting_down,
@@ -191,6 +193,10 @@ export function reduce(
       if (state.attempt?.attemptId === event.attempt_id) {
         next.attempt = { ...state.attempt, lastUsage: event.usage };
       }
+      return next;
+
+    case "context_compacted":
+      next.context = event.context;
       return next;
 
     case "assistant_message_started":

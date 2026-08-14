@@ -827,8 +827,11 @@ M4 reuses the existing events `CompactionStarted`, `CompactionCompleted`,
 `ModelRequestFailed`, and `ModelRetryScheduled`. No debug events
 (`ContextAlmostFull`, `CutPointChosen`, `SummaryGenerated`,
 `ProjectionCreated`) were added: the compaction events are the canonical
-execution facts, and attempt terminal events are unchanged. Agent Status
-emits no event of its own: it is projection-only.
+execution facts, and attempt terminal events are unchanged. The Runtime
+Client projection additionally publishes the committed `context_compacted`
+fact with checkpoint generation and token-measurement provenance; it carries
+metadata only and never exposes summary text. Agent Status emits no event of
+its own: it is projection-only.
 
 ## 22. Known limitations
 
@@ -847,3 +850,50 @@ emits no event of its own: it is projection-only.
   snapshot, active entries only, deterministic allocation order); Agent
   Status is otherwise complete (temporal section, provider seam,
   deterministic rendering).
+
+## 23. Issue #27 live validation
+
+The live validation uses the same production path as an operator:
+
+```text
+rustx-tui
+  -> Runtime Client Protocol v1 over stdio/JSONL
+  -> local rustx conversation runtime
+  -> ContextRuntime / Agent Loop / provider adapter
+  -> local vLLM
+```
+
+Use `cargo build --bin rustx`, then start the TUI with explicit paths to the
+model catalog, session configuration, workspace, and private runtime root.
+For a reasonably sized development run, copy the local catalog/session to an
+untracked temporary directory and adjust only context/output budgets; never
+commit credentials or throwaway configuration. The ordinary request path must
+cross the threshold twice in one coherent conversation. After each committed
+checkpoint, `/status` and `/debug` report the compaction count, latest
+checkpoint generation, pre-compaction measurement source, and deterministic
+post-compaction estimate.
+
+The repeated-compaction invariant is:
+
+```text
+canonical history + checkpoint generation N
+    -> new retained suffix
+    -> checkpoint generation N+1
+    -> rebuilt projection
+```
+
+The canonical message projection and tool call/result ownership remain
+unchanged; only the model-facing projection gains the checkpoint summary and
+retained suffix. Provider-reported input usage is shown as provider-reported
+only when its projection fingerprint still matches. A changed Agent Status
+attachment or other projection change correctly falls back to the
+deterministic estimate.
+
+The vLLM live case covered session-summary mode, two automatic compactions,
+coherent fact retention, a real `glob` tool call/result, fresh Agent Status,
+and provider usage. Explicit-summary mode requires a genuinely different
+usable catalog model; the available local vLLM endpoint exposed only
+`Qwen/Qwen3`, so the explicit-mode contract is validated by the deterministic
+session-model tests instead. A provider context-overflow compact-and-retry is
+likewise validated deterministically unless the local service can produce a safe,
+reliable overflow without distorting the live scenario.

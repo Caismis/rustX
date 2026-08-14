@@ -374,6 +374,7 @@ export function renderStatus(state: PresentationState): string {
   lines.push(
     `- session model: \`${state.sessionModel.configured.model}\``,
   );
+  lines.push(...contextDiagnosticsLines(state));
 
   const attempt = state.attempt;
   lines.push(
@@ -436,6 +437,7 @@ export function renderDebug(
     `- desired session model: \`${state.sessionModel.configured.model}\``,
     `- active attempt model: \`${state.attempt?.model.primary.model ?? "none"}\``,
     `- capability revision: ${state.capabilities.revision}`,
+    ...contextDiagnosticsLines(state),
     `- inbound pending: ${(state.inbound.pending ?? []).length}`,
     `- background executions: ${state.background.length} (${activeBackground(state).length} active)`,
     `- transcript entries: ${state.transcript.length}`,
@@ -454,4 +456,16 @@ export function renderDebug(
     );
   }
   return lines.join("\n");
+}
+
+function contextDiagnosticsLines(state: PresentationState): string[] {
+  const context = state.context;
+  const latest = context.latest_compaction;
+  if (latest === undefined) {
+    return [`- context compactions: ${context.compaction_count}`];
+  }
+  return [
+    `- context compactions: ${context.compaction_count} (latest checkpoint generation ${latest.generation})`,
+    `- latest context measurement: ${latest.tokens_before.input_tokens} tokens before (${latest.tokens_before.source}), ${latest.estimated_tokens_after} estimated after`,
+  ];
 }

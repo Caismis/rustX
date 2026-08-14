@@ -150,7 +150,9 @@ use super::types::{
     RuntimeClientProtocolEvent, RuntimeClientResult,
 };
 use crate::agent::cancellation::AgentCancellation;
-use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
+use crate::agent::observer::{
+    AgentExecutionObserver, AgentStatusObservation, ContextCompactionObservation,
+};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver};
 use crate::context::checkpoint::ContextCheckpointStore;
@@ -1477,6 +1479,10 @@ impl AgentExecutionObserver for HostObserver {
 
     fn observe_status(&self, observation: &AgentStatusObservation) {
         self.apply_direct(Observation::Status(observation.clone()));
+    }
+
+    fn observe_compaction(&self, observation: &ContextCompactionObservation) {
+        self.apply_direct(Observation::ContextCompacted(observation.clone()));
     }
 }
 
