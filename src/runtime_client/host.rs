@@ -1385,8 +1385,10 @@ impl RuntimeClientHost {
     #[must_use]
     pub fn shutdown(&self) -> RuntimeClientResult {
         let mut state = self.inner.lock_state();
-        state.shutting_down = true;
-        state.projection.apply(Observation::Shutdown);
+        if !state.shutting_down {
+            state.shutting_down = true;
+            state.projection.apply(Observation::Shutdown);
+        }
         RuntimeClientResult::ShutdownAccepted
     }
 }
@@ -3784,6 +3786,7 @@ mod tests {
     /// Shutdown is distinct from detach: it stops further admission, the
     /// current attempt continues, and detach remains available.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one complete shutdown lifecycle
     async fn shutdown_is_not_detach_and_not_cancellation() {
         let (release_tx, release_rx) = model_release();
         let (_, fixture) = host_fixture(
@@ -3823,6 +3826,49 @@ mod tests {
             Some(RuntimeClientResult::ShutdownAccepted)
         ));
 
+        let (after_shutdown, _) = fixture.host.snapshot().expect("snapshot after shutdown");
+        assert!(after_shutdown.shutting_down);
+        let first_shutdown_events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::RuntimeShutdown)
+        })
+        .await;
+        assert_eq!(
+            first_shutdown_events
+                .iter()
+                .filter(|event| matches!(event.event, RuntimeClientEvent::RuntimeShutdown))
+                .count(),
+            1
+        );
+        let repeated = attachment.handle_request(RuntimeClientRequest::Shutdown {
+            id: crate::runtime_client::RequestId::new(5),
+        });
+        assert!(matches!(
+            repeated.result,
+            Some(RuntimeClientResult::ShutdownAccepted)
+        ));
+        let mut duplicate_shutdown = false;
+        loop {
+            match subscription.try_next() {
+                EventDelivery::Event(event) => {
+                    duplicate_shutdown |=
+                        matches!(event.event, RuntimeClientEvent::RuntimeShutdown);
+                }
+                EventDelivery::Pending => break,
+                delivery => panic!("subscription remains open after repeat: {delivery:?}"),
+            }
+        }
+        assert!(
+            !duplicate_shutdown,
+            "repeated shutdown publishes no duplicate fact"
+        );
+        let snapshot_response = attachment.handle_request(RuntimeClientRequest::SnapshotGet {
+            id: crate::runtime_client::RequestId::new(4),
+        });
+        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = snapshot_response.result else {
+            panic!("snapshot_get returns the shutdown state: {snapshot_response:?}");
+        };
+        assert!(snapshot.shutting_down);
+
         // Further admission fails explicitly.
         let submit = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(3),
@@ -3840,10 +3886,14 @@ mod tests {
         })
         .await;
         attachment.detach();
-        let (reattached, _) = fixture
+        let (reattached, initialized) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach after shutdown still works");
+        let RuntimeClientResult::Initialized { snapshot, .. } = initialized else {
+            panic!("fresh initialize returns a snapshot");
+        };
+        assert!(snapshot.shutting_down);
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,

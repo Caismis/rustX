@@ -1290,6 +1290,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   admission affects only future attempts. Both share the one host lock, so
   there is no third possibility and no timing assumption.
 
+- **`attempt_started` is self-contained.** The event carries the frozen
+  `AttemptModelView` of the attempt it announces, byte-identical to
+  `snapshot.attempt.model`. A client following only the incremental stream
+  therefore never infers the active attempt's model from event ordering and
+  never needs a second `snapshot_get`. The value is produced by the
+  projection from runtime-owned state; a client can neither supply nor
+  influence it. It is the *frozen* model, never the session's desired model:
+  a `model_set` accepted while the attempt runs publishes
+  `session_model_changed` and never re-announces the running attempt.
+
 - **Transactional updates.** A rejected `model_set` changes nothing,
   allocates no cursor, and publishes no event.
 
@@ -1332,6 +1342,71 @@ contracts and provider protocols. These invariants are frozen by M2:
   error exits non-zero. Semantic `shutdown` keeps its Issue #38 behaviour and
   does not close the transport. Transport EOF remains a detach, never an
   Agent Loop cancellation primitive.
+
+## TypeScript reference terminal client (Issue #39)
+
+- **Pi TUI is presentation only.** `@earendil-works/pi-tui` supplies terminal
+  mechanics and sits strictly below the rustX semantic boundary. It owns no
+  conversation, model, tool, capability, background, mailbox, Agent Status,
+  provider, context, or agent-loop semantics. A Pi component may hold enough
+  local state to render itself; that state is disposable.
+
+- **Reconstructable from a snapshot.** Given a fresh
+  `RuntimeClientSnapshot`, the complete meaningful UI state is
+  reconstructable without consulting hidden client or Pi state, without a
+  local conversation log, and without client-side history inference. The
+  presentation projection is an ephemeral render cache, never canonical
+  conversation state.
+
+- **One transport owner.** Exactly one object owns JSONL framing, request-id
+  allocation, the pending RPC map, response correlation, and ordered writes.
+  UI components never write protocol records and commands never allocate
+  request ids. Every pending request settles exactly once: EOF, a framing or
+  protocol error, and process exit all reject explicitly, and post-terminal
+  requests fail immediately. Transport loss is never cancellation.
+
+- **Snapshot repair, never gap inference.** `resync_required` triggers
+  `snapshot_get`, wholesale replacement of the projection, and a fresh
+  subscription after the new cursor. Nothing is replayed from what the client
+  believed happened.
+
+- **Runtime-provided identity only.** Streaming and tool state are keyed by
+  `attempt_id`, `message_id`, `block_index`, `tool_call_id`, and
+  `execution_id`. Identity is never inferred from visual position. Reasoning
+  and refusal remain distinct presentation types and are never flattened into
+  assistant text.
+
+- **Generic tool lifecycle.** Tool presentation consumes call identity, tool
+  identity, arguments, state, progress, and result. A tool's name or origin
+  may affect a label or icon only; there is no semantic branch keyed to
+  either, because execution semantics are Rust-owned.
+
+- **Background work is runtime-owned.** A background unit is alive because
+  the runtime says it exists. Removing or collapsing a UI card cancels
+  nothing and is never evidence of settlement. Cancellation is a request:
+  acceptance and terminal settlement stay distinct.
+
+- **Model presentation is runtime-published.** `/model` uses
+  `model_catalog_get`, `model_get`, and `model_set` only. The client never
+  reads `models.json`, instantiates a provider SDK, resolves an API key, or
+  interprets provider protocol semantics. Only *effective* capability is
+  advertised. Reasoning profiles are shown exactly as published: a
+  reasoning-capable model with no profiles means reasoning is supported with
+  no selectable profile, and no universal off/low/medium/high scale is
+  invented. `requestParams` stays opaque provider-owned JSON — displayed and
+  passed, never interpreted.
+
+- **No bypass of rustX.** There is no client-side shell, no filesystem read
+  that injects content into a prompt, no client-side Skill execution, no
+  client-side MCP or Python tool execution, no provider HTTP call, no
+  credential resolution, no context compaction, no mailbox drain inference,
+  and no Agent Status synthesis.
+
+- **Shutdown is not exit, cancellation, or detach.** The controlling-client
+  sequence is: stop accepting input, send `shutdown`, let the active attempt
+  settle under runtime semantics, close stdin, wait, and only then apply a
+  bounded process-level fallback termination. A terminating process is never
+  reported as semantic completion of background work.
 
 ## Cancellation
 

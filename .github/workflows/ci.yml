@@ -31,3 +31,66 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-targets --all-features
+
+      - name: Check whitespace
+        run: git diff --check
+
+  # The TUI is a separate job on purpose: the Rust suites must never depend on
+  # Node being present.
+  tui:
+    name: TUI typecheck and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node comes from nvm's LTS line, declared explicitly. The intent is
+      # "rustX TUI runs on the supported Node LTS", not "whatever Node the
+      # runner happens to preinstall".
+      - name: Install the Node LTS through nvm
+        # `set -u` is deliberately not used: nvm's shell functions reference
+        # unset variables internally and abort under it.
+        run: |
+          set -eo pipefail
+          export NVM_DIR="$HOME/.nvm"
+          mkdir -p "$NVM_DIR"
+          curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+          # shellcheck source=/dev/null
+          . "$NVM_DIR/nvm.sh"
+          nvm install --lts
+          nvm use --lts
+          corepack enable
+          # Cache the exact pnpm from tui/package.json's `packageManager` so
+          # the later steps resolve it without hitting the network.
+          (cd tui && corepack install)
+          node --version
+          # Put the resolved LTS bin directory ahead of the runner's
+          # preinstalled Node for every later step.
+          dirname "$(command -v node)" >> "$GITHUB_PATH"
+
+      # The pnpm steps run with `tui` as the working directory on purpose:
+      # Corepack resolves `packageManager` from the manifest in the current
+      # directory, and from the repository root it cannot see tui's.
+      - name: Report the resolved toolchain
+        working-directory: tui
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install dependencies
+        working-directory: tui
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: tui
+        run: pnpm typecheck
+
+      # The integration suite drives the real binary over the real stdio
+      # transport, so it must exist before the tests run.
+      - name: Build the rustx binary
+        run: cargo build --bin rustx
+
+      - name: Test
+        working-directory: tui
+        run: pnpm test

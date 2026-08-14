@@ -256,6 +256,7 @@ impl RuntimeClientProjection {
             exhausted: false,
             snapshot: RuntimeClientSnapshot {
                 conversation_id,
+                shutting_down: false,
                 messages: initial_messages,
                 attempt: None,
                 inbound: InboundDiagnostics {
@@ -398,7 +399,10 @@ impl RuntimeClientProjection {
                 self.snapshot.model = (*model).clone();
                 vec![RuntimeClientEvent::SessionModelChanged { model }]
             }
-            Observation::Shutdown => vec![RuntimeClientEvent::RuntimeShutdown],
+            Observation::Shutdown => {
+                self.snapshot.shutting_down = true;
+                vec![RuntimeClientEvent::RuntimeShutdown]
+            }
         }
     }
 
@@ -410,14 +414,15 @@ impl RuntimeClientProjection {
     /// - PROJECT: attempt lifecycle/settlement, streaming assistant
     ///   output, tool-call assembly, foreground tool lifecycle, and
     ///   progress;
-    /// - FOLD ONLY: turn counting and final request usage (observable
-    ///   through the attempt view, not as events);
+    /// - PROJECT: turn counting and final request usage, carrying the exact
+    ///   values folded into the attempt view;
     /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
     ///   `ModelRequestFailed`, `ModelRetryScheduled`) and compaction
     ///   mechanics (`CompactionStarted/Completed/Failed`).
     // The mapping table is one explicit classification policy; identical
-    // `Vec::new()` bodies mark intentionally distinct classes (FOLD ONLY
-    // vs INTERNAL) that must remain separately documented.
+    // `Vec::new()` bodies mark intentionally distinct classes (the remaining
+    // fold-only/internal observations) that must remain separately
+    // documented.
     #[allow(clippy::too_many_lines, clippy::match_same_arms)]
     fn fold_event(
         &mut self,
@@ -434,11 +439,15 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
-                    model,
+                    model: model.clone(),
                 });
                 self.snapshot.status = None;
+                // The published event carries the same frozen model the
+                // attempt read model carries, so an incremental subscriber
+                // and a snapshot reader agree without inference.
                 vec![RuntimeClientEvent::AttemptStarted {
                     attempt_id: attempt_id.clone(),
+                    model,
                 }]
             }
             RuntimeEvent::AttemptCompleted { finish_reason, .. } => self.settle_attempt(
@@ -469,13 +478,15 @@ impl RuntimeClientProjection {
                     && attempt.attempt_id == *attempt_id
                 {
                     attempt.turn = attempt.turn.saturating_add(1);
+                    return vec![RuntimeClientEvent::AttemptTurnUpdated {
+                        attempt_id: attempt_id.clone(),
+                        turn: attempt.turn,
+                    }];
                 }
                 Vec::new()
             }
-            // FOLD ONLY: the turn count is observable through the attempt
-            // view, not as an event. INTERNAL: model request mechanics
-            // never produce client events — the attempt settlement carries
-            // the normalized failure; usage is folded below.
+            // INTERNAL: model request mechanics never produce client events —
+            // the attempt settlement carries the normalized failure.
             RuntimeEvent::TurnCompleted
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::ModelRequestFailed { .. }
@@ -486,6 +497,10 @@ impl RuntimeClientProjection {
                     && attempt.attempt_id == *attempt_id
                 {
                     attempt.last_usage = Some(usage.clone());
+                    return vec![RuntimeClientEvent::AttemptUsageUpdated {
+                        attempt_id: attempt_id.clone(),
+                        usage: usage.clone(),
+                    }];
                 }
                 Vec::new()
             }
@@ -1496,10 +1511,11 @@ mod tests {
         assert!(snapshot.attempt.is_none());
     }
 
-    /// FOLD-ONLY events update the attempt view (turn count, final usage)
-    /// without publishing client events.
+    /// Turn and usage observations publish the exact values folded into the
+    /// attempt view, so incremental subscribers stay synchronized with a
+    /// snapshot without polling.
     #[test]
-    fn fold_only_events_update_the_attempt_view() {
+    fn turn_and_usage_events_agree_with_the_attempt_view() {
         let mut projection = projection();
         apply_event(
             &mut projection,
@@ -1522,7 +1538,26 @@ mod tests {
             },
         );
         let events = collect(&mut projection, RuntimeClientCursor::new(1));
-        assert!(events.is_empty(), "fold-only events publish nothing");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event,
+            RuntimeClientEvent::AttemptTurnUpdated {
+                attempt_id: attempt(),
+                turn: 1,
+            }
+        );
+        assert_eq!(
+            events[1].event,
+            RuntimeClientEvent::AttemptUsageUpdated {
+                attempt_id: attempt(),
+                usage: ModelUsage {
+                    input_tokens: 10,
+                    output_tokens: 2,
+                    total_tokens: 12,
+                    details: None,
+                },
+            }
+        );
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         let attempt_view = snapshot.attempt.expect("attempt view exists");
         assert_eq!(attempt_view.turn, 1);
@@ -1533,6 +1568,20 @@ mod tests {
                 .map(|usage| usage.input_tokens),
             Some(10)
         );
+    }
+
+    #[test]
+    fn shutdown_folds_into_the_snapshot_and_publishes_the_runtime_fact() {
+        let mut projection = projection();
+        projection.apply(Observation::Shutdown);
+
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, RuntimeClientEvent::RuntimeShutdown);
+
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
+        assert!(snapshot.shutting_down);
+        assert_eq!(cursor, RuntimeClientCursor::new(1));
     }
 
     /// Exactly one terminal settlement exists per attempt, and the

@@ -33,6 +33,30 @@ pub fn attempt_model(
     attempt_model_with_window(adapter, model, 10_000_000, 512)
 }
 
+/// A redacted attempt model view of one model reference.
+///
+/// Wire-contract suites need a well-formed `AttemptModelView` without
+/// standing up a catalog binding: the value is protocol payload there, not a
+/// resolution under test.
+pub fn attempt_model_view(reference: &str) -> rustx::model::AttemptModelView {
+    let capabilities = rustx::model::ModelCapabilities::text_only(true, false);
+    rustx::model::AttemptModelView {
+        primary: rustx::model::ModelInvocationView {
+            model: rustx::model::ModelRef::parse(reference).expect("a valid model reference"),
+            protocol: rustx::model::ModelProtocol::OpenAiChatCompletions,
+            context_window: 128_000,
+            model_max_output_tokens: 4096,
+            max_output_tokens: 4096,
+            reasoning_profile: None,
+            reasoning_enabled: false,
+            request_params: rustx::model::RequestParams::new(),
+            capabilities: capabilities.clone(),
+            declared_capabilities: capabilities,
+        },
+        summary: rustx::model::SummaryModelView::Session,
+    }
+}
+
 /// The attempt model snapshot of a loop suite with explicit limits.
 pub fn attempt_model_with_window(
     adapter: std::sync::Arc<dyn rustx::model::ModelAdapter>,
