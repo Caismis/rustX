@@ -52,7 +52,9 @@ export RUSTX_EXAMPLE_API_KEY='replace-me'
 
 The catalog demonstrates the current `openai_chat_completions` protocol, a
 `example/demo-model` model with structured text/tool/reasoning capabilities,
-model limits, and `compat` metadata. `requestParams.temperature` is a
+model limits, and `compat` metadata. A model ID may contain `/`, so a model
+such as `Qwen/Qwen3` is referenced as `example/Qwen/Qwen3` in the session.
+`requestParams.temperature` is a
 model-level provider wire parameter. It is opaque to rustX and is not a
 universal sampling-parameter schema; adapt it to the selected provider.
 

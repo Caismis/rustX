@@ -119,6 +119,46 @@ async fn plain_text_stream_normalizes() {
     assert_eq!(server.attempt_count(), 1, "exactly one provider attempt");
 }
 
+/// Qwen/vLLM reasoning deltas remain a distinct canonical block before the
+/// visible answer instead of being silently discarded as an unknown field.
+#[tokio::test]
+async fn reasoning_deltas_normalize_as_reasoning() {
+    let server = common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "reasoning_then_text.sse")
+    })
+    .await;
+    let events = collect_events(
+        &adapter(&server),
+        simple_request(ModelProtocol::OpenAiChatCompletions, "gpt-test", "Answer"),
+    )
+    .await;
+    let expected = vec![
+        ModelEvent::Started,
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: "Plan".to_owned(),
+        },
+        ModelEvent::ReasoningDelta {
+            block_index: ContentBlockIndex::new(0),
+            text: " first.".to_owned(),
+        },
+        ModelEvent::TextDelta {
+            block_index: ContentBlockIndex::new(1),
+            text: "Answer".to_owned(),
+        },
+        ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        },
+    ];
+    assert_eq!(
+        events,
+        expected,
+        "event stream mismatch:\n{}",
+        describe_events(&events)
+    );
+}
+
 /// Refusal deltas stream as refusal content, never as plain text.
 #[tokio::test]
 async fn refusal_deltas_normalize_as_refusal() {

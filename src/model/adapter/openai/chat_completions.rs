@@ -297,6 +297,8 @@ enum ChatPhase {
 enum ChatBlockKey {
     /// The streamed text block of the single choice.
     Text,
+    /// The streamed reasoning block of the single choice.
+    Reasoning,
     /// The streamed refusal block of the single choice.
     Refusal,
     /// A tool call assembled by its provider tool index.
@@ -324,6 +326,9 @@ struct ChatChoiceWire {
 struct ChatDeltaWire {
     #[serde(default)]
     content: Option<String>,
+    /// Qwen/vLLM exposes enabled thinking as `delta.reasoning`.
+    #[serde(default)]
+    reasoning: Option<String>,
     #[serde(default)]
     refusal: Option<String>,
     #[serde(default)]
@@ -398,6 +403,15 @@ impl ChatStreamNormalizer {
             events.push(ModelEvent::UsageUpdate { usage });
         }
         if let Some(choice) = chunk.choices.first() {
+            if let Some(reasoning) = &choice.delta.reasoning
+                && !reasoning.is_empty()
+            {
+                let block_index = self.blocks.allocate(ChatBlockKey::Reasoning);
+                events.push(ModelEvent::ReasoningDelta {
+                    block_index,
+                    text: reasoning.clone(),
+                });
+            }
             if let Some(text) = &choice.delta.content
                 && !text.is_empty()
             {

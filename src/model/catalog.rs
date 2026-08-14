@@ -75,7 +75,7 @@ pub struct ModelId(String);
 pub struct ReasoningProfileId(String);
 
 macro_rules! catalog_identity {
-    ($name:ident, $what:literal) => {
+    ($name:ident, $what:literal, $reject_slash:literal) => {
         impl $name {
             /// Creates the identity without validation.
             ///
@@ -93,10 +93,12 @@ macro_rules! catalog_identity {
             ///
             /// Returns [`ModelCatalogError::InvalidIdentity`] when the value
             /// is empty, contains whitespace, or contains the `/` reference
-            /// separator.
+            /// separator when this identity type reserves it.
             pub fn parse(value: impl Into<String>) -> Result<Self, ModelCatalogError> {
                 let value = value.into();
-                if value.is_empty() || value.contains('/') || value.chars().any(char::is_whitespace)
+                if value.is_empty()
+                    || ($reject_slash && value.contains('/'))
+                    || value.chars().any(char::is_whitespace)
                 {
                     return Err(ModelCatalogError::InvalidIdentity { kind: $what, value });
                 }
@@ -118,11 +120,15 @@ macro_rules! catalog_identity {
     };
 }
 
-catalog_identity!(ProviderId, "provider");
-catalog_identity!(ModelId, "model");
-catalog_identity!(ReasoningProfileId, "reasoning profile");
+catalog_identity!(ProviderId, "provider", true);
+catalog_identity!(ModelId, "model", false);
+catalog_identity!(ReasoningProfileId, "reasoning profile", true);
 
 /// A fully qualified catalog model reference: `provider-id/model-id`.
+///
+/// The first `/` separates the provider from the model. The model ID itself
+/// may contain additional `/` characters, as is common for Hugging Face
+/// identities such as `Qwen/Qwen3`.
 ///
 /// This is the explicit model-identity domain of the runtime. Concatenated
 /// strings never travel through the runtime in its place: a reference either
@@ -142,10 +148,12 @@ impl ModelRef {
 
     /// Parses the canonical `provider-id/model-id` form.
     ///
+    /// The first `/` separates the provider; the remainder is the model ID.
+    ///
     /// # Errors
     ///
     /// Returns [`ModelCatalogError::InvalidModelRef`] when the value does
-    /// not contain exactly one `/` separating two valid identities.
+    /// not contain a `/` separating two valid identities.
     pub fn parse(value: &str) -> Result<Self, ModelCatalogError> {
         let mut parts = value.splitn(2, '/');
         let (Some(provider), Some(model)) = (parts.next(), parts.next()) else {
@@ -1203,7 +1211,9 @@ pub enum ModelCatalogError {
     },
     /// The catalog declares no provider.
     EmptyCatalog,
-    /// An identity is empty, contains whitespace, or contains `/`.
+    /// A provider or reasoning-profile identity is empty, contains whitespace,
+    /// or contains `/`. Model identities may contain `/` because the first
+    /// slash in a model reference is the provider separator.
     InvalidIdentity {
         /// What kind of identity failed.
         kind: &'static str,
@@ -1777,8 +1787,9 @@ mod tests {
         assert!(error.to_string().contains("max_tokens"));
     }
 
-    /// A model reference resolves unambiguously to exactly one model, and an
-    /// unknown reference fails explicitly.
+    /// A model reference resolves unambiguously to exactly one model, including
+    /// a model ID containing additional `/` characters, and an unknown
+    /// reference fails explicitly.
     #[test]
     fn model_references_resolve_unambiguously() {
         let catalog = ModelCatalog::from_json_slice(valid_catalog().as_bytes()).expect("valid");
@@ -1801,7 +1812,40 @@ mod tests {
             ModelCatalogError::UnknownProvider { .. }
         ));
         assert!(ModelRef::parse("no-separator").is_err());
-        assert!(ModelRef::parse("a/b/c").is_err());
+        let nested = ModelRef::parse("a/b/c").expect("the model ID may contain slashes");
+        assert_eq!(nested.provider().as_str(), "a");
+        assert_eq!(nested.model().as_str(), "b/c");
+        assert_eq!(nested.to_string(), "a/b/c");
+    }
+
+    /// A provider can publish a model whose provider-facing identity contains
+    /// slashes, and the resolved invocation preserves that identity for the
+    /// request body.
+    #[test]
+    fn slash_bearing_model_ids_reach_the_provider_request() {
+        let json = catalog_json(
+            r#"{"baseUrl":"https://gateway.example/v1","apiKey":"k","models":[
+                 {"id":"Qwen/Qwen3","protocol":"openai_chat_completions","contextWindow":1000,
+                  "maxOutputTokens":100,
+                  "capabilities":{"inputModalities":["text"],"outputModalities":["text"],
+                                  "toolCalls":true,"reasoning":false}}]}"#,
+        );
+        let catalog = ModelCatalog::from_json_slice(json.as_bytes()).expect("valid");
+        let reference = ModelRef::parse("p/Qwen/Qwen3").expect("reference");
+        assert_eq!(
+            catalog.model(&reference).expect("model exists").id.as_str(),
+            "Qwen/Qwen3"
+        );
+
+        let resolved = catalog
+            .resolve(&MapCredentialEnvironment::default())
+            .expect("literal credential resolves");
+        let registry = crate::model::invocation::ModelBindingRegistry::new(resolved)
+            .expect("supported adapter binds");
+        let invocation = registry
+            .resolve(&crate::model::invocation::ModelSelection::of(reference))
+            .expect("model resolves");
+        assert_eq!(invocation.invocation_config().model, "Qwen/Qwen3");
     }
 
     /// Unknown catalog fields are rejected rather than silently ignored.

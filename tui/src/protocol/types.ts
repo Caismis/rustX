@@ -53,7 +53,7 @@ export type RuntimeClientCursor = number;
 export type InboundSequence = number;
 /** An attachment-scoped request id. Allocated by the connection alone. */
 export type RequestId = number;
-/** A canonical `provider-id/model-id` reference. */
+/** A canonical `provider-id/model-id` reference; the model ID may contain `/`. */
 export type ModelRef = string;
 /** A reasoning profile identity declared by the catalog. */
 export type ReasoningProfileId = string;
