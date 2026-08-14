@@ -342,13 +342,13 @@ Exit criteria:
 
 ### MCP
 
-Use `rmcp` 3.1.2 and the MCP 2026-07-28 `Discover` lifecycle behind a
-rustX-owned executor boundary.
+Use `rmcp` 3.1.2 behind a rustX-owned executor boundary, negotiating a
+mutually supported protocol revision instead of pinning one (Issue #46).
 
 Implement:
 
-- Typed stdio and Streamable HTTP configuration with explicit credentials and
-  no legacy session fallback
+- Typed stdio and Streamable HTTP configuration with explicit credentials,
+  normalized once from the ecosystem-compatible named `mcpServers` map
 - Paginated discovery and deterministic canonical ToolId/name ordering
 - Shared `McpServerRuntime` ownership for transport, subscriptions, progress,
   cancellation, and supervised stdio process settlement

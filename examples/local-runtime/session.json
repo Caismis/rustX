@@ -45,7 +45,8 @@
       "concurrency": "sequential"
     }
   },
-  "mcpServers": [],
+  "mcpServers": {},
+  "mcpToolPolicies": {},
   "environment": {
     "RUSTX_EXAMPLE_MODE": "local-runtime"
   }

@@ -146,26 +146,28 @@ async fn capability_projection_covers_mcp_origins() {
     {
         return;
     }
-    let mcp_config = rustx::tools::mcp::McpServerConfig {
-        server_id: rustx::runtime::identity::McpServerId::new("fixture"),
-        transport: rustx::tools::mcp::McpTransportConfig::Stdio {
-            program: std::env::current_exe()
-                .expect("test executable")
-                .display()
-                .to_string(),
-            args: rustx::tools::mcp::fixture::fixture_spawn_args(
-                "scripted_suites::issue37_capability::capability_projection_covers_mcp_origins",
-            ),
-            cwd: None,
-            environment: std::collections::BTreeMap::from([(
-                rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
-                "1".to_owned(),
-            )]),
+    let mcp_bindings = rustx::tools::mcp::McpServerBindings::from([(
+        rustx::runtime::identity::McpServerId::new("fixture"),
+        rustx::tools::mcp::McpServerBinding {
+            transport: rustx::tools::mcp::McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: rustx::tools::mcp::fixture::fixture_spawn_args(
+                    "scripted_suites::issue37_capability::capability_projection_covers_mcp_origins",
+                ),
+                cwd: None,
+                environment: std::collections::BTreeMap::from([(
+                    rustx::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                    "1".to_owned(),
+                )]),
+            },
+            policy: rustx::tools::types::ToolInvocationPolicy::default(),
         },
-        policy: rustx::tools::types::ToolInvocationPolicy::default(),
-    };
+    )]);
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-mcp")
-        .mcp_servers(vec![mcp_config])
+        .mcp_servers(mcp_bindings)
         .build()
         .await;
     let host = fixture.host.clone();

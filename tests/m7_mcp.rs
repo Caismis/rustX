@@ -41,8 +41,8 @@ mod unix_tests {
         let cancel_marker = workspace_dir.path().join("fixture-cancel-observed");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
         let invalidation = Arc::new(rustx::tools::mcp::McpInvalidationState::new());
-        let config = rustx::tools::mcp::McpServerConfig {
-            server_id: rustx::runtime::identity::McpServerId::new("fixture"),
+        let server_id = rustx::runtime::identity::McpServerId::new("fixture");
+        let binding = rustx::tools::mcp::McpServerBinding {
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -65,10 +65,14 @@ mod unix_tests {
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
         };
-        let runtime =
-            rustx::tools::mcp::McpServerRuntime::connect(&config, &workspace, invalidation)
-                .await
-                .expect("MCP connect");
+        let runtime = rustx::tools::mcp::McpServerRuntime::connect(
+            &server_id,
+            &binding,
+            &workspace,
+            invalidation,
+        )
+        .await
+        .expect("MCP connect");
         let tools = runtime.list_tools().await.expect("tools/list");
         assert_eq!(
             tools
@@ -78,7 +82,7 @@ mod unix_tests {
             ["echo", "mutate", "slow"]
         );
         let definitions =
-            rustx::tools::mcp::definitions(&config.server_id, config.policy, &runtime, tools);
+            rustx::tools::mcp::definitions(&server_id, binding.policy, &runtime, tools);
         let mutate_index = definitions
             .iter()
             .position(|(definition, _)| definition.name == "mutate")
@@ -221,8 +225,8 @@ mod unix_tests {
         });
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        let config = rustx::tools::mcp::McpServerConfig {
-            server_id: rustx::runtime::identity::McpServerId::new("http-fixture"),
+        let server_id = rustx::runtime::identity::McpServerId::new("http-fixture");
+        let binding = rustx::tools::mcp::McpServerBinding {
             transport: rustx::tools::mcp::McpTransportConfig::StreamableHttp {
                 endpoint: format!("http://{address}/mcp"),
                 headers: std::collections::BTreeMap::new(),
@@ -230,7 +234,8 @@ mod unix_tests {
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
         };
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
-            &config,
+            &server_id,
+            &binding,
             &workspace,
             Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
         )
@@ -239,7 +244,7 @@ mod unix_tests {
         let tools = runtime.list_tools().await.expect("HTTP tools/list");
         assert_eq!(tools.len(), 3);
         let definitions =
-            rustx::tools::mcp::definitions(&config.server_id, config.policy, &runtime, tools);
+            rustx::tools::mcp::definitions(&server_id, binding.policy, &runtime, tools);
         let initial_epoch = runtime.change_epoch();
         let executor = definitions
             .iter()
@@ -259,8 +264,7 @@ mod unix_tests {
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("http-call"),
                 tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(
-                    &config.server_id,
-                    "mutate",
+                    &server_id, "mutate",
                 )),
                 tool_name: "mutate".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -311,8 +315,7 @@ mod unix_tests {
             rustx::tools::types::ToolInvocation {
                 call_id: rustx::runtime::identity::ToolCallId::new("http-slow"),
                 tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::mcp::mcp_tool_id(
-                    &config.server_id,
-                    "slow",
+                    &server_id, "slow",
                 )),
                 tool_name: "slow".to_owned(),
                 mode: rustx::tools::types::ToolInvocationMode::Foreground,
@@ -365,8 +368,8 @@ mod unix_tests {
         }
         let workspace_dir = tempfile::tempdir().expect("workspace");
         let workspace = rustx::tools::Workspace::new(workspace_dir.path()).expect("workspace");
-        let config = rustx::tools::mcp::McpServerConfig {
-            server_id: rustx::runtime::identity::McpServerId::new("paged-fixture"),
+        let server_id = rustx::runtime::identity::McpServerId::new("paged-fixture");
+        let binding = rustx::tools::mcp::McpServerBinding {
             transport: rustx::tools::mcp::McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .expect("test executable")
@@ -390,7 +393,8 @@ mod unix_tests {
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
         };
         let runtime = rustx::tools::mcp::McpServerRuntime::connect(
-            &config,
+            &server_id,
+            &binding,
             &workspace,
             Arc::new(rustx::tools::mcp::McpInvalidationState::new()),
         )
@@ -407,8 +411,8 @@ mod unix_tests {
         );
         let registry = rustx::tools::executor::ToolRegistry::new()
             .compose(rustx::tools::mcp::definitions(
-                &config.server_id,
-                config.policy,
+                &server_id,
+                binding.policy,
                 &runtime,
                 tools,
             ))

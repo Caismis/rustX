@@ -104,17 +104,89 @@ The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized session
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
 not in this table.
 
-## MCP baseline scope
+## MCP servers
 
-The copyable baseline intentionally keeps `"mcpServers": []`, so it does not
-require an external MCP process or endpoint at startup. It is a startup-safe
-baseline, not a canonical MCP connection-configuration example.
+The copyable baseline intentionally keeps `"mcpServers": {}`, so it does not
+require an external MCP process or endpoint at startup.
 
-The current user-facing MCP configuration shape is being revised under
-[issue #46](https://github.com/Caismis/rustX/issues/46). The obsolete array
-schema with `serverId`, nested `transport` objects, and embedded policy is not
-advertised here; the final named-map connection contract remains owned by that
-issue.
+`mcpServers` is a named map keyed by MCP server identity — the same shape
+mainstream MCP clients use, so an entry can be copied straight from a
+server's own documentation. Three canonical entries:
+
+```json
+{
+  "mcpServers": {
+    "exa": {
+      "type": "http",
+      "url": "https://mcp.exa.ai/mcp"
+    }
+  }
+}
+```
+
+```json
+{
+  "mcpServers": {
+    "exa": {
+      "type": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "headers": {
+        "x-api-key": "YOUR_EXA_API_KEY"
+      }
+    }
+  }
+}
+```
+
+```json
+{
+  "mcpServers": {
+    "exa": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": {
+        "EXA_API_KEY": "YOUR_EXA_API_KEY"
+      }
+    }
+  }
+}
+```
+
+A stdio entry may also set `"cwd"`, which stays workspace-relative.
+
+**Accepted shorthand.** Two shorthand forms from the ecosystem's own READMEs
+are accepted and normalize to exactly the canonical entries above:
+
+```text
+url only     -> http
+command only -> stdio
+```
+
+Documented and generated rustX configuration always uses the explicit `type`.
+Nothing else is accepted: there is no `streamable-http`/`streamable_http`
+alias, no `sse`, and no `ws`. An entry that is ambiguous or contradictory
+(`url` together with `command`, `type: "http"` with `args`, a blank `url` or
+`command`, an unknown field) fails startup rather than being guessed at.
+
+**Tool policy.** rustX's own invocation policy for a server's tools lives in
+the separate `mcpToolPolicies` map, keyed by the same identity, so an
+`mcpServers` entry stays ordinary MCP configuration:
+
+```json
+{
+  "mcpToolPolicies": {
+    "exa": { "execution": "foreground_only", "concurrency": "parallel" }
+  }
+}
+```
+
+A server without an entry gets the deterministic default (`foreground_only`
+and `sequential`). An entry naming a server `mcpServers` does not declare
+fails startup.
+
+rustX connects on whichever MCP protocol revision it and the server actually
+share, so there is no protocol-version setting here.
 
 After successful capability preparation, MCP tools are part of the
 runtime-owned immutable capability snapshot. The TUI does not launch,

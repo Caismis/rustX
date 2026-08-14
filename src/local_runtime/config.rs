@@ -19,7 +19,7 @@ use crate::context::SessionContextPolicy;
 use crate::model::session::SessionModelConfig;
 use crate::runtime::identity::{AgentId, ConversationId, McpServerId};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentError};
-use crate::tools::mcp::{McpServerConfig, McpTransportConfig};
+use crate::tools::mcp::{McpServerBinding, McpServerBindings, McpTransportConfig};
 use crate::tools::native::NativeToolPolicies;
 use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy};
 
@@ -45,9 +45,16 @@ pub struct LocalSessionConfig {
     pub timezone: Option<Tz>,
     /// The static session-owned context policy.
     pub context: ContextPolicyDocument,
-    /// The configured MCP servers of the capability coordinator.
+    /// The ecosystem-compatible named MCP server map, keyed by server
+    /// identity exactly as mainstream MCP clients spell it.
     #[serde(default)]
-    pub mcp_servers: Vec<McpServerDocument>,
+    pub mcp_servers: BTreeMap<McpServerId, McpServerDocument>,
+    /// The rustX-owned per-server tool invocation policy overlay.
+    ///
+    /// Deliberately not part of `mcpServers`: an `mcpServers` entry must stay
+    /// copy-pasteable from an MCP server's own documentation.
+    #[serde(default)]
+    pub mcp_tool_policies: BTreeMap<McpServerId, InvocationPolicyDocument>,
     /// The per-tool execution policies of the native tool plane.
     #[serde(default)]
     pub native_tools: NativeToolPoliciesDocument,
@@ -98,14 +105,11 @@ impl LocalSessionConfig {
                 detail: "context.summaryOutputCap must be positive when present".to_owned(),
             });
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for server in &self.mcp_servers {
-            if !seen.insert(server.server_id.clone()) {
-                return Err(LocalSessionConfigError::Invalid {
-                    detail: format!("duplicate MCP server identity {}", server.server_id),
-                });
-            }
-        }
+        // Duplicate MCP identity is structurally impossible: `mcpServers` is
+        // a keyed map. Normalization is the remaining semantic gate, and it
+        // runs here so a malformed entry fails at parse time rather than at
+        // composition time.
+        self.mcp_bindings()?;
         Ok(())
     }
 
@@ -134,12 +138,55 @@ impl LocalSessionConfig {
         .map_err(LocalSessionConfigError::Environment)
     }
 
-    /// The MCP server bindings this configuration expresses.
-    #[must_use]
-    pub fn mcp_server_configs(&self) -> Vec<McpServerConfig> {
+    /// The typed MCP runtime bindings this configuration expresses.
+    ///
+    /// This is the one normalization boundary: ecosystem spellings (`url`,
+    /// `command`, `env`, `type: "http"`) are resolved here and never reach
+    /// the MCP adapter, the capability coordinator, the Agent Loop, or the
+    /// TUI.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalSessionConfigError::Invalid`] when an entry is
+    /// ambiguous, contradictory, or incomplete, or when the policy overlay
+    /// names a server that `mcpServers` does not declare.
+    pub fn mcp_bindings(&self) -> Result<McpServerBindings, LocalSessionConfigError> {
+        for server_id in self.mcp_tool_policies.keys() {
+            if !self.mcp_servers.contains_key(server_id) {
+                return Err(LocalSessionConfigError::Invalid {
+                    detail: format!(
+                        "mcpToolPolicies names {server_id}, which mcpServers does not declare"
+                    ),
+                });
+            }
+        }
         self.mcp_servers
             .iter()
-            .map(McpServerDocument::to_config)
+            .map(|(server_id, document)| {
+                if server_id.as_str().is_empty() {
+                    return Err(LocalSessionConfigError::Invalid {
+                        detail: "mcpServers keys must be non-empty server identities".to_owned(),
+                    });
+                }
+                let transport =
+                    document
+                        .to_transport()
+                        .map_err(|detail| LocalSessionConfigError::Invalid {
+                            detail: format!("mcpServers.{server_id}: {detail}"),
+                        })?;
+                Ok((
+                    server_id.clone(),
+                    McpServerBinding {
+                        transport,
+                        policy: self
+                            .mcp_tool_policies
+                            .get(server_id)
+                            .copied()
+                            .unwrap_or_default()
+                            .to_policy(),
+                    },
+                ))
+            })
             .collect()
     }
 }
@@ -264,81 +311,131 @@ impl ConcurrencyPolicyDocument {
     }
 }
 
-/// One configured MCP server of the local session.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One `mcpServers` entry, in the shape mainstream MCP clients use.
+///
+/// The document is deliberately flat and permissive at the *field* level and
+/// strict at the *combination* level: every accepted field is declared here,
+/// unknown fields fail, and [`Self::to_transport`] rejects every ambiguous or
+/// contradictory combination rather than guessing.
+///
+/// Two entry shapes are accepted per transport — the canonical one with an
+/// explicit `type`, and the shorthand the ecosystem's own READMEs use:
+///
+/// - `{"type": "http", "url": ..., "headers": {...}}` / `{"url": ...}`;
+/// - `{"type": "stdio", "command": ..., "args": [...], "env": {...},
+///   "cwd": ...}` / `{"command": ..., "args": [...]}`.
+///
+/// No other spellings are accepted. There is no `streamable-http` alias, no
+/// `sse`, and no `ws`: rustX has exactly two runtime transports.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServerDocument {
-    /// The stable server identity.
-    pub server_id: McpServerId,
-    /// The configured transport.
-    pub transport: McpTransportDocument,
-    /// One origin-independent policy for every tool of this server.
-    #[serde(default)]
-    pub policy: InvocationPolicyDocument,
+    /// The explicit transport selector, when the entry declares one.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub transport_type: Option<McpTransportType>,
+    /// The Streamable HTTP endpoint URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Static request headers sent with every HTTP request.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    /// The stdio server executable path or explicit executable name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The stdio server arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// The explicit stdio child environment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// The stdio workspace-relative working directory; absent means the
+    /// workspace root. The runtime keeps enforcing that it stays inside the
+    /// workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+}
+
+/// The transport an `mcpServers` entry selects explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransportType {
+    /// Streamable HTTP. This is the canonical spelling for a remote server.
+    Http,
+    /// A locally launched stdio server.
+    Stdio,
 }
 
 impl McpServerDocument {
-    /// The runtime binding this document expresses.
-    #[must_use]
-    pub fn to_config(&self) -> McpServerConfig {
-        McpServerConfig {
-            server_id: self.server_id.clone(),
-            transport: self.transport.to_config(),
-            policy: self.policy.to_policy(),
-        }
-    }
-}
-
-/// One configured MCP transport of the local session.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum McpTransportDocument {
-    /// A stdio server launched with an explicit environment and a
-    /// workspace-relative working directory.
-    Stdio {
-        /// Executable path or explicit executable name.
-        program: String,
-        /// Program arguments.
-        #[serde(default)]
-        args: Vec<String>,
-        /// Workspace-relative working directory; absent means workspace
-        /// root.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
-        /// The explicit child environment.
-        #[serde(default)]
-        environment: BTreeMap<String, String>,
-    },
-    /// A stateless Streamable HTTP endpoint with explicit headers.
-    StreamableHttp {
-        /// The endpoint URL.
-        endpoint: String,
-        /// Explicit static request headers.
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
-    },
-}
-
-impl McpTransportDocument {
-    /// The runtime transport this document expresses.
-    #[must_use]
-    pub fn to_config(&self) -> McpTransportConfig {
-        match self {
-            Self::Stdio {
-                program,
-                args,
-                cwd,
-                environment,
-            } => McpTransportConfig::Stdio {
-                program: program.clone(),
-                args: args.clone(),
-                cwd: cwd.clone(),
-                environment: environment.clone(),
+    /// The runtime transport this entry normalizes to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable detail when the entry is ambiguous,
+    /// contradictory, or incomplete.
+    pub fn to_transport(&self) -> Result<McpTransportConfig, String> {
+        let has_http_fields = self.url.is_some() || !self.headers.is_empty();
+        let has_stdio_fields = self.command.is_some()
+            || !self.args.is_empty()
+            || !self.env.is_empty()
+            || self.cwd.is_some();
+        let selected = match self.transport_type {
+            Some(explicit) => explicit,
+            None => match (self.url.is_some(), self.command.is_some()) {
+                (true, true) => {
+                    return Err(
+                        "declares both url and command; declare exactly one transport".to_owned(),
+                    );
+                }
+                (true, false) => McpTransportType::Http,
+                (false, true) => McpTransportType::Stdio,
+                (false, false) => {
+                    return Err(
+                        "declares neither url (http) nor command (stdio); one is required"
+                            .to_owned(),
+                    );
+                }
             },
-            Self::StreamableHttp { endpoint, headers } => McpTransportConfig::StreamableHttp {
-                endpoint: endpoint.clone(),
-                headers: headers.clone(),
-            },
+        };
+        match selected {
+            McpTransportType::Http => {
+                if has_stdio_fields {
+                    return Err(
+                        "is an http entry but declares stdio fields (command/args/env/cwd)"
+                            .to_owned(),
+                    );
+                }
+                let endpoint = self
+                    .url
+                    .as_deref()
+                    .ok_or_else(|| "is an http entry but declares no url".to_owned())?;
+                if endpoint.trim().is_empty() {
+                    return Err("url must be a non-empty endpoint".to_owned());
+                }
+                Ok(McpTransportConfig::StreamableHttp {
+                    endpoint: endpoint.to_owned(),
+                    headers: self.headers.clone(),
+                })
+            }
+            McpTransportType::Stdio => {
+                if has_http_fields {
+                    return Err(
+                        "is a stdio entry but declares http fields (url/headers)".to_owned()
+                    );
+                }
+                let program = self
+                    .command
+                    .as_deref()
+                    .ok_or_else(|| "is a stdio entry but declares no command".to_owned())?;
+                if program.trim().is_empty() {
+                    return Err("command must be a non-empty executable".to_owned());
+                }
+                Ok(McpTransportConfig::Stdio {
+                    program: program.to_owned(),
+                    args: self.args.clone(),
+                    cwd: self.cwd.clone(),
+                    environment: self.env.clone(),
+                })
+            }
         }
     }
 }
@@ -402,7 +499,7 @@ mod tests {
         let config = LocalSessionConfig::from_json_slice(MINIMAL.as_bytes()).expect("valid");
         assert_eq!(config.conversation_id.as_str(), "conv-1");
         assert_eq!(config.context_policy().reserve_tokens, 1024);
-        assert!(config.mcp_server_configs().is_empty());
+        assert!(config.mcp_bindings().expect("bindings").is_empty());
         assert!(
             config
                 .tool_environment()
@@ -442,20 +539,21 @@ mod tests {
         ));
     }
 
-    /// Duplicate MCP server identities fail.
+    /// The obsolete array-based `mcpServers` schema is not a valid document.
     #[test]
-    fn duplicate_mcp_servers_fail() {
+    fn array_based_mcp_servers_are_rejected() {
         let json = r#"{
             "conversationId": "c", "agentId": "a",
             "model": {"model": "p/m"},
             "context": {"reserveTokens": 0, "keepRecentTokens": 0},
             "mcpServers": [
-              {"serverId": "s", "transport": {"type": "streamable_http", "endpoint": "https://x"}},
-              {"serverId": "s", "transport": {"type": "streamable_http", "endpoint": "https://y"}}
+              {"serverId": "s", "transport": {"type": "streamable_http", "endpoint": "https://x"}}
             ]
         }"#;
-        let error = LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail");
-        assert!(error.to_string().contains("duplicate MCP server"));
+        assert!(matches!(
+            LocalSessionConfig::from_json_slice(json.as_bytes()).expect_err("must fail"),
+            LocalSessionConfigError::Syntax { .. }
+        ));
     }
 
     /// A present zero summary cap is a configuration error, even when the

@@ -30,6 +30,6 @@ pub use composition::{
 };
 pub use config::{
     LOCAL_SESSION_SCHEMA_VERSION, LocalSessionConfig, LocalSessionConfigError, McpServerDocument,
-    McpTransportDocument,
+    McpTransportType,
 };
 pub use serve::{ProcessOutcome, run_process, serve};

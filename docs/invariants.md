@@ -226,10 +226,32 @@ observed only at the next quiescent re-discovery.
   scheduling remain `ToolExecutionPolicy` and `ToolConcurrencyPolicy`, and
   all origins use the canonical Agent Loop, progress, cancellation, and
   background paths.
-- MCP uses rmcp's MCP 2026-07-28 `Discover` lifecycle. A revision freezes
-  rustX's observed name, description, schema, policy, id, server identity,
-  and executor binding; it cannot byte-snapshot or make deterministic the
-  external server behavior behind that binding.
+- **MCP configuration ownership.** `mcpServers` is an ecosystem-compatible
+  named map keyed by `McpServerId`; the key is the one authoritative
+  identity. Configuration parsing owns validation and normalization, and the
+  runtime consumes only the typed `BTreeMap<McpServerId, McpServerBinding>`
+  it produces. Duplicate identity is structurally impossible, iteration order
+  is identity order rather than document order, and no shorthand spelling
+  (`url`, `command`, `env`, `type: "http"`) exists past that boundary. rustX
+  invocation policy lives in the separate keyed `mcpToolPolicies` overlay, so
+  an `mcpServers` entry stays copy-pasteable from an MCP server's own
+  documentation.
+- **MCP protocol-revision negotiation.** rustX offers the resolved rmcp
+  build's complete `ProtocolVersion::KNOWN_VERSIONS`, newest first, through
+  `ClientLifecycleMode::Auto`, and connects on whichever revision the peer
+  and rustX actually share. rustX validates the negotiated revision against
+  that offered set, because the legacy `initialize` handshake lets a server
+  echo any revision; a peer sharing no revision fails with a bounded
+  `McpError::ProtocolCompatibility`. The negotiated revision also selects the
+  invalidation mechanism — `subscriptions/listen` from 2026-07-28 onwards,
+  the plain `notifications/tools/list_changed` callback before it — and
+  exactly one mechanism is installed per connection, so negotiation never
+  duplicates a discovery session, a subscription, or a published tool. There
+  is no user-facing knob for selecting a revision: protocol compatibility is
+  not session product configuration.
+- A capability revision freezes rustX's observed name, description, schema,
+  policy, id, server identity, and executor binding; it cannot byte-snapshot
+  or make deterministic the external server behavior behind that binding.
 - **MCP invalidation linearization.** `tools/list_changed` epoch mutation and
   capability snapshot activation share exactly one synchronization boundary:
   the mutex-protected MCP invalidation state. A notification increments the

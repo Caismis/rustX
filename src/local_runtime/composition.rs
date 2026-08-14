@@ -216,7 +216,7 @@ impl LocalConversationRuntime {
             conversation_id: tool_runtime.conversation_id().clone(),
             workspace: tool_runtime.workspace().clone(),
             base_tool_registry: Arc::new(base_registry),
-            mcp_servers: session.mcp_server_configs(),
+            mcp_servers: session.mcp_bindings()?,
             base_environment,
             environment_store_root: paths.environment_store_root(),
         })
