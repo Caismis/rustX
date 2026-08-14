@@ -1,10 +1,11 @@
 //! The compiled runtime manifest boundary.
 //!
 //! A `RuntimeManifest` is the deterministic, immutable description of one
-//! attempt: agent identity and instructions, model protocol and reasoning
-//! configuration, the capability set at a specific monotonic revision, and
-//! context and execution limits. An attempt snapshots one manifest when it
-//! starts, and that snapshot is immutable for the attempt's lifetime.
+//! attempt: agent identity and instructions, the catalog model reference and
+//! its selected reasoning profile, the capability set at a specific
+//! monotonic revision, and context and execution limits. An attempt
+//! snapshots one manifest when it starts, and that snapshot is immutable for
+//! the attempt's lifetime.
 //!
 //! M1 establishes the boundary with the smallest typed representation
 //! needed; capability mutation, Skill materialization, and external MCP/Python
@@ -13,7 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::types::{ModelProtocol, ReasoningEffort};
+use crate::model::catalog::{ModelRef, ReasoningProfileId};
+use crate::model::types::ModelProtocol;
 use crate::runtime::identity::{
     AgentId, AgentVersionId, CapabilityRevision, McpServerId, SkillId, SkillVersionId, ToolId,
 };
@@ -54,15 +56,23 @@ pub struct AgentManifest {
     pub instructions: String,
 }
 
-/// Model protocol and generation configuration.
+/// The model binding and reasoning selection of one attempt.
+///
+/// Reasoning is a model-declared *named profile*, never a universal effort
+/// enum: the runtime assigns no meaning to the profile name, and the
+/// profile's wire behaviour is exactly its configured provider request
+/// parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelManifest {
     /// Protocol the adapter must speak.
     pub protocol: ModelProtocol,
-    /// Provider model identifier.
-    pub model: String,
-    /// Reasoning effort configuration.
-    pub reasoning: ReasoningEffort,
+    /// The fully qualified catalog model reference.
+    pub model: ModelRef,
+    /// The selected reasoning profile, when the model declares any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile: Option<ReasoningProfileId>,
+    /// Whether the selected profile semantically enables reasoning.
+    pub reasoning_enabled: bool,
 }
 
 /// The capability set observed by an attempt.
@@ -147,7 +157,8 @@ mod tests {
         MANIFEST_SCHEMA_VERSION, McpBinding, ModelManifest, RuntimeManifest, SkillBinding,
         ToolBinding,
     };
-    use crate::model::types::{ModelProtocol, ReasoningEffort};
+    use crate::model::catalog::{ModelRef, ReasoningProfileId};
+    use crate::model::types::ModelProtocol;
     use crate::runtime::identity::{
         AgentId, AgentVersionId, CapabilityRevision, McpServerId, SkillId, SkillVersionId, ToolId,
     };
@@ -164,8 +175,9 @@ mod tests {
             },
             model: ModelManifest {
                 protocol: ModelProtocol::OpenAiResponses,
-                model: "gpt-5-mini".to_owned(),
-                reasoning: ReasoningEffort::High,
+                model: ModelRef::parse("provider-a/gpt-5-mini").expect("valid reference"),
+                reasoning_profile: Some(ReasoningProfileId::new("high")),
+                reasoning_enabled: true,
             },
             capabilities: CapabilitiesManifest {
                 revision: CapabilityRevision::new(42),

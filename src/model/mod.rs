@@ -9,20 +9,37 @@
 //! `crate::runtime::continuation`.
 
 pub mod adapter;
+pub mod catalog;
 pub mod error;
 pub mod event;
 pub mod finish;
+pub mod invocation;
+pub mod session;
 pub mod types;
 
 pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
 pub use adapter::openai::{
-    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ResponsesStorageMode,
+    OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
 };
 pub use adapter::{ModelAdapter, ModelEventStream, model_event_stream_of_failure};
+pub use catalog::{
+    ChatMaxTokensField, ChatStreamUsage, CredentialSource, CredentialSourceView, Modality,
+    ModelCapabilities, ModelCatalog, ModelCatalogError, ModelCatalogView, ModelCompat,
+    ModelDefinition, ModelId, ModelRef, ProviderId, ReasoningProfile, ReasoningProfileId,
+    ResolvedModelCatalog, ResponsesStorageMode,
+};
 pub use error::{ModelError, ModelErrorKind};
 pub use event::ModelEvent;
 pub use finish::ModelFinishReason;
-pub use types::{ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort, UsageDetails};
+pub use invocation::{
+    ModelBindingRegistry, ModelInvocationConfig, ModelInvocationError, ModelInvocationView,
+    ModelSelection, RequestParams, ResolvedModelInvocation,
+};
+pub use session::{
+    AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,
+    SessionModelState, SessionModelView, SummaryModelPolicy, SummaryModelView,
+};
+pub use types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 
 /// Test-only model protocol value for in-crate agent-loop unit tests.
 ///

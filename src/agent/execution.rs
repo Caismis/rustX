@@ -54,13 +54,13 @@ use crate::context::tokens::ProviderObservedInput;
 use crate::context::{ContextRuntime, compile_projection};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use crate::message::types::{AgentMessageBlock, MessageBlock, ToolMessageBlock};
-use crate::model::adapter::{ModelAdapter, ModelEventStream};
+use crate::model::adapter::ModelEventStream;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
+use crate::model::session::AttemptModelSnapshot;
 use crate::model::types::{
-    AgentStatusAttachment, ModelProtocol, ModelRequest, ModelUsage, ReasoningEffort,
-    SkillCatalogAttachment,
+    AgentStatusAttachment, ModelRequest, ModelUsage, SkillCatalogAttachment,
 };
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
@@ -115,14 +115,15 @@ pub struct AgentExecutionRequest {
     /// temporal Agent Status section, when known. The process/system local
     /// timezone is never consulted.
     pub timezone: Option<Tz>,
-    /// Provider model identifier for every model request of the attempt.
-    pub model: String,
-    /// Canonical protocol every model request must use.
-    pub protocol: ModelProtocol,
-    /// Reasoning effort for every model request.
-    pub reasoning: ReasoningEffort,
-    /// The runtime-resolved effective maximum output tokens.
-    pub max_output_tokens: u32,
+    /// The one immutable model ownership object of the attempt.
+    ///
+    /// The loop receives exactly this instead of independent
+    /// mutable-looking model fields. Every model turn of the attempt — the
+    /// first request, every tool→model continuation, every context-overflow
+    /// retry, every proactive-compaction continuation, and every compaction
+    /// summary — uses this frozen snapshot and never reads live session
+    /// model state.
+    pub model: AttemptModelSnapshot,
 }
 
 /// The deterministic result of one attempt execution.
@@ -168,7 +169,6 @@ pub struct AgentExecutionResult {
 /// inbound trigger, and the runtime event trace.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
-    adapter: &'a dyn ModelAdapter,
     capability: AttemptCapabilityLease,
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
@@ -183,7 +183,7 @@ pub struct AgentExecution<'a> {
     /// invocation has observed it. One pending fresh inbound turn produces
     /// at most one Agent Status snapshot per request preparation.
     pending_fresh_inbound: Option<FreshInboundTurn>,
-    context_runtime: ContextRuntime<'a>,
+    context_runtime: ContextRuntime,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
     /// The optional live observation seam: when attached, every emitted
@@ -272,10 +272,9 @@ impl<'a> AgentExecution<'a> {
     /// conversation (and therefore its canonical mailbox).
     pub fn new(
         request: AgentExecutionRequest,
-        adapter: &'a dyn ModelAdapter,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
-        context_runtime: ContextRuntime<'a>,
+        context_runtime: ContextRuntime,
         tool_runtime: &'a ConversationToolRuntime,
     ) -> Result<Self, MailboxError> {
         if tool_runtime.conversation_id() != &request.conversation_id {
@@ -298,7 +297,6 @@ impl<'a> AgentExecution<'a> {
         Ok(Self {
             history: request.initial_messages.clone(),
             request,
-            adapter,
             capability,
             cancellation,
             tool_runtime,
@@ -445,7 +443,7 @@ impl<'a> AgentExecution<'a> {
             Err(terminal) => return Some(terminal),
         };
         self.emit(RuntimeEvent::ModelRequestStarted {
-            model: request.model.clone(),
+            model: request.model().to_owned(),
         });
         let mut invocation = match self.consume_invocation(request, &agent_message_id).await {
             Ok(invocation) => invocation,
@@ -733,10 +731,11 @@ impl<'a> AgentExecution<'a> {
             Ok(projection) => projection,
             Err(terminal) => return Err(terminal),
         };
+        let budgets = self.compaction_budgets();
         let should_compact = match self
             .context_runtime
             .engine
-            .should_compact(&projection, self.request.max_output_tokens)
+            .should_compact(&projection, budgets.primary_output_budget)
         {
             Ok(value) => value,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
@@ -863,6 +862,10 @@ impl<'a> AgentExecution<'a> {
         self.capability.snapshot().skill_catalog_attachment()
     }
 
+    fn compaction_budgets(&self) -> crate::context::CompactionBudgets {
+        self.context_runtime.compaction_budgets
+    }
+
     /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
     fn tool_registry(&self) -> &ToolRegistry {
         self.capability.snapshot().tool_registry()
@@ -970,12 +973,13 @@ impl<'a> AgentExecution<'a> {
             agent_status,
             self.skill_catalog(),
         )?;
+        let budgets = self.compaction_budgets();
         let plan = self.context_runtime.engine.plan_compaction(
             &self.history,
             checkpoint.as_ref(),
             &projection,
             &tools,
-            self.request.max_output_tokens,
+            budgets,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
@@ -1021,7 +1025,7 @@ impl<'a> AgentExecution<'a> {
         match self
             .context_runtime
             .engine
-            .fits_under_soft_limit(&projection, self.request.max_output_tokens)
+            .fits_under_soft_limit(&projection, budgets.primary_output_budget)
         {
             Ok(true) => {}
             Ok(false) => {
@@ -1081,8 +1085,14 @@ impl<'a> AgentExecution<'a> {
         request: ModelRequest,
         provisional_message_id: &MessageId,
     ) -> Result<ModelInvocation, Terminal> {
+        // The provider binding comes from the attempt's frozen snapshot: the
+        // loop never resolves an adapter and never observes a later session
+        // model change.
         let mut stream = self
-            .adapter
+            .request
+            .model
+            .primary()
+            .adapter()
             .stream(request, self.cancellation.model_cancellation());
         let mut assembler = ModelEventAssembler::new();
         let terminal = match self
@@ -1175,7 +1185,7 @@ impl<'a> AgentExecution<'a> {
             Err(terminal) => return Err(terminal),
         };
         self.emit(RuntimeEvent::ModelRequestStarted {
-            model: request.model.clone(),
+            model: request.model().to_owned(),
         });
         self.consume_invocation(request, &retry_message_id).await
     }
@@ -1531,15 +1541,21 @@ impl<'a> AgentExecution<'a> {
     /// never encoded as a fake canonical message.
     fn model_request_from_projection(&self, projection: &ContextProjection) -> ModelRequest {
         let compiled = compile_projection(projection);
+        let primary = self.request.model.primary();
+        // Tool definitions are compiled only for a model whose effective
+        // capabilities include tool calls: a text-only model is usable, it
+        // simply never receives runtime tool definitions.
+        let tools = if primary.capabilities().tool_calls {
+            self.tool_registry().model_definitions()
+        } else {
+            Vec::new()
+        };
         ModelRequest {
-            model: self.request.model.clone(),
-            protocol: self.request.protocol,
+            invocation: primary.invocation_config(),
             messages: compiled.messages,
-            tools: self.tool_registry().model_definitions(),
+            tools,
             agent_status: compiled.agent_status,
             skill_catalog: compiled.skill_catalog,
-            reasoning: self.request.reasoning,
-            max_output_tokens: self.request.max_output_tokens,
             continuation: self.pending_continuation.clone(),
         }
     }
@@ -1847,13 +1863,14 @@ mod tests {
     use crate::model::chat_protocol;
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
-    use crate::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
+    use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::types::CancellationReason;
+    use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::{ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
@@ -1948,7 +1965,11 @@ mod tests {
         }
     }
 
-    fn request() -> AgentExecutionRequest {
+    /// One attempt request bound to a scripted adapter through a real
+    /// catalog resolution: the binding still requires an explicit endpoint
+    /// and credential, exactly as in production.
+    fn request(adapter: &Arc<ScriptedAdapter>) -> AgentExecutionRequest {
+        let adapter: Arc<dyn ModelAdapter> = adapter.clone();
         AgentExecutionRequest {
             agent_id: AgentId::new("agent-a"),
             conversation_id: ConversationId::new("conv-1"),
@@ -1956,15 +1977,13 @@ mod tests {
             initial_messages: Vec::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
             timezone: None,
-            model: "scripted-model".to_owned(),
-            protocol: chat_protocol(),
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 512,
+            model: scripted_session_model(adapter).snapshot(),
         }
     }
 
-    /// A deterministic context runtime with a window far larger than any
-    /// scripted request, so no compaction ever triggers in these tests.
+    /// A deterministic context runtime derived from the same immutable model
+    /// snapshot as the execution. The window is far larger than any scripted
+    /// request, so no compaction ever triggers in these tests.
     /// A conversation tool runtime over a temporary workspace.
     fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
         tool_runtime_with_mailbox(None)
@@ -1992,38 +2011,19 @@ mod tests {
         .expect("tool runtime")
     }
 
-    fn runtime() -> ContextRuntime<'static> {
-        use crate::context::checkpoint::InMemoryCheckpointStore;
-        use crate::context::summarizer::{ContextSummarizer, SummaryRequest};
-        use crate::context::{
-            ContextConfig, ContextEngine, ContextError, DefaultTokenEstimator, TokenEstimator,
-        };
-        use crate::runtime::cancellation::CancellationSignal;
-        struct NeverSummarizes;
-        impl ContextSummarizer for NeverSummarizes {
-            fn summarize(
-                &self,
-                _request: SummaryRequest,
-                _cancellation: CancellationSignal,
-            ) -> futures_util::future::BoxFuture<'_, Result<String, ContextError>> {
-                unreachable!("no compaction is possible under a huge window")
-            }
-        }
-        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            ContextConfig {
-                context_window_tokens: 10_000_000,
+    fn runtime(adapter: &Arc<ScriptedAdapter>) -> ContextRuntime {
+        ContextRuntime::for_attempt(
+            crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
+                summary_output_cap: None,
             },
-            estimator,
+            Arc::new(crate::context::DefaultTokenEstimator),
+            Arc::new(crate::context::InMemoryCheckpointStore::new()),
+            crate::context::AgentStatusComposer::default(),
+            &request(adapter).model,
         )
-        .expect("valid context configuration");
-        ContextRuntime::new(
-            engine,
-            Arc::new(NeverSummarizes),
-            Arc::new(InMemoryCheckpointStore::new()),
-        )
+        .expect("valid context runtime")
     }
 
     fn inbound_message(id: &str, text: &str) -> UserMessageBlock {
@@ -2081,7 +2081,7 @@ mod tests {
             },
             RuntimeEvent::TurnStarted,
             RuntimeEvent::ModelRequestStarted {
-                model: "scripted-model".to_owned(),
+                model: "scripted".to_owned(),
             },
             RuntimeEvent::AgentMessageStarted {
                 message_id: MessageId::new("attempt-1-agent-1"),
@@ -2189,18 +2189,17 @@ mod tests {
 
     #[tokio::test]
     async fn capability_lease_owner_matches_runtime_before_execution() {
-        let adapter = ScriptedAdapter::new(Vec::new());
+        let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let tool_runtime = tool_runtime();
         let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
 
         let execution = AgentExecution::new(
-            request(),
-            &adapter,
+            request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("matching capability owner is accepted");
@@ -2212,7 +2211,7 @@ mod tests {
 
     #[tokio::test]
     async fn capability_lease_rejects_different_conversation_before_execution() {
-        let adapter = ScriptedAdapter::new(Vec::new());
+        let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let owner_runtime = tool_runtime();
         let (_dir, coordinator, lease) =
@@ -2226,15 +2225,14 @@ mod tests {
             other_dir.path().join("artifacts"),
         )
         .expect("other tool runtime");
-        let mut other_request = request();
+        let mut other_request = request(&adapter);
         other_request.conversation_id = ConversationId::new("conv-2");
 
         let result = AgentExecution::new(
             other_request,
-            &adapter,
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &other_runtime,
         );
 
@@ -2252,7 +2250,7 @@ mod tests {
 
     #[tokio::test]
     async fn capability_lease_rejects_different_workspace_before_execution() {
-        let adapter = ScriptedAdapter::new(Vec::new());
+        let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let owner_runtime = tool_runtime();
         let (_dir, coordinator, lease) =
@@ -2268,11 +2266,10 @@ mod tests {
         .expect("other tool runtime");
 
         let result = AgentExecution::new(
-            request(),
-            &adapter,
+            request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &other_runtime,
         );
 
@@ -2302,7 +2299,7 @@ mod tests {
             name: "alpha".to_owned(),
             arguments: serde_json::json!({}),
         };
-        let adapter = ScriptedAdapter::new(vec![tool_call_script(&call)]);
+        let adapter = Arc::new(ScriptedAdapter::new(vec![tool_call_script(&call)]));
         let mut tools = ToolRegistry::new();
         tools
             .register(
@@ -2317,11 +2314,10 @@ mod tests {
         let tool_runtime = tool_runtime();
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
-            request(),
-            &adapter,
+            request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
@@ -2389,7 +2385,7 @@ mod tests {
             name: "alpha".to_owned(),
             arguments: serde_json::json!({}),
         };
-        let adapter = ScriptedAdapter::new(vec![tool_call_script(&call)]);
+        let adapter = Arc::new(ScriptedAdapter::new(vec![tool_call_script(&call)]));
         let mut tools = ToolRegistry::new();
         tools
             .register(
@@ -2408,11 +2404,10 @@ mod tests {
         let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
-            request(),
-            &adapter,
+            request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");
@@ -2640,7 +2635,7 @@ mod tests {
             name: "bg".to_owned(),
             arguments: serde_json::json!({"__rustx_execution": "background"}),
         };
-        let adapter = ScriptedAdapter::new(vec![
+        let adapter = Arc::new(ScriptedAdapter::new(vec![
             tool_call_script(&call),
             vec![
                 ModelEvent::Started,
@@ -2664,7 +2659,7 @@ mod tests {
                     usage: None,
                 },
             ],
-        ]);
+        ]));
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let mut tools = ToolRegistry::new();
         tools
@@ -2720,11 +2715,10 @@ mod tests {
         });
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
-            request(),
-            &adapter,
+            request(&adapter),
             lease,
             &cancellation,
-            runtime(),
+            runtime(&adapter),
             &tool_runtime,
         )
         .expect("conversation identity matches the tool runtime");

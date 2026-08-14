@@ -6,7 +6,9 @@
 //! loop, never retries, never persists messages, never starts a server, and
 //! never routes among providers automatically.
 //!
-//! Usage (credentials come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`):
+//! Usage (credentials come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`;
+//! endpoints come from `RUSTX_OPENAI_BASE_URL` / `RUSTX_ANTHROPIC_BASE_URL`,
+//! because no adapter can infer an official endpoint):
 //!
 //! ```text
 //! cargo run --example model_smoke -- --protocol openai-chat --model gpt-5-mini --prompt "Say hello."
@@ -14,16 +16,16 @@
 //! cargo run --example model_smoke -- --protocol anthropic --model claude-sonnet-4-6 --prompt "Say hello."
 //! ```
 //!
-//! The Anthropic smoke request sends adaptive thinking plus
-//! `output_config.effort`; pick a model that accepts that configuration
-//! (Claude Sonnet 4.6 / Claude Opus 4.6 and later), never a model that
-//! rejects adaptive thinking.
+//! The smoke request carries **no** provider request parameters: reasoning
+//! is a model-declared catalog profile, and this example deliberately does
+//! not synthesize one, so whatever reaches the wire came from canonical
+//! translation alone.
 
 use futures_util::StreamExt;
 use rustx::model::{
-    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelEvent, ModelProtocol,
-    ModelRequest, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter,
-    ReasoningEffort,
+    AnthropicAdapterConfig, AnthropicMessagesAdapter, ModelAdapter, ModelCapabilities, ModelCompat,
+    ModelEvent, ModelInvocationConfig, ModelProtocol, ModelRequest, OpenAiAdapterConfig,
+    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, RequestParams,
 };
 use rustx::runtime::CancellationSignal;
 
@@ -43,12 +45,15 @@ fn main() {
     let adapter: Box<dyn ModelAdapter> = match protocol.as_str() {
         "openai-chat" => Box::new(OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(
             read_secret("OPENAI_API_KEY"),
+            base_url("RUSTX_OPENAI_BASE_URL", "https://api.openai.com/v1"),
         ))),
         "openai-responses" => Box::new(OpenAiResponsesAdapter::new(OpenAiAdapterConfig::new(
             read_secret("OPENAI_API_KEY"),
+            base_url("RUSTX_OPENAI_BASE_URL", "https://api.openai.com/v1"),
         ))),
         "anthropic" => Box::new(AnthropicMessagesAdapter::new(AnthropicAdapterConfig::new(
             read_secret("ANTHROPIC_API_KEY"),
+            base_url("RUSTX_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
         ))),
         _ => unreachable!("protocol validated above"),
     };
@@ -154,8 +159,14 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         _ => unreachable!("validated in main"),
     };
     ModelRequest {
-        model: model.to_owned(),
-        protocol,
+        invocation: ModelInvocationConfig {
+            model: model.to_owned(),
+            protocol,
+            max_output_tokens: 512,
+            request_params: RequestParams::new(),
+            capabilities: ModelCapabilities::text_only(true, true),
+            compat: ModelCompat::default(),
+        },
         messages: vec![MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-smoke-1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -168,10 +179,13 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
         tools: Vec::new(),
         agent_status: None,
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
         continuation: None,
     }
+}
+
+/// The explicit provider endpoint of a smoke run.
+fn base_url(variable: &str, default: &str) -> String {
+    std::env::var(variable).unwrap_or_else(|_| default.to_owned())
 }
 
 fn read_secret(name: &str) -> String {

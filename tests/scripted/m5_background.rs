@@ -12,12 +12,11 @@
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -28,7 +27,6 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
 use rustx::runtime::identity::{
     AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
@@ -46,6 +44,9 @@ use rustx::tools::types::{
     ToolInvocation, ToolInvocationMode, ToolProgress, ToolResultContent,
 };
 use rustx::tools::workspace::Workspace;
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
+};
 
 /// A fixed runtime clock.
 #[derive(Debug, Clone, Copy)]
@@ -635,7 +636,7 @@ async fn wait_for_state(
 // Loop integration: background dispatch, terminal inbound, Agent Status
 // ---------------------------------------------------------------------------
 
-fn request() -> AgentExecutionRequest {
+fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
@@ -651,33 +652,28 @@ fn request() -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
-fn runtime() -> rustx::context::ContextRuntime<'static> {
+fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
     use rustx::context::{
-        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
-        InMemoryCheckpointStore,
+        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
+    ContextRuntime::for_attempt(
+        SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
+            summary_output_cap: None,
         },
         estimator,
-    )
-    .expect("valid context configuration");
-    ContextRuntime::new(
-        engine,
-        Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         Arc::new(InMemoryCheckpointStore::new()),
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
+    .expect("valid context runtime")
 }
 
 fn started() -> ModelEvent {
@@ -703,18 +699,17 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 /// Runs the loop over the given tool registry and tool runtime; the runtime
 /// owns the canonical conversation mailbox the loop drains.
 async fn run_with_mailbox(
-    model: &FakeModel,
+    model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     tool_runtime: &ConversationToolRuntime,
 ) -> AgentExecutionResult {
     let capability = common::capability_lease(tools, tool_runtime).await;
     AgentExecution::new(
-        request(),
-        model,
+        request(model),
         capability.into_lease(),
         cancellation,
-        runtime(),
+        runtime(model),
         tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -761,7 +756,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         "bg",
         serde_json::json!({"__rustx_execution": "background"}),
     );
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -883,7 +878,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         "bg",
         serde_json::json!({"__rustx_execution": "background"}),
     );
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call_fg)[0].clone()),
@@ -1246,8 +1241,8 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
         "b2",
         serde_json::json!({"__rustx_execution": "background"}),
     );
-    let (model_release_tx, model_release_rx) = common::fake::model_release();
-    let model = FakeModel::new(vec![
+    let (model_release_tx, model_release_rx) = support::fake::model_release();
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call_b1)[0].clone()),
@@ -1390,7 +1385,7 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     .expect("tool runtime");
 
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),

@@ -17,11 +17,7 @@
 //! lifecycle, and backpressure are transport-specific and live in
 //! `issue38_stdio_transport.rs` instead.
 
-#[path = "common/mod.rs"]
-mod common;
-
-#[path = "common/runtime_client_conformance.rs"]
-mod conformance;
+use super::support::runtime_client_conformance as conformance;
 
 /// Generates one test per scenario per transport.
 macro_rules! conformance_scenarios {
@@ -30,12 +26,12 @@ macro_rules! conformance_scenarios {
             mod $scenario {
                 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
                 async fn direct() {
-                    crate::conformance::$scenario(&crate::conformance::DirectDriverFactory).await;
+                    super::conformance::$scenario(&super::conformance::DirectDriverFactory).await;
                 }
 
                 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
                 async fn stdio_jsonl() {
-                    crate::conformance::$scenario(&crate::conformance::StdioJsonlDriverFactory)
+                    super::conformance::$scenario(&super::conformance::StdioJsonlDriverFactory)
                         .await;
                 }
             }
@@ -76,18 +72,18 @@ conformance_scenarios!(
 mod capability_projection_covers_mcp_origins {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn direct() {
-        crate::conformance::capability_projection_covers_mcp_origins(
-            &crate::conformance::DirectDriverFactory,
-            "capability_projection_covers_mcp_origins::direct",
+        super::conformance::capability_projection_covers_mcp_origins(
+            &super::conformance::DirectDriverFactory,
+            "scripted_suites::issue38_conformance::capability_projection_covers_mcp_origins::direct",
         )
         .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn stdio_jsonl() {
-        crate::conformance::capability_projection_covers_mcp_origins(
-            &crate::conformance::StdioJsonlDriverFactory,
-            "capability_projection_covers_mcp_origins::stdio_jsonl",
+        super::conformance::capability_projection_covers_mcp_origins(
+            &super::conformance::StdioJsonlDriverFactory,
+            "scripted_suites::issue38_conformance::capability_projection_covers_mcp_origins::stdio_jsonl",
         )
         .await;
     }

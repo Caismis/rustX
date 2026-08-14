@@ -20,15 +20,17 @@ use crate::message::types::ContentBlockIndex;
 use crate::message::types::{AgentContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
-use crate::model::adapter::openai::config::{OpenAiAdapterConfig, ResponsesStorageMode};
+use crate::model::adapter::openai::config::OpenAiAdapterConfig;
 use crate::model::adapter::openai::mapping::{normalize_error, resolve_tool};
 use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::catalog::ResponsesStorageMode;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
+use crate::model::invocation::finalize_provider_request;
 use crate::model::types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -36,15 +38,18 @@ use crate::runtime::identity::ToolCallId;
 use crate::tools::types::{ToolCall, ToolCallStart};
 
 /// Adapter for the `OpenAI` Responses protocol.
+///
+/// The provider storage/continuation mode is **per model**: it arrives with
+/// each request's invocation configuration
+/// ([`ModelCompat`](crate::model::catalog::ModelCompat)), so one adapter
+/// serves every Responses model of its provider.
 pub struct OpenAiResponsesAdapter {
     client: Client<OpenAIConfig>,
-    storage_mode: ResponsesStorageMode,
 }
 
 impl std::fmt::Debug for OpenAiResponsesAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenAiResponsesAdapter")
-            .field("storage_mode", &self.storage_mode)
             .finish_non_exhaustive()
     }
 }
@@ -53,10 +58,9 @@ impl OpenAiResponsesAdapter {
     /// Creates the adapter from rustX-owned configuration.
     #[must_use]
     pub fn new(config: OpenAiAdapterConfig) -> Self {
-        let (api_key, api_base, storage_mode, http_client) = config.into_parts();
+        let (api_key, api_base, http_client) = config.into_parts();
         Self {
             client: build_client(&api_key, &api_base, http_client),
-            storage_mode,
         }
     }
 }
@@ -71,12 +75,13 @@ impl ModelAdapter for OpenAiResponsesAdapter {
             Ok(validated) => validated,
             Err(error) => return model_event_stream_of_failure(error),
         };
-        let translated = match translate_request(&request, &validated, self.storage_mode) {
+        let storage_mode = request.invocation.compat.responses_storage;
+        let translated = match translate_request(&request, &validated, storage_mode) {
             Ok(translated) => translated,
             Err(error) => return model_event_stream_of_failure(error),
         };
         let client = self.client.clone();
-        let normalizer = ResponsesNormalizer::new(validated, self.storage_mode);
+        let normalizer = ResponsesNormalizer::new(validated, storage_mode);
         Box::pin(futures_util::stream::unfold(
             ResponsesPhase::Preparing {
                 client,
@@ -768,19 +773,14 @@ fn translate_request(
     let (input_items, instructions, previous_response_id) =
         translate_inputs(request, continuation_variant)?;
 
+    // Every runtime-owned structural field is written first; no reasoning
+    // field is ever synthesized here, so the selected reasoning profile's
+    // configured parameters are exactly what reaches the wire.
     let mut request_value = serde_json::json!({
-        "model": request.model,
+        "model": request.model(),
         "input": input_items,
         "stream": true,
         "store": storage_mode == ResponsesStorageMode::Stored,
-        "reasoning": {
-            "effort": match request.reasoning {
-                crate::model::types::ReasoningEffort::Minimal => "minimal",
-                crate::model::types::ReasoningEffort::Low => "low",
-                crate::model::types::ReasoningEffort::Medium => "medium",
-                crate::model::types::ReasoningEffort::High => "high",
-            }
-        }
     });
     if storage_mode == ResponsesStorageMode::Stateless {
         // Opaque encrypted reasoning must be requested for stateless replay.
@@ -792,12 +792,24 @@ fn translate_request(
     if !instructions.is_empty() {
         request_value["instructions"] = instructions.join("\n\n").into();
     }
-    request_value["max_output_tokens"] = request.max_output_tokens.into();
+    request_value["max_output_tokens"] = request.max_output_tokens().into();
     if !request.tools.is_empty() {
+        if !request.invocation.capabilities.tool_calls {
+            return Err(unsupported(
+                "the effective model capabilities do not include tool calls; \
+                 tool definitions are never sent to a text-only model",
+            ));
+        }
         request_value["tools"] = serde_json::json!(translate_tools(&request.tools));
     }
     let _ = tools;
-    Ok(request_value)
+    // The effective opaque request parameters are overlaid last, after every
+    // runtime-owned continuation/input/tool/output field is present.
+    finalize_provider_request(
+        request_value,
+        request.request_params(),
+        ModelProtocol::OpenAiResponses,
+    )
 }
 
 /// Translated canonical context: input items, instructions, and the optional

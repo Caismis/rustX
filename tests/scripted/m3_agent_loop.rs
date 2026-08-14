@@ -9,14 +9,10 @@
 //! interleavings driven by explicit synchronization (never wall-clock
 //! timing).
 
-mod common;
+use super::{common, support};
 
 use std::path::Path;
 
-use common::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
-    tool_call_events,
-};
 use common::replay_execution_states;
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult, ExecutionState,
@@ -27,7 +23,7 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ModelUsage, ReasoningEffort};
+use rustx::model::types::ModelUsage;
 use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
@@ -36,8 +32,17 @@ use rustx::runtime::inbound::{ConversationInboundMailbox, MailboxError};
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionStatus};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
+    tool_call_events,
+};
 
-fn request(attempt: &str) -> AgentExecutionRequest {
+/// A scripted model handle shared with its attempt model snapshot.
+fn fake(scripts: Vec<Vec<FakeStep>>) -> std::sync::Arc<FakeModel> {
+    std::sync::Arc::new(FakeModel::new(scripts))
+}
+
+fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
@@ -56,52 +61,46 @@ fn request(attempt: &str) -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
 /// A deterministic context runtime with a window far larger than any
 /// scripted request: the mandatory M4 path is active, but no compaction or
 /// summary activity can ever trigger in these loop-contract tests.
-fn runtime() -> rustx::context::ContextRuntime<'static> {
+fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
     use rustx::context::{
-        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
-        InMemoryCheckpointStore,
+        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
+    ContextRuntime::for_attempt(
+        SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
+            summary_output_cap: None,
         },
         estimator,
-    )
-    .expect("valid context configuration");
-    ContextRuntime::new(
-        engine,
-        std::sync::Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         std::sync::Arc::new(InMemoryCheckpointStore::new()),
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
+    .expect("valid context runtime")
 }
 
 async fn run(
-    model: &FakeModel,
+    model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> AgentExecutionResult {
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
-        request("attempt-1"),
-        model,
+        request("attempt-1", model),
         capability.into_lease(),
         cancellation,
-        runtime(),
+        runtime(model),
         &tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -226,7 +225,7 @@ fn agent_message_id(turn: u32) -> MessageId {
 /// A text-only turn completes with the exact canonical trace.
 #[tokio::test]
 async fn text_execution_completes_with_exact_trace() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "hello")),
         FakeStep::Emit(text(0, " world")),
@@ -287,7 +286,7 @@ async fn text_execution_completes_with_exact_trace() {
 /// Several deltas across blocks assemble in stream order.
 #[tokio::test]
 async fn several_deltas_assemble_in_stream_order() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "a")),
         FakeStep::Emit(text(1, "b")),
@@ -325,7 +324,7 @@ async fn several_deltas_assemble_in_stream_order() {
 /// a message.
 #[tokio::test]
 async fn model_failure_before_content_fails_attempt() {
-    let model = FakeModel::new(vec![vec![FakeStep::Emit(fail(
+    let model = fake(vec![vec![FakeStep::Emit(fail(
         rustx::model::ModelErrorKind::Timeout,
         "timed out",
     ))]]);
@@ -381,7 +380,7 @@ async fn model_failure_before_content_fails_attempt() {
 /// trace but commits nothing.
 #[tokio::test]
 async fn model_failure_after_partial_content_commits_nothing() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::Emit(fail(
@@ -429,7 +428,7 @@ async fn exactly_one_terminal_event_across_scenarios() {
         ]],
     ];
     for script in scenarios {
-        let model = FakeModel::new(script);
+        let model = fake(script);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
@@ -445,7 +444,7 @@ async fn exactly_one_terminal_event_across_scenarios() {
 /// `assert_single_terminal` over a full trace).
 #[tokio::test]
 async fn no_events_after_completed_terminal() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "done")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -487,7 +486,7 @@ async fn tool_calls_execute_in_block_order() {
         }
     }
     turn_one.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         turn_one,
         vec![
             FakeStep::Emit(started()),
@@ -547,7 +546,7 @@ async fn continuation_starts_after_tool_completion() {
         name: "alpha",
         arguments: serde_json::json!({"path": "."}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -679,7 +678,7 @@ async fn single_tool_call_then_continuation() {
         name: "alpha",
         arguments: serde_json::json!({"path": "."}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -729,7 +728,7 @@ async fn tool_receives_exact_canonical_arguments() {
         name: "alpha",
         arguments: serde_json::json!({"path": ".", "options": {"recursive": true}}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -771,7 +770,7 @@ async fn tool_result_passed_back_verbatim() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -867,7 +866,7 @@ async fn unknown_tool_fails_deterministically() {
         name: "missing",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
@@ -928,7 +927,7 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -989,7 +988,7 @@ async fn multiple_ordered_tool_calls_continue_once() {
         name: "beta",
         arguments: serde_json::json!({"y": 2}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
@@ -1040,7 +1039,7 @@ async fn multiple_ordered_tool_calls_continue_once() {
 /// cancellation reason is preserved.
 #[tokio::test]
 async fn cancellation_before_start_settles_cancelled() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
     ]]);
@@ -1077,7 +1076,7 @@ async fn cancellation_before_start_settles_cancelled() {
 /// cancelled; the streamed deltas remain, nothing after the terminal.
 #[tokio::test]
 async fn cancellation_during_generation_after_partial_text() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::ParkUntilCancelled,
@@ -1151,7 +1150,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
@@ -1268,7 +1267,7 @@ async fn cancellation_interrupts_later_tool_call() {
         name: "beta",
         arguments: serde_json::json!({"n": 2}),
     };
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &first)[1].clone()),
@@ -1385,7 +1384,7 @@ async fn cancellation_during_continuation_generation() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -1448,7 +1447,7 @@ async fn cancellation_never_results_in_completed() {
         CancellationReason::RuntimeShutdown,
         CancellationReason::ParentCancelled,
     ] {
-        let model = FakeModel::new(vec![vec![
+        let model = fake(vec![vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text(0, "hi")),
             FakeStep::ParkUntilCancelled,
@@ -1496,7 +1495,7 @@ async fn continuation_state_propagates_losslessly() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(reasoning(0, "Thinking.")),
@@ -1558,7 +1557,7 @@ async fn opaque_continuation_is_never_inspected() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(ModelEvent::ContinuationState {
@@ -1604,7 +1603,7 @@ async fn missing_required_continuation_fails_explicitly() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -1654,7 +1653,7 @@ async fn no_reasoning_state_is_fabricated() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(reasoning(0, "Visible reasoning.")),
@@ -1693,7 +1692,7 @@ async fn no_reasoning_state_is_fabricated() {
 /// terminal model failure and never becomes text.
 #[tokio::test]
 async fn unsupported_capability_stays_terminal_failure() {
-    let model = FakeModel::new(vec![vec![FakeStep::Emit(fail(
+    let model = fake(vec![vec![FakeStep::Emit(fail(
         rustx::model::ModelErrorKind::Unsupported,
         "server-side fallback blocks are not supported",
     ))]]);
@@ -1784,7 +1783,7 @@ async fn usage_folds_updates_and_terminal_usage() {
         ),
     ];
     for (script, expected) in cases {
-        let model = FakeModel::new(vec![script]);
+        let model = fake(vec![script]);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
@@ -1805,7 +1804,7 @@ async fn usage_folds_updates_and_terminal_usage() {
 /// refusal block and provisional content is rolled back.
 #[tokio::test]
 async fn refusal_semantics_preserved() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "I would normally answer, but")),
         FakeStep::Emit(refusal(1, "I cannot comply.")),
@@ -1842,7 +1841,7 @@ async fn refusal_semantics_preserved() {
 /// A text-only trace reconstructs `Idle → RunningModel → Completed`.
 #[tokio::test]
 async fn replay_text_execution() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "hello")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -1870,7 +1869,7 @@ async fn replay_tool_execution() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -1903,7 +1902,7 @@ async fn replay_tool_execution() {
 /// A failed trace reconstructs `Idle → ... → Failed`.
 #[tokio::test]
 async fn replay_failed_execution() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::Emit(fail(rustx::model::ModelErrorKind::RateLimit, "nope")),
@@ -1924,7 +1923,7 @@ async fn replay_failed_execution() {
 /// A cancelled trace reconstructs `Idle → ... → Failed`.
 #[tokio::test]
 async fn replay_cancelled_execution() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::ParkUntilCancelled,
@@ -1963,8 +1962,8 @@ async fn identical_inputs_produce_identical_traces() {
             FakeStep::Emit(done(ModelFinishReason::Stop)),
         ]]
     };
-    let first = FakeModel::new(script());
-    let second = FakeModel::new(script());
+    let first = fake(script());
+    let second = fake(script());
     let tools_first = ToolRegistry::new();
     let tools_second = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -1980,7 +1979,7 @@ async fn identical_inputs_produce_identical_traces() {
 /// the terminal event is always the last recorded event.
 #[tokio::test]
 async fn successful_settlement_completes_the_machine() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "done")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -2000,7 +1999,7 @@ async fn successful_settlement_completes_the_machine() {
 /// Model failure settles the real machine to Failed.
 #[tokio::test]
 async fn model_failure_settles_the_machine_to_failed() {
-    let model = FakeModel::new(vec![vec![FakeStep::Emit(fail(
+    let model = fake(vec![vec![FakeStep::Emit(fail(
         rustx::model::ModelErrorKind::Timeout,
         "boom",
     ))]]);
@@ -2018,7 +2017,7 @@ async fn model_failure_settles_the_machine_to_failed() {
 /// Runtime contract failure settles the real machine to Failed.
 #[tokio::test]
 async fn contract_failure_settles_the_machine_to_failed() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "hi")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -2045,7 +2044,7 @@ async fn contract_failure_settles_the_machine_to_failed() {
 /// Cancellation from `RunningModel` settles the real machine to Failed.
 #[tokio::test]
 async fn cancellation_from_running_model_settles_the_machine_to_failed() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::ParkUntilCancelled,
@@ -2083,7 +2082,7 @@ async fn cancellation_from_waiting_for_tool_settles_the_machine_to_failed() {
     let mut tool_turn = vec![FakeStep::Emit(started())];
     tool_turn.extend(tool_call_events(0, &call).into_iter().map(FakeStep::Emit));
     tool_turn.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
-    let model = FakeModel::new(vec![tool_turn]);
+    let model = fake(vec![tool_turn]);
     let (tool, _never_released) =
         FakeTool::parking(common::tool("alpha", "tool-alpha"), success_result("late"));
     let mut tool_started = tool.started();
@@ -2129,10 +2128,10 @@ async fn replay_settlement_cannot_diverge_from_machine() {
         FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
         FakeStep::Emit(tool_call_events(0, &call)[2].clone()),
     ];
-    let scenarios: Vec<(FakeModel, ToolRegistry)> = vec![
+    let scenarios: Vec<(std::sync::Arc<FakeModel>, ToolRegistry)> = vec![
         // Text execution completes.
         (
-            FakeModel::new(vec![vec![
+            fake(vec![vec![
                 FakeStep::Emit(started()),
                 FakeStep::Emit(text(0, "done")),
                 FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -2145,7 +2144,7 @@ async fn replay_settlement_cannot_diverge_from_machine() {
                 let mut tool_turn = vec![FakeStep::Emit(started())];
                 tool_turn.extend(tool_call.clone());
                 tool_turn.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
-                FakeModel::new(vec![
+                fake(vec![
                     tool_turn,
                     vec![
                         FakeStep::Emit(started()),
@@ -2162,7 +2161,7 @@ async fn replay_settlement_cannot_diverge_from_machine() {
         ),
         // Model failure.
         (
-            FakeModel::new(vec![vec![FakeStep::Emit(fail(
+            fake(vec![vec![FakeStep::Emit(fail(
                 rustx::model::ModelErrorKind::RateLimit,
                 "boom",
             ))]]),
@@ -2170,7 +2169,7 @@ async fn replay_settlement_cannot_diverge_from_machine() {
         ),
         // Contract violation.
         (
-            FakeModel::new(vec![vec![
+            fake(vec![vec![
                 FakeStep::Emit(started()),
                 FakeStep::Emit(done(ModelFinishReason::Stop)),
                 FakeStep::Emit(fail(rustx::model::ModelErrorKind::Timeout, "late")),
@@ -2388,7 +2387,7 @@ async fn malformed_streams_are_rejected() {
         ],
     ];
     for script in cases {
-        let model = FakeModel::new(vec![script]);
+        let model = fake(vec![script]);
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
@@ -2417,7 +2416,7 @@ async fn unfinished_tool_call_at_terminal_is_rejected() {
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
         FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
@@ -2478,7 +2477,7 @@ fn block_id(block: &MessageBlock) -> String {
 /// Runs the attempt with the given mailbox bound as the canonical
 /// conversation mailbox of the tool runtime.
 async fn run_with_mailbox(
-    model: &FakeModel,
+    model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     mailbox: ConversationInboundMailbox,
@@ -2486,11 +2485,10 @@ async fn run_with_mailbox(
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox);
     let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
-        request("attempt-1"),
-        model,
+        request("attempt-1", model),
         capability.into_lease(),
         cancellation,
-        runtime(),
+        runtime(model),
         &tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -2503,17 +2501,16 @@ async fn run_with_mailbox(
 /// (and therefore its canonical mailbox) must agree.
 #[tokio::test]
 async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
-    let model = FakeModel::new(Vec::new());
+    let model = fake(Vec::new());
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-other");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let error = AgentExecution::new(
-        request("attempt-1"),
-        &model,
+        request("attempt-1", &model),
         capability.into_lease(),
         &cancellation,
-        runtime(),
+        runtime(&model),
         &tool_runtime,
     )
     .err()
@@ -2531,7 +2528,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
         name: "alpha",
         arguments: serde_json::json!({"path": "."}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -2594,7 +2591,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         name: "alpha",
         arguments: serde_json::json!({"path": "."}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -2699,7 +2696,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
         name: "alpha",
         arguments: serde_json::json!({"path": "."}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
@@ -2783,7 +2780,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
 #[tokio::test]
 async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(text(0, "doing")),
@@ -2852,7 +2849,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
 /// snapshot never reopens the attempt and stays in the conversation mailbox.
 #[tokio::test]
 async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "done")),
         FakeStep::Emit(done(ModelFinishReason::Stop)),
@@ -2900,7 +2897,7 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
 #[tokio::test]
 async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "doing")),
         FakeStep::ParkUntilReleased(parked.clone()),
@@ -2966,7 +2963,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
         name: "beta",
         arguments: serde_json::json!({"n": 2}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &first)[0].clone()),
@@ -3049,7 +3046,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
 #[tokio::test]
 async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(text(0, "partial")),
         FakeStep::ParkUntilReleased(parked.clone()),
@@ -3106,7 +3103,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
         name: "missing",
         arguments: serde_json::json!({}),
     };
-    let model = FakeModel::new(vec![vec![
+    let model = fake(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &call)[1].clone()),
@@ -3156,7 +3153,7 @@ async fn continuation_retained_across_inbound_drain() {
         opaque: serde_json::json!({"signature": "sig-1", "opaque": [1, 2, 3]}),
     });
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(reasoning(0, "Thinking.")),
@@ -3224,7 +3221,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
         name: "beta",
         arguments: serde_json::json!({"n": 2}),
     };
-    let model = FakeModel::new(vec![
+    let model = fake(vec![
         vec![
             FakeStep::Emit(started()),
             FakeStep::Emit(tool_call_events(0, &first)[0].clone()),

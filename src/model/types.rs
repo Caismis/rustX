@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message::types::MessageBlock;
+use crate::model::invocation::ModelInvocationConfig;
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::MessageId;
 use crate::tools::types::ModelToolDefinition;
@@ -64,7 +65,7 @@ pub struct SkillCatalogAttachment {
 }
 
 /// The model interaction protocol an adapter must speak.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelProtocol {
     /// `OpenAI` Chat Completions API.
@@ -77,37 +78,27 @@ pub enum ModelProtocol {
     AnthropicMessages,
 }
 
-/// Reasoning effort configuration that belongs in canonical runtime
-/// semantics rather than in a provider-specific option.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningEffort {
-    /// Minimal reasoning.
-    Minimal,
-    /// Low reasoning effort.
-    Low,
-    /// Medium reasoning effort (the default).
-    #[default]
-    Medium,
-    /// High reasoning effort.
-    High,
-}
-
 /// A canonical, provider-independent model request.
 ///
-/// The runtime passes exactly the normalized information it owns: model
-/// identity, canonical context, available tool definitions, reasoning
-/// configuration, the ephemeral Agent Status attachment of a pending fresh
-/// inbound turn (when one exists), and optional provider continuation state.
-/// Provider request schemas are adapter concerns. The Agent Status
-/// attachment is never encoded as a fake canonical `MessageBlock`; adapters
-/// own its wire placement.
+/// A request has exactly two parts, and the separation is deliberate:
+///
+/// - **canonical content** — the messages, the compiled model-facing tool
+///   definitions, the ephemeral Agent Status and Skill catalog attachments,
+///   and the provider continuation state;
+/// - **immutable resolved invocation configuration** —
+///   [`ModelInvocationConfig`], the one channel through which provider wire
+///   configuration reaches an adapter.
+///
+/// Provider request schemas remain adapter concerns, provider wire
+/// parameters never enter canonical history or message types, and the Agent
+/// Status attachment is never encoded as a fake canonical `MessageBlock`:
+/// adapters own its wire placement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
-    /// Provider model identifier.
-    pub model: String,
-    /// Protocol the adapter must use.
-    pub protocol: ModelProtocol,
+    /// The immutable resolved invocation configuration of this request:
+    /// model identity, protocol, output budget, opaque provider request
+    /// parameters, effective capabilities, and structural compat metadata.
+    pub invocation: ModelInvocationConfig,
     /// Canonical context/messages to send.
     pub messages: Vec<MessageBlock>,
     /// Compiled model-facing tool definitions the model may call. Runtime
@@ -124,19 +115,41 @@ pub struct ModelRequest {
     /// system context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_catalog: Option<SkillCatalogAttachment>,
-    /// Reasoning effort for the generation.
-    pub reasoning: ReasoningEffort,
+    /// Provider continuation state, when continuing an earlier generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<ProviderContinuationState>,
+}
+
+impl ModelRequest {
+    /// The provider-facing model identifier of this request.
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.invocation.model
+    }
+
+    /// The protocol the adapter must speak.
+    #[must_use]
+    pub const fn protocol(&self) -> ModelProtocol {
+        self.invocation.protocol
+    }
+
     /// The runtime-resolved effective maximum output tokens.
     ///
     /// Real provider integration proved that an adapter cannot faithfully
     /// represent "no runtime output limit" when the provider requires an
     /// explicit generation maximum (Anthropic requires `max_tokens`). The
-    /// runtime must therefore resolve an effective output-token limit before
-    /// entering the adapter boundary; no adapter-local default exists.
-    pub max_output_tokens: u32,
-    /// Provider continuation state, when continuing an earlier generation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub continuation: Option<ProviderContinuationState>,
+    /// runtime resolves the effective limit before the adapter boundary; no
+    /// adapter-local default exists.
+    #[must_use]
+    pub const fn max_output_tokens(&self) -> u32 {
+        self.invocation.max_output_tokens
+    }
+
+    /// The effective opaque provider request parameters.
+    #[must_use]
+    pub const fn request_params(&self) -> &crate::model::invocation::RequestParams {
+        &self.invocation.request_params
+    }
 }
 
 /// Normalized token accounting for one generation.
@@ -169,7 +182,21 @@ pub struct UsageDetails {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelProtocol, ModelUsage, ReasoningEffort, UsageDetails};
+    use super::{ModelProtocol, ModelUsage, UsageDetails};
+    use crate::model::catalog::ModelCapabilities;
+    use crate::model::invocation::{ModelInvocationConfig, RequestParams};
+
+    /// The canonical text-only invocation configuration of a unit test.
+    fn invocation(protocol: ModelProtocol) -> ModelInvocationConfig {
+        ModelInvocationConfig {
+            model: "m".to_owned(),
+            protocol,
+            max_output_tokens: 512,
+            request_params: RequestParams::new(),
+            capabilities: ModelCapabilities::text_only(true, true),
+            compat: crate::model::catalog::ModelCompat::default(),
+        }
+    }
 
     /// Protocol discriminators are stable strings, never Rust debug output.
     #[test]
@@ -189,16 +216,6 @@ mod tests {
                 serde_json::from_value(value).expect("deserialize protocol");
             assert_eq!(decoded, protocol);
         }
-    }
-
-    /// Reasoning effort serializes with stable casing.
-    #[test]
-    fn reasoning_effort_round_trip() {
-        let value = ReasoningEffort::High;
-        let json = serde_json::to_string(&value).expect("serialize effort");
-        assert_eq!(json, "\"high\"");
-        let decoded: ReasoningEffort = serde_json::from_str(&json).expect("deserialize effort");
-        assert_eq!(decoded, value);
     }
 
     /// Usage round-trips including optional details.
@@ -229,8 +246,7 @@ mod tests {
         };
         use crate::runtime::identity::MessageId;
         let mut request = super::ModelRequest {
-            model: "m".to_owned(),
-            protocol: ModelProtocol::OpenAiResponses,
+            invocation: invocation(ModelProtocol::OpenAiResponses),
             messages: vec![MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-inbound-1"),
                 content: vec![UserContentBlock::Text(TextBlock {
@@ -243,8 +259,6 @@ mod tests {
             tools: Vec::new(),
             agent_status: None,
             skill_catalog: None,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 512,
             continuation: None,
         };
         let json = serde_json::to_string(&request).expect("serialize");

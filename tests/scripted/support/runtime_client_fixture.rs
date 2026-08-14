@@ -13,12 +13,13 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::model::scripted_session_model;
 use rustx::context::{
-    AgentStatusComposer, ContextConfig, ContextEngine, DefaultTokenEstimator,
-    InMemoryCheckpointStore, TokenEstimator,
+    AgentStatusComposer, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
+    TokenEstimator,
 };
 use rustx::message::types::MessageBlock;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
+use rustx::model::session::SessionModelState;
 use rustx::runtime::identity::{AgentId, ConversationId};
 use rustx::runtime_client::{
     RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig,
@@ -58,6 +59,12 @@ impl RuntimeClientFixture {
             initial_messages: Vec::new(),
             workspace_fixtures: Vec::new(),
             mcp_servers: Vec::new(),
+            session_model: None,
+            context_policy: SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
         }
     }
 
@@ -101,6 +108,12 @@ pub struct RuntimeClientFixtureBuilder {
     workspace_fixtures: Vec<WorkspaceFixture>,
     /// MCP servers the capability coordinator connects.
     mcp_servers: Vec<rustx::tools::mcp::McpServerConfig>,
+    /// An explicit session model authority, when the test needs a specific
+    /// catalog (several models, reasoning profiles, or an explicit summary
+    /// model). Defaults to the one scripted model.
+    session_model: Option<SessionModelState>,
+    /// The static session context policy.
+    context_policy: SessionContextPolicy,
 }
 
 impl RuntimeClientFixtureBuilder {
@@ -171,6 +184,20 @@ impl RuntimeClientFixtureBuilder {
         self
     }
 
+    /// Replaces the session model authority with an explicit one.
+    #[must_use]
+    pub fn session_model(mut self, model: SessionModelState) -> Self {
+        self.session_model = Some(model);
+        self
+    }
+
+    /// Replaces the static session context policy.
+    #[must_use]
+    pub const fn context_policy(mut self, policy: SessionContextPolicy) -> Self {
+        self.context_policy = policy;
+        self
+    }
+
     /// Builds the runtime.
     ///
     /// # Panics
@@ -200,7 +227,7 @@ impl RuntimeClientFixtureBuilder {
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: workspace.path().join("skill-env"),
             },
-            Arc::new(super::FakeSkillEnvironmentBackend::new()),
+            Arc::new(crate::scripted_suites::common::FakeSkillEnvironmentBackend::new()),
         )
         .expect("capability coordinator");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
@@ -213,26 +240,16 @@ impl RuntimeClientFixtureBuilder {
         let model = Arc::new(self.model.unwrap_or_else(|| FakeModel::new(self.scripts)));
         let adapter: Arc<dyn rustx::model::ModelAdapter> = model.clone();
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-        let engine = ContextEngine::new(
-            ContextConfig {
-                context_window_tokens: 10_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            estimator,
-        )
-        .expect("context engine");
+        let session_model = self
+            .session_model
+            .unwrap_or_else(|| scripted_session_model(adapter));
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
             agent_id: AgentId::new("agent-a"),
-            model: "scripted".to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 512,
+            model: session_model,
             timezone: None,
-            adapter,
             context: RuntimeClientContextConfig {
-                engine,
-                summarizer: Arc::new(super::context::FakeContextSummarizer::new(Vec::new())),
+                policy: self.context_policy,
+                estimator,
                 checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: self.composer,
             },

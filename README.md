@@ -29,6 +29,21 @@ The first runtime targets three model interaction protocols:
 
 Provider SDKs are implementation details of model adapters. Their types must not cross into the runtime core.
 
+Models are declared in a validated `models.json` catalog. Every provider states an explicit endpoint and an explicit credential source (a literal or `$ENV_VAR`); a provider *name* never implies an official endpoint. Provider request parameters are opaque JSON that reaches the wire unchanged under a documented shallow-overlay contract, protected only against overwriting runtime-owned structural fields, and reasoning is expressed as model-declared named profiles rather than a universal effort enum.
+
+## Running the local runtime
+
+`rustx` is a spawnable single-conversation runtime process. It takes explicit configuration paths and speaks the Runtime Client Protocol over stdio/JSONL:
+
+```text
+rustx --models /path/to/models.json \
+      --session /path/to/session.json \
+      --workspace /path/to/workspace \
+      --runtime-root /path/to/private-runtime
+```
+
+stdout carries protocol records only; every diagnostic goes to stderr, and a startup configuration failure exits non-zero having written zero bytes to stdout. A client owns the child-process lifecycle and nothing else — the process itself owns the session model, tool runtime, capability coordinator, context policy, and Runtime Client host.
+
 ## Capability model
 
 The runtime capability set consists of:

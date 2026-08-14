@@ -16,22 +16,20 @@
 //! - provider adapters own wire placement;
 //! - the status never enters canonical history, checkpoints, or results.
 
-mod common;
+use super::{common, support};
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
-use common::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
-use common::fake::{FakeModel, FakeStep, model_release};
 use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, InitialTurnTrigger};
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError, AgentStatusFact,
     AgentStatusRenderContext, AgentStatusSectionData, AgentStatusSectionId,
-    AgentStatusSectionProvider, ContextCheckpointStore, ContextConfig, ContextEngine, ContextError,
-    ContextErrorKind, ContextRuntime, InMemoryCheckpointStore, ProviderObservedInput,
-    TokenEstimator, TokenMeasurementSource, render_agent_status,
+    AgentStatusSectionProvider, CompactionBudgets, ContextCheckpointStore, ContextConfig,
+    ContextEngine, ContextError, ContextErrorKind, ContextRuntime, InMemoryCheckpointStore,
+    ProviderObservedInput, TokenEstimator, TokenMeasurementSource, render_agent_status,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
@@ -41,13 +39,15 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{AgentStatusAttachment, ModelProtocol, ModelRequest, ReasoningEffort};
+use rustx::model::types::{AgentStatusAttachment, ModelProtocol, ModelRequest};
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
 use rustx::runtime::inbound::{ConversationInboundMailbox, FreshInboundTurn};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
+use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
+use support::fake::{FakeModel, FakeStep, fake_model, model_release};
 
 // ---------------------------------------------------------------------------
 // Deterministic clocks and composition fixtures
@@ -281,6 +281,7 @@ fn request(
     initial_messages: Vec<MessageBlock>,
     trigger: InitialTurnTrigger,
     timezone: Option<Tz>,
+    model: &Arc<FakeModel>,
 ) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-status"),
@@ -289,10 +290,12 @@ fn request(
         initial_messages,
         initial_turn_trigger: trigger,
         timezone,
-        model: "fake-status-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 0,
+        model: support::attempt_model_with_window(
+            model.clone(),
+            "fake-status-model",
+            10_000_000,
+            1,
+        ),
     }
 }
 
@@ -323,12 +326,13 @@ fn runtime(
     summarizer: FakeContextSummarizer,
     store: Arc<InMemoryCheckpointStore>,
     clock: Arc<dyn AgentStatusClock>,
-) -> ContextRuntime<'static> {
-    ContextRuntime::with_status_composer(
+) -> ContextRuntime {
+    ContextRuntime::with_scripted_summarizer(
         engine(window, 0, 0, estimator),
         Arc::new(summarizer),
         store,
         AgentStatusComposer::new(clock),
+        CompactionBudgets::new(1, 1),
     )
 }
 
@@ -836,7 +840,7 @@ fn temporal_rendering_is_utc_without_timezone_line() {
 /// and never leaks the status into the result history.
 #[tokio::test]
 async fn initial_human_inbound_produces_exactly_one_status() {
-    let model = FakeModel::new(vec![stop_script()]);
+    let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -856,8 +860,8 @@ async fn initial_human_inbound_produces_exactly_one_status() {
             vec![initial.clone()],
             InitialTurnTrigger::FreshInbound(fresh),
             Some(Tz::Asia__Tokyo),
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -903,7 +907,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
 /// like a human turn: status triggering is provenance-neutral.
 #[tokio::test]
 async fn runtime_originated_inbound_triggers_status() {
-    let model = FakeModel::new(vec![stop_script()]);
+    let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -923,8 +927,8 @@ async fn runtime_originated_inbound_triggers_status() {
             vec![initial],
             InitialTurnTrigger::FreshInbound(fresh),
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -961,7 +965,7 @@ async fn runtime_originated_inbound_triggers_status() {
 /// for the first model invocation, so the first request carries no status.
 #[tokio::test]
 async fn no_role_heuristic_triggers_status() {
-    let model = FakeModel::new(vec![stop_script()]);
+    let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -972,8 +976,13 @@ async fn no_role_heuristic_triggers_status() {
     let tool_runtime = common::tool_runtime("conv-status-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", initial, InitialTurnTrigger::Continuation, None),
-        &model,
+        request(
+            "attempt-1",
+            initial,
+            InitialTurnTrigger::Continuation,
+            None,
+            &model,
+        ),
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1002,7 +1011,7 @@ async fn no_role_heuristic_triggers_status() {
 /// omitting it, because there is no optional status field left to omit.
 #[tokio::test]
 async fn explicit_fresh_trigger_carries_mandatory_status() {
-    let model = FakeModel::new(vec![stop_script()]);
+    let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -1018,8 +1027,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
     let tool_runtime = common::tool_runtime("conv-status-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
-        request("attempt-1", vec![initial], trigger, None),
-        &model,
+        request("attempt-1", vec![initial], trigger, None, &model),
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1052,7 +1060,7 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
 /// equal to B's persisted timestamp. Mixed Human/Runtime provenance works.
 #[tokio::test]
 async fn drained_batch_produces_one_status_targeting_the_final_message() {
-    let model = FakeModel::new(vec![stop_script(), stop_script()]);
+    let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -1087,8 +1095,8 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             vec![historical_user("msg-u0", "start")],
             InitialTurnTrigger::Continuation,
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1154,7 +1162,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
 /// B is the final message in inbound order — never `max(timestamp)`.
 #[tokio::test]
 async fn non_monotonic_producer_timestamps_follow_inbound_order() {
-    let model = FakeModel::new(vec![stop_script(), stop_script()]);
+    let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -1191,8 +1199,8 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             vec![historical_user("msg-u0", "start")],
             InitialTurnTrigger::Continuation,
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1230,7 +1238,7 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
 /// request containing only A ever exists.
 #[tokio::test]
 async fn correction_batch_reaches_the_model_as_one_turn() {
-    let model = FakeModel::new(vec![stop_script(), stop_script()]);
+    let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -1265,8 +1273,8 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             vec![historical_user("msg-u0", "start")],
             InitialTurnTrigger::Continuation,
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1324,8 +1332,8 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
 /// no mailbox batch was drained afterward.
 #[tokio::test]
 async fn foreground_tool_continuation_has_no_status() {
-    use common::fake::ScriptedCall;
-    use common::fake::tool_call_events;
+    use support::fake::ScriptedCall;
+    use support::fake::tool_call_events;
     let call = ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
@@ -1336,11 +1344,11 @@ async fn foreground_tool_continuation_has_no_status() {
         .chain(tool_call_events(0, &call).into_iter().map(FakeStep::Emit))
         .collect();
     tool_script.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
-    let model = FakeModel::new(vec![tool_script, stop_script()]);
+    let model = fake_model(vec![tool_script, stop_script()]);
     let mut tools = ToolRegistry::new();
-    common::fake::FakeTool::new(
+    support::fake::FakeTool::new(
         common::tool("alpha", "tool-alpha"),
-        common::fake::success_result("ok"),
+        support::fake::success_result("ok"),
     )
     .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -1356,8 +1364,8 @@ async fn foreground_tool_continuation_has_no_status() {
             vec![initial],
             InitialTurnTrigger::FreshInbound(fresh),
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1396,7 +1404,7 @@ async fn foreground_tool_continuation_has_no_status() {
 /// the status snapshot still targets it.
 #[tokio::test]
 async fn fresh_inbound_is_protected_from_compaction() {
-    let model = FakeModel::new(vec![stop_script()]);
+    let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let store = InMemoryCheckpointStore::new().shared();
@@ -1421,8 +1429,8 @@ async fn fresh_inbound_is_protected_from_compaction() {
             initial,
             InitialTurnTrigger::FreshInbound(fresh),
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1511,7 +1519,7 @@ fn unobservable_fresh_inbound_yields_cannot_fit_not_summary() {
             None,
             &projection,
             &[],
-            0,
+            CompactionBudgets::new(0, 0),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
@@ -1645,7 +1653,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
         opaque: serde_json::json!({"type": "thinking", "thinking": "x", "signature": "sig"}),
     });
     let (release, parked) = model_release();
-    let model = FakeModel::new(vec![
+    let model = fake_model(vec![
         // Turn 1: a successful Stop with a continuation; the controller
         // enqueues the A/B batch while it streams.
         vec![
@@ -1713,8 +1721,8 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             vec![historical_user("msg-u0", "start")],
             InitialTurnTrigger::Continuation,
             None,
+            &model,
         ),
-        &model,
         capability.into_lease(),
         &cancellation,
         runtime(
@@ -1818,8 +1826,7 @@ const STATUS_TEXT: &str = "<system-reminder>\nCurrent time: 2026-08-07T13:00:00Z
 
 fn status_request(protocol: ModelProtocol, messages: Vec<MessageBlock>) -> ModelRequest {
     ModelRequest {
-        model: "status-test".to_owned(),
-        protocol,
+        invocation: common::invocation(protocol, "status-test"),
         messages,
         tools: Vec::new(),
         agent_status: Some(AgentStatusAttachment {
@@ -1827,8 +1834,6 @@ fn status_request(protocol: ModelProtocol, messages: Vec<MessageBlock>) -> Model
             rendered: STATUS_TEXT.to_owned(),
         }),
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 64,
         continuation: None,
     }
 }
@@ -1867,7 +1872,7 @@ async fn chat_completions_appends_status_to_the_target_fresh_user() {
     })
     .await;
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let request = status_request(
         ModelProtocol::OpenAiChatCompletions,
@@ -1925,9 +1930,9 @@ async fn chat_completions_continuation_without_status_has_no_footer() {
     })
     .await;
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
-    let call = common::fake::ScriptedCall {
+    let call = support::fake::ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
         name: "alpha",
@@ -1983,7 +1988,7 @@ async fn responses_stored_continuation_appends_status_in_the_transmitted_tail() 
     })
     .await;
     let adapter = rustx::model::OpenAiResponsesAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let mut request = status_request(
         ModelProtocol::OpenAiResponses,
@@ -2048,9 +2053,7 @@ async fn responses_stateless_continuation_appends_status_after_preserved_items()
     })
     .await;
     let adapter = rustx::model::OpenAiResponsesAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key")
-            .with_api_base(server.url("/v1"))
-            .with_responses_storage(rustx::model::ResponsesStorageMode::Stateless),
+        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
     let preserved = serde_json::json!({
         "type": "function_call",
@@ -2065,6 +2068,7 @@ async fn responses_stateless_continuation_appends_status_after_preserved_items()
             inbound_user("msg-b", "actually do not deploy it"),
         ],
     );
+    request.invocation.compat.responses_storage = rustx::model::ResponsesStorageMode::Stateless;
     request.continuation = Some(ProviderContinuationState::OpenAiResponses(
         OpenAiResponsesContinuation::Stateless {
             items: vec![preserved.clone()],
@@ -2107,7 +2111,7 @@ async fn anthropic_appends_status_without_breaking_tool_result_grouping() {
     })
     .await;
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
-        rustx::model::AnthropicAdapterConfig::new("test-key").with_api_base(server.url("")),
+        rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
     );
     let mut request = status_request(
         ModelProtocol::AnthropicMessages,
@@ -2218,6 +2222,196 @@ fn model_layer_has_no_context_dependency() {
             file.display()
         );
     }
+}
+
+/// No adapter or summarizer test seam is published API.
+///
+/// Substituting a provider adapter or a summary service must be a
+/// `#[cfg(test)] pub(crate)` seam: it then does not exist in a release build
+/// and no consumer of the library can call it. The published API is exactly
+/// [`ModelBindingRegistry::new`](rustx::model::ModelBindingRegistry::new) and
+/// [`ContextRuntime::for_attempt`](rustx::context::ContextRuntime::for_attempt).
+///
+/// The checks are deliberately bounded source-level repository invariants —
+/// each seam is declared exactly once, in its owning file, carrying both
+/// `#[cfg(test)]` and `pub(crate)`; no seam name is ever declared `pub`; the
+/// superseded names are gone entirely; the seam owners hide nothing behind
+/// `#[doc(hidden)]`; and the model layer publishes no fixture module.
+#[test]
+fn no_published_adapter_or_summarizer_seam_exists() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rs_files(&src, &mut files);
+    assert!(!files.is_empty(), "runtime sources must exist");
+    let sources: Vec<(std::path::PathBuf, String)> = files
+        .into_iter()
+        .map(|file| {
+            let source = std::fs::read_to_string(&file).expect("read runtime source");
+            (file, source)
+        })
+        .collect();
+
+    // Each seam is declared exactly once, in its owning file, as
+    // `#[cfg(test)] pub(crate)`.
+    let context_owner = std::path::Path::new("context").join("mod.rs");
+    let model_owner = std::path::Path::new("model").join("invocation.rs");
+    for (owner, item) in [
+        (&context_owner, "fn with_scripted_summarizer"),
+        (&model_owner, "fn new_with_scripted_adapters"),
+        (&model_owner, "trait ScriptedProviderAdapterFactory"),
+    ] {
+        let declarations = declarations_of(&sources, item);
+        assert_eq!(
+            declarations.len(),
+            1,
+            "{item} must be declared exactly once, in src/{}",
+            owner.display()
+        );
+        let (file, declaration) = &declarations[0];
+        assert!(
+            file.ends_with(owner),
+            "{item} must be declared in src/{}, found in {}",
+            owner.display(),
+            file.display()
+        );
+        assert!(
+            declaration.text.starts_with("pub(crate) "),
+            "{item} must be pub(crate), found: {}",
+            declaration.text
+        );
+        assert!(
+            declaration.cfg_test,
+            "{item} must be gated behind #[cfg(test)], found: {}",
+            declaration.text
+        );
+    }
+
+    // No seam name, superseded or current, is ever declared `pub`.
+    for item in [
+        "fn with_test_summarizer",
+        "fn with_scripted_summarizer",
+        "fn new_with_test_factory",
+        "fn new_with_scripted_adapters",
+        "trait TestProviderAdapterFactory",
+        "trait ScriptedProviderAdapterFactory",
+    ] {
+        for (file, declaration) in declarations_of(&sources, item) {
+            assert!(
+                !declaration.text.starts_with("pub "),
+                "{} declares {item} as published API: {}",
+                file.display(),
+                declaration.text
+            );
+        }
+    }
+
+    // The superseded seam names are gone from the runtime sources entirely.
+    for name in [
+        "with_test_summarizer",
+        "new_with_test_factory",
+        "TestProviderAdapterFactory",
+    ] {
+        for (file, source) in &sources {
+            assert!(
+                !source.contains(name),
+                "{} still references the superseded seam {name}",
+                file.display()
+            );
+        }
+    }
+
+    // A seam owner hides nothing: `#[doc(hidden)]` removes an item from the
+    // documentation, never from the API a consumer can call.
+    for owner in [&context_owner, &model_owner] {
+        let source = std::fs::read_to_string(src.join(owner)).expect("read seam owner");
+        assert!(
+            !source.contains("doc(hidden)"),
+            "src/{} must not hide a public item: a test seam is \
+             #[cfg(test)] pub(crate), never #[doc(hidden)] pub",
+            owner.display()
+        );
+    }
+
+    // The model layer publishes no fixture module, and the runtime sources
+    // declare no fixture module beyond the feature-gated MCP protocol
+    // *server* fixture, which is not an injection seam.
+    assert!(
+        !src.join("model").join("fixture.rs").exists(),
+        "src/model/fixture.rs must not exist: model fixtures are test-only"
+    );
+    for (file, source) in &sources {
+        if file.ends_with(std::path::Path::new("tools").join("mcp").join("mod.rs")) {
+            continue;
+        }
+        for line in source.lines() {
+            let text = line.trim();
+            assert!(
+                text.starts_with("//") || !text.ends_with("mod fixture;"),
+                "{} declares a fixture module in the runtime sources: {text}",
+                file.display()
+            );
+        }
+    }
+}
+
+/// One item declaration found in the runtime sources.
+struct SeamDeclaration {
+    /// The declaration line, trimmed.
+    text: String,
+    /// Whether the attribute block directly above it contains `#[cfg(test)]`.
+    cfg_test: bool,
+}
+
+/// Every declaration of `item` in the runtime sources.
+///
+/// `item` is the declaration keyword plus the name (`fn foo`, `trait Bar`),
+/// so a mention in a comment, an import, or a call site never matches.
+fn declarations_of<'a>(
+    sources: &'a [(std::path::PathBuf, String)],
+    item: &str,
+) -> Vec<(&'a std::path::Path, SeamDeclaration)> {
+    let mut found = Vec::new();
+    for (file, source) in sources {
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let text = line.trim();
+            if text.starts_with("//") || !declares(text, item) {
+                continue;
+            }
+            let mut cfg_test = false;
+            for above in lines[..index].iter().rev() {
+                let above = above.trim();
+                if above.starts_with("//") {
+                    continue;
+                }
+                if !above.starts_with("#[") {
+                    break;
+                }
+                if above == "#[cfg(test)]" {
+                    cfg_test = true;
+                }
+            }
+            found.push((
+                file.as_path(),
+                SeamDeclaration {
+                    text: text.to_owned(),
+                    cfg_test,
+                },
+            ));
+        }
+    }
+    found
+}
+
+/// Whether one source line declares `item` rather than merely naming it.
+///
+/// The character after the name must end it, so `fn new_with_x` never matches
+/// `fn new_with_x_extended`.
+fn declares(line: &str, item: &str) -> bool {
+    line.find(item).is_some_and(|start| {
+        let rest = &line[start + item.len()..];
+        rest.is_empty() || rest.starts_with(['(', '<', ':', ' '])
+    })
 }
 
 /// The old ambiguous request contract is gone: `AgentExecutionRequest` has an

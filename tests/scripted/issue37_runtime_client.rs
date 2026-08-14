@@ -6,12 +6,10 @@
 //! exact synchronization/linearization proofs live in the in-crate host
 //! tests; this file proves the public contract end to end.
 
-#[path = "common/mod.rs"]
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
     AgentStatusSectionId, AgentStatusSectionProvider, ContextError,
@@ -27,6 +25,9 @@ use rustx::runtime_client::{
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
+};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events,
 };
 
 /// A fixed deterministic status clock.
@@ -122,7 +123,7 @@ async fn host(
     composer: AgentStatusComposer,
     replay_limit: Option<usize>,
 ) -> (Arc<FakeModel>, RuntimeClientHost) {
-    common::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
+    support::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
         .model(model)
         .tools(tools)
         .composer(composer)
@@ -254,7 +255,7 @@ async fn submit_idle_admits_and_settles_asynchronously() {
 /// drain admits it into the next turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_while_busy_queues_for_the_next_drain() {
-    let (release_tx, release_rx) = common::fake::model_release();
+    let (release_tx, release_rx) = support::fake::model_release();
     let model = FakeModel::new(vec![
         vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -510,7 +511,7 @@ async fn foreground_tools_project_with_stable_identities() {
 /// remaining output exactly once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streaming_repair_from_a_mid_stream_snapshot() {
-    let (release_tx, release_rx) = common::fake::model_release();
+    let (release_tx, release_rx) = support::fake::model_release();
     let model = FakeModel::new(vec![vec![
         FakeStep::Emit(ModelEvent::Started),
         FakeStep::Emit(ModelEvent::TextDelta {
@@ -617,7 +618,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     // The model parks on its first step, so the exact set of publications
     // that happen before the test polls is deterministic: the attempt
     // cannot advance past the park.
-    let (release, release_rx) = common::fake::model_release();
+    let (release, release_rx) = support::fake::model_release();
     let model = FakeModel::new(vec![vec![
         FakeStep::ParkUntilReleased(release_rx),
         FakeStep::Emit(ModelEvent::Started),
@@ -953,7 +954,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             },
-            Arc::new(common::fake::FakeTool::new(
+            Arc::new(support::fake::FakeTool::new(
                 rustx::tools::types::ToolDefinition {
                     id: ToolId::new("tool-ls"),
                     name: "ls".to_owned(),

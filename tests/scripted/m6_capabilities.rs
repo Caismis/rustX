@@ -28,8 +28,7 @@ use rustx::tools::types::{
 };
 use rustx::tools::workspace::Workspace;
 
-#[path = "common/mod.rs"]
-mod common;
+use super::{common, support};
 
 /// One conversation fixture: workspace (with skills), environment store,
 /// artifact store, mailbox, background registry, and the coordinator.
@@ -1401,9 +1400,9 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     // test needs the fake tool registered, so it builds its own coordinator
     // over the same workspace/store.
     let mut tools = ToolRegistry::new();
-    let fake_tool = common::fake::FakeTool::new(
+    let fake_tool = support::fake::FakeTool::new(
         common::tool("alpha", "tool-alpha"),
-        common::fake::success_result("ok"),
+        support::fake::success_result("ok"),
     );
     fake_tool.register(&mut tools);
     let tools = Arc::new(tools);
@@ -1427,33 +1426,33 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         .clone();
 
     // A two-turn model script: turn 1 is a tool-call turn, turn 2 stops.
-    let call = common::fake::ScriptedCall {
+    let call = support::fake::ScriptedCall {
         id: "call-1",
         tool_id: "tool-alpha",
         name: "alpha",
         arguments: serde_json::json!({}),
     };
-    let mut first = vec![common::fake::FakeStep::Emit(
+    let mut first = vec![support::fake::FakeStep::Emit(
         rustx::model::ModelEvent::Started,
     )];
-    for event in common::fake::tool_call_events(0, &call) {
-        first.push(common::fake::FakeStep::Emit(event));
+    for event in support::fake::tool_call_events(0, &call) {
+        first.push(support::fake::FakeStep::Emit(event));
     }
-    first.push(common::fake::FakeStep::Emit(
+    first.push(support::fake::FakeStep::Emit(
         rustx::model::ModelEvent::Completed {
             finish_reason: rustx::model::ModelFinishReason::ToolCalls,
             usage: None,
         },
     ));
-    let model = common::fake::FakeModel::new(vec![
+    let model = support::fake::fake_model(vec![
         first,
         vec![
-            common::fake::FakeStep::Emit(rustx::model::ModelEvent::Started),
-            common::fake::FakeStep::Emit(rustx::model::ModelEvent::TextDelta {
+            support::fake::FakeStep::Emit(rustx::model::ModelEvent::Started),
+            support::fake::FakeStep::Emit(rustx::model::ModelEvent::TextDelta {
                 block_index: rustx::message::types::ContentBlockIndex::new(0),
                 text: "done".to_owned(),
             }),
-            common::fake::FakeStep::Emit(rustx::model::ModelEvent::Completed {
+            support::fake::FakeStep::Emit(rustx::model::ModelEvent::Completed {
                 finish_reason: rustx::model::ModelFinishReason::Stop,
                 usage: None,
             }),
@@ -1480,35 +1479,25 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         initial_messages: vec![],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: rustx::model::ModelProtocol::OpenAiChatCompletions,
-        reasoning: rustx::model::ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: support::attempt_model(model.clone(), "fake-model"),
     };
-    let runtime = rustx::context::ContextRuntime::new(
-        rustx::context::ContextEngine::new(
-            rustx::context::ContextConfig {
-                context_window_tokens: 10_000_000,
-                reserve_tokens: 0,
-                keep_recent_tokens: 0,
-            },
-            Arc::new(rustx::context::DefaultTokenEstimator),
-        )
-        .expect("engine"),
-        Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
+    let runtime = rustx::context::ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
+            reserve_tokens: 0,
+            keep_recent_tokens: 0,
+            summary_output_cap: None,
+        },
+        Arc::new(rustx::context::DefaultTokenEstimator),
         Arc::new(rustx::context::InMemoryCheckpointStore::new()),
-    );
-    let result = rustx::agent::AgentExecution::new(
-        request,
-        &model,
-        lease,
-        &cancellation,
-        runtime,
-        &tool_runtime,
+        rustx::context::AgentStatusComposer::default(),
+        &request.model,
     )
-    .expect("execution")
-    .run()
-    .await;
+    .expect("context runtime");
+    let result =
+        rustx::agent::AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
+            .expect("execution")
+            .run()
+            .await;
     assert!(matches!(
         result.outcome,
         rustx::events::types::AttemptOutcome::Completed { .. }

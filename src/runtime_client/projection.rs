@@ -100,6 +100,7 @@ use crate::agent::observer::AgentStatusObservation;
 use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
+use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
 use crate::runtime::inbound::{InboundBatch, InboundItem};
 use crate::tools::background::BackgroundExecutionSnapshot;
@@ -148,6 +149,22 @@ pub(crate) enum Observation {
     AttemptAdmitted {
         /// The admitted attempt.
         attempt_id: AttemptId,
+    },
+    /// The admitted attempt froze its immutable model snapshot.
+    ///
+    /// Published under the same lock acquisition as `AttemptAdmitted`, so
+    /// the attempt read model always carries the model it actually runs
+    /// with.
+    AttemptModelFrozen {
+        /// The admitted attempt.
+        attempt_id: AttemptId,
+        /// The frozen model view.
+        model: Box<AttemptModelView>,
+    },
+    /// The authoritative session model configuration changed.
+    SessionModelChanged {
+        /// The redacted session model state after the update.
+        model: Box<SessionModelView>,
     },
     /// The runtime accepted shutdown.
     Shutdown,
@@ -231,6 +248,7 @@ impl RuntimeClientProjection {
         conversation_id: ConversationId,
         initial_messages: Vec<MessageBlock>,
         initial_capabilities: CapabilityView,
+        initial_model: SessionModelView,
         replay_limit: usize,
     ) -> Self {
         Self {
@@ -247,6 +265,7 @@ impl RuntimeClientProjection {
                 background: Vec::new(),
                 status: None,
                 capabilities: initial_capabilities,
+                model: initial_model,
             },
             replay: VecDeque::new(),
             replay_limit,
@@ -349,6 +368,10 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::CapabilityPublished { capabilities }]
             }
             Observation::AttemptAdmitted { attempt_id } => {
+                // The model is folded by the `AttemptModelFrozen`
+                // observation the admission path publishes immediately
+                // after this one, under the same lock acquisition.
+                let model = Box::new(self.snapshot.model.to_attempt_view());
                 self.snapshot.attempt = Some(RuntimeClientAttempt {
                     attempt_id,
                     phase: RuntimeClientAttemptPhase::Admitted,
@@ -356,8 +379,24 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
+                    model,
                 });
                 Vec::new()
+            }
+            Observation::AttemptModelFrozen { attempt_id, model } => {
+                if let Some(attempt) = self
+                    .snapshot
+                    .attempt
+                    .as_mut()
+                    .filter(|attempt| attempt.attempt_id == attempt_id)
+                {
+                    attempt.model = model;
+                }
+                Vec::new()
+            }
+            Observation::SessionModelChanged { model } => {
+                self.snapshot.model = (*model).clone();
+                vec![RuntimeClientEvent::SessionModelChanged { model }]
             }
             Observation::Shutdown => vec![RuntimeClientEvent::RuntimeShutdown],
         }
@@ -387,6 +426,7 @@ impl RuntimeClientProjection {
     ) -> Vec<RuntimeClientEvent> {
         match event {
             RuntimeEvent::AttemptStarted { .. } => {
+                let model = self.frozen_attempt_model(attempt_id);
                 self.snapshot.attempt = Some(RuntimeClientAttempt {
                     attempt_id: attempt_id.clone(),
                     phase: RuntimeClientAttemptPhase::Running,
@@ -394,6 +434,7 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
+                    model,
                 });
                 self.snapshot.status = None;
                 vec![RuntimeClientEvent::AttemptStarted {
@@ -685,6 +726,7 @@ impl RuntimeClientProjection {
             .as_ref()
             .is_none_or(|attempt| attempt.attempt_id != *attempt_id)
         {
+            let model = self.frozen_attempt_model(attempt_id);
             self.snapshot.attempt = Some(RuntimeClientAttempt {
                 attempt_id: attempt_id.clone(),
                 phase: RuntimeClientAttemptPhase::Running,
@@ -692,7 +734,26 @@ impl RuntimeClientProjection {
                 last_usage: None,
                 in_flight: None,
                 foreground: Vec::new(),
+                model,
             });
+        }
+    }
+
+    /// The model view an attempt froze at admission.
+    ///
+    /// Rebuilding the attempt view (for example when the loop's
+    /// `AttemptStarted` arrives after admission) must never lose the frozen
+    /// model: while the same attempt is described, the already-frozen view
+    /// wins over live session state.
+    fn frozen_attempt_model(&self, attempt_id: &AttemptId) -> Box<AttemptModelView> {
+        match self
+            .snapshot
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.attempt_id == *attempt_id)
+        {
+            Some(attempt) => attempt.model.clone(),
+            None => Box::new(self.snapshot.model.to_attempt_view()),
         }
     }
 
@@ -1236,6 +1297,14 @@ mod tests {
         AttemptId::new("attempt-1")
     }
 
+    /// A deterministic session model view for projection unit tests.
+    fn model_view() -> crate::model::session::SessionModelView {
+        crate::scripted_suites::support::model::scripted_session_model(std::sync::Arc::new(
+            crate::scripted_suites::support::model::NullAdapter,
+        ))
+        .view()
+    }
+
     fn projection() -> RuntimeClientProjection {
         RuntimeClientProjection::new(
             ConversationId::new("conv-1"),
@@ -1245,6 +1314,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: Vec::new(),
             },
+            model_view(),
             64,
         )
     }
@@ -1753,6 +1823,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: Vec::new(),
             },
+            model_view(),
             4,
         );
         apply_event(
@@ -1821,6 +1892,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: Vec::new(),
             },
+            model_view(),
             limit,
         );
         apply_event(

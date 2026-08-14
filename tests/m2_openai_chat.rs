@@ -18,9 +18,7 @@ use rustx::runtime::identity::{ToolCallId, ToolId};
 use rustx::tools::types::ToolCall;
 
 fn adapter(server: &common::FixtureServer) -> OpenAiChatCompletionsAdapter {
-    OpenAiChatCompletionsAdapter::new(
-        OpenAiAdapterConfig::new("test-key").with_api_base(server.url("/v1")),
-    )
+    OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new("test-key", server.url("/v1")))
 }
 
 fn request_with_tools(prompt: &str) -> ModelRequest {

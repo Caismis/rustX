@@ -7,8 +7,7 @@
 //! name, description) — without executors, environment paths, or private
 //! dependency internals on the wire.
 
-#[path = "common/mod.rs"]
-mod common;
+use super::support;
 
 use std::sync::Arc;
 
@@ -35,7 +34,7 @@ async fn capability_projection_covers_native_python_and_skills() {
         eprintln!("uv unavailable; capability Python origin not exercised");
         return;
     }
-    let fixture = common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-cap")
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-cap")
         .tools({
             let mut base = rustx::tools::executor::ToolRegistry::new();
             let definition = ToolDefinition {
@@ -50,21 +49,21 @@ async fn capability_projection_covers_native_python_and_skills() {
             };
             base.register(
                 definition.clone(),
-                Arc::new(common::fake::FakeTool::new(
+                Arc::new(support::fake::FakeTool::new(
                     definition,
-                    common::fake::success_result("listed"),
+                    support::fake::success_result("listed"),
                 )),
             )
             .expect("register base tool");
             base
         })
         .workspace_fixture(|workspace| {
-            common::runtime_client_fixture::write_python_package(
+            support::runtime_client_fixture::write_python_package(
                 workspace,
                 "py-echo",
                 "Echoes arguments",
             );
-            common::runtime_client_fixture::write_skill(
+            support::runtime_client_fixture::write_skill(
                 workspace,
                 "skill-readme",
                 "Reads the README",
@@ -155,7 +154,7 @@ async fn capability_projection_covers_mcp_origins() {
                 .display()
                 .to_string(),
             args: rustx::tools::mcp::fixture::fixture_spawn_args(
-                "capability_projection_covers_mcp_origins",
+                "scripted_suites::issue37_capability::capability_projection_covers_mcp_origins",
             ),
             cwd: None,
             environment: std::collections::BTreeMap::from([(
@@ -165,7 +164,7 @@ async fn capability_projection_covers_mcp_origins() {
         },
         policy: rustx::tools::types::ToolInvocationPolicy::default(),
     };
-    let fixture = common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-mcp")
+    let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-mcp")
         .mcp_servers(vec![mcp_config])
         .build()
         .await;

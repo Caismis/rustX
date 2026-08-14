@@ -6,8 +6,7 @@
 //! negotiation, and attachment lifecycle. No host-side race is asserted
 //! here (the in-crate host tests own the synchronization proofs).
 
-#[path = "common/mod.rs"]
-mod common;
+use super::support;
 
 use rustx::runtime_client::RuntimeClientHost;
 use rustx::runtime_client::{
@@ -23,7 +22,7 @@ fn request_id(value: u64) -> rustx::runtime_client::RequestId {
 ///
 /// Construction is the shared Runtime Client fixture.
 async fn host() -> RuntimeClientHost {
-    common::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-protocol")
+    support::runtime_client_fixture::RuntimeClientFixture::builder("conv-37-protocol")
         .build()
         .await
         .into_parts()

@@ -97,12 +97,29 @@ tools/python.rs           immutable ToolVersion discovery/publication,
                            PythonToolEnvironment materialization, and the
                            canonical Python executor
 model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
-                           ReasoningEffort, AgentStatusAttachment (the
-                           cross-layer model-request attachment contract of
-                           the Agent Status projection: the context plane
-                           produces it, `ModelRequest` and adapters consume
-                           it, and model contracts never depend on context
-                           implementation modules)
+                           AgentStatusAttachment (the cross-layer
+                           model-request attachment contract of the Agent
+                           Status projection: the context plane produces it,
+                           `ModelRequest` and adapters consume it, and model
+                           contracts never depend on context implementation
+                           modules)
+model/catalog.rs           the validated models.json catalog: explicit
+                           provider endpoints and credential sources,
+                           redacted credentials, model definitions,
+                           capabilities, reasoning profiles, bounded compat
+model/invocation.rs        opaque requestParams and their shallow-overlay
+                           contract, per-protocol protected wire keys,
+                           effective-capability intersection,
+                           ResolvedModelInvocation, ModelBindingRegistry
+model/session.rs           SessionModelConfig (the session's authoritative
+                           mutable model state), the summary policy, and the
+                           immutable AttemptModelSnapshot
+model/fixture.rs           fixture construction for tests over the public
+                           catalog path (no runtime behaviour of its own)
+local_runtime/             the local conversation runtime process: bounded
+                           session configuration, the one composition owner,
+                           the startup argument contract, and the stdio
+                           serving lifecycle
 model/finish.rs            ModelFinishReason
 model/error.rs             ModelError, ModelErrorKind
 model/event.rs             ModelEvent (adapter-to-kernel streaming protocol)
@@ -159,13 +176,22 @@ The runtime must therefore resolve an effective output-token limit before
 entering the adapter boundary; no adapter-local default exists. This is a
 deliberate pre-1.0 canonical correction, not a compatibility shim.
 
-`ContextManifest` gained `context_window_tokens` in M4. The model context
-window is runtime-owned configuration, never a hard-coded per-model catalog
-in the context engine; the soft input limit is
+`ContextManifest` gained `context_window_tokens` in M4, and Issue #42 moved
+its *ownership*: the context window belongs to the selected catalog model,
+not to the process. A session owns a static `SessionContextPolicy` (reserve
+tokens, keep-recent target, summary output cap) and each attempt derives its
+`ContextConfig` from that policy plus **its own** immutable model snapshot.
+The soft input limit is still
 `context_window_tokens - reserve_tokens - max_output_tokens` (checked,
-impossible configurations rejected). This is an additive pre-1.0 contract
-change: the M1 manifest fixture and round-trip tests were updated
-accordingly.
+impossible configurations rejected), but an attempt on a 32k model never
+plans compaction with a previously selected 128k window.
+
+Issue #42 also retired the universal `ReasoningEffort` enum. Reasoning is a
+model-declared *named profile* whose wire behaviour is exactly its configured
+`requestParams`; the runtime assigns no meaning to a profile name and
+synthesizes no reasoning field. `ModelManifest` therefore carries a catalog
+`ModelRef`, the selected `ReasoningProfileId`, and the semantic
+reasoning-enabled state.
 
 ### 2.2 Attempt settlement invariant
 
@@ -293,6 +319,28 @@ The M3 test suite drives the loop with scripted fixture models and tools
 `RuntimeEvent` trace and the platform `AttemptOutcome`, and reconstructs
 execution phases from traces (`tests/common/mod.rs`).
 
+### Test seams are not published API
+
+Substituting a runtime-owned dependency is a `#[cfg(test)] pub(crate)`
+seam, never a published item:
+
+```text
+ModelBindingRegistry::new         one binding path; builds the three
+                                  supported protocol adapters directly
+ContextRuntime::for_attempt       one context-runtime constructor; derives
+                                  the summarizer from the frozen snapshot
+```
+
+An external test binary can only reach `pub` items, so a seam usable from
+`tests/*.rs` is necessarily a seam a consumer can call; `#[doc(hidden)]`
+hides it from documentation without removing it. The suites that need a
+scripted `ModelAdapter` or a scripted `ContextSummarizer` therefore compile
+into the crate's own test build through `src/lib.rs`, with their sources
+under `tests/scripted/` so `src/` carries production code only. The
+remaining `tests/*.rs` binaries use published API exclusively; fixtures
+shared by both live in `tests/common/`, and fixtures that need a seam live
+in `tests/scripted/support/`.
+
 The Issue #22 inbound batching integration is canonical:
 `ConversationToolRuntime` owns the one conversation inbound mailbox, and at
 every safe turn boundary the loop performs exactly one finite
@@ -340,10 +388,14 @@ ModelAdapter → provider
 The engine is a deterministic pure function of (canonical history, latest
 checkpoint, tool definitions, observed provider usage): the same inputs
 always produce the same projection, plan, and estimate. It owns no provider
-knowledge — the window/reserve/recent-token configuration is runtime-owned
-(`ContextConfig`, mirrored additively into the M1 `ContextManifest`), token
-estimation is pluggable (`TokenEstimator`, with a default
-`ceil(bytes / 4)` formula), and no model name catalog exists.
+knowledge — token estimation is pluggable (`TokenEstimator`, with a default
+`ceil(bytes / 4)` formula), and the engine holds no model catalog.
+
+Its configuration is split by ownership. The session owns the static
+`SessionContextPolicy`; the *window* comes from the attempt's immutable model
+snapshot. `ContextRuntime::for_attempt` derives one engine per attempt from
+those two inputs, so a session model change between attempts changes the next
+attempt's compaction arithmetic and never the running one's.
 
 Key contracts:
 
@@ -370,7 +422,14 @@ Key contracts:
   persistence contract, M8 owns the durable backend.
 - The `ContextSummarizer` service is provider-neutral; the production
   `ModelBackedSummarizer` issues a canonical one-off `ModelRequest` (no
-  tools, no continuation) through the existing `ModelAdapter` boundary.
+  tools, no Agent Status, no Skill catalog, no continuation) through the
+  existing `ModelAdapter` boundary. It is constructed from the attempt's
+  *frozen summary policy*, never from an independently injected summarizer:
+  in `session` mode that is the attempt's own primary invocation, in
+  `explicit` mode a separately resolved catalog model. The context plane's
+  summary output safety cap is applied through the runtime-owned protected
+  max-output field and never by mutating a reasoning profile or a
+  request-parameter object.
 - The mandatory progress rule (coverage advances and projected estimate
   strictly decreases) is the anti-loop invariant; successful compaction
   invalidates the pending provider continuation, and
@@ -800,6 +859,69 @@ ModelEvent
 M3 Agent Loop
 ```
 
+#### Model selection ownership (Issue #42)
+
+Selection is upstream of the adapters and entirely catalog-driven:
+
+```text
+models.json
+    -> ModelCatalog                  validated: explicit baseUrl, explicit
+                                     apiKey source, protocol, limits,
+                                     capabilities, reasoning profiles, compat
+    -> ResolvedModelCatalog          credentials bound at startup
+    -> ModelBindingRegistry          one adapter per provider x protocol
+    -> ResolvedModelInvocation       immutable: binding, model, protocol,
+                                     window, output budget, selected profile,
+                                     effective requestParams, effective
+                                     capabilities
+    -> AttemptModelSnapshot          frozen at attempt admission
+```
+
+Governing rules:
+
+- **No implicit endpoint.** `OpenAiAdapterConfig::new` and
+  `AnthropicAdapterConfig::new` both require an explicit base URL. No
+  provider *name* selects an official endpoint, and there is no path from
+  `"openai"` or `"anthropic"` to a network address.
+- **Credentials are redacted by type.** A resolved credential lives in
+  `ResolvedCredential`, which has no `Serialize`, redacted `Debug`/`Display`,
+  and exactly one read boundary (`expose`) used only to construct a provider
+  client. Client-facing views carry at most the credential *source kind* and
+  the environment variable *name*.
+- **`requestParams` is opaque.** rustX normalizes no provider sampling or
+  routing parameter. Effective parameters resolve as model defaults →
+  selected reasoning profile → session overrides, each a **top-level shallow
+  overlay**: nested objects and arrays are replaced atomically, never
+  deep-merged. The selected profile *owns* every top-level key it declares, so
+  a session override that also declares one fails deterministically rather
+  than being resolved by merge order.
+- **Protected wire keys.** Each protocol declares the runtime-owned fields
+  opaque parameters may never replace — Chat Completions: `model`,
+  `messages`, `tools`, `stream`, `stream_options`, and *both* max-token
+  spellings; Responses: `model`, `input`, `instructions`, `tools`, `stream`,
+  `max_output_tokens`, `store`, `previous_response_id`, `include`; Anthropic:
+  `model`, `messages`, `system`, `tools`, `stream`, `max_tokens`. A collision
+  fails at configuration time *and* again at final request construction.
+  Provider-owned reasoning/sampling fields (`thinking`, `reasoning`,
+  `output_config`, `temperature`, …) are deliberately **not** protected: a
+  reasoning profile is expected to own them.
+- **Final wire placement.** Each adapter translates canonically, serializes
+  to a JSON object, validates protected-key ownership, and shallow-overlays
+  the effective parameters at the **top level** of the real provider body.
+  There is no invented `extra_body` nesting level and no second HTTP path.
+- **Bounded compat.** `compat` configures only structural translation the
+  adapters actually branch on — the legal Chat max-token spelling, whether
+  streaming usage options are supported, and the Responses storage /
+  continuation mode. It is not a strategy framework, and nothing is ever
+  inferred from a hostname.
+- **Effective capabilities.** The client-visible capability is
+  `model-declared ∩ adapter/protocol ∩ current runtime`. Because no adapter
+  can transmit canonical image or file references yet, a catalog claiming
+  image input never causes image input to be advertised, and unsupported
+  content is rejected at the invocation boundary before a provider request is
+  opened. A model without effective tool-call capability stays usable as a
+  text model and simply never receives tool definitions.
+
 Provider SDK and wire types terminate inside the adapter modules
 (`src/model/adapter/openai`, `src/model/adapter/anthropic`); the agent kernel
 operates only on the runtime-owned `ModelAdapter` interface and the
@@ -840,9 +962,10 @@ the current Messages API. The Anthropic adapter therefore talks to
   `Unsupported` (never silently discarded), because its position carries
   replay semantics rustX cannot preserve losslessly with the current
   canonical continuation model;
-- current request semantics (adaptive thinking via `thinking.type`,
-  effort via `output_config.effort` — never `thinking.display`;
-  `redacted_thinking.data` preserved losslessly as opaque provider state);
+- current request semantics (`redacted_thinking.data` preserved losslessly
+  as opaque provider state; `thinking` and `output_config` are provider-owned
+  fields the *selected reasoning profile* declares — the adapter synthesizes
+  neither);
 - current refusal semantics (`stop_reason = refusal` with top-level
   `stop_details`; a human-readable `explanation` streams as `RefusalDelta`
   before `Completed(Refusal)`, never as plain text);
@@ -1618,10 +1741,220 @@ means adding a sibling module there; no semantic module moves.
   operator logging to its output sink — failures are returned to the
   caller for a process-composition layer to report.
 - **Conformance is transport-independent.** The Issue #38 scenario suite
-  (`tests/common/runtime_client_conformance.rs`) drives one set of
+  (`tests/scripted/support/runtime_client_conformance.rs`) drives one set of
   semantic scenarios through a direct-endpoint driver and the stdio
   driver. Issue #36 adds a WebSocket driver and inherits every scenario
   unchanged; byte-level framing tests stay transport-specific.
+
+#### Runtime Client model semantics (Issue #42)
+
+The protocol distinguishes two model facts that a client must never
+conflate:
+
+```text
+snapshot.model            the session's *desired* configuration and its
+                          resolution — mutable, client-settable
+snapshot.attempt.model    the immutable snapshot an already-admitted attempt
+                          froze — never changes for that attempt
+```
+
+While an attempt admitted with model A is running and the session has been
+switched to B, the snapshot truthfully reports both at once. No client has to
+infer this from event ordering.
+
+Three methods complete the contract:
+
+- `model_catalog_get` — the bounded public catalog view: model reference,
+  protocol, context window, configured max output, declared *and* effective
+  capabilities, reasoning profile identities with their semantic enabled
+  state, the default profile, and the redacted credential *source*. This is
+  why #39 never reads `models.json`. No endpoint, no credential, no adapter
+  internal, and no compat object appears.
+- `model_get` — the authoritative session model state.
+- `model_set` — a **whole-state replacement**, never a JSON patch.
+  Validation is transactional: a rejected update changes nothing, allocates
+  no cursor, and publishes no event. A valid update may occur while an
+  attempt is running and affects future admissions only.
+
+One event, `session_model_changed`, is published on the existing observation
+stream by the existing projection owner, under the same host lock that owns
+attempt admission. There is no second event stream and no second cursor
+domain.
+
+### Layer 8: The local conversation runtime process (Issue #42)
+
+```text
+explicit startup arguments (--models --session --workspace --runtime-root)
+        |
+ModelCatalog + LocalSessionConfig
+        |
+        +--> SessionModelState (authoritative session model)
+        +--> ConversationToolRuntime  (workspace, artifacts, mailbox,
+        |                              background registry, base environment)
+        +--> base ToolRegistry + register_native_tools(...)
+        +--> CapabilityCoordinator    (same conversation and workspace)
+        +--> prepare_candidate() -> commit()   <-- before serving
+        +--> context policy / checkpoint / status pieces
+        |
+RuntimeClientHost -> RuntimeClientEndpoint -> stdio JSONL (Issue #38)
+```
+
+`LocalConversationRuntime::compose` is the one Rust-side composition owner.
+The governing invariant:
+
+> One local runtime process owns one conversation session. That session owns
+> one authoritative mutable session-model configuration, one
+> `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one context
+> policy/checkpoint domain, and one `RuntimeClientHost`. Runtime Client
+> attachments may come and go without replacing those semantic owners.
+
+A client — including the Issue #39 TUI — owns the child-process lifecycle and
+nothing else. It never assembles provider adapters, model parameters, context
+engines, tool registries, capability coordinators, or summary models.
+
+There is deliberately no process-global registry, no second background
+manager, no client-owned tool registration, no tool plugin factory, no second
+coordinator, and no second host.
+
+Configuration is explicit paths only. M10 (#13) owns discovery, precedence,
+profiles, and manifest UX; none of that exists here. Unknown fields are
+rejected everywhere, so a typo fails startup loudly rather than silently
+changing semantics.
+
+Representative `models.json` (no real credential ever appears in a catalog
+checked into a repository — `$ENV_VAR` is the reason the literal form exists
+only for local development):
+
+```json
+{
+  "providers": {
+    "gateway": {
+      "baseUrl": "https://gateway.example/v1",
+      "apiKey": "$RUSTX_MODEL_API_KEY",
+      "models": [
+        {
+          "id": "reasoner",
+          "protocol": "anthropic_messages",
+          "contextWindow": 200000,
+          "maxOutputTokens": 32000,
+          "capabilities": {
+            "inputModalities": ["text", "image"],
+            "outputModalities": ["text"],
+            "toolCalls": true,
+            "reasoning": true
+          },
+          "requestParams": { "temperature": 0.7, "top_k": 40 },
+          "reasoning": {
+            "defaultProfile": "on",
+            "profiles": {
+              "off": {
+                "enabled": false,
+                "requestParams": {
+                  "thinking": { "type": "disabled" },
+                  "temperature": 0.7
+                }
+              },
+              "on": {
+                "enabled": true,
+                "requestParams": {
+                  "thinking": { "type": "enabled", "budget_tokens": 32000 },
+                  "temperature": 1.0
+                }
+              }
+            }
+          },
+          "compat": {}
+        }
+      ]
+    },
+    "compat-service": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "apiKey": "local-development-only",
+      "models": [
+        {
+          "id": "small",
+          "protocol": "openai_chat_completions",
+          "contextWindow": 32768,
+          "maxOutputTokens": 4096,
+          "capabilities": {
+            "inputModalities": ["text"],
+            "outputModalities": ["text"],
+            "toolCalls": false,
+            "reasoning": false
+          },
+          "requestParams": { "min_p": 0.05, "repetition_penalty": 1.1 },
+          "compat": {
+            "chatMaxTokensField": "max_tokens",
+            "chatStreamUsage": "unsupported"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Note that `capabilities.inputModalities` claims `image` for `reasoner`, but
+the *effective* capability the Runtime Client advertises is text-only until an
+adapter can actually transmit an image reference. The claim is preserved so a
+client can explain why.
+
+Representative local session configuration:
+
+```json
+{
+  "conversationId": "conv-local-1",
+  "agentId": "agent-default",
+  "model": {
+    "model": "gateway/reasoner",
+    "reasoningProfile": "on",
+    "requestParams": { "top_p": 0.95 },
+    "maxOutputTokens": 8000,
+    "summaryModel": {
+      "mode": "explicit",
+      "model": "compat-service/small",
+      "requestParams": { "temperature": 0.1 }
+    }
+  },
+  "timezone": "Europe/Paris",
+  "context": {
+    "reserveTokens": 16384,
+    "keepRecentTokens": 20000,
+    "summaryOutputCap": 2048
+  },
+  "mcpServers": [],
+  "nativeTools": {
+    "bash": { "execution": "model_selectable", "concurrency": "sequential" }
+  },
+  "environment": { "RUSTX_PROJECT": "demo" }
+}
+```
+
+A session override may not declare a key the selected reasoning profile owns
+(`temperature` above belongs to the `on` profile, so `requestParams` declares
+`top_p` instead) and may not declare a runtime-protected wire key.
+
+**Process output contract.**
+
+```text
+before serving : stdout is exactly empty
+while serving  : stdout is Runtime Client JSONL records only
+diagnostics    : stderr, always
+```
+
+Composition — including the initial capability commit — finishes entirely
+before the transport is created, so a startup configuration failure writes a
+bounded stderr diagnostic, exits non-zero, and leaves **zero bytes** on
+stdout. `println!` is never used for diagnostics anywhere in the process.
+
+**Exit semantics.** A clean input EOF at a record boundary or a peer broken
+pipe ends this one-session process successfully. Malformed framing or any
+other transport error reports to stderr and exits non-zero. Semantic
+`shutdown` keeps its Issue #38 behaviour: it responds, stops admitting
+inbound work, lets the current attempt settle, and does **not** close the
+transport — a controlling client closes it according to its own lifecycle
+policy. Transport EOF remains a detach, never an Agent Loop cancellation
+primitive, and no M9 recovery or quiescence exists here.
 
 
 ## 3. Dependency rule

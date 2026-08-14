@@ -98,6 +98,9 @@ impl RuntimeAttachment {
                 }
             }
             RuntimeClientRequest::CapabilityGet { .. } => host.capability(),
+            RuntimeClientRequest::ModelCatalogGet { .. } => host.model_catalog(),
+            RuntimeClientRequest::ModelGet { .. } => host.model_get(),
+            RuntimeClientRequest::ModelSet { config, .. } => host.model_set(*config),
             RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
                 host.background_status(&execution_id)
             }

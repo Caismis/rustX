@@ -226,7 +226,7 @@ async fn open_stream(
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
-    wire_request: &super::mapping::WireRequest,
+    wire_request: &serde_json::Value,
     cancellation: CancellationSignal,
 ) -> OpeningOutcome {
     let send = http_client
@@ -350,7 +350,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
-        wire_request: super::mapping::WireRequest,
+        wire_request: serde_json::Value,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -359,7 +359,7 @@ enum AnthropicPhase {
         url: String,
         anthropic_version: String,
         http_client: reqwest::Client,
-        wire_request: super::mapping::WireRequest,
+        wire_request: serde_json::Value,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },

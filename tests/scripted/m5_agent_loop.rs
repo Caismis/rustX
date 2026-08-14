@@ -11,11 +11,10 @@
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
-mod common;
+use super::{common, support};
 
 use std::sync::Arc;
 
-use common::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
@@ -25,13 +24,15 @@ use rustx::message::types::{
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
-use rustx::model::types::{ModelProtocol, ReasoningEffort};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+use support::fake::{
+    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
+};
 
-fn request() -> AgentExecutionRequest {
+fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
     AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
@@ -47,37 +48,32 @@ fn request() -> AgentExecutionRequest {
         })],
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: "fake-model".to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
+        model: support::attempt_model(model.clone(), "fake-model"),
     }
 }
 
-fn runtime() -> rustx::context::ContextRuntime<'static> {
+fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
     use rustx::context::{
-        ContextConfig, ContextEngine, ContextRuntime, DefaultTokenEstimator,
-        InMemoryCheckpointStore,
+        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
     };
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 10_000_000,
+    let snapshot = support::attempt_model(model.clone(), "fake-model");
+    ContextRuntime::for_attempt(
+        SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 0,
+            summary_output_cap: None,
         },
         estimator,
-    )
-    .expect("valid context configuration");
-    ContextRuntime::new(
-        engine,
-        Arc::new(common::context::FakeContextSummarizer::new(Vec::new())),
         Arc::new(InMemoryCheckpointStore::new()),
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
+    .expect("valid context runtime")
 }
 
 async fn run(
-    model: &FakeModel,
+    model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     mailbox: Option<rustx::runtime::inbound::ConversationInboundMailbox>,
@@ -92,11 +88,10 @@ async fn run(
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let result = AgentExecution::new(
-        request(),
-        model,
+        request(model),
         lease,
         cancellation,
-        runtime(),
+        runtime(model),
         &tool_runtime,
     )
     .expect("conversation identity matches the tool runtime")
@@ -161,7 +156,10 @@ fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
 }
 
 /// The next model request after the tool turn.
-fn next_request(result: &AgentExecutionResult, model: &FakeModel) -> rustx::model::ModelRequest {
+fn next_request(
+    result: &AgentExecutionResult,
+    model: &std::sync::Arc<FakeModel>,
+) -> rustx::model::ModelRequest {
     let _ = result;
     let requests = model.requests();
     requests
@@ -177,7 +175,7 @@ fn next_request(result: &AgentExecutionResult, model: &FakeModel) -> rustx::mode
 async fn parallel_reversed_completion_keeps_canonical_order() {
     let call_a = scripted("call-a", "tool-alpha", "alpha", serde_json::json!({"n": 1}));
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({"n": 2}));
-    let model = FakeModel::new(tool_turn_then_stop(&[&call_a, &call_b]));
+    let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
         common::tool_policies(
             "alpha",
@@ -276,7 +274,7 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
 async fn sequential_barrier_blocks_later_calls() {
     let call_a = scripted("call-a", "tool-alpha", "alpha", serde_json::json!({}));
     let call_b = scripted("call-b", "tool-beta", "beta", serde_json::json!({}));
-    let model = FakeModel::new(tool_turn_then_stop(&[&call_a, &call_b]));
+    let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b]));
     let (tool_a, release_a) = FakeTool::parking(
         common::tool_policies(
             "alpha",
@@ -341,7 +339,7 @@ async fn parallel_group_then_sequential_barrier() {
     let call_p1 = scripted("call-p1", "tool-p1", "p1", serde_json::json!({}));
     let call_p2 = scripted("call-p2", "tool-p2", "p2", serde_json::json!({}));
     let call_s = scripted("call-s", "tool-s", "s", serde_json::json!({}));
-    let model = FakeModel::new(tool_turn_then_stop(&[&call_p1, &call_p2, &call_s]));
+    let model = fake_model(tool_turn_then_stop(&[&call_p1, &call_p2, &call_s]));
     let (tool_p1, release_p1) = FakeTool::parking(
         common::tool_policies(
             "p1",
@@ -437,7 +435,7 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
         serde_json::json!({"__rustx_execution": "background"}),
     );
     let call_c = scripted("call-c", "tool-gamma", "gamma", serde_json::json!({}));
-    let model = FakeModel::new(tool_turn_then_stop(&[&call_a, &call_b, &call_c]));
+    let model = fake_model(tool_turn_then_stop(&[&call_a, &call_b, &call_c]));
     let (tool_a, release_a) = FakeTool::parking(
         common::tool_policies(
             "alpha",
@@ -537,7 +535,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     );
     let call_c = scripted("call-c", "tool-gamma", "gamma", serde_json::json!({}));
     let call_d = scripted("call-d", "tool-delta", "delta", serde_json::json!({}));
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call_a)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &call_a)[1].clone()),
@@ -716,7 +714,7 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
         "read",
         serde_json::json!({"path": 42}),
     );
-    let model = FakeModel::new(tool_turn_then_stop(&[&call]));
+    let model = fake_model(tool_turn_then_stop(&[&call]));
     let tool = FakeTool::new(
         common::tool_policies(
             "read",
@@ -775,7 +773,7 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
 #[tokio::test]
 async fn missing_model_selectable_field_is_rejected_without_executor() {
     let call = scripted("call-1", "tool-sel", "sel", serde_json::json!({}));
-    let model = FakeModel::new(tool_turn_then_stop(&[&call]));
+    let model = fake_model(tool_turn_then_stop(&[&call]));
     let tool = FakeTool::new(
         common::tool_policies(
             "sel",
@@ -813,7 +811,7 @@ async fn missing_model_selectable_field_is_rejected_without_executor() {
 #[tokio::test]
 async fn identity_mismatch_is_a_structural_contract_failure() {
     let call = scripted("call-1", "tool-alpha", "wrong-name", serde_json::json!({}));
-    let model = FakeModel::new(vec![vec![
+    let model = fake_model(vec![vec![
         FakeStep::Emit(started()),
         FakeStep::Emit(tool_call_events(0, &call)[0].clone()),
         FakeStep::Emit(tool_call_events(0, &call)[1].clone()),

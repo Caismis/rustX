@@ -9,10 +9,6 @@
 
 #![allow(dead_code)] // every helper is used only by some test binaries
 
-pub mod context;
-pub mod fake;
-pub mod runtime_client_fixture;
-
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -283,6 +279,39 @@ pub fn describe_events(events: &[rustx::model::ModelEvent]) -> String {
         .join("\n")
 }
 
+/// A `requestParams` object literal.
+///
+/// # Panics
+///
+/// Panics when the value is not a JSON object, which always means the test
+/// itself is wrong.
+pub fn request_params(value: serde_json::Value) -> rustx::model::RequestParams {
+    match value {
+        serde_json::Value::Object(map) => map,
+        other => panic!("requestParams must be a JSON object, got {other}"),
+    }
+}
+
+/// The canonical text-only invocation configuration of an adapter test.
+///
+/// Adapter tests exercise translation, not selection, so the invocation is
+/// built directly rather than resolved from a catalog. It carries no request
+/// parameters, so any provider field an adapter test observes was produced
+/// by translation and not by a configured overlay.
+pub fn invocation(
+    protocol: rustx::model::ModelProtocol,
+    model: &str,
+) -> rustx::model::ModelInvocationConfig {
+    rustx::model::ModelInvocationConfig {
+        model: model.to_owned(),
+        protocol,
+        max_output_tokens: 512,
+        request_params: rustx::model::RequestParams::new(),
+        capabilities: rustx::model::ModelCapabilities::text_only(true, true),
+        compat: rustx::model::ModelCompat::default(),
+    }
+}
+
 /// A canonical user-only request for the given protocol.
 pub fn simple_request(
     protocol: rustx::model::ModelProtocol,
@@ -291,11 +320,9 @@ pub fn simple_request(
 ) -> rustx::model::ModelRequest {
     use rustx::message::content::TextBlock;
     use rustx::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
-    use rustx::model::ReasoningEffort;
     use rustx::runtime::identity::MessageId;
     rustx::model::ModelRequest {
-        model: model.to_owned(),
-        protocol,
+        invocation: invocation(protocol, model),
         messages: vec![MessageBlock::User(UserMessageBlock {
             id: MessageId::new("msg-user-1"),
             content: vec![UserContentBlock::Text(TextBlock {
@@ -308,8 +335,6 @@ pub fn simple_request(
         tools: Vec::new(),
         agent_status: None,
         skill_catalog: None,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 512,
         continuation: None,
     }
 }

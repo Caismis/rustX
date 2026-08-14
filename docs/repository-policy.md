@@ -20,6 +20,8 @@ Dependencies must point inward toward rustX-owned contracts.
 
 External SDK types must terminate at adapter boundaries. Provider SDK types, MCP SDK types, database models, HTTP framework types, process implementation details, and control-plane schemas must not appear in agent-kernel interfaces.
 
+Test seams must not be published API. A fixture that substitutes a runtime-owned dependency — a provider adapter behind a validated catalog binding, a summary service behind a context runtime — must be `#[cfg(test)] pub(crate)` and must be exercised from the crate's own test build. `#[doc(hidden)] pub` hides a seam from documentation but leaves it callable by a consumer, and is not an acceptable substitute. Suites needing such a seam live under `tests/scripted/` and compile into the crate through `src/lib.rs`; `tests/*.rs` binaries use published API only.
+
 Changes that alter architectural boundaries must update `docs/architecture.md`.
 
 Changes that alter runtime invariants must update `docs/invariants.md`.

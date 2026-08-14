@@ -26,17 +26,16 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    ContextCheckpointStore, ContextConfig, ContextRuntime, DefaultTokenEstimator,
-    InMemoryCheckpointStore,
+    ContextCheckpointStore, ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore,
 };
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use rustx::model::{
-    ModelAdapter, ModelProtocol, OpenAiAdapterConfig, OpenAiChatCompletionsAdapter, ReasoningEffort,
-};
+use rustx::model::catalog::ProcessCredentialEnvironment;
+use rustx::model::session::{SessionModelConfig, SessionModelState};
+use rustx::model::{AttemptModelSnapshot, ModelBindingRegistry, ModelCatalog, ModelRef};
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
@@ -46,17 +45,64 @@ fn conversation_id() -> ConversationId {
     ConversationId::new("live-conv-1")
 }
 
+/// The live session model authority.
+///
+/// The binding goes through the ordinary production path: an explicit
+/// catalog document with an explicit endpoint and a `$OPENAI_API_KEY`
+/// credential source, resolved against the process environment, bound by
+/// [`ModelBindingRegistry::new`] — which is the one binding path and
+/// constructs the real Chat Completions adapter itself. Nothing here
+/// substitutes an adapter.
+fn live_session_model(base_url: &str, model: &str, window: u64) -> SessionModelState {
+    let document = serde_json::json!({
+        "providers": {
+            "openai": {
+                "baseUrl": base_url,
+                "apiKey": "$OPENAI_API_KEY",
+                "models": [{
+                    "id": model,
+                    "protocol": "openai_chat_completions",
+                    "contextWindow": window,
+                    "maxOutputTokens": 64,
+                    "capabilities": {
+                        "inputModalities": ["text"],
+                        "outputModalities": ["text"],
+                        "toolCalls": true,
+                        "reasoning": false
+                    }
+                }]
+            }
+        }
+    });
+    let catalog = ModelCatalog::from_json_slice(
+        &serde_json::to_vec(&document).expect("the live catalog document serializes"),
+    )
+    .expect("the live catalog validates");
+    let resolved = catalog
+        .resolve(&ProcessCredentialEnvironment)
+        .expect("OPENAI_API_KEY resolves");
+    let registry = ModelBindingRegistry::new(resolved).expect("the live provider binds");
+    SessionModelState::new(
+        registry,
+        SessionModelConfig::of(
+            ModelRef::parse(&format!("openai/{model}")).expect("a valid model reference"),
+        ),
+    )
+    .expect("the live session model resolves")
+}
+
 /// One live conversation step: a fresh attempt over the canonical history,
 /// sharing the checkpoint store and the model-backed context runtime.
 async fn live_step(
     history: Vec<MessageBlock>,
     attempt: &str,
-    model: &str,
-    adapter: &dyn ModelAdapter,
+    snapshot: AttemptModelSnapshot,
     tools: ToolRegistry,
     store: Arc<InMemoryCheckpointStore>,
-    window: u64,
 ) -> AgentExecutionResult {
+    // One attempt snapshot drives everything: the loop's provider binding,
+    // the engine window, and the summary invocation. In `session` summary
+    // mode the summary uses exactly this primary invocation.
     let request = AgentExecutionRequest {
         agent_id: AgentId::new("agent-live"),
         conversation_id: conversation_id(),
@@ -64,34 +110,28 @@ async fn live_step(
         initial_messages: history,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
-        model: model.to_owned(),
-        protocol: ModelProtocol::OpenAiChatCompletions,
-        reasoning: ReasoningEffort::Medium,
-        max_output_tokens: 64,
+        model: snapshot.clone(),
     };
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let runtime = ContextRuntime::model_backed(
-        ContextConfig {
-            context_window_tokens: window,
+    let runtime = ContextRuntime::for_attempt(
+        rustx::context::SessionContextPolicy {
             reserve_tokens: 0,
             keep_recent_tokens: 40,
+            summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        adapter,
-        rustx::context::SummaryModelConfig {
-            model: model.to_owned(),
-            protocol: ModelProtocol::OpenAiChatCompletions,
-            reasoning: ReasoningEffort::Medium,
-            max_output_tokens: 64,
-        },
         store,
+        rustx::context::AgentStatusComposer::default(),
+        &snapshot,
     )
     .expect("live context runtime");
-    let tool_runtime = common::tool_runtime("conv-1");
+    // One conversation identity authority: the tool runtime is built from the
+    // same value the request carries, so `AgentExecution` construction proves
+    // ownership rather than failing its `ConversationMismatch` validation.
+    let tool_runtime = common::tool_runtime(conversation_id().as_str());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request,
-        adapter,
         capability.into_lease(),
         &cancellation,
         runtime,
@@ -112,18 +152,20 @@ async fn live_step(
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY and network access"]
 async fn live_repeated_compaction() {
-    let Some(key) = std::env::var("OPENAI_API_KEY").ok() else {
+    if std::env::var_os("OPENAI_API_KEY").is_none() {
         eprintln!("M4 live: NOT RUN (OPENAI_API_KEY is not set)");
         return;
-    };
+    }
     let model =
         std::env::var("RUSTX_OPENAI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_owned());
-    let adapter = OpenAiChatCompletionsAdapter::new(OpenAiAdapterConfig::new(key));
+    let base_url = std::env::var("RUSTX_OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
     let store = InMemoryCheckpointStore::new().shared();
 
     // A small window relative to the history guarantees compaction: the
     // accumulated serialized history quickly exceeds a few hundred tokens.
     let window = 350;
+    let session_model = live_session_model(&base_url, &model, window);
 
     let mut history = vec![MessageBlock::User(UserMessageBlock {
         id: MessageId::new("msg-live-1"),
@@ -143,11 +185,9 @@ async fn live_repeated_compaction() {
         let result = live_step(
             history.clone(),
             &attempt,
-            &model,
-            &adapter,
+            session_model.snapshot(),
             ToolRegistry::new(),
             store.clone(),
-            window,
         )
         .await;
         assert!(

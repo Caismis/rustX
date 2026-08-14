@@ -13,8 +13,7 @@
 //! If any of those semantics leaked out of the endpoint, the adapter below
 //! could not be written at all.
 
-#[path = "common/mod.rs"]
-mod common;
+use super::support;
 
 use rustx::message::types::MessageBlock;
 use rustx::model::event::ModelEvent;
@@ -24,7 +23,7 @@ use rustx::runtime_client::{
     RuntimeClientResponse,
 };
 
-use common::fake::FakeStep;
+use support::fake::FakeStep;
 
 /// The complete set of operations a future transport performs.
 ///
@@ -79,7 +78,7 @@ impl FramingAdapter {
 /// workspace alive for the rest of the process. Moving the host field out
 /// instead would drop the workspace directory under a live runtime.
 async fn host(conversation: &str, scripts: Vec<Vec<FakeStep>>) -> RuntimeClientHost {
-    common::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
+    support::runtime_client_fixture::RuntimeClientFixture::builder(conversation)
         .scripts(scripts)
         .build()
         .await

@@ -18,9 +18,9 @@ use crate::message::types::{
     AgentContentBlock, InboundKind, MessageBlock, ToolMessageBlock, UserContentBlock,
     UserMessageBlock, UserSource,
 };
-use crate::model::adapter::ModelAdapter;
 use crate::model::event::ModelEvent;
-use crate::model::types::{ModelProtocol, ModelRequest, ReasoningEffort};
+use crate::model::invocation::ResolvedModelInvocation;
+use crate::model::types::ModelRequest;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::MessageId;
 
@@ -93,41 +93,38 @@ pub trait ContextSummarizer: Send + Sync {
     ) -> BoxFuture<'_, Result<String, ContextError>>;
 }
 
-/// The model configuration of one summary generation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SummaryModelConfig {
-    /// Provider model identifier.
-    pub model: String,
-    /// Canonical protocol.
-    pub protocol: ModelProtocol,
-    /// Reasoning effort.
-    pub reasoning: ReasoningEffort,
-    /// The runtime-resolved effective maximum output tokens, shared with the
-    /// execution; no adapter-local generation limit is invented.
-    pub max_output_tokens: u32,
-}
-
-/// The production-capable summarizer backed by the canonical model adapter.
+/// The production summarizer backed by an attempt's resolved summary model
+/// invocation.
+///
+/// The invocation is the attempt's frozen summary resolution — the primary
+/// invocation itself in `session` mode, or the separately resolved explicit
+/// summary invocation — optionally narrowed by the context plane's summary
+/// output safety cap. There is deliberately no independent "summary provider
+/// config" system and no production path that injects an unrelated
+/// summarizer beside the attempt's model.
 ///
 /// The summary request is a canonical one-off `ModelRequest`: no tools, no
-/// continuation, the execution's model/protocol/reasoning and runtime
-/// output budget, and a deterministic instruction plus the serialized
-/// request input. A refusal (with or without a `RefusalDelta`), a tool
-/// request, an invalid stream, a model failure, or an empty/whitespace-only
-/// output is a compaction failure, and any provider continuation emitted by
-/// the one-off request is discarded: summary activity never contaminates the
-/// attempt's continuation or usage state.
-pub struct ModelBackedSummarizer<'a> {
-    adapter: &'a dyn ModelAdapter,
-    config: SummaryModelConfig,
+/// Agent Status, no Skill catalog, no continuation, and a deterministic
+/// instruction plus the serialized request input. A refusal (with or without
+/// a `RefusalDelta`), a tool request, an invalid stream, a model failure, or
+/// an empty/whitespace-only output is a compaction failure, and any provider
+/// continuation emitted by the one-off request is discarded: summary
+/// activity never contaminates the attempt's continuation or usage state.
+pub struct ModelBackedSummarizer {
+    invocation: ResolvedModelInvocation,
 }
 
-impl<'a> ModelBackedSummarizer<'a> {
-    /// Creates a summarizer over the execution's adapter and model
-    /// configuration.
+impl ModelBackedSummarizer {
+    /// Creates a summarizer over one resolved summary invocation.
     #[must_use]
-    pub fn new(adapter: &'a dyn ModelAdapter, config: SummaryModelConfig) -> Self {
-        Self { adapter, config }
+    pub const fn new(invocation: ResolvedModelInvocation) -> Self {
+        Self { invocation }
+    }
+
+    /// The resolved invocation this summarizer sends with.
+    #[must_use]
+    pub const fn invocation(&self) -> &ResolvedModelInvocation {
+        &self.invocation
     }
 
     /// The deterministic summary instruction text.
@@ -153,7 +150,7 @@ impl<'a> ModelBackedSummarizer<'a> {
     }
 }
 
-impl ContextSummarizer for ModelBackedSummarizer<'_> {
+impl ContextSummarizer for ModelBackedSummarizer {
     fn summarize(
         &self,
         request: SummaryRequest,
@@ -170,8 +167,7 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                 timestamp: None,
             })];
             let model_request = ModelRequest {
-                model: self.config.model.clone(),
-                protocol: self.config.protocol,
+                invocation: self.invocation.invocation_config(),
                 messages,
                 tools: Vec::new(),
                 // Summary generation is not an inbound agent turn: it never
@@ -179,11 +175,12 @@ impl ContextSummarizer for ModelBackedSummarizer<'_> {
                 // attempt's Skill catalog attachment.
                 agent_status: None,
                 skill_catalog: None,
-                reasoning: self.config.reasoning,
-                max_output_tokens: self.config.max_output_tokens,
                 continuation: None,
             };
-            let mut stream = self.adapter.stream(model_request, cancellation);
+            let mut stream = self
+                .invocation
+                .adapter()
+                .stream(model_request, cancellation);
             let mut text = String::new();
             let mut state = SummaryStreamState::default();
             let mut finish_reason = None;
