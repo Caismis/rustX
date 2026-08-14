@@ -85,6 +85,8 @@ export class RustxTuiApp {
   #overlay: OverlayHandle | undefined;
   #quitting = false;
   #exitCode = 0;
+  #finished = false;
+  #started = false;
   #resolveExit: ((code: number) => void) | undefined;
 
   constructor(options: RustxTuiAppOptions) {
@@ -122,29 +124,41 @@ export class RustxTuiApp {
         `${error.message}\nThe runtime is no longer observable from this client.`,
       );
       this.#editor.disableSubmit = true;
-      this.#finish(this.#quitting ? this.#exitCode : 1);
+      if (!this.#quitting) {
+        this.#finish(1);
+      }
     });
   }
 
   /** Starts the terminal and resolves with the process exit code. */
   run(): Promise<number> {
-    this.#tui.start();
-    this.#tui.setFocus(this.#editor);
-    const state = this.#session.state;
-    if (state !== undefined) {
-      this.#renderState(state);
-    }
-    // Ctrl+C is a cancellation *intent*, routed through the protocol like any
-    // other; it never kills the runtime behind the runtime's back.
-    this.#tui.addInputListener((data) => {
-      if (matchesKey(data, "ctrl+c")) {
-        void this.#onInterrupt();
-        return { consume: true };
-      }
-      return undefined;
-    });
     return new Promise<number>((resolve) => {
       this.#resolveExit = resolve;
+      // The connection can become terminal before run() installs its waiter.
+      // #finish records that result, so startup never returns a promise that
+      // can no longer be resolved.
+      if (this.#finished) {
+        this.#resolveExit = undefined;
+        resolve(this.#exitCode);
+        return;
+      }
+
+      this.#started = true;
+      this.#tui.start();
+      this.#tui.setFocus(this.#editor);
+      const state = this.#session.state;
+      if (state !== undefined) {
+        this.#renderState(state);
+      }
+      // Ctrl+C is a cancellation *intent*, routed through the protocol like any
+      // other; it never kills the runtime behind the runtime's back.
+      this.#tui.addInputListener((data) => {
+        if (matchesKey(data, "ctrl+c")) {
+          void this.#onInterrupt();
+          return { consume: true };
+        }
+        return undefined;
+      });
     });
   }
 
@@ -199,7 +213,8 @@ export class RustxTuiApp {
    *
    * ```text
    * disable new input
-   *   -> shutdown          (the active attempt settles under runtime semantics)
+   *   -> shutdown          (canonical runtime request)
+   *   -> wait for the exact active AttemptSettled fact, when needed
    *   -> close stdin       (transport EOF, never cancellation)
    *   -> wait              (bounded process-level fallback if it overstays)
    * ```
@@ -215,15 +230,37 @@ export class RustxTuiApp {
     this.#editor.disableSubmit = true;
     this.#note("info", "shutting the runtime down…");
 
+    const attempt = this.#session.state?.attempt;
+    const unsettledAttemptId =
+      attempt !== undefined && attempt.phase.type !== "settled"
+        ? attempt.attemptId
+        : undefined;
+    let lifecycleFailure = false;
     try {
       await this.#session.shutdown();
     } catch (error) {
+      lifecycleFailure = true;
       this.#note("error", `shutdown request failed: ${(error as Error).message}`);
+    }
+
+    if (!lifecycleFailure && unsettledAttemptId !== undefined) {
+      try {
+        await this.#session.waitForAttemptSettlement(unsettledAttemptId);
+      } catch (error) {
+        lifecycleFailure = true;
+        this.#note(
+          "error",
+          `attempt settlement was not observed: ${(error as Error).message}`,
+        );
+      }
     }
 
     this.#child.closeStdin();
     const exit = await this.#child.waitOrTerminate(this.#terminationGraceMs);
-    this.#exitCode = exit.code ?? 0;
+    this.#exitCode = exit.code ?? 1;
+    if (lifecycleFailure && this.#exitCode === 0) {
+      this.#exitCode = 1;
+    }
     this.#finish(this.#exitCode);
   }
 
@@ -365,14 +402,21 @@ export class RustxTuiApp {
   }
 
   #finish(code: number): void {
-    const resolve = this.#resolveExit;
-    if (resolve === undefined) {
+    if (this.#finished) {
       return;
     }
+    this.#finished = true;
+    this.#exitCode = code;
+    const resolve = this.#resolveExit;
     this.#resolveExit = undefined;
     this.#loader.stop();
     this.#overlay?.hide();
-    this.#tui.stop();
+    if (this.#started) {
+      this.#tui.stop();
+    }
+    if (resolve === undefined) {
+      return;
+    }
     resolve(code);
   }
 }

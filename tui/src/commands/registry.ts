@@ -29,7 +29,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/model",
     description:
-      "Inspect the runtime-owned session model, or select one from the catalog.",
+      "Inspect the session model, or select one; selection resets primary overrides and preserves summary policy.",
     argumentHint: "[provider/model]",
   },
   {

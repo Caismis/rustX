@@ -183,13 +183,23 @@ export class CommandDispatcher {
    * simply reports both facts truthfully.
    */
   async selectModel(model: CatalogModelView): Promise<CommandOutcome> {
-    const updated = await this.#context.session.modelSet({
+    const current = this.#context.session.state?.sessionModel.configured;
+    if (current === undefined) {
+      return { kind: "message", level: "error", text: "not attached yet" };
+    }
+
+    // `/model X` is a deliberate whole-state replacement: the selected
+    // primary model gets its own runtime defaults, while the independently
+    // configured summary policy is copied from the authoritative current
+    // configuration unchanged.
+    const replacement = {
       model: model.model,
-      // The default profile is what the runtime itself would select; naming
-      // it explicitly is not a client-side reasoning policy.
-      ...(model.defaultReasoningProfile === undefined
-        ? {}
-        : { reasoningProfile: model.defaultReasoningProfile }),
+      reasoningProfile: model.defaultReasoningProfile,
+      requestParams: {},
+      summaryModel: current.summaryModel,
+    };
+    const updated = await this.#context.session.modelSet({
+      ...replacement,
     });
 
     const attempt = this.#context.session.state?.attempt;
@@ -198,7 +208,7 @@ export class CommandDispatcher {
         ? `\nThe running attempt stays on ${attempt.model.primary.model}; the change applies to the next attempt.`
         : "";
     return info(
-      `session model is now ${updated.configured.model}\n${capabilitySummary(updated.effective)}${note}`,
+      `session model is now ${updated.configured.model}\nprimary overrides reset to the selected model defaults; summary model policy preserved\n${capabilitySummary(updated.effective)}${note}`,
     );
   }
 

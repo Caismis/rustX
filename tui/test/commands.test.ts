@@ -218,7 +218,27 @@ describe("CommandDispatcher", () => {
   });
 
   it("changes the model only through model_catalog_get + model_set", async () => {
-    const { peer, dispatcher } = await harness();
+    const summaryPolicy = {
+      mode: "explicit" as const,
+      model: "summary/model-s",
+      reasoning_profile: "compact",
+      request_params: { summary_tag: "keep" },
+      max_output_tokens: 300,
+    };
+    const { peer, dispatcher } = await harness(
+      snapshot({
+        model: {
+          ...sessionModel("alpha/model-a"),
+          configured: {
+            model: "alpha/model-a",
+            reasoningProfile: "on",
+            requestParams: { temperature: 0.2 },
+            maxOutputTokens: 777,
+            summaryModel: summaryPolicy,
+          },
+        },
+      }),
+    );
     const changing = dispatcher.submit("/model beta/model-b");
 
     const afterCatalog = await peer.awaitRequests(3);
@@ -248,6 +268,7 @@ describe("CommandDispatcher", () => {
               toolCalls: true,
               reasoning: false,
             },
+            defaultReasoningProfile: "off",
             credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
         ],
@@ -257,9 +278,13 @@ describe("CommandDispatcher", () => {
     const afterSet = await peer.awaitRequests(4);
     const modelSet = afterSet[3];
     assert.equal(modelSet?.method, "model_set");
-    // A whole-state replacement, never a patch.
+    // A deliberate whole-state replacement: primary overrides reset, while
+    // the independent summary policy survives exactly.
     assert.deepEqual(modelSet?.method === "model_set" ? modelSet.config : null, {
       model: "beta/model-b",
+      reasoningProfile: "off",
+      requestParams: {},
+      summaryModel: summaryPolicy,
     });
     peer.respond(4, { type: "model_set", model: sessionModel("beta/model-b") });
 
@@ -267,6 +292,8 @@ describe("CommandDispatcher", () => {
     assert.equal(outcome.kind, "message");
     if (outcome.kind === "message") {
       assert.match(outcome.text, /session model is now beta\/model-b/);
+      assert.match(outcome.text, /primary overrides reset/);
+      assert.match(outcome.text, /summary model policy preserved/);
     }
   });
 
