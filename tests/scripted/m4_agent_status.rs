@@ -2226,20 +2226,104 @@ fn model_layer_has_no_context_dependency() {
 
 /// No adapter or summarizer test seam is published API.
 ///
-/// The two files that own the seams — the context runtime bundle and the
-/// model binding registry — declare no `#[doc(hidden)]` item at all, so a
-/// seam cannot be reintroduced as a hidden-but-callable one, and `src/`
-/// declares no fixture module outside the feature-gated MCP server fixture.
-/// Substituting a provider adapter or a summary service is `#[cfg(test)]
-/// pub(crate)` and reachable only from this crate's own test build.
+/// Substituting a provider adapter or a summary service must be a
+/// `#[cfg(test)] pub(crate)` seam: it then does not exist in a release build
+/// and no consumer of the library can call it. The published API is exactly
+/// [`ModelBindingRegistry::new`](rustx::model::ModelBindingRegistry::new) and
+/// [`ContextRuntime::for_attempt`](rustx::context::ContextRuntime::for_attempt).
+///
+/// The checks are deliberately bounded source-level repository invariants —
+/// each seam is declared exactly once, in its owning file, carrying both
+/// `#[cfg(test)]` and `pub(crate)`; no seam name is ever declared `pub`; the
+/// superseded names are gone entirely; the seam owners hide nothing behind
+/// `#[doc(hidden)]`; and the model layer publishes no fixture module.
 #[test]
 fn no_published_adapter_or_summarizer_seam_exists() {
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for owner in [
-        std::path::Path::new("context").join("mod.rs"),
-        std::path::Path::new("model").join("invocation.rs"),
+    let mut files = Vec::new();
+    collect_rs_files(&src, &mut files);
+    assert!(!files.is_empty(), "runtime sources must exist");
+    let sources: Vec<(std::path::PathBuf, String)> = files
+        .into_iter()
+        .map(|file| {
+            let source = std::fs::read_to_string(&file).expect("read runtime source");
+            (file, source)
+        })
+        .collect();
+
+    // Each seam is declared exactly once, in its owning file, as
+    // `#[cfg(test)] pub(crate)`.
+    let context_owner = std::path::Path::new("context").join("mod.rs");
+    let model_owner = std::path::Path::new("model").join("invocation.rs");
+    for (owner, item) in [
+        (&context_owner, "fn with_scripted_summarizer"),
+        (&model_owner, "fn new_with_scripted_adapters"),
+        (&model_owner, "trait ScriptedProviderAdapterFactory"),
     ] {
-        let source = std::fs::read_to_string(src.join(&owner)).expect("read seam owner");
+        let declarations = declarations_of(&sources, item);
+        assert_eq!(
+            declarations.len(),
+            1,
+            "{item} must be declared exactly once, in src/{}",
+            owner.display()
+        );
+        let (file, declaration) = &declarations[0];
+        assert!(
+            file.ends_with(owner),
+            "{item} must be declared in src/{}, found in {}",
+            owner.display(),
+            file.display()
+        );
+        assert!(
+            declaration.text.starts_with("pub(crate) "),
+            "{item} must be pub(crate), found: {}",
+            declaration.text
+        );
+        assert!(
+            declaration.cfg_test,
+            "{item} must be gated behind #[cfg(test)], found: {}",
+            declaration.text
+        );
+    }
+
+    // No seam name, superseded or current, is ever declared `pub`.
+    for item in [
+        "fn with_test_summarizer",
+        "fn with_scripted_summarizer",
+        "fn new_with_test_factory",
+        "fn new_with_scripted_adapters",
+        "trait TestProviderAdapterFactory",
+        "trait ScriptedProviderAdapterFactory",
+    ] {
+        for (file, declaration) in declarations_of(&sources, item) {
+            assert!(
+                !declaration.text.starts_with("pub "),
+                "{} declares {item} as published API: {}",
+                file.display(),
+                declaration.text
+            );
+        }
+    }
+
+    // The superseded seam names are gone from the runtime sources entirely.
+    for name in [
+        "with_test_summarizer",
+        "new_with_test_factory",
+        "TestProviderAdapterFactory",
+    ] {
+        for (file, source) in &sources {
+            assert!(
+                !source.contains(name),
+                "{} still references the superseded seam {name}",
+                file.display()
+            );
+        }
+    }
+
+    // A seam owner hides nothing: `#[doc(hidden)]` removes an item from the
+    // documentation, never from the API a consumer can call.
+    for owner in [&context_owner, &model_owner] {
+        let source = std::fs::read_to_string(src.join(owner)).expect("read seam owner");
         assert!(
             !source.contains("doc(hidden)"),
             "src/{} must not hide a public item: a test seam is \
@@ -2248,21 +2332,86 @@ fn no_published_adapter_or_summarizer_seam_exists() {
         );
     }
 
-    let mut files = Vec::new();
-    collect_rs_files(&src, &mut files);
-    assert!(!files.is_empty(), "runtime sources must exist");
-    for file in files {
-        let source = std::fs::read_to_string(&file).expect("read runtime source");
-        for declaration in ["pub mod fixture;", "pub(crate) mod fixture;"] {
+    // The model layer publishes no fixture module, and the runtime sources
+    // declare no fixture module beyond the feature-gated MCP protocol
+    // *server* fixture, which is not an injection seam.
+    assert!(
+        !src.join("model").join("fixture.rs").exists(),
+        "src/model/fixture.rs must not exist: model fixtures are test-only"
+    );
+    for (file, source) in &sources {
+        if file.ends_with(std::path::Path::new("tools").join("mcp").join("mod.rs")) {
+            continue;
+        }
+        for line in source.lines() {
+            let text = line.trim();
             assert!(
-                // The MCP fixture is a feature-gated protocol *server*, not an
-                // injection seam, and stays out of every default build.
-                !source.contains(declaration) || file.ends_with("tools/mcp/mod.rs"),
-                "{} declares a fixture module in the runtime sources",
+                text.starts_with("//") || !text.ends_with("mod fixture;"),
+                "{} declares a fixture module in the runtime sources: {text}",
                 file.display()
             );
         }
     }
+}
+
+/// One item declaration found in the runtime sources.
+struct SeamDeclaration {
+    /// The declaration line, trimmed.
+    text: String,
+    /// Whether the attribute block directly above it contains `#[cfg(test)]`.
+    cfg_test: bool,
+}
+
+/// Every declaration of `item` in the runtime sources.
+///
+/// `item` is the declaration keyword plus the name (`fn foo`, `trait Bar`),
+/// so a mention in a comment, an import, or a call site never matches.
+fn declarations_of<'a>(
+    sources: &'a [(std::path::PathBuf, String)],
+    item: &str,
+) -> Vec<(&'a std::path::Path, SeamDeclaration)> {
+    let mut found = Vec::new();
+    for (file, source) in sources {
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            let text = line.trim();
+            if text.starts_with("//") || !declares(text, item) {
+                continue;
+            }
+            let mut cfg_test = false;
+            for above in lines[..index].iter().rev() {
+                let above = above.trim();
+                if above.starts_with("//") {
+                    continue;
+                }
+                if !above.starts_with("#[") {
+                    break;
+                }
+                if above == "#[cfg(test)]" {
+                    cfg_test = true;
+                }
+            }
+            found.push((
+                file.as_path(),
+                SeamDeclaration {
+                    text: text.to_owned(),
+                    cfg_test,
+                },
+            ));
+        }
+    }
+    found
+}
+
+/// Whether one source line declares `item` rather than merely naming it.
+///
+/// The character after the name must end it, so `fn new_with_x` never matches
+/// `fn new_with_x_extended`.
+fn declares(line: &str, item: &str) -> bool {
+    line.find(item).is_some_and(|start| {
+        let rest = &line[start + item.len()..];
+        rest.is_empty() || rest.starts_with(['(', '<', ':', ' '])
+    })
 }
 
 /// The old ambiguous request contract is gone: `AgentExecutionRequest` has an

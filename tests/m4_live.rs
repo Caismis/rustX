@@ -125,7 +125,10 @@ async fn live_step(
         &snapshot,
     )
     .expect("live context runtime");
-    let tool_runtime = common::tool_runtime("conv-1");
+    // One conversation identity authority: the tool runtime is built from the
+    // same value the request carries, so `AgentExecution` construction proves
+    // ownership rather than failing its `ConversationMismatch` validation.
+    let tool_runtime = common::tool_runtime(conversation_id().as_str());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     AgentExecution::new(
         request,
