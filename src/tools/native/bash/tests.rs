@@ -41,13 +41,15 @@ fn invocation(command: &str) -> ToolInvocation {
     }
 }
 
-fn invocation_with_timeout(command: &str, timeout_ms: u64) -> ToolInvocation {
+/// The model-facing Bash deadline is measured in seconds; the tool
+/// boundary converts it to the internal `Duration`.
+fn invocation_with_timeout(command: &str, timeout_seconds: u64) -> ToolInvocation {
     ToolInvocation {
         call_id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-bash"),
         tool_name: NAME.to_owned(),
         mode: ToolInvocationMode::Foreground,
-        arguments: serde_json::json!({"command": command, "timeout_ms": timeout_ms}),
+        arguments: serde_json::json!({"command": command, "timeout": timeout_seconds}),
     }
 }
 
@@ -77,7 +79,7 @@ async fn run_with_control(
     cancellation: CancellationSignal,
     artifacts: ArtifactStore,
     workspace: Workspace,
-    timeout_ms: Option<u64>,
+    timeout_seconds: Option<u64>,
 ) -> ToolExecutionResult {
     let tool = BashTool::with_test_control(control);
     let reporter = NoopProgress;
@@ -90,8 +92,8 @@ async fn run_with_control(
         artifacts: &artifacts,
         environment: &ToolEnvironment::new(),
     };
-    let invocation = match timeout_ms {
-        Some(ms) => invocation_with_timeout(&command, ms),
+    let invocation = match timeout_seconds {
+        Some(seconds) => invocation_with_timeout(&command, seconds),
         None => invocation(&command),
     };
     tool.execute(invocation, context).await
@@ -298,7 +300,7 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
             CancellationSignal::new(),
             artifacts,
             workspace,
-            Some(500),
+            Some(1),
         ),
     )
     .await
@@ -1055,7 +1057,7 @@ async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
         CancellationSignal::new(),
         artifacts.clone(),
         workspace.clone(),
-        Some(800),
+        Some(1),
     ));
     // 1. The exact boundary: the shell exited after waiting for A; the
     //    executor is parked before any settlement handling.
@@ -1133,7 +1135,7 @@ async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
             CancellationSignal::new(),
             artifacts,
             workspace,
-            Some(10_000),
+            Some(10),
         ),
     )
     .await
@@ -1194,7 +1196,7 @@ async fn setsid_escape_attempt_times_out_with_the_owned_group() {
             CancellationSignal::new(),
             artifacts,
             workspace,
-            Some(500),
+            Some(1),
         ),
     )
     .await
@@ -1319,7 +1321,7 @@ async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
         CancellationSignal::new(),
         artifacts.clone(),
         workspace.clone(),
-        Some(800),
+        Some(1),
     ));
     // 1. The exact shell-exit boundary: the main shell exited after
     //    backgrounding A; the executor is parked before any settlement

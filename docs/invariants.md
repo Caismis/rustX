@@ -572,6 +572,82 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - Native filesystem tools and Bash operate only inside the canonical
   workspace: relative UTF-8 paths, no absolute paths, no lexical `..`
   escape, and symlinks resolving only to targets inside the canonical root.
+- The model-facing contracts of the six ordinary native tools follow
+  established Pi coding-agent conventions — `read {path, offset?, limit?}`,
+  `write {path, content}`, `edit {path, edits:[{oldText, newText}]}`,
+  `glob {pattern, path?}`,
+  `grep {pattern, path?, glob?, ignoreCase?, literal?, context?, limit?}`,
+  `bash {command, timeout?}` — while execution semantics stay rustX-owned.
+  Adopting the schema convention never imports another agent's runtime,
+  subprocess model, permission system, ignore behavior, or result ordering,
+  and `path` is never renamed to `file_path`. There are no legacy aliases:
+  the obsolete `start_line`/`line_count`, `old_text`/`new_text`/
+  `replace_all`, `case_sensitive`, and `timeout_ms` spellings are unknown
+  fields, rejected before dispatch.
+- **One Edit invocation is one atomic transformation from one original file
+  snapshot to one final file snapshot.** Every `oldText` is resolved against
+  that same original snapshot — never against the result of an earlier edit
+  in the same call — and must identify exactly one range; zero matches and
+  ambiguous matches are deterministic failures. The complete replacement
+  range set is computed and validated before any mutation, and intersecting,
+  nested, and coinciding ranges are all rejected. Validated disjoint ranges
+  are ordered by position, so input edit ordering can never change the
+  result, and the final snapshot is committed as exactly one file mutation
+  through the plane's single atomic commit. Any validation failure leaves
+  the file byte-for-byte unchanged. There is no sequential-application mode
+  and no replace-all mode.
+- **Glob and Grep observe one shared workspace file universe.** The private
+  `tools/native/search/` substrate — not either tool, and not a traversal
+  crate's defaults — owns that policy: search-root containment through the
+  `Workspace` boundary, hidden files visible, ignore files (`.gitignore`,
+  `.ignore`, git global excludes, `.git/info/exclude`) deliberately not
+  applied, symlinks never followed (neither directory-symlink recursion nor
+  a file symlink's target enters the universe), normalized root-relative
+  paths, and deterministic lexical enumeration. A caller filter — Glob's
+  `pattern`, Grep's optional `glob` — only narrows that shared set; neither
+  tool can reach a file the other cannot see. The substrate is not a tool:
+  it is never registered, never model-facing, and never a generic
+  search-provider framework.
+- Native search is linked, never spawned: `ignore`, `globset`,
+  `grep-regex`, and `grep-searcher` are implementation dependencies of the
+  shared substrate and of the Grep engine. The runtime never depends on a
+  system-installed or vendored `rg` executable, none of those crates'
+  defaults are part of a model-facing contract, and `grep-searcher` never
+  owns workspace traversal — it only decides how matching happens inside a
+  file the substrate handed it.
+- Glob and Grep results are deterministically ordered and bounded: Glob
+  returns lexically ordered root-relative paths (never mtime-ranked), Grep
+  returns matches ordered by path, then line, then column, with several
+  matches on one line reported separately in column order. Grep context
+  windows merge as a set union — every source line appears exactly once and
+  a matching line is never also reported as context. Both enforce a result
+  count cap and a hard payload byte cap, and both report truncation
+  explicitly; results are never dropped silently.
+- The Glob/Grep payload cap bounds the **actually serialized** model-facing
+  JSON, never an estimate of it. Each candidate entry is charged its own
+  serialization plus its array separator on top of a measured envelope, and
+  is admitted only when the complete document still fits, so JSON escaping
+  of quotes, backslashes, and control characters inside a path or a matched
+  line can never deliver more than `MAX_MODEL_TOOL_RESULT_BYTES` to the
+  model. Grep's `matches` and `context` arrays share one budget. The count
+  cap is evaluated before the byte budget, so which entries survive
+  truncation depends only on the deterministic ordering.
+- Grep distinguishes a content policy from an execution failure. A file
+  whose bytes are not valid UTF-8 is not searched, contributes no matches,
+  and is not an error — binary content is never fabricated as text. A file
+  the shared traversal enumerated but that cannot be *read* is an explicit
+  Grep failure naming the path: silently reporting it as "no matches" would
+  remove a file from the searched universe without telling the caller.
+- The model-facing Bash `timeout` is measured in **seconds** and is
+  converted to the internal `Duration` at the Bash input-contract boundary.
+  No unit conversion exists anywhere below it: the executor, supervisor,
+  process-group lifecycle, cancellation, timeout settlement, descendant
+  termination, and output capture keep their existing native representation.
+- `background_task` is a runtime intrinsic that participates in the common
+  tool execution plane; it is not an ordinary native tool. Its contract and
+  runtime semantics are outside the ordinary-native-tool contract
+  alignment, and it is never moved, renamed, or re-schema'd to make the
+  native tool directory look uniform.
 - Model-facing output is bounded by named limits; full Bash output is
   spooled to the conversation artifact store (opaque monotonic
   `artifact_N` ids outside the model workspace) while bounded head/tail

@@ -83,8 +83,16 @@ tools/native/             the native tool plane: one module per native
                            schema, executor, and private helpers;
                            registration.rs owns the NativeToolRegistration
                            pair and schema generation, input.rs the typed
-                           input boundary, and mod.rs only composes the
-                           known native tools
+                           input boundary, support.rs the shared failed/
+                           success results and the one atomic file commit,
+                           and mod.rs only composes the known native tools
+tools/native/search/      the private native-search substrate shared by
+                           Glob and Grep: the one workspace file-universe
+                           policy (containment, traversal, hidden-file
+                           visibility, ignore-file behavior, symlink
+                           policy, normalized relative paths, deterministic
+                           enumeration) — not a tool, never registered,
+                           never a generic search-provider framework
 tools/native/bash/        the Bash subsystem: registration (mod.rs), the
                            invocation lifecycle executor (executor.rs), the
                            output capture half (capture.rs), and the
@@ -638,6 +646,86 @@ and private helpers, and constructs itself through its own
 native tools. Composition stays explicit and deterministic: no discovery,
 no plugin loading, no registration macros, no generic tool factory.
 
+##### Model-facing ordinary native tool contracts
+
+The model-facing schemas of the six *ordinary* native tools follow
+established Pi coding-agent conventions rather than rustX-specific
+parameter vocabulary, so a model trained around modern coding agents
+recognizes the surface immediately:
+
+```text
+read   { path, offset?, limit? }              offset is 1-based (default 1),
+                                              limit defaults to 200 lines
+write  { path, content }
+edit   { path, edits: [{ oldText, newText }] }
+glob   { pattern, path? }
+grep   { pattern, path?, glob?, ignoreCase?, literal?, context?, limit? }
+bash   { command, timeout? }                  timeout is in seconds
+```
+
+Adopting those conventions is a *schema* decision only. It does not import
+Pi's runtime, subprocess model, permission system, ignore behavior, result
+ordering, or remote-operations abstractions: execution semantics stay
+explicitly rustX-owned, and where a rustX contract and an external
+implementation disagree, the rustX contract wins.
+
+Four consequences are load-bearing:
+
+- **Write is intentionally unchanged.** `path` + `content` was already the
+  right contract, so it does not churn for symmetry. In particular `path` is
+  never renamed to `file_path` anywhere in the plane.
+- **Edit is an atomic multi-edit against one original file snapshot.** One
+  invocation reads one snapshot, resolves *every* `oldText` against that
+  same snapshot (never against the result of an earlier edit in the same
+  call), requires each to identify exactly one range, computes the whole
+  replacement range set before mutating anything, rejects intersecting,
+  nested, and coinciding ranges, orders the validated disjoint ranges by
+  position, and commits one final snapshot through the plane's single
+  atomic file commit. Input edit ordering therefore cannot change the
+  result, and any validation failure leaves the file byte-for-byte
+  unchanged. There is no sequential-application mode and no replace-all
+  mode.
+- **Glob and Grep share one search substrate.** `tools/native/search/` owns
+  the single workspace file-universe policy both observe: search-root
+  containment through the `Workspace` boundary, hidden files visible,
+  ignore files (`.gitignore`, `.ignore`, git global excludes,
+  `.git/info/exclude`) deliberately *not* applied, symlinks never followed
+  (so neither a directory symlink recursion nor a file symlink target can
+  enter the universe), normalized root-relative paths, and deterministic
+  lexical enumeration. A caller filter — Glob's `pattern`, Grep's optional
+  `glob` — only ever narrows that shared set. The `ignore`, `globset`,
+  `grep-regex`, and `grep-searcher` crates are implementation dependencies
+  of that substrate and of the Grep engine; no `rg` executable is ever
+  spawned, none of those crates' defaults are part of the tool contract, and
+  `grep-searcher` never owns workspace traversal.
+- **Bash converts its unit at the tool boundary.** The model-facing
+  `timeout` is measured in seconds and is converted to the internal
+  `Duration` in the Bash input contract. Nothing below that boundary — the
+  executor, the supervisor, process-group lifecycle, cancellation, timeout
+  settlement, descendant termination, output capture — changes, and no unit
+  conversion spreads into the process plane.
+
+Deterministic ordering and bounded output remain rustX-owned semantics in
+all cases: Glob returns lexically ordered paths (never mtime-ranked), Grep
+returns matches ordered by path, then line, then column, both enforce a
+result count cap and a hard payload byte cap with explicit truncation
+state, and neither ever drops results silently.
+
+The payload cap bounds the **actually serialized** model-facing JSON, not an
+estimate of it. Each candidate entry is charged its own serialization plus
+its array separator on top of a measured envelope, and an entry is admitted
+only if the whole document still fits, so JSON escaping inside a path or a
+matched line cannot push the delivered payload past
+`MAX_MODEL_TOOL_RESULT_BYTES`. Grep's `matches` and `context` arrays share
+that one budget. The count cap is evaluated before the byte budget, so which
+entries survive truncation stays a function of the deterministic ordering
+alone rather than of how expensive a particular entry is to encode.
+
+`background_task` is a runtime intrinsic that happens to participate in the
+common tool execution plane. It is not an ordinary native tool, its contract
+and runtime semantics are outside this alignment, and it is never moved,
+renamed, or re-schema'd to make `tools/native/` look uniform.
+
 Native tool input schemas are generated from tool-owned Rust input types,
 so the typed contract is the single source of truth for the model-facing
 arguments:
@@ -653,7 +741,7 @@ validating every invocation against the stored canonical schema before
 dispatch. An optional native property means an *absent* property: the
 native schema-generation boundary collapses the nullable union that
 `Option<T>` would otherwise produce for a field that only expresses
-omission, so `{"timeout_ms": null}` is a business argument violation
+omission, so `{"timeout": null}` is a business argument violation
 rejected at preflight rather than a second spelling of omission. This is a
 rule about implicit nullability, not a restriction on the schema language:
 a native contract that genuinely needs a composite or nullable model-facing

@@ -43,6 +43,10 @@ mod grep;
 mod input;
 mod read;
 mod registration;
+// The private native-search substrate shared by Glob and Grep. It is not a
+// tool: it is never registered, never reaches the model, and exists only
+// because Glob and Grep must observe one filesystem universe.
+mod search;
 mod support;
 mod write;
 

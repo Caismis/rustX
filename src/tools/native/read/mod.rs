@@ -1,11 +1,11 @@
 //! Native Read tool (M5).
 //!
-//! Reads a UTF-8 text file with deterministic line slicing. `start_line` is
-//! 1-based and `line_count` bounds the number of lines; both are optional.
-//! Output is bounded by [`MAX_MODEL_TOOL_RESULT_BYTES`]; invalid UTF-8 or
-//! binary input fails explicitly rather than fabricating text. Path
-//! resolution goes through the workspace contract — nothing outside the
-//! workspace is ever read.
+//! Reads a UTF-8 text file with a deterministic line window. `offset` is the
+//! 1-based first line and `limit` bounds the number of lines; both are
+//! optional and default to `offset = 1`, `limit = 200`. Output is bounded by
+//! [`MAX_MODEL_TOOL_RESULT_BYTES`]; invalid UTF-8 or binary input fails
+//! explicitly rather than fabricating text. Path resolution goes through the
+//! workspace contract — nothing outside the workspace is ever read.
 //!
 //! The model-facing argument contract is the typed [`ReadInput`]; the
 //! canonical schema is generated from it.
@@ -34,7 +34,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<ReadInput>(
             "tool-read",
             NAME,
-            "Read a UTF-8 text file inside the workspace with 1-based line slicing.",
+            "Read a UTF-8 text file inside the workspace. Returns a line window starting at the \
+             1-based offset (default 1) of at most limit lines (default 200).",
             policy,
         ),
         std::sync::Arc::new(ReadTool),
@@ -62,7 +63,7 @@ fn run_read(
         Ok(input) => input,
         Err(error) => return failed(error),
     };
-    let (start_line, line_count) = (input.start_line(), input.line_count());
+    let (offset, limit) = (input.offset(), input.limit());
     let resolved = match context.workspace.resolve(&input.path) {
         Ok(resolved) => resolved,
         Err(error) => return failed(error.to_string()),
@@ -80,7 +81,7 @@ fn run_read(
         ));
     };
     let lines: Vec<&str> = text.lines().collect();
-    let slice = slice_lines(&lines, start_line, line_count);
+    let slice = line_window(&lines, offset, limit);
     let output = slice.join("\n");
     let (preview, truncated) = bounded_text_preview(output.as_bytes(), MAX_MODEL_TOOL_RESULT_BYTES);
     ToolExecutionResult {
@@ -98,18 +99,20 @@ fn run_read(
     }
 }
 
-/// Deterministic 1-based line slicing: `start_line` selects the first line
-/// (1 = first line) and `line_count` bounds the number of selected lines.
-fn slice_lines<'a>(lines: &'a [&'a str], start_line: u64, line_count: u64) -> Vec<&'a str> {
-    if start_line == 0 {
+/// The deterministic 1-based line window: `offset` selects the first line
+/// (1 = the first line of the file) and `limit` bounds how many lines the
+/// window contains. An offset past the end of the file yields an empty
+/// window rather than an error.
+fn line_window<'a>(lines: &'a [&'a str], offset: u64, limit: u64) -> Vec<&'a str> {
+    if offset == 0 {
         return Vec::new();
     }
-    let start = usize::try_from(start_line.saturating_sub(1)).unwrap_or(usize::MAX);
+    let start = usize::try_from(offset.saturating_sub(1)).unwrap_or(usize::MAX);
     if start >= lines.len() {
         return Vec::new();
     }
     let end = start
-        .saturating_add(usize::try_from(line_count).unwrap_or(usize::MAX))
+        .saturating_add(usize::try_from(limit).unwrap_or(usize::MAX))
         .min(lines.len());
     lines[start..end].to_vec()
 }

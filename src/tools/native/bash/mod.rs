@@ -151,8 +151,8 @@ pub(super) fn registration(policy: ToolInvocationPolicy) -> NativeToolRegistrati
         native_definition::<BashInput>(
             "tool-bash",
             NAME,
-            "Run one non-interactive /bin/bash command inside the workspace with an explicit \
-             environment and supervised process ownership.",
+            "Run one non-interactive /bin/bash command inside the workspace. No shell state \
+             survives between calls. The optional timeout is in seconds.",
             policy,
         ),
         std::sync::Arc::new(BashTool::new()),

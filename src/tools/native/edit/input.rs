@@ -11,14 +11,29 @@ use crate::tools::native::input::decode;
 pub(super) struct EditInput {
     /// The workspace-relative path of the file to edit.
     pub path: String,
-    /// The exact text to replace; never a fuzzy or semantic match.
+    /// The replacements to apply. Every replacement is matched against the
+    /// file as it was before this call, and all of them are applied together
+    /// as one change.
     #[schemars(length(min = 1))]
+    pub edits: Vec<EditReplacement>,
+}
+
+/// One exact-text replacement of an [`EditInput`].
+///
+/// The model-facing JSON names are `oldText` and `newText`; the Rust field
+/// names stay idiomatic and the serde/schema rename is the contract.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EditReplacement {
+    /// The exact text to replace. It must occur exactly once in the file;
+    /// never a fuzzy or semantic match.
+    #[serde(rename = "oldText")]
+    #[schemars(rename = "oldText", length(min = 1))]
     pub old_text: String,
-    /// The replacement text.
+    /// The text that replaces it.
+    #[serde(rename = "newText")]
+    #[schemars(rename = "newText")]
     pub new_text: String,
-    /// Whether every exact match is replaced instead of exactly one.
-    #[serde(default)]
-    pub replace_all: bool,
 }
 
 impl EditInput {
@@ -34,13 +49,24 @@ impl EditInput {
         Ok(input)
     }
 
-    /// The tool-specific semantic rule of the replacement anchor: an empty
-    /// `old_text` has no exact match semantics at all. The generated schema
-    /// states the same constraint, so this rule also holds for a direct
-    /// executor call.
+    /// The tool-specific semantic rules of the edit set. The generated
+    /// schema states the same two constraints, so they also hold for a
+    /// direct executor call that bypasses the registry preflight.
+    ///
+    /// An empty edit set describes no transformation at all, and an empty
+    /// `oldText` has no exact-match semantics at all.
     fn validate(&self) -> Result<(), String> {
-        if self.old_text.is_empty() {
-            return Err("edit requires a non-empty old_text".to_owned());
+        if self.edits.is_empty() {
+            return Err("edit requires at least one replacement".to_owned());
+        }
+        if let Some(index) = self
+            .edits
+            .iter()
+            .position(|replacement| replacement.old_text.is_empty())
+        {
+            return Err(format!(
+                "edit requires a non-empty oldText; edits[{index}] is empty"
+            ));
         }
         Ok(())
     }

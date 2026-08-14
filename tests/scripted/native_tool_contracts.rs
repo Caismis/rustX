@@ -141,15 +141,17 @@ fn generated_native_schemas_are_canonical_root_object_schemas() {
 /// is the right model-facing contract — the invariant only forbids picking
 /// up nullability *implicitly* from a Rust field that exists to express
 /// omission.
-const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 8] = [
-    ("read", "start_line", "integer"),
-    ("read", "line_count", "integer"),
-    ("edit", "replace_all", "boolean"),
+const OPTIONAL_NATIVE_PROPERTIES: [(&str, &str, &str); 10] = [
+    ("read", "offset", "integer"),
+    ("read", "limit", "integer"),
     ("glob", "path", "string"),
     ("grep", "path", "string"),
     ("grep", "glob", "string"),
-    ("grep", "case_sensitive", "boolean"),
-    ("bash", "timeout_ms", "integer"),
+    ("grep", "ignoreCase", "boolean"),
+    ("grep", "literal", "boolean"),
+    ("grep", "context", "integer"),
+    ("grep", "limit", "integer"),
+    ("bash", "timeout", "integer"),
 ];
 
 /// Each current optional native property means the property may be
@@ -220,30 +222,44 @@ fn explicit_null_is_rejected_for_optional_native_properties() {
         serde_json::Value,
         serde_json::Value,
         serde_json::Value,
-    ); 8] = [
-        // Optional integers (Option<u64>).
+    ); 10] = [
+        // Optional integers (Option<u64> / Option<u32>).
         (
             "read",
-            "start_line",
+            "offset",
             serde_json::json!({"path": "a.txt"}),
-            serde_json::json!({"path": "a.txt", "start_line": 3}),
-            serde_json::json!({"path": "a.txt", "start_line": null}),
+            serde_json::json!({"path": "a.txt", "offset": 3}),
+            serde_json::json!({"path": "a.txt", "offset": null}),
         ),
         (
             "read",
-            "line_count",
+            "limit",
             serde_json::json!({"path": "a.txt"}),
-            serde_json::json!({"path": "a.txt", "line_count": 5}),
-            serde_json::json!({"path": "a.txt", "line_count": null}),
+            serde_json::json!({"path": "a.txt", "limit": 5}),
+            serde_json::json!({"path": "a.txt", "limit": null}),
+        ),
+        (
+            "grep",
+            "context",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "context": 2}),
+            serde_json::json!({"pattern": "x", "context": null}),
+        ),
+        (
+            "grep",
+            "limit",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "limit": 10}),
+            serde_json::json!({"pattern": "x", "limit": null}),
         ),
         (
             "bash",
-            "timeout_ms",
+            "timeout",
             serde_json::json!({"command": "true"}),
-            serde_json::json!({"command": "true", "timeout_ms": 1000}),
-            serde_json::json!({"command": "true", "timeout_ms": null}),
+            serde_json::json!({"command": "true", "timeout": 30}),
+            serde_json::json!({"command": "true", "timeout": null}),
         ),
-        // Optional strings (defaulted search parameters).
+        // Optional strings (search-root and file filters).
         (
             "glob",
             "path",
@@ -265,20 +281,20 @@ fn explicit_null_is_rejected_for_optional_native_properties() {
             serde_json::json!({"pattern": "x", "glob": "**/*.rs"}),
             serde_json::json!({"pattern": "x", "glob": null}),
         ),
-        // Optional booleans (defaulted flags).
+        // Optional booleans (search-mode flags).
         (
             "grep",
-            "case_sensitive",
+            "ignoreCase",
             serde_json::json!({"pattern": "x"}),
-            serde_json::json!({"pattern": "x", "case_sensitive": false}),
-            serde_json::json!({"pattern": "x", "case_sensitive": null}),
+            serde_json::json!({"pattern": "x", "ignoreCase": true}),
+            serde_json::json!({"pattern": "x", "ignoreCase": null}),
         ),
         (
-            "edit",
-            "replace_all",
-            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"}),
-            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": true}),
-            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b", "replace_all": null}),
+            "grep",
+            "literal",
+            serde_json::json!({"pattern": "x"}),
+            serde_json::json!({"pattern": "x", "literal": true}),
+            serde_json::json!({"pattern": "x", "literal": null}),
         ),
     ];
     for (tool, property, absent, present, null) in &cases {
@@ -334,15 +350,16 @@ fn preflight(
 }
 
 /// The generated Read schema is exactly the `ReadInput` contract: one
-/// required path, two optional bounded line-window fields.
+/// required path plus the optional bounded `offset`/`limit` line window.
+/// The obsolete `start_line`/`line_count` spelling is gone, not aliased.
 #[test]
 fn read_schema_matches_its_input_contract() {
     let fixture = common::native_fixture();
     let schema = definition(&fixture, "read").input_schema;
     assert_eq!(required(&schema), ["path"]);
-    assert_eq!(properties(&schema), ["line_count", "path", "start_line"]);
+    assert_eq!(properties(&schema), ["limit", "offset", "path"]);
     assert_eq!(schema["properties"]["path"]["type"], "string");
-    for optional in ["start_line", "line_count"] {
+    for optional in ["offset", "limit"] {
         assert_eq!(
             schema["properties"][optional]["minimum"], 1,
             "{optional} is bounded by its contract"
@@ -354,8 +371,11 @@ fn read_schema_matches_its_input_contract() {
     }
 }
 
-/// The generated Write and Edit schemas are exactly their input contracts,
-/// including Edit's non-empty anchor constraint and its defaulted flag.
+/// Write intentionally stays `path` + `content`, and the generated Edit
+/// schema is exactly the atomic multi-edit contract: one path plus a
+/// non-empty `edits` array whose items carry the Pi-compatible camelCase
+/// `oldText`/`newText` names. The obsolete single-replacement fields
+/// (`old_text`, `new_text`, `replace_all`) exist nowhere in the contract.
 #[test]
 fn write_and_edit_schemas_match_their_input_contracts() {
     let fixture = common::native_fixture();
@@ -364,48 +384,100 @@ fn write_and_edit_schemas_match_their_input_contracts() {
     assert_eq!(properties(&write), ["content", "path"]);
 
     let edit = definition(&fixture, "edit").input_schema;
-    assert_eq!(required(&edit), ["new_text", "old_text", "path"]);
+    assert_eq!(required(&edit), ["edits", "path"]);
+    assert_eq!(properties(&edit), ["edits", "path"]);
+    assert_eq!(edit["properties"]["edits"]["type"], "array");
     assert_eq!(
-        properties(&edit),
-        ["new_text", "old_text", "path", "replace_all"]
+        edit["properties"]["edits"]["minItems"], 1,
+        "an edit set describing no transformation is not a legal contract"
     );
-    assert_eq!(edit["properties"]["old_text"]["minLength"], 1);
-    assert_eq!(edit["properties"]["replace_all"]["type"], "boolean");
-    assert_eq!(edit["properties"]["replace_all"]["default"], false);
+
+    let replacement = &edit["properties"]["edits"]["items"];
+    assert_eq!(replacement["type"], "object");
+    assert_eq!(
+        replacement["additionalProperties"],
+        serde_json::Value::Bool(false),
+        "a replacement rejects unknown properties too"
+    );
+    assert_eq!(required(replacement), ["newText", "oldText"]);
+    assert_eq!(properties(replacement), ["newText", "oldText"]);
+    assert_eq!(replacement["properties"]["oldText"]["type"], "string");
+    assert_eq!(replacement["properties"]["newText"]["type"], "string");
+    assert_eq!(replacement["properties"]["oldText"]["minLength"], 1);
+    for obsolete in ["old_text", "new_text", "replace_all"] {
+        assert!(
+            replacement["properties"][obsolete].is_null() && edit["properties"][obsolete].is_null(),
+            "the obsolete Edit field {obsolete} must not survive anywhere in the contract"
+        );
+    }
 }
 
-/// The generated Glob and Grep schemas carry their optional search
-/// parameters with the defaults their input contracts apply.
+/// The generated Glob and Grep schemas are exactly the Pi-style search
+/// contracts. Both spell their search root `path` and leave it optional
+/// (an omitted root means the workspace), and Grep exposes `ignoreCase`
+/// rather than the obsolete `case_sensitive` inversion.
 #[test]
 fn glob_and_grep_schemas_match_their_input_contracts() {
     let fixture = common::native_fixture();
     let glob = definition(&fixture, "glob").input_schema;
     assert_eq!(required(&glob), ["pattern"]);
     assert_eq!(properties(&glob), ["path", "pattern"]);
-    assert_eq!(glob["properties"]["path"]["default"], ".");
 
     let grep = definition(&fixture, "grep").input_schema;
     assert_eq!(required(&grep), ["pattern"]);
     assert_eq!(
         properties(&grep),
-        ["case_sensitive", "glob", "path", "pattern"]
+        [
+            "context",
+            "glob",
+            "ignoreCase",
+            "limit",
+            "literal",
+            "path",
+            "pattern"
+        ]
     );
-    assert_eq!(grep["properties"]["path"]["default"], ".");
-    assert_eq!(grep["properties"]["glob"]["default"], "**/*");
-    assert_eq!(grep["properties"]["case_sensitive"]["default"], true);
+    assert!(
+        grep["properties"]["case_sensitive"].is_null(),
+        "the obsolete case_sensitive field must not survive as an alias"
+    );
+    assert_eq!(grep["properties"]["ignoreCase"]["type"], "boolean");
+    assert_eq!(grep["properties"]["literal"]["type"], "boolean");
+    assert_eq!(grep["properties"]["context"]["minimum"], 0);
+    assert_eq!(
+        grep["properties"]["context"]["maximum"],
+        u64::from(rustx::tools::limits::MAX_GREP_CONTEXT_LINES)
+    );
+    assert_eq!(grep["properties"]["limit"]["minimum"], 1);
+    assert_eq!(
+        grep["properties"]["limit"]["maximum"],
+        rustx::tools::limits::MAX_GREP_MATCHES as u64,
+        "the schema states the same hard match cap the executor enforces"
+    );
 }
 
 /// The generated Bash schema states the non-empty command and the bounded
-/// optional deadline; the `background_task` intrinsic keeps its exact
-/// two-operation enum.
+/// optional deadline in **seconds**; the `background_task` intrinsic keeps
+/// its exact two-operation enum.
 #[test]
 fn bash_and_background_task_schemas_match_their_input_contracts() {
     let fixture = common::native_fixture();
     let bash = definition(&fixture, "bash").input_schema;
     assert_eq!(required(&bash), ["command"]);
-    assert_eq!(properties(&bash), ["command", "timeout_ms"]);
+    assert_eq!(properties(&bash), ["command", "timeout"]);
     assert_eq!(bash["properties"]["command"]["minLength"], 1);
-    assert_eq!(bash["properties"]["timeout_ms"]["minimum"], 1);
+    assert_eq!(bash["properties"]["timeout"]["minimum"], 1);
+    assert!(
+        bash["properties"]["timeout_ms"].is_null(),
+        "the obsolete millisecond field must not survive as an alias"
+    );
+    let timeout_description = bash["properties"]["timeout"]["description"]
+        .as_str()
+        .expect("the timeout property documents its unit");
+    assert!(
+        timeout_description.contains("seconds"),
+        "the model-facing unit is explicit in the contract: {timeout_description}"
+    );
 
     let intrinsic = definition(&fixture, "background_task").input_schema;
     assert_eq!(required(&intrinsic), ["action", "execution_id"]);
@@ -426,32 +498,58 @@ fn bash_and_background_task_schemas_match_their_input_contracts() {
 #[test]
 fn invalid_native_arguments_are_rejected_before_any_invocation_exists() {
     let fixture = common::native_fixture();
-    let cases: [(&str, serde_json::Value); 12] = [
+    let cases: [(&str, serde_json::Value); 22] = [
         ("read", serde_json::json!({})),
         ("read", serde_json::json!({"path": 42})),
+        ("read", serde_json::json!({"path": "a.txt", "offset": 0})),
+        ("read", serde_json::json!({"path": "a.txt", "limit": 0})),
         (
             "read",
-            serde_json::json!({"path": "a.txt", "start_line": 0}),
-        ),
-        (
-            "read",
-            serde_json::json!({"path": "a.txt", "line_count": "many"}),
+            serde_json::json!({"path": "a.txt", "limit": "many"}),
         ),
         ("read", serde_json::json!({"path": "a.txt", "extra": true})),
+        // The obsolete Read spelling is an unknown field now, not an alias.
+        (
+            "read",
+            serde_json::json!({"path": "a.txt", "start_line": 2, "line_count": 1}),
+        ),
         ("write", serde_json::json!({"path": "a.txt"})),
+        ("edit", serde_json::json!({"path": "a.txt", "edits": []})),
         (
             "edit",
-            serde_json::json!({"path": "a.txt", "old_text": "", "new_text": "b"}),
+            serde_json::json!({"path": "a.txt", "edits": [{"oldText": "", "newText": "b"}]}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path": "a.txt", "edits": [{"oldText": "a"}]}),
+        ),
+        // The obsolete Edit spelling is an unknown field now, not an alias.
+        (
+            "edit",
+            serde_json::json!({"path": "a.txt", "old_text": "a", "new_text": "b"}),
+        ),
+        (
+            "edit",
+            serde_json::json!({"path": "a.txt", "edits": [{"old_text": "a", "new_text": "b"}]}),
         ),
         ("glob", serde_json::json!({"pattern": "*", "path": 3})),
         (
             "grep",
-            serde_json::json!({"pattern": "x", "case_sensitive": "yes"}),
+            serde_json::json!({"pattern": "x", "ignoreCase": "yes"}),
         ),
+        // The obsolete Grep spelling is an unknown field now, not an alias.
+        (
+            "grep",
+            serde_json::json!({"pattern": "x", "case_sensitive": false}),
+        ),
+        ("grep", serde_json::json!({"pattern": "x", "context": 999})),
+        ("grep", serde_json::json!({"pattern": "x", "limit": 0})),
         ("bash", serde_json::json!({"command": ""})),
+        ("bash", serde_json::json!({"command": "true", "timeout": 0})),
+        // The obsolete Bash spelling is an unknown field now, not an alias.
         (
             "bash",
-            serde_json::json!({"command": "true", "timeout_ms": 0}),
+            serde_json::json!({"command": "true", "timeout_ms": 1000}),
         ),
         (
             "background_task",
@@ -499,7 +597,7 @@ async fn rejected_input_never_reaches_the_executed_work() {
     let edit = execute_directly(
         &fixture,
         "edit",
-        serde_json::json!({"path": "kept.txt", "old_text": "", "new_text": "replaced"}),
+        serde_json::json!({"path": "kept.txt", "edits": [{"oldText": "", "newText": "replaced"}]}),
     )
     .await;
     assert!(matches!(edit.status, ToolExecutionStatus::Failed { .. }));
@@ -566,7 +664,7 @@ async fn native_tools_still_execute_through_the_agent_loop() {
         id: "call-1",
         tool_id: "tool-read",
         name: "read",
-        arguments: serde_json::json!({"path": "sample.txt", "start_line": 2, "line_count": 1}),
+        arguments: serde_json::json!({"path": "sample.txt", "offset": 2, "limit": 1}),
     };
     let result = run_through_agent_loop(&fixture, &call).await;
 
@@ -640,7 +738,7 @@ async fn explicit_null_optional_argument_is_rejected_by_the_agent_loop() {
         name: "bash",
         arguments: serde_json::json!({
             "command": "printf marker > marker.txt",
-            "timeout_ms": null
+            "timeout": null
         }),
     };
     let result = run_through_agent_loop(&fixture, &call).await;
@@ -700,13 +798,13 @@ async fn bash_still_settles_its_process_lifecycle_behind_the_typed_contract() {
     let timed_out = common::run_tool(
         &fixture,
         "bash",
-        serde_json::json!({"command": "sleep 30", "timeout_ms": 200}),
+        serde_json::json!({"command": "sleep 30", "timeout": 1}),
     )
     .await;
     assert_eq!(
         timed_out.status,
         ToolExecutionStatus::TimedOut,
-        "an explicit timeout_ms from the typed contract still bounds the invocation"
+        "an explicit timeout in seconds from the typed contract still bounds the invocation"
     );
 }
 
