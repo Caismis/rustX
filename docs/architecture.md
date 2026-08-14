@@ -711,6 +711,16 @@ returns matches ordered by path, then line, then column, both enforce a
 result count cap and a hard payload byte cap with explicit truncation
 state, and neither ever drops results silently.
 
+The payload cap bounds the **actually serialized** model-facing JSON, not an
+estimate of it. Each candidate entry is charged its own serialization plus
+its array separator on top of a measured envelope, and an entry is admitted
+only if the whole document still fits, so JSON escaping inside a path or a
+matched line cannot push the delivered payload past
+`MAX_MODEL_TOOL_RESULT_BYTES`. Grep's `matches` and `context` arrays share
+that one budget. The count cap is evaluated before the byte budget, so which
+entries survive truncation stays a function of the deterministic ordering
+alone rather than of how expensive a particular entry is to encode.
+
 `background_task` is a runtime intrinsic that happens to participate in the
 common tool execution plane. It is not an ordinary native tool, its contract
 and runtime semantics are outside this alignment, and it is never moved,

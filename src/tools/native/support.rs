@@ -4,6 +4,32 @@ use std::path::{Path, PathBuf};
 
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
+/// The exact serialized byte length of one model-facing JSON value.
+///
+/// The bounded search tools budget their payload against the bytes the model
+/// actually receives, so the only trustworthy measure is the serialization
+/// itself: JSON string escaping (`"`, `\`, control characters), field names,
+/// array and object punctuation, and numeric widths all change the size and
+/// none of them are recoverable from a string's own length.
+///
+/// A value that cannot be serialized is reported as [`usize::MAX`], so a
+/// caller budgeting against a cap always rejects it rather than admitting an
+/// unmeasured item. Native tools only ever build serializable values.
+#[must_use]
+pub fn json_bytes(value: &serde_json::Value) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// The byte cost of appending one already-measured element to a JSON array
+/// that currently holds `present` elements.
+///
+/// The array's own brackets belong to the enclosing envelope; each element
+/// after the first additionally pays for its separating comma.
+#[must_use]
+pub fn json_array_element_cost(element_bytes: usize, present: usize) -> usize {
+    element_bytes.saturating_add(usize::from(present > 0))
+}
+
 /// The one file-mutation commit of the native tool plane.
 ///
 /// Write and Edit both replace a whole file with a whole new content

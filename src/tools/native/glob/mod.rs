@@ -6,9 +6,16 @@
 //! observes: no shelling out, no implicit ignore-file semantics, hidden
 //! files visible, and symlinks never followed. Results are normalized paths
 //! relative to the search root, sorted lexicographically so physical
-//! filesystem enumeration order can never become result order, and bounded
-//! by [`MAX_GLOB_RESULTS`] and [`MAX_MODEL_TOOL_RESULT_BYTES`] with explicit
-//! truncation reporting. Ordering is never by modification time.
+//! filesystem enumeration order can never become result order.
+//!
+//! The result is bounded twice: by [`MAX_GLOB_RESULTS`] entries and by
+//! [`MAX_MODEL_TOOL_RESULT_BYTES`] of **actually serialized** model-facing
+//! JSON. The byte budget is charged the exact serialization of each path
+//! plus its array separator, on top of a measured envelope, so JSON escaping
+//! of quotes, backslashes, and control characters inside a filename can
+//! never push the delivered payload past the cap. Reaching either bound is
+//! reported explicitly and nothing is dropped silently. Ordering is never by
+//! modification time.
 //!
 //! The model-facing argument contract is the typed [`GlobInput`]; the
 //! canonical schema is generated from it.
@@ -21,7 +28,9 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{MAX_GLOB_RESULTS, MAX_MODEL_TOOL_RESULT_BYTES};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search::SearchRoot;
-use crate::tools::native::support::{failed_result, success_json_with};
+use crate::tools::native::support::{
+    failed_result, json_array_element_cost, json_bytes, success_json_with,
+};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
@@ -30,10 +39,14 @@ use input::GlobInput;
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "glob";
 
-/// The serialized cost one result path adds beyond its own bytes (the two
-/// JSON quotes and the separating comma). The byte cap is a deterministic
-/// bound on the model-facing payload, not an exact serialization measure.
-const RESULT_ENVELOPE_BYTES: usize = 3;
+/// The serialized size of the result envelope with an empty result array.
+///
+/// It is measured, not estimated, and it uses `"truncated": false` because
+/// `false` serializes one byte longer than `true`: whichever value the run
+/// finally reports, the real envelope is no larger than the reserved one.
+fn envelope_bytes() -> usize {
+    json_bytes(&serde_json::json!({ "results": [], "truncated": false }))
+}
 
 /// The tool-owned registration of the native Glob tool.
 #[must_use]
@@ -92,9 +105,13 @@ fn run_glob(
 
     // The shared traversal already yields the universe in lexical order of
     // the normalized relative path, so filtering preserves that order.
-    let mut results: Vec<String> = Vec::new();
+    //
+    // The count cap is checked before the byte cap so that which results are
+    // dropped stays a function of the ordering alone, never of how expensive
+    // a path happens to be to serialize.
+    let mut results: Vec<serde_json::Value> = Vec::new();
     let mut truncated = false;
-    let mut bytes = 0usize;
+    let mut payload = envelope_bytes();
     for file in files {
         if !matcher.is_match(&file.relative) {
             continue;
@@ -103,12 +120,14 @@ fn run_glob(
             truncated = true;
             break;
         }
-        bytes += file.relative.len() + RESULT_ENVELOPE_BYTES;
-        if bytes > MAX_MODEL_TOOL_RESULT_BYTES {
+        let entry = serde_json::Value::String(file.relative);
+        let cost = json_array_element_cost(json_bytes(&entry), results.len());
+        if payload.saturating_add(cost) > MAX_MODEL_TOOL_RESULT_BYTES {
             truncated = true;
             break;
         }
-        results.push(file.relative);
+        payload += cost;
+        results.push(entry);
     }
     success_json_with(
         serde_json::json!({ "results": results, "truncated": truncated }),

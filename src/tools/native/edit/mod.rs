@@ -15,7 +15,10 @@
 //!    partially edited intermediate, so the edits are order-independent and
 //!    an earlier replacement can never change what a later one matches;
 //! 3. every `oldText` must resolve to exactly one range in the snapshot;
-//!    zero matches and more than one match are both deterministic failures;
+//!    zero candidate ranges and two or more candidate ranges are both
+//!    deterministic failures. Candidates may *overlap*: in `"aaa"` the
+//!    anchor `"aa"` identifies both `0..2` and `1..3`, so it names no single
+//!    target and is rejected as ambiguous;
 //! 4. the complete replacement range set is computed before any mutation and
 //!    rejected when any two ranges intersect, nest, or coincide;
 //! 5. the validated ranges are ordered by their position in the snapshot and
@@ -145,23 +148,24 @@ fn plan<'a>(
     for (index, edit) in edits.iter().enumerate() {
         // Every anchor is resolved against the original snapshot, never
         // against a partially edited intermediate.
-        let mut occurrences = original.match_indices(edit.old_text.as_str());
-        let Some((start, found)) = occurrences.next() else {
-            return Err(format!(
-                "edits[{index}]: oldText not found in {relative}; no edit was applied"
-            ));
+        let range = match anchor_target(original, edit.old_text.as_str()) {
+            AnchorTarget::Unique(range) => range,
+            AnchorTarget::Missing => {
+                return Err(format!(
+                    "edits[{index}]: oldText not found in {relative}; no edit was applied"
+                ));
+            }
+            AnchorTarget::Ambiguous => {
+                return Err(format!(
+                    "edits[{index}]: oldText matches more than one place in {relative}; it must \
+                     identify exactly one place, so no edit was applied"
+                ));
+            }
         };
-        if occurrences.next().is_some() {
-            let total = original.matches(edit.old_text.as_str()).count();
-            return Err(format!(
-                "edits[{index}]: oldText occurs {total} times in {relative}; it must identify \
-                 exactly one place, so no edit was applied"
-            ));
-        }
         planned.push((
             index,
             PlannedEdit {
-                range: start..start + found.len(),
+                range,
                 replacement: edit.new_text.as_str(),
             },
         ));
@@ -192,6 +196,61 @@ fn plan<'a>(
         }
     }
     Ok(planned.into_iter().map(|(_, edit)| edit).collect())
+}
+
+/// What one exact anchor identifies in the original snapshot.
+enum AnchorTarget {
+    /// The anchor occurs nowhere.
+    Missing,
+    /// The anchor identifies exactly one byte range.
+    Unique(Range<usize>),
+    /// The anchor could be placed at two or more distinct byte ranges, so it
+    /// identifies no single target.
+    Ambiguous,
+}
+
+/// Resolves one exact anchor to the single byte range it identifies.
+///
+/// Every byte offset at which the anchor could start is a distinct candidate
+/// target, **including overlapping ones**: in `"aaa"` the anchor `"aa"` can
+/// be placed at `0..2` and at `1..3`, and in `"ababa"` the anchor `"aba"` can
+/// be placed at `0..3` and at `2..5`. Both are ambiguous. A non-overlapping
+/// match iterator would report one match for each and silently pick a target
+/// the caller never chose, so the scan resumes one character past a
+/// candidate's *start* rather than past its end.
+///
+/// The scan stops the moment a second candidate exists: proving ambiguity
+/// never requires counting the remaining occurrences, so a large file with a
+/// very common anchor still costs one bounded pass.
+///
+/// A candidate start is always a UTF-8 character boundary of `original`:
+/// UTF-8 is self-synchronizing, so a byte-level match of the (valid UTF-8)
+/// anchor can never begin inside a code point. Slicing at these offsets is
+/// therefore safe.
+fn anchor_target(original: &str, anchor: &str) -> AnchorTarget {
+    // The input contract already rejects an empty anchor; it has no exact
+    // placement semantics and must never reach the planner.
+    debug_assert!(!anchor.is_empty(), "an empty oldText is rejected as input");
+    let mut found: Option<Range<usize>> = None;
+    let mut cursor = 0usize;
+    while let Some(offset) = original[cursor..].find(anchor) {
+        let start = cursor + offset;
+        if found.is_some() {
+            return AnchorTarget::Ambiguous;
+        }
+        found = Some(start..start + anchor.len());
+        // Resume at the next character, not after the candidate, so an
+        // overlapping placement is still discovered.
+        cursor = start + next_char_bytes(original, start);
+    }
+    found.map_or(AnchorTarget::Missing, AnchorTarget::Unique)
+}
+
+/// The byte length of the character starting at `at`, which is a character
+/// boundary of `text`. Returns `1` only at the end of the string, where the
+/// caller's scan is already finished.
+fn next_char_bytes(text: &str, at: usize) -> usize {
+    text[at..].chars().next().map_or(1, char::len_utf8)
 }
 
 /// Builds the final snapshot from the original snapshot plus the validated,

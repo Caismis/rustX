@@ -601,6 +601,87 @@ async fn edit_rejects_conflicting_replacement_ranges() {
     }
 }
 
+/// An anchor whose candidate placements **overlap each other** identifies no
+/// single target and must be rejected as ambiguous.
+///
+/// This is the case a non-overlapping match iterator silently gets wrong:
+/// `"aa"` in `"aaa"` reports one match and would quietly replace `0..2`,
+/// even though `1..3` is an equally valid reading of the same request. The
+/// contract is "exactly one possible target", not "exactly one match
+/// according to a convenience iterator".
+#[tokio::test]
+async fn edit_rejects_an_anchor_with_overlapping_candidate_placements() {
+    // (original content, anchor, the two placements that make it ambiguous)
+    let cases: [(&str, &str, &str); 2] = [
+        ("aaa", "aa", "0..2 and 1..3"),
+        ("ababa", "aba", "0..3 and 2..5"),
+    ];
+    for (original, anchor, placements) in cases {
+        let fixture = native_fixture();
+        let path = edit_fixture(&fixture, original);
+        let rejected = run_tool(
+            &fixture,
+            "edit",
+            serde_json::json!({"path": "edit.txt", "edits": [replacement(anchor, "REPLACED")]}),
+        )
+        .await;
+        assert!(
+            matches!(rejected.status, ToolExecutionStatus::Failed { .. }),
+            "{anchor:?} in {original:?} can be placed at {placements}, so it must be rejected \
+             as ambiguous; got {:?}",
+            rejected.status
+        );
+        assert_unchanged(&fixture, &path, original);
+    }
+}
+
+/// An overlapping-candidate anchor anywhere in the edit set fails the whole
+/// invocation: no other edit of the same call may partially commit.
+#[tokio::test]
+async fn an_ambiguous_overlapping_anchor_blocks_every_edit_of_the_invocation() {
+    let fixture = native_fixture();
+    let original = "aaa and unique";
+    let path = edit_fixture(&fixture, original);
+    let rejected = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({
+            "path": "edit.txt",
+            // The first edit is perfectly valid on its own; the second one
+            // can be placed at two overlapping ranges.
+            "edits": [replacement("unique", "UNIQUE"), replacement("aa", "X")]
+        }),
+    )
+    .await;
+    assert!(
+        matches!(rejected.status, ToolExecutionStatus::Failed { .. }),
+        "one ambiguous anchor fails the whole invocation, got {:?}",
+        rejected.status
+    );
+    assert_unchanged(&fixture, &path, original);
+}
+
+/// Overlapping *candidate placements of one anchor* are ambiguous, but an
+/// anchor that occurs exactly once is still unique even when it repeats a
+/// character that could overlap in a longer file.
+#[tokio::test]
+async fn edit_still_accepts_an_anchor_with_one_possible_placement() {
+    let fixture = native_fixture();
+    let path = edit_fixture(&fixture, "aab");
+    let applied = run_tool(
+        &fixture,
+        "edit",
+        serde_json::json!({"path": "edit.txt", "edits": [replacement("aa", "X")]}),
+    )
+    .await;
+    assert_eq!(
+        applied.status,
+        ToolExecutionStatus::Success,
+        "`aa` can only be placed at 0..2 in `aab`"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read back"), "Xb");
+}
+
 /// Adjacent — but not overlapping — replacements are legal: the rule is
 /// that a range may start exactly where the previous one ended.
 #[tokio::test]
@@ -915,6 +996,18 @@ async fn glob_truncates_at_the_result_limit() {
     assert!(result.truncation.expect("truncation state").truncated);
 }
 
+/// The exact number of bytes the model-facing JSON payload of a result
+/// serializes to.
+///
+/// This — not the sum of the returned string lengths — is what the hard cap
+/// has to bound: JSON escaping, field names, punctuation, and numeric widths
+/// are all part of what the model actually receives.
+fn serialized_payload_bytes(result: &rustx::tools::types::ToolExecutionResult) -> usize {
+    serde_json::to_vec(&json_content(result))
+        .expect("a native tool payload is serializable")
+        .len()
+}
+
 #[tokio::test]
 async fn glob_truncates_at_the_byte_limit() {
     let fixture = native_fixture();
@@ -940,11 +1033,68 @@ async fn glob_truncates_at_the_byte_limit() {
         returned.len()
     );
     assert!(
-        returned.iter().map(String::len).sum::<usize>() <= MAX_MODEL_TOOL_RESULT_BYTES,
-        "the model-facing payload stays bounded"
+        serialized_payload_bytes(&result) <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the delivered JSON payload stays within the hard cap: {} bytes",
+        serialized_payload_bytes(&result)
     );
     assert_eq!(json_content(&result)["truncated"], true);
     assert!(result.truncation.expect("truncation state").truncated);
+}
+
+/// The hard payload cap bounds the **serialized** document, so filenames
+/// full of characters that expand under JSON encoding cannot push the
+/// delivered payload past it.
+///
+/// Each fixture name below carries quotes, backslashes, and a control
+/// character, every one of which serializes to more bytes than it occupies
+/// on disk (`"` → `\"`, `\` → `\\`, `\t` → `\t`, `\x07` → ``). An
+/// accounting based on `path.len()` undercounts every one of them.
+#[cfg(unix)]
+#[tokio::test]
+async fn glob_bounds_the_serialized_payload_of_json_hostile_paths() {
+    let fixture = native_fixture();
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    std::fs::create_dir_all(root.join("hostile")).expect("dir");
+    // Every one of these bytes is legal in a POSIX filename and every one of
+    // them grows during JSON encoding.
+    let expanding = "\"\\\t\u{7}".repeat(40);
+    let files = 400usize;
+    for index in 0..files {
+        let name = format!("{index:04}{expanding}.txt");
+        std::fs::write(root.join("hostile").join(name), "x").expect("write");
+    }
+    let result = run_tool(
+        &fixture,
+        "glob",
+        serde_json::json!({"pattern": "hostile/*.txt"}),
+    )
+    .await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+
+    let returned = glob_results(&result);
+    let raw = returned.iter().map(String::len).sum::<usize>();
+    let encoded = serialized_payload_bytes(&result);
+    assert!(
+        encoded > raw,
+        "the fixture must actually expand under JSON encoding: raw {raw}, encoded {encoded}"
+    );
+    assert!(
+        encoded <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the delivered JSON payload stays within the hard cap: {encoded} bytes"
+    );
+    assert!(
+        returned.len() < files,
+        "the payload cap actually engaged: {} of {files}",
+        returned.len()
+    );
+    assert_eq!(json_content(&result)["truncated"], true);
+    assert!(result.truncation.expect("truncation state").truncated);
+
+    // Truncation keeps the deterministic lexical prefix: the paths that
+    // survive are exactly the first ones in order.
+    let mut ordered = returned.clone();
+    ordered.sort();
+    assert_eq!(returned, ordered, "the surviving prefix stays ordered");
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,11 +1372,69 @@ async fn grep_truncates_at_the_byte_limit() {
         matches.len()
     );
     assert!(
-        matches.iter().map(|entry| entry.3.len()).sum::<usize>() <= MAX_MODEL_TOOL_RESULT_BYTES,
-        "the model-facing payload stays bounded"
+        serialized_payload_bytes(&result) <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the delivered JSON payload stays within the hard cap: {} bytes",
+        serialized_payload_bytes(&result)
     );
     assert_eq!(json_content(&result)["truncated"], true);
     assert!(result.truncation.expect("truncation state").truncated);
+}
+
+/// The hard payload cap bounds the **serialized** document for Grep too, and
+/// `matches` and `context` share that one budget.
+///
+/// The fixture's matching lines are full of characters that grow under JSON
+/// encoding (`"`, `\`, tab, and a bare control byte), so an accounting based
+/// on `text.len()` undercounts every reported line. Context is requested as
+/// well, so both arrays are charged against the same cap.
+#[tokio::test]
+async fn grep_bounds_the_serialized_payload_of_json_hostile_content() {
+    let fixture = native_fixture();
+    // Each of these bytes serializes to more than one byte of JSON.
+    let expanding = "\"\\\t\u{1}".repeat(60);
+    let mut body = String::new();
+    for index in 0..400 {
+        use std::fmt::Write as _;
+        writeln!(body, "hit {index} {expanding}").expect("in-memory fixture");
+    }
+    std::fs::write(fixture.runtime.workspace().root().join("hostile.txt"), body).expect("write");
+
+    let result = run_tool(
+        &fixture,
+        "grep",
+        serde_json::json!({"pattern": "hit", "limit": 400, "context": 2}),
+    )
+    .await;
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+
+    let matches = grep_matches(&result);
+    let raw: usize = matches
+        .iter()
+        .map(|entry| entry.3.len())
+        .chain(grep_context(&result).iter().map(|entry| entry.2.len()))
+        .sum();
+    let encoded = serialized_payload_bytes(&result);
+    assert!(
+        encoded > raw,
+        "the fixture must actually expand under JSON encoding: raw {raw}, encoded {encoded}"
+    );
+    assert!(
+        encoded <= MAX_MODEL_TOOL_RESULT_BYTES,
+        "the delivered JSON payload stays within the hard cap: {encoded} bytes"
+    );
+    assert!(
+        matches.len() < 400,
+        "the payload cap actually engaged: {} of 400",
+        matches.len()
+    );
+    assert_eq!(json_content(&result)["truncated"], true);
+    assert!(result.truncation.expect("truncation state").truncated);
+
+    // Ordering survives truncation: the surviving matches are still the
+    // deterministic path/line/column prefix.
+    let mut ordered = matches.clone();
+    ordered.sort_by(|left, right| (&left.0, left.1, left.2).cmp(&(&right.0, right.1, right.2)));
+    assert_eq!(matches, ordered, "the surviving prefix stays ordered");
 }
 
 /// A very long line is reported with an explicit truncation marker, and the

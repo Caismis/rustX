@@ -36,9 +36,13 @@
 //! - **Bounds.** At most `limit` matches (default
 //!   [`DEFAULT_GREP_MATCHES`](crate::tools::limits::DEFAULT_GREP_MATCHES),
 //!   hard cap [`MAX_GREP_MATCHES`](crate::tools::limits::MAX_GREP_MATCHES))
-//!   are returned, and the payload is bounded by
-//!   [`MAX_MODEL_TOOL_RESULT_BYTES`]. Reaching either bound sets the
-//!   explicit truncation state; nothing is dropped silently.
+//!   are returned, and the delivered document is bounded by
+//!   [`MAX_MODEL_TOOL_RESULT_BYTES`] of **actually serialized** JSON. Every
+//!   admitted match and context line is charged its exact serialization plus
+//!   its array separator on top of a measured envelope, and the two arrays
+//!   share one budget, so JSON escaping inside a path or a matched line can
+//!   never push the delivered payload past the cap. Reaching either bound
+//!   sets the explicit truncation state; nothing is dropped silently.
 //! - **Long lines.** A reported line longer than [`MAX_GREP_LINE_BYTES`] is
 //!   shortened with an explicit truncation marker. `column` always refers to
 //!   the original, untruncated line.
@@ -59,7 +63,9 @@ use crate::tools::limits::{
 };
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::search::{SearchFile, SearchRoot};
-use crate::tools::native::support::{failed_result, success_json_with};
+use crate::tools::native::support::{
+    failed_result, json_array_element_cost, json_bytes, success_json_with,
+};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation, TruncationState};
 
@@ -67,11 +73,6 @@ use input::GrepInput;
 
 /// The canonical model-facing name of the tool.
 pub const NAME: &str = "grep";
-
-/// The serialized cost one reported line adds beyond its own text (the JSON
-/// keys, the path, and the numbers). The byte cap is a deterministic bound
-/// on the model-facing payload, not an exact serialization measure.
-const LINE_ENVELOPE_BYTES: usize = 48;
 
 /// The tool-owned registration of the native Grep tool.
 #[must_use]
@@ -227,19 +228,24 @@ fn build_matcher(
 /// Searches one eligible file and feeds its matches and context lines to the
 /// collector.
 ///
-/// A file whose bytes are not valid UTF-8 is skipped: it is not searched, it
-/// produces no matches, and it is not an error.
+/// The two ways a file can produce no matches are deliberately different:
+///
+/// - **Content policy.** A file whose bytes are not valid UTF-8 is not
+///   searched, produces no matches, and is not an error. That is Grep's
+///   documented eligibility rule.
+/// - **Execution failure.** A file the shared traversal enumerated but that
+///   cannot be read is an explicit failure naming the path. Silently
+///   skipping it would delete a file from the searched universe without ever
+///   telling the caller, which is exactly the silent data loss the tool
+///   plane forbids.
 fn search_file(
     searcher: &mut Searcher,
     matcher: &RegexMatcher,
     file: &SearchFile,
     collector: &mut Collector,
 ) -> Result<(), String> {
-    let Ok(bytes) = std::fs::read(&file.absolute) else {
-        // An unreadable workspace file narrows the universe rather than
-        // failing the whole search; the traversal already proved it exists.
-        return Ok(());
-    };
+    let bytes = std::fs::read(&file.absolute)
+        .map_err(|error| format!("cannot read {}: {error}", file.relative))?;
     if std::str::from_utf8(&bytes).is_err() {
         return Ok(());
     }
@@ -258,18 +264,39 @@ fn search_file(
     }
 }
 
+/// The serialized size of the result envelope with both arrays empty.
+///
+/// It is measured, not estimated, and it uses `"truncated": false` because
+/// `false` serializes one byte longer than `true`: whichever value the run
+/// finally reports, the real envelope is no larger than the reserved one.
+fn envelope_bytes() -> usize {
+    json_bytes(&serde_json::json!({
+        "matches": [],
+        "context": [],
+        "truncated": false,
+    }))
+}
+
 /// The bounded, deterministically ordered accumulation of one Grep run.
+///
+/// Entries are stored already serialized, and the payload budget starts at
+/// the measured envelope. Because every admitted entry is charged its exact
+/// serialization plus its array separator, the final document can never
+/// exceed [`MAX_MODEL_TOOL_RESULT_BYTES`] — JSON escaping inside a path or a
+/// matched line is paid for at admission time rather than estimated.
+/// `matches` and `context` share one budget: they are two halves of one
+/// model-facing payload.
 struct Collector {
-    /// The reported matches, in path/line/column order.
-    matches: Vec<Match>,
-    /// The reported context lines, in path/line order.
-    context: Vec<ContextLine>,
+    /// The reported matches, serialized, in path/line/column order.
+    matches: Vec<serde_json::Value>,
+    /// The reported context lines, serialized, in path/line order.
+    context: Vec<serde_json::Value>,
     /// Whether a bound cut the result short.
     truncated: bool,
     /// The maximum number of reported matches.
     limit: usize,
-    /// The accumulated model-facing payload estimate.
-    bytes: usize,
+    /// The exact serialized size of the payload accumulated so far.
+    payload: usize,
 }
 
 impl Collector {
@@ -279,7 +306,7 @@ impl Collector {
             context: Vec::new(),
             truncated: false,
             limit,
-            bytes: 0,
+            payload: envelope_bytes(),
         }
     }
 
@@ -288,21 +315,33 @@ impl Collector {
         self.truncated
     }
 
-    /// Accounts one reported line against the byte cap.
+    /// Charges one serialized entry against the shared payload budget.
     ///
-    /// Returns `false` once the cap is reached, which marks the result
-    /// truncated and stops the search.
-    fn admit(&mut self, text: &str) -> bool {
-        let projected = self.bytes + text.len() + LINE_ENVELOPE_BYTES;
-        if projected > MAX_MODEL_TOOL_RESULT_BYTES {
+    /// Returns the value to store, or `None` once the hard cap is reached,
+    /// which marks the result truncated and stops the search.
+    fn charge<T: serde::Serialize>(
+        &mut self,
+        entry: &T,
+        present: usize,
+    ) -> Option<serde_json::Value> {
+        let Ok(value) = serde_json::to_value(entry) else {
             self.truncated = true;
-            return false;
+            return None;
+        };
+        let cost = json_array_element_cost(json_bytes(&value), present);
+        if self.payload.saturating_add(cost) > MAX_MODEL_TOOL_RESULT_BYTES {
+            self.truncated = true;
+            return None;
         }
-        self.bytes = projected;
-        true
+        self.payload += cost;
+        Some(value)
     }
 
-    /// Records one match, or reports that the match bound was reached.
+    /// Records one match, or reports that a bound was reached.
+    ///
+    /// The count limit is checked before the byte budget so that which
+    /// matches are dropped stays a function of the search order alone, never
+    /// of how expensive a particular line is to serialize.
     ///
     /// Returns `false` when the search must stop.
     fn push_match(&mut self, path: &str, line: u64, column: u64, text: &str) -> bool {
@@ -310,15 +349,17 @@ impl Collector {
             self.truncated = true;
             return false;
         }
-        if !self.admit(text) {
-            return false;
-        }
-        self.matches.push(Match {
+        let entry = Match {
             path: path.to_owned(),
             line,
             column,
             text: text.to_owned(),
-        });
+        };
+        let present = self.matches.len();
+        let Some(value) = self.charge(&entry, present) else {
+            return false;
+        };
+        self.matches.push(value);
         true
     }
 
@@ -326,14 +367,16 @@ impl Collector {
     ///
     /// Returns `false` when the search must stop.
     fn push_context(&mut self, path: &str, line: u64, text: &str) -> bool {
-        if !self.admit(text) {
-            return false;
-        }
-        self.context.push(ContextLine {
+        let entry = ContextLine {
             path: path.to_owned(),
             line,
             text: text.to_owned(),
-        });
+        };
+        let present = self.context.len();
+        let Some(value) = self.charge(&entry, present) else {
+            return false;
+        };
+        self.context.push(value);
         true
     }
 }
@@ -420,4 +463,74 @@ fn trim_line_terminator(bytes: &[u8]) -> &[u8] {
 fn bounded_line(line: &str) -> String {
     let (bounded, _) = bounded_text_preview(line.as_bytes(), MAX_GREP_LINE_BYTES);
     bounded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Collector, SearchFile, build_matcher, search_file};
+    use grep_searcher::SearcherBuilder;
+
+    /// A file the shared traversal enumerated but that cannot be read is an
+    /// explicit failure naming the path, never a silent empty result.
+    ///
+    /// The distinction matters: Grep's documented content policy makes a
+    /// non-UTF-8 file produce no matches, but an I/O failure is an execution
+    /// error. Reporting it as "no matches" would delete a file from the
+    /// searched universe without telling the caller.
+    ///
+    /// The failure is provoked at the file-search boundary with an
+    /// enumerated entry whose path does not exist, so the test depends on no
+    /// permission semantics, no umask, and no filesystem-specific behavior.
+    #[test]
+    fn an_enumerated_file_that_cannot_be_read_fails_explicitly() {
+        let mut searcher = SearcherBuilder::new().line_number(true).build();
+        let matcher = build_matcher("hit", false, false).expect("valid pattern");
+        let mut collector = Collector::new(10);
+        let missing = SearchFile {
+            relative: "gone.txt".to_owned(),
+            absolute: std::env::temp_dir()
+                .join("rustx-grep-missing-fixture")
+                .join("gone.txt"),
+        };
+
+        let error = search_file(&mut searcher, &matcher, &missing, &mut collector)
+            .expect_err("an unreadable enumerated file is an execution failure");
+
+        assert!(
+            error.contains("gone.txt"),
+            "the failure identifies the unreadable path: {error}"
+        );
+        assert!(
+            collector.matches.is_empty() && collector.context.is_empty(),
+            "a failed read contributes nothing to the result"
+        );
+        assert!(
+            !collector.truncated,
+            "a read failure is an error, never a truncated success"
+        );
+    }
+
+    /// The same boundary keeps the content policy intact: a readable file
+    /// whose bytes are not valid UTF-8 is skipped without error.
+    #[test]
+    fn an_unreadable_encoding_is_skipped_without_failing() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("binary.bin");
+        std::fs::write(&path, b"\xff\xfehit\x00\x01\xfe").expect("write binary fixture");
+        let mut searcher = SearcherBuilder::new().line_number(true).build();
+        let matcher = build_matcher("hit", false, false).expect("valid pattern");
+        let mut collector = Collector::new(10);
+        let file = SearchFile {
+            relative: "binary.bin".to_owned(),
+            absolute: path,
+        };
+
+        search_file(&mut searcher, &matcher, &file, &mut collector)
+            .expect("non-UTF-8 content is a content policy, not an execution failure");
+
+        assert!(
+            collector.matches.is_empty(),
+            "a non-UTF-8 file contributes no matches"
+        );
+    }
 }

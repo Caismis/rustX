@@ -622,9 +622,22 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   windows merge as a set union — every source line appears exactly once and
   a matching line is never also reported as context. Both enforce a result
   count cap and a hard payload byte cap, and both report truncation
-  explicitly; results are never dropped silently. Grep searches UTF-8 text
-  files only: a file whose bytes are not valid UTF-8 contributes no matches
-  rather than being fabricated as text.
+  explicitly; results are never dropped silently.
+- The Glob/Grep payload cap bounds the **actually serialized** model-facing
+  JSON, never an estimate of it. Each candidate entry is charged its own
+  serialization plus its array separator on top of a measured envelope, and
+  is admitted only when the complete document still fits, so JSON escaping
+  of quotes, backslashes, and control characters inside a path or a matched
+  line can never deliver more than `MAX_MODEL_TOOL_RESULT_BYTES` to the
+  model. Grep's `matches` and `context` arrays share one budget. The count
+  cap is evaluated before the byte budget, so which entries survive
+  truncation depends only on the deterministic ordering.
+- Grep distinguishes a content policy from an execution failure. A file
+  whose bytes are not valid UTF-8 is not searched, contributes no matches,
+  and is not an error — binary content is never fabricated as text. A file
+  the shared traversal enumerated but that cannot be *read* is an explicit
+  Grep failure naming the path: silently reporting it as "no matches" would
+  remove a file from the searched universe without telling the caller.
 - The model-facing Bash `timeout` is measured in **seconds** and is
   converted to the internal `Duration` at the Bash input-contract boundary.
   No unit conversion exists anywhere below it: the executor, supervisor,
