@@ -519,6 +519,157 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
     assert_eq!(attempt.model.summary, SummaryModelView::Session);
 }
 
+/// The incremental A -> B invariant, proven from the event stream alone.
+///
+/// A continuously subscribed client must be able to answer "which model is
+/// the running attempt actually using" without a second `snapshot_get` and
+/// without inferring anything from ordering. `attempt_started` therefore
+/// carries the frozen attempt model:
+///
+/// ```text
+/// session = A ; attempt admitted -> attempt_started(model = A)
+/// model_set(B) accepted while the attempt runs
+///     -> session_model_changed(B), and no second attempt_started for A
+/// next attempt admitted    -> attempt_started(model = B)
+/// ```
+///
+/// Synchronization is the scripted model's park barrier and the observation
+/// stream itself; nothing here sleeps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attempt_started_freezes_the_model_across_a_mid_attempt_switch() {
+    let (release, release_rx) = support::fake::model_release();
+    let (model, host) = runtime(vec![
+        vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::ParkUntilReleased(release_rx),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ],
+        one_turn_stop(),
+    ])
+    .await;
+    let (attachment, _) = host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+    let subscription = attachment
+        .subscribe_events(RuntimeClientCursor::new(0))
+        .expect("subscribe");
+
+    // The first attempt is admitted while the session model is A.
+    assert!(
+        attachment
+            .handle_request(RuntimeClientRequest::SubmitInbound {
+                id: RequestId::new(1),
+                content: text("first"),
+            })
+            .error
+            .is_none()
+    );
+    let observed = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+    })
+    .await;
+    let Some(RuntimeClientEvent::AttemptStarted {
+        attempt_id: first_attempt,
+        model: first_model,
+    }) = observed.last().map(|event| event.event.clone())
+    else {
+        panic!("the first attempt started");
+    };
+    assert_eq!(
+        first_model.primary.model,
+        model_ref("alpha/model-a"),
+        "the start event carries the model the attempt froze at admission"
+    );
+
+    // The model is parked, so the set of publications so far is fixed: the
+    // switch below cannot race with an unobserved attempt transition.
+    support::runtime_client_conformance::await_model_parked(&model).await;
+
+    // Switch the session to B *while* the attempt runs.
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(2),
+        config: Box::new(SessionModelConfig::of(model_ref("beta/model-b"))),
+    });
+    let Some(RuntimeClientResult::ModelSet { model: desired }) = response.result else {
+        panic!("the update is accepted while an attempt runs: {response:?}");
+    };
+    assert_eq!(desired.configured.model, model_ref("beta/model-b"));
+
+    // The switch publishes exactly one session observation and never a
+    // second start for the running attempt.
+    let switch = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+    })
+    .await;
+    let RuntimeClientEvent::SessionModelChanged { model: published } =
+        switch.last().expect("the change").event.clone()
+    else {
+        panic!("the session model change is published");
+    };
+    assert_eq!(published.configured.model, model_ref("beta/model-b"));
+    assert_eq!(
+        switch
+            .iter()
+            .filter(|event| matches!(event.event, RuntimeClientEvent::AttemptStarted { .. }))
+            .count(),
+        0,
+        "the running attempt never restarts and never re-announces a model"
+    );
+
+    // The running attempt is still, truthfully, on A.
+    let (during, _) = host.snapshot().expect("snapshot");
+    let attempt = during.attempt.as_ref().expect("the running attempt");
+    assert_eq!(attempt.attempt_id, first_attempt);
+    assert_eq!(
+        attempt.model.primary.model,
+        model_ref("alpha/model-a"),
+        "desired session model = B, active attempt model = A"
+    );
+    assert_eq!(during.model.configured.model, model_ref("beta/model-b"));
+
+    release.send_replace(true);
+    let settled = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+    })
+    .await;
+    assert!(matches!(
+        settled.last().expect("settlement").event,
+        RuntimeClientEvent::AttemptSettled { .. }
+    ));
+
+    // The next admission uses B, announced on the same self-contained event.
+    assert!(
+        attachment
+            .handle_request(RuntimeClientRequest::SubmitInbound {
+                id: RequestId::new(3),
+                content: text("second"),
+            })
+            .error
+            .is_none()
+    );
+    let next = receive_until(&subscription, |event| {
+        matches!(event.event, RuntimeClientEvent::AttemptStarted { .. })
+    })
+    .await;
+    let Some(RuntimeClientEvent::AttemptStarted {
+        attempt_id: second_attempt,
+        model: second_model,
+    }) = next.last().map(|event| event.event.clone())
+    else {
+        panic!("the second attempt started");
+    };
+    assert_ne!(second_attempt, first_attempt);
+    assert_eq!(
+        second_model.primary.model,
+        model_ref("beta/model-b"),
+        "the next attempt freezes the model the session moved to"
+    );
+    assert_eq!(second_model.primary.context_window, 32_000);
+}
+
 /// Model requests before `initialize` are rejected like every other method:
 /// the model contract adds no out-of-band path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

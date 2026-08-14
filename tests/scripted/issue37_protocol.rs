@@ -66,6 +66,7 @@ fn protocol_envelopes_round_trip_deterministically() {
         cursor: RuntimeClientCursor::new(9),
         event: RuntimeClientEvent::AttemptStarted {
             attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
+            model: Box::new(support::attempt_model_view("fixture/model-a")),
         },
     };
     let json = serde_json::to_string(&event).expect("serialize event");
@@ -75,6 +76,12 @@ fn protocol_envelopes_round_trip_deterministically() {
         "notifications never fabricate request ids"
     );
     assert_eq!(value["cursor"], 9);
+    // The start notification is self-contained: the frozen attempt model
+    // travels with it, so an incremental client never infers it.
+    assert_eq!(
+        value["event"]["model"]["primary"]["model"],
+        "fixture/model-a"
+    );
     let decoded: RuntimeClientProtocolEvent = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(decoded, event);
 }

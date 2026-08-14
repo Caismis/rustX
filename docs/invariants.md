@@ -1290,6 +1290,16 @@ contracts and provider protocols. These invariants are frozen by M2:
   admission affects only future attempts. Both share the one host lock, so
   there is no third possibility and no timing assumption.
 
+- **`attempt_started` is self-contained.** The event carries the frozen
+  `AttemptModelView` of the attempt it announces, byte-identical to
+  `snapshot.attempt.model`. A client following only the incremental stream
+  therefore never infers the active attempt's model from event ordering and
+  never needs a second `snapshot_get`. The value is produced by the
+  projection from runtime-owned state; a client can neither supply nor
+  influence it. It is the *frozen* model, never the session's desired model:
+  a `model_set` accepted while the attempt runs publishes
+  `session_model_changed` and never re-announces the running attempt.
+
 - **Transactional updates.** A rejected `model_set` changes nothing,
   allocates no cursor, and publishes no event.
 

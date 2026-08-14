@@ -1762,6 +1762,28 @@ While an attempt admitted with model A is running and the session has been
 switched to B, the snapshot truthfully reports both at once. No client has to
 infer this from event ordering.
 
+The same guarantee holds for a client that only follows the incremental
+stream, because `attempt_started` is **self-contained**:
+
+```text
+attempt_started { attempt_id, model }   model = the frozen AttemptModelView,
+                                        identical to snapshot.attempt.model
+```
+
+The value is runtime-owned and published by the projection under the same
+host lock that admitted the attempt; a client never supplies it and never
+derives it. So a continuously subscribed client answers "which model is this
+attempt actually using" from the start event alone — no `snapshot_get` round
+trip and no inference:
+
+```text
+session = A ; attempt admitted -> attempt_started(model = A)
+model_set(B) accepted mid-attempt
+                               -> session_model_changed(B)
+                                  (no second attempt_started; A keeps running)
+next attempt admitted          -> attempt_started(model = B)
+```
+
 Three methods complete the contract:
 
 - `model_catalog_get` — the bounded public catalog view: model reference,

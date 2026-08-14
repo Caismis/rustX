@@ -601,6 +601,7 @@ mod tests {
             cursor: RuntimeClientCursor::new(5),
             event: RuntimeClientEvent::AttemptStarted {
                 attempt_id: AttemptId::new("attempt-1"),
+                model: Box::new(attempt_model_view("acme/model-a")),
             },
         };
         let value = serde_json::to_value(&notification).expect("serialize");
@@ -610,6 +611,48 @@ mod tests {
         let decoded: RuntimeClientProtocolEvent =
             serde_json::from_value(value).expect("deserialize");
         assert_eq!(decoded, notification);
+    }
+
+    /// `attempt_started` is self-contained: the frozen attempt model travels
+    /// with the event, so a continuously subscribed client never has to
+    /// infer the active attempt's model or take a second snapshot.
+    #[test]
+    fn attempt_started_carries_the_frozen_attempt_model() {
+        let event = RuntimeClientEvent::AttemptStarted {
+            attempt_id: AttemptId::new("attempt-a"),
+            model: Box::new(attempt_model_view("acme/model-a")),
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert_eq!(value["type"], "attempt_started");
+        assert_eq!(value["model"]["primary"]["model"], "acme/model-a");
+        assert_eq!(value["model"]["summary"]["mode"], "session");
+        let decoded: RuntimeClientEvent = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(decoded, event);
+    }
+
+    /// The redacted attempt model view of one model reference.
+    fn attempt_model_view(reference: &str) -> crate::model::session::AttemptModelView {
+        use crate::model::catalog::{ModelCapabilities, ModelRef};
+        use crate::model::invocation::{ModelInvocationView, RequestParams};
+        use crate::model::session::{AttemptModelView, SummaryModelView};
+        use crate::model::types::ModelProtocol;
+
+        let capabilities = ModelCapabilities::text_only(true, false);
+        AttemptModelView {
+            primary: ModelInvocationView {
+                model: ModelRef::parse(reference).expect("a valid model reference"),
+                protocol: ModelProtocol::OpenAiChatCompletions,
+                context_window: 128_000,
+                model_max_output_tokens: 4096,
+                max_output_tokens: 4096,
+                reasoning_profile: None,
+                reasoning_enabled: false,
+                request_params: RequestParams::new(),
+                capabilities: capabilities.clone(),
+                declared_capabilities: capabilities,
+            },
+            summary: SummaryModelView::Session,
+        }
     }
 
     /// Typed errors carry structured categories, never free-form strings

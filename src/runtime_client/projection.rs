@@ -434,11 +434,15 @@ impl RuntimeClientProjection {
                     last_usage: None,
                     in_flight: None,
                     foreground: Vec::new(),
-                    model,
+                    model: model.clone(),
                 });
                 self.snapshot.status = None;
+                // The published event carries the same frozen model the
+                // attempt read model carries, so an incremental subscriber
+                // and a snapshot reader agree without inference.
                 vec![RuntimeClientEvent::AttemptStarted {
                     attempt_id: attempt_id.clone(),
+                    model,
                 }]
             }
             RuntimeEvent::AttemptCompleted { finish_reason, .. } => self.settle_attempt(

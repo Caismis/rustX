@@ -27,7 +27,7 @@ use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::error::ModelErrorKind;
 use crate::model::finish::ModelFinishReason;
-use crate::model::session::SessionModelView;
+use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
 use crate::runtime::types::{CancellationReason, RuntimeError};
@@ -41,9 +41,24 @@ use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProg
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuntimeClientEvent {
     /// An attempt started executing.
+    ///
+    /// The event is self-contained: it carries the immutable model snapshot
+    /// the attempt froze at admission, so a continuously subscribed client
+    /// knows the attempt's authoritative model without inferring it from
+    /// event ordering and without a second `snapshot_get` round trip. The
+    /// value is runtime-owned — a client never supplies or derives it — and
+    /// it is exactly [`RuntimeClientAttempt::model`]
+    /// ([`super::snapshot::RuntimeClientAttempt`]) of the same attempt.
+    ///
+    /// It is deliberately **not** the session's desired model: while this
+    /// attempt runs on model A and the session is switched to model B, this
+    /// event keeps reporting A and
+    /// [`SessionModelChanged`](Self::SessionModelChanged) reports B.
     AttemptStarted {
         /// The attempt identity.
         attempt_id: AttemptId,
+        /// The immutable model snapshot the attempt froze at admission.
+        model: Box<AttemptModelView>,
     },
     /// The attempt settled. Exactly one terminal settlement exists per
     /// attempt; the outcome is the platform-level settlement, never a
