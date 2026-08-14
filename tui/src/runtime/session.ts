@@ -49,6 +49,7 @@ import {
   type RuntimeClientCursor,
   type RuntimeClientProtocolEvent,
   type RuntimeClientSnapshot,
+  type RuntimeClientOutcome,
   type SessionModelConfig,
   type SessionModelView,
   type ToolExecutionId,
@@ -257,6 +258,53 @@ export class RuntimeClientSession {
     }
   }
 
+  /**
+   * Waits for the runtime's terminal settlement fact for one known attempt.
+   *
+   * The current projection is checked before and after listener installation,
+   * so a settlement that raced the waiter is still returned. No process exit
+   * or client-side inference can satisfy this wait.
+   */
+  async waitForAttemptSettlement(
+    attemptId: string,
+  ): Promise<RuntimeClientOutcome> {
+    const settled = settlementOf(this.#state, attemptId);
+    if (settled !== undefined) {
+      return settled;
+    }
+
+    return new Promise<RuntimeClientOutcome>((resolve, reject) => {
+      let done = false;
+      let removeStateListener = () => {};
+      let removeCloseListener = () => {};
+
+      const finish = (callback: () => void): void => {
+        if (done) {
+          return;
+        }
+        done = true;
+        removeStateListener();
+        removeCloseListener();
+        callback();
+      };
+
+      const check = (): void => {
+        const outcome = settlementOf(this.#state, attemptId);
+        if (outcome !== undefined) {
+          finish(() => resolve(outcome));
+        }
+      };
+
+      removeStateListener = this.onState(() => check());
+      removeCloseListener = this.#connection.onClose((error) =>
+        finish(() => reject(error)),
+      );
+      // The settlement may have been published between the initial check and
+      // listener installation.
+      check();
+    });
+  }
+
   /** Releases the attachment without cancelling anything. */
   async detach(): Promise<void> {
     const result = await this.#connection.request({ method: "detach" });
@@ -329,7 +377,6 @@ export class RuntimeClientSession {
         : {
             notices: this.#state.notices,
             pendingSubmissions: this.#state.pendingSubmissions,
-            runtimeShutdown: this.#state.runtimeShutdown,
           },
     );
     this.#publish();
@@ -353,6 +400,21 @@ export class RuntimeClientSession {
       listener(state);
     }
   }
+}
+
+function settlementOf(
+  state: PresentationState | undefined,
+  attemptId: string,
+): RuntimeClientOutcome | undefined {
+  const attempt = state?.attempt;
+  if (
+    attempt === undefined ||
+    attempt.attemptId !== attemptId ||
+    attempt.phase.type !== "settled"
+  ) {
+    return undefined;
+  }
+  return attempt.phase.outcome;
 }
 
 /** Whether an error is the runtime asking for an authoritative repair. */

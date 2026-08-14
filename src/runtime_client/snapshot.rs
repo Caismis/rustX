@@ -51,6 +51,9 @@ use crate::tools::types::{
 pub struct RuntimeClientSnapshot {
     /// The conversation this snapshot belongs to.
     pub conversation_id: ConversationId,
+    /// Whether the runtime has accepted shutdown and stopped admitting new
+    /// inbound work. This is runtime-owned state, not a client observation.
+    pub shutting_down: bool,
     /// The committed canonical conversation messages, in canonical order.
     ///
     /// This is a read model of canonical history: it is repaired from

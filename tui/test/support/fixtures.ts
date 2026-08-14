@@ -105,6 +105,7 @@ export function snapshot(
 ): RuntimeClientSnapshot {
   return {
     conversation_id: "conv-test",
+    shutting_down: false,
     messages: [],
     inbound: { pending: [] },
     background: [],

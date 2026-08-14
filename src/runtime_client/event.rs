@@ -69,6 +69,20 @@ pub enum RuntimeClientEvent {
         /// The platform-level settlement.
         outcome: RuntimeClientOutcome,
     },
+    /// The current attempt turn count changed.
+    AttemptTurnUpdated {
+        /// The attempt whose turn count changed.
+        attempt_id: AttemptId,
+        /// The exact folded number of completed turns.
+        turn: u32,
+    },
+    /// The current attempt's latest normalized model-request usage changed.
+    AttemptUsageUpdated {
+        /// The attempt whose usage changed.
+        attempt_id: AttemptId,
+        /// The exact normalized usage folded into the attempt view.
+        usage: crate::model::types::ModelUsage,
+    },
 
     /// Assembly of a canonical agent message began.
     AssistantMessageStarted {

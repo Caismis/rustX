@@ -120,6 +120,39 @@ describe("presentation projection", () => {
     assert.equal(state.attempt?.phase.type, "running");
   });
 
+  it("updates turn and normalized usage incrementally and reconstructs the same values", () => {
+    const usage = {
+      input_tokens: 10,
+      output_tokens: 4,
+      total_tokens: 14,
+      details: { cached_input_tokens: 2 },
+    };
+    const incremental = fold(initial(), [
+      { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
+      { type: "attempt_turn_updated", attempt_id: "a1", turn: 1 },
+      { type: "attempt_turn_updated", attempt_id: "a1", turn: 2 },
+      { type: "attempt_usage_updated", attempt_id: "a1", usage },
+    ]);
+
+    assert.equal(incremental.attempt?.turn, 2);
+    assert.deepEqual(incremental.attempt?.lastUsage, usage);
+
+    const repaired = replaceFromSnapshot(
+      snapshot({
+        attempt: {
+          attempt_id: "a1",
+          phase: { type: "running" },
+          turn: 2,
+          last_usage: usage,
+          model: attemptModel("alpha/model-a"),
+        },
+      }),
+      incremental.cursor,
+    );
+    assert.equal(repaired.attempt?.turn, incremental.attempt?.turn);
+    assert.deepEqual(repaired.attempt?.lastUsage, incremental.attempt?.lastUsage);
+  });
+
   it("accumulates streaming text, reasoning, and refusal as distinct kinds", () => {
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
@@ -406,6 +439,11 @@ describe("presentation projection", () => {
     assert.equal(state.runtimeShutdown, true);
     // Shutdown is not cancellation: the attempt is still running.
     assert.equal(state.attempt?.phase.type, "running");
+  });
+
+  it("derives the shutdown marker directly from an authoritative snapshot", () => {
+    const state = replaceFromSnapshot(snapshot({ shutting_down: true }), 8);
+    assert.equal(state.runtimeShutdown, true);
   });
 
   it("records every attempt settlement kind faithfully", () => {

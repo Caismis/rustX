@@ -532,6 +532,7 @@ export interface CapabilityView {
 
 export interface RuntimeClientSnapshot {
   conversation_id: ConversationId;
+  shutting_down: boolean;
   messages: MessageBlock[];
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
@@ -561,6 +562,16 @@ export type RuntimeClientEvent =
       type: "attempt_settled";
       attempt_id: AttemptId;
       outcome: RuntimeClientOutcome;
+    }
+  | {
+      type: "attempt_turn_updated";
+      attempt_id: AttemptId;
+      turn: number;
+    }
+  | {
+      type: "attempt_usage_updated";
+      attempt_id: AttemptId;
+      usage: ModelUsage;
     }
   | {
       type: "assistant_message_started";

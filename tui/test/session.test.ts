@@ -131,6 +131,66 @@ describe("RuntimeClientSession", () => {
     );
   });
 
+  it("folds live turn and usage events, then reconstructs them from resync", async () => {
+    const { peer, session } = connect();
+    await attach(
+      peer,
+      session,
+      snapshot({
+        attempt: {
+          attempt_id: "a1",
+          phase: { type: "running" },
+          turn: 0,
+          model: attemptModel("alpha/model-a"),
+        },
+      }),
+      0,
+    );
+
+    const usage = {
+      input_tokens: 10,
+      output_tokens: 4,
+      total_tokens: 14,
+      details: { cached_input_tokens: 2 },
+    };
+    peer.emit(1, { type: "attempt_turn_updated", attempt_id: "a1", turn: 1 });
+    peer.emit(2, { type: "attempt_turn_updated", attempt_id: "a1", turn: 2 });
+    peer.emit(3, { type: "attempt_usage_updated", attempt_id: "a1", usage });
+    await until(
+      () =>
+        session.state?.attempt?.turn === 2 &&
+        session.state.attempt.lastUsage?.total_tokens === 14,
+      "live turn and usage facts",
+    );
+    assert.equal(
+      peer.requests.some((request) => request.method === "snapshot_get"),
+      false,
+      "incremental facts do not require polling",
+    );
+
+    const repairing = session.resync();
+    await peer.awaitRequests(3);
+    peer.respond(3, {
+      type: "snapshot",
+      snapshot: snapshot({
+        attempt: {
+          attempt_id: "a1",
+          phase: { type: "running" },
+          turn: 2,
+          last_usage: usage,
+          model: attemptModel("alpha/model-a"),
+        },
+      }),
+      cursor: 30,
+    });
+    await peer.awaitRequests(4);
+    peer.respond(4, { type: "subscribed", after_cursor: 30 });
+    await repairing;
+
+    assert.equal(session.state?.attempt?.turn, 2);
+    assert.deepEqual(session.state?.attempt?.lastUsage, usage);
+  });
+
   it("repairs from the authoritative snapshot on resync_required", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot(), 0);
@@ -223,7 +283,7 @@ describe("RuntimeClientSession", () => {
     assert.equal(session.state?.transcript.length, 1);
   });
 
-  it("carries an observed shutdown across an authoritative repair", async () => {
+  it("derives shutdown from the replacement snapshot, not prior client state", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot(), 0);
 
@@ -235,14 +295,68 @@ describe("RuntimeClientSession", () => {
 
     const repairing = session.resync();
     await peer.awaitRequests(3);
-    peer.respond(3, { type: "snapshot", snapshot: snapshot(), cursor: 60 });
+    peer.respond(3, {
+      type: "snapshot",
+      snapshot: snapshot({ shutting_down: false }),
+      cursor: 60,
+    });
     await peer.awaitRequests(4);
     peer.respond(4, { type: "subscribed", after_cursor: 60 });
     await repairing;
 
-    // Shutdown is absorbing and the snapshot has no field for it. Dropping it
-    // would make the UI claim the runtime still admits inbound work.
-    assert.equal(session.state?.runtimeShutdown, true);
+    assert.equal(
+      session.state?.runtimeShutdown,
+      false,
+      "authoritative replacement owns the shutdown value",
+    );
+  });
+
+  it("waits for the exact attempt settlement and handles an already-settled attempt", async () => {
+    const outcome = {
+      type: "completed" as const,
+      finish_reason: { type: "stop" as const },
+    };
+    const { peer, session } = connect();
+    await attach(
+      peer,
+      session,
+      snapshot({
+        attempt: {
+          attempt_id: "a1",
+          phase: { type: "settled", outcome },
+          turn: 1,
+          model: attemptModel("alpha/model-a"),
+        },
+      }),
+      5,
+    );
+
+    assert.deepEqual(await session.waitForAttemptSettlement("a1"), outcome);
+  });
+
+  it("resolves the settlement waiter from the matching event", async () => {
+    const { peer, session } = connect();
+    await attach(
+      peer,
+      session,
+      snapshot({
+        attempt: {
+          attempt_id: "a1",
+          phase: { type: "running" },
+          turn: 1,
+          model: attemptModel("alpha/model-a"),
+        },
+      }),
+      5,
+    );
+
+    const waiting = session.waitForAttemptSettlement("a1");
+    const outcome = {
+      type: "cancelled" as const,
+      reason: "user_requested" as const,
+    };
+    peer.emit(6, { type: "attempt_settled", attempt_id: "a1", outcome });
+    assert.deepEqual(await waiting, outcome);
   });
 
   it("classifies resync_required distinctly from other protocol errors", async () => {

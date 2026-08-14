@@ -402,6 +402,70 @@ async fn model_get_returns_the_authoritative_session_state() {
     assert!(!after.effective.reasoning_enabled);
 }
 
+/// The TUI `/model X` operation sends a complete replacement: primary
+/// overrides reset to the selected model defaults while an independent summary
+/// policy remains exactly the one the authoritative session already held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_policy() {
+    let (_model, host) = runtime(vec![one_turn_stop()]).await;
+    let (attachment, _) = host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+        .expect("attach");
+
+    let summary_policy = rustx::model::session::SummaryModelPolicy::Explicit {
+        model: model_ref("summary/summary-model"),
+        reasoning_profile: None,
+        request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
+        max_output_tokens: Some(300),
+    };
+    let initial = SessionModelConfig {
+        model: model_ref("alpha/model-a"),
+        reasoning_profile: Some(ReasoningProfileId::new("off")),
+        request_params: common::request_params(serde_json::json!({"top_k": 40})),
+        max_output_tokens: Some(1_000),
+        summary_model: summary_policy.clone(),
+    };
+    let initial_response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(1),
+        config: Box::new(initial),
+    });
+    assert!(initial_response.error.is_none(), "{initial_response:?}");
+
+    let selected = SessionModelConfig {
+        model: model_ref("beta/model-b"),
+        reasoning_profile: None,
+        request_params: rustx::model::RequestParams::new(),
+        max_output_tokens: None,
+        summary_model: summary_policy.clone(),
+    };
+    let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
+        id: RequestId::new(2),
+        config: Box::new(selected.clone()),
+    });
+    let Some(RuntimeClientResult::ModelSet { model }) = response.result else {
+        panic!("primary selection returns the replacement: {response:?}");
+    };
+
+    assert_eq!(model.configured, selected);
+    assert_eq!(model.effective.model, model_ref("beta/model-b"));
+    assert_eq!(model.effective.reasoning_profile, None);
+    assert_eq!(model.effective.max_output_tokens, 2_048);
+    assert!(model.effective.request_params.is_empty());
+    let SummaryModelView::Explicit(summary) = model.summary else {
+        panic!("the explicit summary policy survives the primary switch");
+    };
+    assert_eq!(summary.model, model_ref("summary/summary-model"));
+    assert_eq!(summary.max_output_tokens, 300);
+    assert_eq!(
+        summary.request_params["summary_tag"],
+        serde_json::json!("keep")
+    );
+
+    let (snapshot, _) = host.snapshot().expect("snapshot");
+    assert_eq!(snapshot.model.configured, selected);
+    assert_eq!(snapshot.model.summary, SummaryModelView::Explicit(summary));
+}
+
 /// Runtime Client model projections preserve always-on reasoning as enabled
 /// without inventing a selectable profile or a provider wire field.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

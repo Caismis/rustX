@@ -73,7 +73,7 @@ export function replaceFromSnapshot(
   carry?: Partial<
     Pick<
       PresentationState,
-      "notices" | "pendingSubmissions" | "runtimeShutdown"
+      "notices" | "pendingSubmissions"
     >
   >,
 ): PresentationState {
@@ -139,10 +139,7 @@ export function replaceFromSnapshot(
     status: snapshot.status,
     capabilities: snapshot.capabilities,
     sessionModel: snapshot.model,
-    // Shutdown is an absorbing stream fact that the snapshot has no field
-    // for. Dropping it on repair would make the UI claim the runtime still
-    // admits inbound work, so an already-observed shutdown is carried.
-    runtimeShutdown: carry?.runtimeShutdown ?? false,
+    runtimeShutdown: snapshot.shutting_down,
     pendingSubmissions: carry?.pendingSubmissions ?? [],
     notices: carry?.notices ?? [],
   };
@@ -182,6 +179,18 @@ export function reduce(
         (entry) =>
           entry.kind !== "streaming" || entry.attemptId !== event.attempt_id,
       );
+      return next;
+
+    case "attempt_turn_updated":
+      if (state.attempt?.attemptId === event.attempt_id) {
+        next.attempt = { ...state.attempt, turn: event.turn };
+      }
+      return next;
+
+    case "attempt_usage_updated":
+      if (state.attempt?.attemptId === event.attempt_id) {
+        next.attempt = { ...state.attempt, lastUsage: event.usage };
+      }
       return next;
 
     case "assistant_message_started":
