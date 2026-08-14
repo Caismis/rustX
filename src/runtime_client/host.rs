@@ -3786,6 +3786,7 @@ mod tests {
     /// Shutdown is distinct from detach: it stops further admission, the
     /// current attempt continues, and detach remains available.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // one complete shutdown lifecycle
     async fn shutdown_is_not_detach_and_not_cancellation() {
         let (release_tx, release_rx) = model_release();
         let (_, fixture) = host_fixture(
