@@ -184,7 +184,13 @@ Implemented in the M5 tool plane PR (Issue #8):
 - The `background_task` runtime intrinsic (status and idempotent cancel)
 - The runtime-owned Agent Status `background_execution` built-in section
 - Native Read, Write, Edit, Glob, Grep, and Bash tools plus the workspace
-  boundary, artifact store, and explicit tool environment
+  boundary, artifact store, and explicit tool environment. Their
+  model-facing schemas follow established Pi coding-agent conventions
+  (`read` takes `offset`/`limit`, `edit` takes an atomic `edits` array of
+  `oldText`/`newText`, `grep` takes `ignoreCase`/`literal`/`context`/
+  `limit`, `bash` takes a `timeout` in seconds); Glob and Grep share one
+  private Rust-native search substrate built on the ripgrep crates, with no
+  `rg` executable dependency
 - The concrete bounded `NativeToolPolicies` configuration: each ordinary
   native tool independently selects its `ToolInvocationPolicy` (execution +
   concurrency axes; foreground-only sequential by default), with
