@@ -14,8 +14,10 @@ import {
   RuntimeClientConnection,
   RuntimeRequestError,
 } from "../src/runtime/connection.ts";
+import { reduce, replaceFromSnapshot } from "../src/presentation/projection.ts";
 import type { RuntimeClientProtocolEvent } from "../src/protocol/types.ts";
 import { ScriptedPeer, until } from "./support/scripted-peer.ts";
+import { snapshot } from "./support/fixtures.ts";
 
 function connect(): { peer: ScriptedPeer; connection: RuntimeClientConnection } {
   const peer = new ScriptedPeer();
@@ -87,10 +89,56 @@ describe("RuntimeClientConnection", () => {
 
     await pending;
     await until(() => events.length === 2, "both events delivered");
+    assert.deepEqual(events[0]?.event, { type: "runtime_shutdown" });
     assert.deepEqual(
       events.map((event) => event.cursor),
       [1, 2],
     );
+  });
+
+  it("closes on an unknown v1 event without advancing the projection", async () => {
+    const { peer, connection } = connect();
+    const events: RuntimeClientProtocolEvent[] = [];
+    let projection = replaceFromSnapshot(snapshot(), 0);
+    connection.onEvent((event) => {
+      events.push(event);
+      projection = reduce(projection, event);
+    });
+
+    const rejectionCounts = { pending: 0 };
+    const pending = connection
+      .request({ method: "snapshot_get" })
+      .catch((error: unknown) => {
+        rejectionCounts.pending += 1;
+        throw error;
+      });
+    await peer.awaitRequests(1);
+
+    peer.writeRecord({
+      cursor: 17,
+      event: { type: "future_semantic_transition" },
+    });
+
+    await assert.rejects(pending, (error: unknown) => {
+      assert.ok(error instanceof ConnectionClosedError);
+      assert.equal(error.reason, "protocol_error");
+      return true;
+    });
+    assert.equal(rejectionCounts.pending, 1);
+    assert.ok(connection.closed instanceof ConnectionClosedError);
+    assert.equal(connection.closed.reason, "protocol_error");
+    assert.deepEqual(events, []);
+    assert.equal(projection.cursor, 0);
+
+    await assert.rejects(
+      connection.request({ method: "model_get" }),
+      (error: unknown) => {
+        assert.ok(error instanceof ConnectionClosedError);
+        assert.equal(error.reason, "protocol_error");
+        return true;
+      },
+    );
+    assert.equal(peer.requests.length, 1);
   });
 
   it("rejects a request with its typed protocol error and stays usable", async () => {

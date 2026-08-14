@@ -386,10 +386,13 @@ export function reduce(
       return next;
 
     default:
-      // A future runtime may publish a variant this build does not know.
-      // Advancing the cursor and ignoring the payload keeps the projection
-      // consistent; guessing at its meaning would not.
-      return next;
+      // RuntimeClientConnection validates the v1 event vocabulary before an
+      // event reaches this reducer. This branch is unreachable unless a
+      // caller bypasses that boundary, and must never advance the cursor.
+      const exhaustiveEvent: never = event;
+      throw new Error(
+        `unreachable Runtime Client Protocol v1 event: ${String(exhaustiveEvent)}`,
+      );
   }
 }
 

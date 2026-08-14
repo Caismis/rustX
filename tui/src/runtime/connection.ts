@@ -35,10 +35,10 @@ import type { Readable, Writable } from "node:stream";
 import { JsonlDecoder, JsonlFramingError, encodeRecord } from "../protocol/jsonl.ts";
 import {
   describeProtocolError,
+  isEventLikeRecord,
   isProtocolEvent,
   type RequestId,
   type RuntimeClientError,
-  type RuntimeClientOutboundRecord,
   type RuntimeClientProtocolEvent,
   type RuntimeClientRequest,
   type RuntimeClientRequestBody,
@@ -319,15 +319,24 @@ export class RuntimeClientConnection {
       return false;
     }
 
-    const outbound = record as RuntimeClientOutboundRecord;
-    if (isProtocolEvent(outbound)) {
+    if (isProtocolEvent(record)) {
       for (const listener of this.#eventListeners) {
-        listener(outbound);
+        listener(record);
       }
       return true;
     }
 
-    const response = outbound as RuntimeClientResponse;
+    if (isEventLikeRecord(record)) {
+      this.#close(
+        new ConnectionClosedError(
+          "protocol_error",
+          "the runtime sent an unknown or malformed Runtime Client Protocol v1 event",
+        ),
+      );
+      return false;
+    }
+
+    const response = record as RuntimeClientResponse;
     if (typeof response.id !== "number") {
       this.#close(
         new ConnectionClosedError(

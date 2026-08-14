@@ -476,12 +476,15 @@ describe("presentation projection", () => {
     }
   });
 
-  it("advances the cursor past an unrecognized future event", () => {
-    const state = reduce(initial(), {
-      cursor: 42,
-      event: { type: "future_variant" } as unknown as RuntimeClientEvent,
-    });
-    assert.equal(state.cursor, 42);
+  it("fails closed if a caller bypasses protocol event validation", () => {
+    assert.throws(
+      () =>
+        reduce(initial(), {
+          cursor: 42,
+          event: { type: "future_variant" } as unknown as RuntimeClientEvent,
+        }),
+      /unreachable Runtime Client Protocol v1 event/,
+    );
   });
 
   it("keeps optimistic submissions as transient client state", () => {

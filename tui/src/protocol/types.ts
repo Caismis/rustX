@@ -11,9 +11,10 @@
  * - nothing in this file interprets a value. `requestParams` stays opaque
  *   provider-owned JSON, capability sets are read as published, and tool
  *   arguments/results are carried, not parsed for meaning;
- * - unknown variants must stay representable, so unions that rustX may extend
- *   are read through explicit discriminator checks rather than exhaustive
- *   assumptions.
+ * - Runtime Client Protocol v1 event discriminators are a closed vocabulary at
+ *   the connection boundary: an unknown event is a protocol error, not a
+ *   presentation fact; other open values remain opaque or are checked at
+ *   their owning boundary.
  *
  * Field casing follows the Rust `serde` attributes exactly: the protocol
  * envelope, snapshot, and event types are snake_case; the model-configuration
@@ -796,19 +797,78 @@ export type RuntimeClientOutboundRecord =
   | RuntimeClientProtocolEvent;
 
 /**
+ * Checks only the discriminator of one Runtime Client Protocol v1 event.
+ *
+ * The connection owns structural protocol validation, so this deliberately
+ * does not validate the event payload. Once this returns true, the reducer
+ * may receive the event as a known v1 fact.
+ */
+export function isKnownRuntimeClientEvent(
+  value: unknown,
+): value is RuntimeClientEvent {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  switch ((value as { type?: unknown }).type) {
+    case "attempt_started":
+    case "attempt_settled":
+    case "attempt_turn_updated":
+    case "attempt_usage_updated":
+    case "assistant_message_started":
+    case "assistant_text_delta":
+    case "assistant_reasoning_delta":
+    case "assistant_refusal_delta":
+    case "tool_call_started":
+    case "tool_call_arguments_delta":
+    case "tool_call_assembled":
+    case "tool_execution_started":
+    case "tool_execution_progress":
+    case "tool_execution_settled":
+    case "message_committed":
+    case "agent_status_composed":
+    case "inbound_enqueued":
+    case "inbound_drained":
+    case "background_execution_updated":
+    case "capability_published":
+    case "session_model_changed":
+    case "runtime_shutdown":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * Classifies one decoded outbound record.
  *
- * A notification structurally carries no request id, and a response always
- * carries one — that is the protocol's own discriminator, so no heuristic is
- * needed.
+ * A known notification carries a cursor and a known v1 event discriminator.
+ * Malformed or future event-shaped records are handled separately by the
+ * connection so they cannot fall through as responses.
  */
 export function isProtocolEvent(
-  record: RuntimeClientOutboundRecord,
+  record: unknown,
 ): record is RuntimeClientProtocolEvent {
+  if (typeof record !== "object" || record === null) {
+    return false;
+  }
+
+  const candidate = record as {
+    cursor?: unknown;
+    event?: unknown;
+  };
   return (
-    typeof (record as RuntimeClientProtocolEvent).cursor === "number" &&
-    typeof (record as RuntimeClientProtocolEvent).event === "object" &&
-    (record as RuntimeClientProtocolEvent).event !== null
+    typeof candidate.cursor === "number" &&
+    isKnownRuntimeClientEvent(candidate.event)
+  );
+}
+
+/** Returns true for a record attempting to use the event notification shape. */
+export function isEventLikeRecord(record: unknown): boolean {
+  return (
+    typeof record === "object" &&
+    record !== null &&
+    ("cursor" in record || "event" in record)
   );
 }
 
