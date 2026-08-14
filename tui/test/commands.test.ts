@@ -248,7 +248,7 @@ describe("CommandDispatcher", () => {
               toolCalls: true,
               reasoning: false,
             },
-            credentialSource: { environment: { variable: "RUSTX_KEY" } },
+            credentialSource: { type: "environment", variable: "RUSTX_KEY" },
           },
         ],
       },

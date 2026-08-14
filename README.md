@@ -107,6 +107,29 @@ Terminal input
 
 Container integration, production storage, orchestration, and control-plane integration come after the local runtime semantics are stable.
 
+## Reference terminal client
+
+`tui/` holds `rustx-tui`, a TypeScript reference client built on
+[`@earendil-works/pi-tui`](https://www.npmjs.com/package/@earendil-works/pi-tui).
+It spawns the `rustx` binary and communicates with it only through the stdio
+JSONL transport and Runtime Client Protocol v1:
+
+```sh
+cargo build --bin rustx
+
+nvm use --lts && corepack enable
+pnpm --dir tui install --frozen-lockfile
+
+pnpm --dir tui start -- \
+  --binary "$PWD/target/debug/rustx" \
+  --models "$PWD/models.json" --session "$PWD/session.json" \
+  --workspace "$PWD/workspace" --runtime-root "$PWD/.rustx"
+```
+
+Pi TUI is the terminal input/output projection of rustX and nothing more: all
+agent, session, model, tool, capability, and background semantics stay inside
+the Rust runtime. See [`tui/README.md`](tui/README.md).
+
 See [Architecture](docs/architecture.md), [Development Plan](docs/development-plan.md), [Runtime Invariants](docs/invariants.md), and [Repository Policy](docs/repository-policy.md).
 
 ## Repository governance

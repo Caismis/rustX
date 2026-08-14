@@ -1978,6 +1978,101 @@ transport — a controlling client closes it according to its own lifecycle
 policy. Transport EOF remains a detach, never an Agent Loop cancellation
 primitive, and no M9 recovery or quiescence exists here.
 
+### Layer 9: The TypeScript reference terminal client (Issue #39)
+
+`tui/` is a private pnpm package holding the client half of the Runtime
+Client boundary. It exists to validate rustX end to end, and its whole design
+follows from one rule:
+
+> Pi TUI is only the terminal input/output projection of rustX.
+
+`@earendil-works/pi-tui` sits **below** the rustX semantic boundary, never
+beside it:
+
+```text
+rustX Runtime semantics
+        |
+        v
+Runtime Client Protocol v1
+        |
+        v
+rustX TypeScript projection
+        |
+        v
+rustX TUI presentation
+        |
+        v
+@earendil-works/pi-tui primitives
+```
+
+Pi supplies terminal mechanics — differential rendering, a multiline editor,
+Markdown layout, overlays, a spinner. rustX supplies every semantic above it.
+No Pi class holds authoritative state, and nothing resembling Pi's
+`AgentSession`, `SessionManager`, model runtime, provider registry, tool
+registry, compaction state, session tree, extension runtime, Skill runtime,
+or `InteractiveMode` exists in the package. Pi is imported by one file.
+
+**Owners.** Each responsibility has exactly one owner:
+
+```text
+ChildRuntimeProcess     OS process lifecycle only: spawn with the explicit
+                        --models/--session/--workspace/--runtime-root
+                        contract, stdio, a bounded stderr tail, stdin close,
+                        wait, bounded fallback termination. It never reads a
+                        byte of stdout and never interprets a startup path.
+
+RuntimeClientConnection the single owner of JSONL framing, request-id
+                        allocation, the pending RPC map, response
+                        correlation, event delivery, and ordered writes.
+                        Every pending request settles exactly once; after
+                        terminal failure new requests fail immediately.
+
+RuntimeClientSession    attach, snapshot/cursor installation, subscribe,
+                        resync repair, shutdown sequencing. No agent
+                        semantics.
+
+PresentationProjection  the ephemeral render cache.
+
+CommandDispatcher       UI intent -> one canonical Runtime Client operation.
+
+RustxTuiApp             the Pi components.
+```
+
+**The projection is not a second runtime state machine.** Two total functions
+define the whole model — `replaceFromSnapshot(snapshot, cursor)` and
+`reduce(state, event)` — and every field they write is copied from a
+runtime-published value. The reducer decides where a fact goes in the render
+tree, never what the fact is. Given a fresh authoritative snapshot the
+complete meaningful UI state is reconstructable without any hidden local
+conversation log and without client-side history inference.
+
+**Resync** is loss of trust in the incremental projection, never a gap to
+fill:
+
+```text
+resync_required -> snapshot_get -> replace the projection -> subscribe after
+                                   the new cursor -> continue
+```
+
+**What the client must never do**, and does not: construct ModelAdapters or
+provider HTTP clients, parse `models.json`, resolve credentials or endpoints,
+build context engines or summarizers, register tools, read `SKILL.md`,
+compose an Agent Status, infer a mailbox drain, execute a tool, or branch on a
+tool's name or origin for anything but a label. Several of those are reachable
+only through the canonical operations this client calls.
+
+**Validation.** Most correctness is proven without a terminal, without
+credentials, and without sleep-based races: scripted byte and record
+sequences drive framing, RPC correlation and terminal settlement, projection
+folding, the A -> B model invariant, and resync repair. A bounded integration
+suite then drives the **real** `rustx` binary over the real stdio/JSONL
+transport against a local SSE provider fixture, exercising spawn, initialize,
+subscribe, model and capability inspection, inbound submission, streaming and
+commit, attempt settlement, resync, shutdown, stdin EOF, and clean exit.
+
+CI runs the TUI as a separate job on the nvm LTS line, so the Rust suites
+never depend on Node being present.
+
 
 ## 3. Dependency rule
 

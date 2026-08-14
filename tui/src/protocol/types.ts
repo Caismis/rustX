@@ -266,14 +266,20 @@ export interface ModelInvocationView {
   declaredCapabilities: ModelCapabilities;
 }
 
+/**
+ * The compaction summary model policy.
+ *
+ * Note the casing: this is a tagged enum whose struct-variant fields are
+ * snake_case, unlike the surrounding camelCase model-configuration types.
+ */
 export type SummaryModelPolicy =
   | { mode: "session" }
   | {
       mode: "explicit";
       model: ModelRef;
-      reasoningProfile?: ReasoningProfileId;
-      requestParams?: RequestParams;
-      maxOutputTokens?: number;
+      reasoning_profile?: ReasoningProfileId;
+      request_params?: RequestParams;
+      max_output_tokens?: number;
     };
 
 export type SummaryModelView =
@@ -314,9 +320,13 @@ export interface AttemptModelView {
   summary: SummaryModelView;
 }
 
+/**
+ * Where a provider credential comes from — the *kind*, and for an environment
+ * reference the variable *name*. Never a credential value.
+ */
 export type CredentialSourceView =
-  | "literal"
-  | { environment: { variable: string } };
+  | { type: "literal" }
+  | { type: "environment"; variable: string };
 
 export interface ReasoningProfileView {
   id: ReasoningProfileId;

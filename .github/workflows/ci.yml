@@ -31,3 +31,54 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-targets --all-features
+
+      - name: Check whitespace
+        run: git diff --check
+
+  # The TUI is a separate job on purpose: the Rust suites must never depend on
+  # Node being present.
+  tui:
+    name: TUI typecheck and tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Node comes from nvm's LTS line, declared explicitly. The intent is
+      # "rustX TUI runs on the supported Node LTS", not "whatever Node the
+      # runner happens to preinstall".
+      - name: Install the Node LTS through nvm
+        run: |
+          set -euo pipefail
+          export NVM_DIR="$HOME/.nvm"
+          mkdir -p "$NVM_DIR"
+          curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+          # shellcheck source=/dev/null
+          . "$NVM_DIR/nvm.sh"
+          nvm install --lts
+          nvm use --lts
+          corepack enable
+          node --version
+          pnpm --version
+          # Export the resolved LTS bin directory for the later steps.
+          echo "$(dirname "$(nvm which --lts)")" >> "$GITHUB_PATH"
+
+      - name: Report the resolved toolchain
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install dependencies
+        run: pnpm --dir tui install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm --dir tui typecheck
+
+      # The integration suite drives the real binary over the real stdio
+      # transport, so it must exist before the tests run.
+      - name: Build the rustx binary
+        run: cargo build --bin rustx
+
+      - name: Test
+        run: pnpm --dir tui test
