@@ -97,7 +97,7 @@ The four runtime paths are passed straight through. **The client never opens,
 parses, or interprets any of them** — `models.json` is a runtime-owned model
 authority, and reading it here would create a second one. Provider credentials
 are resolved by the Rust process from the environment it inherits. For the
-complete copyable configuration and the MCP/Python-tool variants, see
+complete copyable configuration and Python-tool example, see
 [`examples/local-runtime/README.md`](../examples/local-runtime/README.md).
 
 ## Startup sequence
@@ -149,6 +149,15 @@ never visually mutates to B. The next admission shows B.
 This is proven in `test/model-invariant.test.ts` through the pure reducer and
 end to end over the transport, and again against the real binary in
 `test/integration.test.ts`.
+
+## Reasoning presentation
+
+The TUI consumes only canonical Runtime Client reasoning blocks. Provider
+spellings such as `reasoning` and `reasoning_content` never enter the
+TypeScript protocol or presentation layer. Reasoning, visible answer,
+refusal, and tool blocks remain distinct presentation blocks in both
+streaming and committed rendering; the TUI is a downstream projection, not a
+second runtime state machine.
 
 ## Testing
 

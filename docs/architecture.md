@@ -909,12 +909,19 @@ Governing rules:
   to a JSON object, validates protected-key ownership, and shallow-overlays
   the effective parameters at the **top level** of the real provider body.
   There is no invented `extra_body` nesting level and no second HTTP path.
+- **Model identity.** A canonical model reference is `provider/model-id`.
+  Only the first slash separates the provider; the model ID keeps the entire
+  remainder, so `gateway/Qwen/Qwen3` reaches the provider as `Qwen/Qwen3`.
+  Provider IDs and reasoning-profile IDs cannot contain `/`, and model IDs
+  may contain slash-separated non-empty segments (`a//b` is invalid).
 - **Bounded compat.** `compat` configures only structural translation the
   adapters actually branch on — the legal Chat max-token spelling, whether
   streaming usage options are supported, whether previous assistant reasoning
   is replayed as `reasoning`, `reasoning_content`, or omitted, and the
-  Responses storage / continuation mode. It is not a strategy framework, and
-  nothing is ever inferred from a hostname.
+  Responses storage / continuation mode. For `openai_chat_completions`,
+  `chatReasoningReplay` is required and has no universal default; it is a
+  provider/model wire contract, not a reasoning-generation switch. It is not
+  a strategy framework, and nothing is ever inferred from a hostname.
 - **Effective capabilities.** The client-visible capability is
   `model-declared ∩ adapter/protocol ∩ current runtime`. Because no adapter
   can transmit canonical image or file references yet, a catalog claiming
@@ -1953,6 +1960,11 @@ Representative local session configuration:
   "environment": { "RUSTX_PROJECT": "demo" }
 }
 ```
+
+This empty `mcpServers` field is intentionally startup-safe and is not a
+canonical MCP connection-configuration example. The user-facing MCP shape is
+being revised under [issue #46](https://github.com/Caismis/rustX/issues/46);
+that issue owns the named-map connection contract and protocol negotiation.
 
 A session override may not declare a key the selected reasoning profile owns
 (`temperature` above belongs to the `on` profile, so `requestParams` declares

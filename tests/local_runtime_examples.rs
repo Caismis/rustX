@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use rustx::local_runtime::LocalSessionConfig;
-use rustx::local_runtime::config::McpTransportDocument;
-use rustx::model::catalog::{MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId};
+use rustx::model::catalog::{
+    ChatReasoningReplay, MapCredentialEnvironment, ModelCatalog, ModelRef, ReasoningProfileId,
+};
 use rustx::model::session::SummaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::tools::Workspace;
@@ -28,6 +29,10 @@ fn committed_model_example_uses_the_production_catalog_contract() {
     assert_eq!(model.max_output_tokens, 4_096);
     assert!(model.capabilities.tool_calls);
     assert!(model.capabilities.reasoning);
+    assert_eq!(
+        model.compat.chat_reasoning_replay,
+        Some(ChatReasoningReplay::Reasoning)
+    );
     assert_eq!(model.request_params["temperature"], serde_json::json!(0.2));
 
     let reasoning = model.reasoning.as_ref().expect("reasoning profiles");
@@ -95,46 +100,6 @@ fn committed_baseline_session_selects_a_catalog_model_and_configures_runtime_pol
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
-}
-
-#[test]
-fn committed_mcp_session_exposes_both_current_transport_shapes_and_policies() {
-    let session = LocalSessionConfig::from_json_slice(&read_example("session.with-mcp.json"))
-        .expect("session.with-mcp.json must parse through LocalSessionConfig");
-    assert_eq!(session.mcp_servers.len(), 2);
-
-    let stdio = &session.mcp_servers[0];
-    assert_eq!(stdio.server_id.as_str(), "example-stdio");
-    match &stdio.transport {
-        McpTransportDocument::Stdio {
-            program,
-            args,
-            cwd,
-            environment,
-        } => {
-            assert_eq!(program, "replace-with-real-mcp-server");
-            assert_eq!(args, &["--stdio"]);
-            assert_eq!(cwd.as_deref(), Some(Path::new(".")));
-            assert_eq!(environment["MCP_EXAMPLE_MODE"], "replace-me");
-        }
-        McpTransportDocument::StreamableHttp { .. } => panic!("expected stdio transport"),
-    }
-    let stdio_policy = stdio.policy.to_policy();
-    assert_eq!(stdio_policy.execution, ToolExecutionPolicy::ModelSelectable);
-    assert_eq!(stdio_policy.concurrency, ToolConcurrencyPolicy::Sequential);
-
-    let http = &session.mcp_servers[1];
-    assert_eq!(http.server_id.as_str(), "example-http");
-    match &http.transport {
-        McpTransportDocument::StreamableHttp { endpoint, headers } => {
-            assert_eq!(endpoint, "https://mcp.example.invalid/mcp");
-            assert_eq!(headers["Authorization"], "Bearer replace-me");
-        }
-        McpTransportDocument::Stdio { .. } => panic!("expected streamable HTTP transport"),
-    }
-    let http_policy = http.policy.to_policy();
-    assert_eq!(http_policy.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(http_policy.concurrency, ToolConcurrencyPolicy::Parallel);
 }
 
 #[test]

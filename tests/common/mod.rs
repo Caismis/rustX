@@ -302,13 +302,18 @@ pub fn invocation(
     protocol: rustx::model::ModelProtocol,
     model: &str,
 ) -> rustx::model::ModelInvocationConfig {
+    let chat_reasoning_replay = (protocol == rustx::model::ModelProtocol::OpenAiChatCompletions)
+        .then_some(rustx::model::ChatReasoningReplay::Omit);
     rustx::model::ModelInvocationConfig {
         model: model.to_owned(),
         protocol,
         max_output_tokens: 512,
         request_params: rustx::model::RequestParams::new(),
         capabilities: rustx::model::ModelCapabilities::text_only(true, true),
-        compat: rustx::model::ModelCompat::default(),
+        compat: rustx::model::ModelCompat {
+            chat_reasoning_replay,
+            ..rustx::model::ModelCompat::default()
+        },
     }
 }
 

@@ -1,8 +1,8 @@
 # Copyable local runtime configuration
 
 This is the canonical example for the current explicit local runtime
-contract. Copy this directory, replace the provider/MCP placeholders, and
-pass all four paths explicitly. There is no cwd-based configuration discovery,
+contract. Copy this directory, replace the provider placeholder, and pass all
+four paths explicitly. There is no cwd-based configuration discovery,
 global/project precedence, implicit `~/.rustx` configuration, or TUI-side
 configuration parser.
 
@@ -12,7 +12,6 @@ The intended layout is:
 examples/local-runtime/
 ├── models.json
 ├── session.json
-├── session.with-mcp.json
 ├── workspace/
 │   └── .agents/
 │       └── tools/
@@ -70,6 +69,13 @@ by the concrete OpenAI-compatible service:
 This must follow the selected model's documentation; rustX deliberately does
 not infer it from the provider name, hostname, or model ID.
 
+There is no universal default: an `openai_chat_completions` model must declare
+this field explicitly. These values control replay of historical assistant
+reasoning only; they do not enable reasoning for the next generation.
+Generation-time reasoning remains owned by the selected reasoning profile and
+its provider request parameters. In particular, the `off` profile does not
+implicitly select `omit`.
+
 The named `off` and `on` reasoning profiles likewise have no built-in meaning
 from their names. Their exact `enabled` state and provider-owned
 `requestParams` are the contract. The illustrative `reasoning_effort` value
@@ -98,22 +104,17 @@ The harmless `RUSTX_EXAMPLE_MODE` entry demonstrates the authorized session
 environment. Keep provider credentials in `models.json`'s `apiKey` reference,
 not in this table.
 
-## MCP variant
+## MCP baseline scope
 
-The copyable baseline has `"mcpServers": []`, so it does not require an
-external MCP process or endpoint at startup. `session.with-mcp.json` contains
-the same model, context, native-tool, and environment configuration plus
-concrete examples of the current MCP schema:
+The copyable baseline intentionally keeps `"mcpServers": []`, so it does not
+require an external MCP process or endpoint at startup. It is a startup-safe
+baseline, not a canonical MCP connection-configuration example.
 
-- `example-stdio` uses `transport.type = "stdio"` with `program`, `args`,
-  `cwd`, `environment`, and a server `policy`.
-- `example-http` uses `transport.type = "streamable_http"` with `endpoint`,
-  `headers`, and a server `policy`.
-
-The example program and `.invalid` endpoint are intentionally placeholders.
-Replace them with a real reachable server before switching the startup path
-from `session.json` to `session.with-mcp.json`. The file is parser-validated
-in CI, but CI does not launch or connect to either placeholder server.
+The current user-facing MCP configuration shape is being revised under
+[issue #46](https://github.com/Caismis/rustX/issues/46). The obsolete array
+schema with `serverId`, nested `transport` objects, and embedded policy is not
+advertised here; the final named-map connection contract remains owned by that
+issue.
 
 After successful capability preparation, MCP tools are part of the
 runtime-owned immutable capability snapshot. The TUI does not launch,
@@ -178,8 +179,5 @@ pnpm --dir tui start \
   --runtime-root "$PWD/examples/local-runtime/.rustx"
 ```
 
-To try MCP, replace only the session path with
-`examples/local-runtime/session.with-mcp.json` after replacing both example
-server configurations with real ones. The TUI still passes the paths through
-unchanged; the Rust runtime remains the sole owner of model, session, tool,
-capability, and MCP semantics.
+The TUI passes the paths through unchanged; the Rust runtime remains the sole
+owner of model, session, tool, capability, and MCP semantics.

@@ -38,6 +38,7 @@ const MODELS_JSON: &str = r#"{
             "toolCalls": true,
             "reasoning": false
           },
+          "compat": {"chatReasoningReplay": "omit"},
           "requestParams": {"temperature": 0.3}
         }
       ]

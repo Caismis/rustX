@@ -1254,6 +1254,11 @@ contracts and provider protocols. These invariants are frozen by M2:
   override that also declares one of those keys is a deterministic
   configuration failure, never resolved by merge order.
 
+- **Model references are deterministic.** `provider/model-id` splits at the
+  first slash only. Provider IDs and reasoning-profile IDs reject `/`; model
+  IDs preserve the full remainder but reject empty slash-separated segments.
+  Thus `a/b` and `a/b/c` are valid, while `a/`, `/b`, and `a//b` are not.
+
 - **Reasoning is model-declared named profiles.** The runtime assigns no
   meaning to a profile name, synthesizes no `off`/`low`/`medium`/`high`
   profile, and injects no reasoning field of its own. A profile's wire
@@ -1275,8 +1280,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   text model.
 
 - **`compat` is bounded structural translation behaviour**, disjoint from
-  `requestParams`. Nothing is ever inferred from a provider name or a base
-  URL hostname.
+  `requestParams`. Chat Completions models must explicitly declare
+  `chatReasoningReplay` as `reasoning`, `reasoning_content`, or `omit`; there
+  is no universal dialect default. `omit` is applied while translating
+  canonical history, so unavailable or multiple historical reasoning blocks
+  are ignored without inspecting provider continuation state. Nothing is
+  inferred from a provider name or a base URL hostname.
 
 - **One immutable attempt model snapshot.** The snapshot is taken at the same
   admission linearization boundary that publishes the attempt. Every model

@@ -21,9 +21,9 @@
 //!
 //! No request-level reasoning control is ever synthesized: whatever the
 //! selected reasoning profile configured is exactly what appears on the
-//! wire. Previous assistant reasoning is replayed through vLLM's
-//! provider-specific `reasoning` message field rather than flattened into
-//! visible assistant text.
+//! wire. Previous assistant reasoning is replayed through the model-declared
+//! provider-specific `reasoning` or `reasoning_content` field, or omitted by
+//! policy, rather than flattened into visible assistant text.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -58,7 +58,7 @@ use crate::model::adapter::traits::{
     ModelAdapter, ModelEventStream, model_event_stream_of_failure,
 };
 use crate::model::adapter::validation::{ValidatedTools, validate_request};
-use crate::model::catalog::ChatStreamUsage;
+use crate::model::catalog::{ChatReasoningReplay, ChatStreamUsage};
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
 use crate::model::invocation::finalize_provider_request;
@@ -1088,7 +1088,12 @@ fn translate_request(request: &ModelRequest) -> Result<serde_json::Value, ModelE
             retry_after_ms: None,
             provider_code: None,
         })?;
-        if let Some(field) = request.invocation.compat.chat_reasoning_replay.wire_name() {
+        if let Some(field) = request
+            .invocation
+            .compat
+            .chat_reasoning_replay
+            .and_then(ChatReasoningReplay::wire_name)
+        {
             object.insert(field.to_owned(), reasoning.into());
         }
     }
@@ -1117,6 +1122,7 @@ struct TranslatedChatMessage {
 fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessage>, ModelError> {
     let mut system_messages = Vec::new();
     let mut transcript_messages = Vec::new();
+    let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
     for block in &request.messages {
         let (translated, reasoning) = match block {
             MessageBlock::System(system) => {
@@ -1191,7 +1197,7 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
                 )
             }
             MessageBlock::Agent(agent) => {
-                let (message, reasoning) = translate_agent_message(agent)?;
+                let (message, reasoning) = translate_agent_message(agent, reasoning_replay)?;
                 (ChatCompletionRequestMessage::Assistant(message), reasoning)
             }
             MessageBlock::Tool(tool_message) => (
@@ -1240,12 +1246,14 @@ fn append_skill_catalog(request: &ModelRequest, messages: &mut Vec<TranslatedCha
 
 /// Translates one canonical agent message into an assistant message.
 ///
-/// vLLM represents one previous reasoning block in its provider-specific
-/// `reasoning` field. The typed `OpenAI` SDK message and that extension value
-/// stay separate until the final BYOT JSON is assembled. Shapes that cannot
-/// be represented losslessly remain unsupported.
+/// A Chat Completions dialect represents one previous reasoning block in its
+/// provider-specific extension field. The typed `OpenAI` SDK message and that
+/// extension value stay separate until the final BYOT JSON is assembled.
+/// Shapes that cannot be represented losslessly remain unsupported; the
+/// explicit omit policy skips canonical reasoning before this validation.
 fn translate_agent_message(
     agent: &crate::message::types::AgentMessageBlock,
+    reasoning_replay: Option<ChatReasoningReplay>,
 ) -> Result<
     (
         async_openai::types::chat::ChatCompletionRequestAssistantMessage,
@@ -1289,17 +1297,27 @@ fn translate_agent_message(
                 ));
             }
             AgentContentBlock::Reasoning(block) => {
-                let text = block.text.as_ref().ok_or_else(|| {
-                    unsupported(
-                        "OpenAI Chat Completions cannot replay a previous reasoning block \
-                         whose text was not exposed by the provider",
-                    )
-                })?;
-                if reasoning.replace(text.clone()).is_some() {
-                    return Err(unsupported(
-                        "OpenAI Chat Completions cannot losslessly represent multiple \
-                         reasoning blocks in one assistant message",
-                    ));
+                // Omit is a translation policy, not a serialized-JSON
+                // cleanup step: this branch deliberately does nothing for
+                // that policy, without inspecting text or provider state.
+                if reasoning_replay != Some(ChatReasoningReplay::Omit) {
+                    if reasoning_replay.is_none() {
+                        return Err(unsupported(
+                            "OpenAI Chat Completions requires an explicit chatReasoningReplay compat value to replay historical reasoning",
+                        ));
+                    }
+                    let text = block.text.as_ref().ok_or_else(|| {
+                        unsupported(
+                            "OpenAI Chat Completions cannot replay a previous reasoning block \
+                             whose text was not exposed by the provider",
+                        )
+                    })?;
+                    if reasoning.replace(text.clone()).is_some() {
+                        return Err(unsupported(
+                            "OpenAI Chat Completions cannot losslessly represent multiple \
+                             reasoning blocks in one assistant message",
+                        ));
+                    }
                 }
             }
             AgentContentBlock::Image(_) => {
