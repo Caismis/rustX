@@ -75,8 +75,8 @@ pub struct RuntimeClientSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatusView>,
     /// Runtime-owned context-compaction diagnostics. The values describe
-    /// committed checkpoint observations; they never replace canonical
-    /// history or expose summary content.
+    /// committed `RuntimeEvent::CompactionCompleted` facts; they never
+    /// replace canonical history or expose summary content.
     #[serde(default)]
     pub context: RuntimeClientContextView,
     /// The active capability projection.
@@ -99,7 +99,9 @@ pub struct RuntimeClientSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientContextView {
-    /// The number of checkpoints committed while this runtime was observed.
+    /// Runtime Client projection statistic: the number of committed
+    /// completion events folded into this read model. Checkpoint generation
+    /// remains the context-owned identity.
     pub compaction_count: u64,
     /// The latest committed checkpoint metadata, when compaction occurred.
     #[serde(default, skip_serializing_if = "Option::is_none")]

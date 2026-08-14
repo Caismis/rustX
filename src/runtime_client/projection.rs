@@ -97,7 +97,7 @@ use super::snapshot::{
     RuntimeClientStatusFact, RuntimeClientStatusSection,
 };
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
-use crate::agent::observer::{AgentStatusObservation, ContextCompactionObservation};
+use crate::agent::observer::AgentStatusObservation;
 use crate::context::status::{AgentStatusSectionData, render_agent_status};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
@@ -138,8 +138,6 @@ pub(crate) enum Observation {
     },
     /// One composed Agent Status observation.
     Status(AgentStatusObservation),
-    /// One checkpoint committed by context compaction.
-    ContextCompacted(ContextCompactionObservation),
     /// One mailbox enqueue (authoritative item + sequence).
     InboundEnqueued(InboundItem),
     /// One mailbox finite drain (authoritative batch).
@@ -338,20 +336,6 @@ impl RuntimeClientProjection {
                     status: view,
                 }]
             }
-            Observation::ContextCompacted(observation) => {
-                let compaction = RuntimeClientCompactionView {
-                    generation: observation.generation,
-                    tokens_before: observation.tokens_before,
-                    estimated_tokens_after: observation.estimated_tokens_after,
-                };
-                self.snapshot.context.compaction_count =
-                    self.snapshot.context.compaction_count.saturating_add(1);
-                self.snapshot.context.latest_compaction = Some(compaction);
-                vec![RuntimeClientEvent::ContextCompacted {
-                    attempt_id: observation.attempt_id,
-                    context: self.snapshot.context.clone(),
-                }]
-            }
             Observation::InboundEnqueued(item) => {
                 self.snapshot.inbound.pending.push(InboundItemView {
                     sequence: item.sequence(),
@@ -436,8 +420,10 @@ impl RuntimeClientProjection {
     /// - PROJECT: turn counting and final request usage, carrying the exact
     ///   values folded into the attempt view;
     /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
-    ///   `ModelRequestFailed`, `ModelRetryScheduled`) and compaction
-    ///   mechanics (`CompactionStarted/Completed/Failed`).
+    ///   `ModelRequestFailed`, `ModelRetryScheduled`) and compaction start /
+    ///   failure (`CompactionStarted/Failed`);
+    /// - PROJECT: committed compaction completion, carrying only checkpoint
+    ///   metadata from `CompactionCompleted`.
     // The mapping table is one explicit classification policy; identical
     // `Vec::new()` bodies mark intentionally distinct classes (the remaining
     // fold-only/internal observations) that must remain separately
@@ -724,10 +710,30 @@ impl RuntimeClientProjection {
                     result,
                 }]
             }
-            // INTERNAL: compaction mechanics never produce client events.
-            RuntimeEvent::CompactionStarted
-            | RuntimeEvent::CompactionCompleted
-            | RuntimeEvent::CompactionFailed { .. } => Vec::new(),
+            RuntimeEvent::CompactionCompleted {
+                generation,
+                tokens_before,
+                estimated_tokens_after,
+            } => {
+                let compaction = RuntimeClientCompactionView {
+                    generation: *generation,
+                    tokens_before: *tokens_before,
+                    estimated_tokens_after: *estimated_tokens_after,
+                };
+                self.snapshot.context.compaction_count = self
+                    .snapshot
+                    .context
+                    .compaction_count
+                    .checked_add(1)
+                    .expect("Runtime Client compaction count cannot overflow");
+                self.snapshot.context.latest_compaction = Some(compaction);
+                vec![RuntimeClientEvent::ContextCompacted {
+                    attempt_id: attempt_id.clone(),
+                    context: self.snapshot.context.clone(),
+                }]
+            }
+            // INTERNAL: compaction start/failure never produce client events.
+            RuntimeEvent::CompactionStarted | RuntimeEvent::CompactionFailed { .. } => Vec::new(),
         }
     }
 
@@ -1306,28 +1312,44 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 #[cfg(test)]
 mod tests {
     use super::{Observation, RuntimeClientProjection, SubscriberPoll};
-    use crate::agent::observer::ContextCompactionObservation;
+    use crate::agent::{
+        AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
+    };
     use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
+    use crate::context::{
+        AgentStatusComposer, CompactionBudgets, ContextCheckpoint, ContextCheckpointStore,
+        ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
+    };
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AgentContentBlock, AgentMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
         UserContentBlock, UserMessageBlock, UserSource,
     };
+    use crate::model::adapter::ModelAdapter;
     use crate::model::error::{ModelError, ModelErrorKind};
+    use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
-    use crate::runtime::identity::{AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
-    use crate::runtime::inbound::ConversationInboundMailbox;
+    use crate::runtime::identity::{
+        AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
+    };
+    use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::types::CancellationReason;
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
         ForegroundToolState, InFlightBlock, RuntimeClientAttemptPhase,
     };
     use crate::runtime_client::types::RuntimeClientCursor;
+    use crate::scripted_suites::support::context::{
+        FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator,
+    };
+    use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
+    use crate::tools::executor::ToolRegistry;
     use crate::tools::types::{
         ToolCall, ToolCallStart, ToolExecutionResult, ToolExecutionStatus, ToolProgress,
     };
+    use std::sync::{Arc, Mutex};
 
     fn attempt() -> AttemptId {
         AttemptId::new("attempt-1")
@@ -1379,14 +1401,327 @@ mod tests {
         events
     }
 
-    /// Checkpoint observations advance the external context view exactly once
-    /// per committed generation and preserve token-measurement provenance.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum CompactionOrderFact {
+        CheckpointSaveAttempted,
+        CheckpointSaved,
+        RuntimeCompactionCompleted,
+        ClientContextCompacted,
+        ClientAttemptSettled,
+    }
+
+    struct RecordingCheckpointStore {
+        checkpoint: Mutex<Option<ContextCheckpoint>>,
+        facts: Arc<Mutex<Vec<CompactionOrderFact>>>,
+        fail_save: bool,
+    }
+
+    impl ContextCheckpointStore for RecordingCheckpointStore {
+        fn load(
+            &self,
+            _conversation_id: &ConversationId,
+        ) -> Result<Option<ContextCheckpoint>, ContextError> {
+            Ok(self.checkpoint.lock().expect("checkpoint lock").clone())
+        }
+
+        fn save(&self, checkpoint: &ContextCheckpoint) -> Result<(), ContextError> {
+            self.facts
+                .lock()
+                .expect("order facts lock")
+                .push(CompactionOrderFact::CheckpointSaveAttempted);
+            if self.fail_save {
+                return Err(ContextError::new(
+                    ContextErrorKind::CheckpointSaveFailed,
+                    "scripted checkpoint save failure",
+                ));
+            }
+            *self.checkpoint.lock().expect("checkpoint lock") = Some(checkpoint.clone());
+            self.facts
+                .lock()
+                .expect("order facts lock")
+                .push(CompactionOrderFact::CheckpointSaved);
+            Ok(())
+        }
+    }
+
+    struct EventPathObserver {
+        projection: Mutex<RuntimeClientProjection>,
+        subscriber: u64,
+        facts: Arc<Mutex<Vec<CompactionOrderFact>>>,
+    }
+
+    impl EventPathObserver {
+        fn new(
+            initial_messages: Vec<MessageBlock>,
+            facts: Arc<Mutex<Vec<CompactionOrderFact>>>,
+        ) -> Self {
+            let mut projection = RuntimeClientProjection::new(
+                ConversationId::new("projection-order"),
+                initial_messages,
+                crate::runtime_client::snapshot::CapabilityView {
+                    revision: crate::runtime::identity::CapabilityRevision::new(1),
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                },
+                model_view(),
+                64,
+            );
+            let (subscriber, _notify) = projection
+                .subscribe(RuntimeClientCursor::new(0))
+                .expect("subscribe projection observer");
+            Self {
+                projection: Mutex::new(projection),
+                subscriber,
+                facts,
+            }
+        }
+
+        fn drain_client_events(&self, projection: &mut RuntimeClientProjection) {
+            loop {
+                match projection.poll_subscriber(self.subscriber) {
+                    SubscriberPoll::Event(event) => match event.event {
+                        RuntimeClientEvent::ContextCompacted { .. } => self
+                            .facts
+                            .lock()
+                            .expect("order facts lock")
+                            .push(CompactionOrderFact::ClientContextCompacted),
+                        RuntimeClientEvent::AttemptSettled { .. } => self
+                            .facts
+                            .lock()
+                            .expect("order facts lock")
+                            .push(CompactionOrderFact::ClientAttemptSettled),
+                        _ => {}
+                    },
+                    SubscriberPoll::Pending => return,
+                    other => panic!("projection observer lost its subscription: {other:?}"),
+                }
+            }
+        }
+
+        fn snapshot(&self) -> crate::runtime_client::snapshot::RuntimeClientSnapshot {
+            self.projection
+                .lock()
+                .expect("projection lock")
+                .snapshot()
+                .expect("projection snapshot")
+                .0
+        }
+    }
+
+    impl AgentExecutionObserver for EventPathObserver {
+        fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent) {
+            if matches!(event, RuntimeEvent::CompactionCompleted { .. }) {
+                self.facts
+                    .lock()
+                    .expect("order facts lock")
+                    .push(CompactionOrderFact::RuntimeCompactionCompleted);
+            }
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(Observation::Event {
+                attempt_id: attempt_id.clone(),
+                event: event.clone(),
+            });
+            self.drain_client_events(&mut projection);
+        }
+
+        fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(Observation::Committed {
+                attempt_id: Some(attempt_id.clone()),
+                block: block.clone(),
+            });
+            self.drain_client_events(&mut projection);
+        }
+
+        fn observe_status(&self, observation: &AgentStatusObservation) {
+            let mut projection = self.projection.lock().expect("projection lock");
+            projection.apply(Observation::Status(observation.clone()));
+            self.drain_client_events(&mut projection);
+        }
+    }
+
+    fn compactable_user(id: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "history".to_owned(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    async fn run_compaction_order_case(
+        fail_save: bool,
+    ) -> (
+        crate::agent::AgentExecutionResult,
+        Arc<RecordingCheckpointStore>,
+        Arc<EventPathObserver>,
+        Arc<Mutex<Vec<CompactionOrderFact>>>,
+    ) {
+        let facts = Arc::new(Mutex::new(Vec::new()));
+        let store = Arc::new(RecordingCheckpointStore {
+            checkpoint: Mutex::new(None),
+            facts: facts.clone(),
+            fail_save,
+        });
+        let model = Arc::new(FakeModel::new(vec![vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ]]));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let model_snapshot = crate::scripted_suites::support::attempt_model_with_window(
+            adapter,
+            "projection-order",
+            200,
+            1,
+        );
+        let initial_messages = vec![compactable_user("old-1"), compactable_user("old-2")];
+        let engine = ContextEngine::new(
+            crate::context::ContextConfig {
+                context_window_tokens: 200,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(ScriptedEstimator::new(120, 0, 0)),
+        )
+        .expect("valid test context engine");
+        let runtime = ContextRuntime::with_scripted_summarizer(
+            engine,
+            Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+                "summary".to_owned(),
+            )])),
+            store.clone(),
+            AgentStatusComposer::default(),
+            CompactionBudgets::new(1, 1),
+        );
+        let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
+        let capability =
+            crate::scripted_suites::common::capability_lease(ToolRegistry::new(), &tool_runtime)
+                .await;
+        let request = AgentExecutionRequest {
+            agent_id: AgentId::new("agent-a"),
+            conversation_id: ConversationId::new("projection-order"),
+            attempt_id: AttemptId::new("attempt-order"),
+            initial_messages: initial_messages.clone(),
+            initial_turn_trigger: InitialTurnTrigger::Continuation,
+            timezone: None,
+            model: model_snapshot,
+        };
+        let cancellation = crate::agent::AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = Arc::new(EventPathObserver::new(initial_messages, facts.clone()));
+        let mut execution = AgentExecution::new(
+            request,
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.observe(observer.as_ref());
+        let result = execution.run().await;
+        (result, store, observer, facts)
+    }
+
+    /// A successful committed compaction has one ordered fact path: the
+    /// checkpoint save, canonical completion event, Runtime Client event,
+    /// and terminal settlement.
+    #[tokio::test]
+    async fn committed_compaction_order_is_canonical_and_terminal_last() {
+        let (result, store, observer, facts) = run_compaction_order_case(false).await;
+        assert_eq!(
+            *facts.lock().expect("order facts lock"),
+            vec![
+                CompactionOrderFact::CheckpointSaveAttempted,
+                CompactionOrderFact::CheckpointSaved,
+                CompactionOrderFact::RuntimeCompactionCompleted,
+                CompactionOrderFact::ClientContextCompacted,
+                CompactionOrderFact::ClientAttemptSettled,
+            ]
+        );
+        assert!(matches!(
+            result.events.last(),
+            Some(RuntimeEvent::AttemptCompleted { .. })
+        ));
+        let checkpoint = store
+            .load(&ConversationId::new("projection-order"))
+            .expect("load checkpoint")
+            .expect("checkpoint committed");
+        assert_eq!(checkpoint.generation, 1);
+        let snapshot = observer.snapshot();
+        assert_eq!(snapshot.context.compaction_count, 1);
+        assert_eq!(
+            snapshot
+                .context
+                .latest_compaction
+                .expect("latest compaction")
+                .generation,
+            checkpoint.generation
+        );
+    }
+
+    /// A checkpoint save failure emits the existing compaction failure and
+    /// terminal settlement, but never emits canonical or client completion.
+    #[tokio::test]
+    async fn failed_checkpoint_save_has_no_completion_fact_or_client_event() {
+        let (result, store, observer, facts) = run_compaction_order_case(true).await;
+        assert_eq!(
+            *facts.lock().expect("order facts lock"),
+            vec![
+                CompactionOrderFact::CheckpointSaveAttempted,
+                CompactionOrderFact::ClientAttemptSettled,
+            ]
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CompactionStarted))
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. }))
+        );
+        assert!(
+            result
+                .events
+                .iter()
+                .all(|event| { !matches!(event, RuntimeEvent::CompactionCompleted { .. }) })
+        );
+        assert!(matches!(
+            result.events.last(),
+            Some(RuntimeEvent::AttemptFailed { .. })
+        ));
+        assert!(
+            store
+                .load(&ConversationId::new("projection-order"))
+                .expect("load checkpoint")
+                .is_none()
+        );
+        let snapshot = observer.snapshot();
+        assert_eq!(snapshot.context.compaction_count, 0);
+        assert!(snapshot.context.latest_compaction.is_none());
+    }
+
+    /// Canonical completion events advance the external context view exactly
+    /// once per committed generation and preserve token-measurement
+    /// provenance.
     #[test]
     fn committed_compactions_are_visible_without_exposing_summary_content() {
         let mut projection = projection();
-        projection.apply(Observation::ContextCompacted(
-            ContextCompactionObservation {
-                attempt_id: attempt(),
+        apply_event(
+            &mut projection,
+            RuntimeEvent::CompactionCompleted {
                 generation: 1,
                 tokens_before: TokenMeasurement {
                     input_tokens: 4800,
@@ -1394,10 +1729,10 @@ mod tests {
                 },
                 estimated_tokens_after: 1700,
             },
-        ));
-        projection.apply(Observation::ContextCompacted(
-            ContextCompactionObservation {
-                attempt_id: attempt(),
+        );
+        apply_event(
+            &mut projection,
+            RuntimeEvent::CompactionCompleted {
                 generation: 2,
                 tokens_before: TokenMeasurement {
                     input_tokens: 4700,
@@ -1405,7 +1740,7 @@ mod tests {
                 },
                 estimated_tokens_after: 1800,
             },
-        ));
+        );
 
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.messages, Vec::new());
@@ -1553,10 +1888,10 @@ mod tests {
         assert_eq!(first_cursor, second_cursor);
     }
 
-    /// INTERNAL events (model request mechanics, compaction mechanics) are
-    /// never blindly exposed as client events.
+    /// Model-request mechanics and compaction start/failure stay internal;
+    /// committed compaction completion is projected from its canonical event.
     #[test]
-    fn internal_only_events_are_not_exposed() {
+    fn internal_events_are_not_exposed_but_committed_compaction_is_projected() {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
@@ -1575,7 +1910,14 @@ mod tests {
                 retry_delay_ms: Some(5),
             },
             RuntimeEvent::CompactionStarted,
-            RuntimeEvent::CompactionCompleted,
+            RuntimeEvent::CompactionCompleted {
+                generation: 1,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 1,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 1,
+            },
             RuntimeEvent::CompactionFailed {
                 error: "boom".to_owned(),
             },
@@ -1583,12 +1925,16 @@ mod tests {
         ] {
             apply_event(&mut projection, event);
         }
-        assert!(
-            collect(&mut projection, RuntimeClientCursor::new(0)).is_empty(),
-            "internal events produce no client events"
-        );
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0].event,
+            RuntimeClientEvent::ContextCompacted { context, .. }
+                if context.compaction_count == 1
+        ));
         let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert_eq!(cursor, RuntimeClientCursor::new(1));
+        assert_eq!(snapshot.context.compaction_count, 1);
         assert!(snapshot.attempt.is_none());
     }
 

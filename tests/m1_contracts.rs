@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use rustx::context::tokens::{TokenMeasurement, TokenMeasurementSource};
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
     AgentContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
@@ -411,6 +412,19 @@ fn additional_event_variants_round_trip() {
         serde_json::from_str(&serde_json::to_string(&interrupted).expect("serialize"))
             .expect("deserialize");
     assert_eq!(decoded, interrupted);
+
+    let compaction = RuntimeEvent::CompactionCompleted {
+        generation: 3,
+        tokens_before: TokenMeasurement {
+            input_tokens: 4800,
+            source: TokenMeasurementSource::ProviderReported,
+        },
+        estimated_tokens_after: 1700,
+    };
+    let decoded: RuntimeEvent =
+        serde_json::from_str(&serde_json::to_string(&compaction).expect("serialize"))
+            .expect("deserialize");
+    assert_eq!(decoded, compaction);
 }
 
 /// A `ToolMessageBlock` composes `ToolExecutionResult` as the single source

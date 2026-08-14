@@ -541,6 +541,21 @@ Every cancellation scenario produces exactly one attempt terminal event.
 checkpoint is committed to the M4 checkpoint store. A save failure is
 `CompactionFailed`.
 
+Committed compaction has exactly one execution-fact path:
+
+```text
+checkpoint_store.save(checkpoint)
+    -> RuntimeEvent::CompactionCompleted { generation, tokens_before,
+       estimated_tokens_after }
+    -> AgentExecutionObserver::observe_event
+    -> RuntimeClientProjection::fold_event
+    -> RuntimeClientEvent::ContextCompacted
+```
+
+The Runtime Client event is a downstream projection of the canonical runtime
+event. There is no separate compaction-completion observer callback, and the
+attempt terminal event remains later and last.
+
 ## 18. Agent Status (mandatory ephemeral projection)
 
 Agent Status is the mandatory, provider-neutral, ephemeral context
@@ -822,16 +837,17 @@ context-owned type.
 
 ## 21. RuntimeEvent policy
 
-M4 reuses the existing events `CompactionStarted`, `CompactionCompleted`,
-`CompactionFailed`, `ModelRequestStarted`, `ModelRequestCompleted`,
-`ModelRequestFailed`, and `ModelRetryScheduled`. No debug events
+M4 reuses the existing events `CompactionStarted`, metadata-bearing
+`CompactionCompleted`, `CompactionFailed`, `ModelRequestStarted`,
+`ModelRequestCompleted`, `ModelRequestFailed`, and `ModelRetryScheduled`. No debug events
 (`ContextAlmostFull`, `CutPointChosen`, `SummaryGenerated`,
 `ProjectionCreated`) were added: the compaction events are the canonical
-execution facts, and attempt terminal events are unchanged. The Runtime
-Client projection additionally publishes the committed `context_compacted`
-fact with checkpoint generation and token-measurement provenance; it carries
-metadata only and never exposes summary text. Agent Status emits no event of
-its own: it is projection-only.
+execution facts, and attempt terminal events are unchanged. The canonical
+`CompactionCompleted` event carries only committed checkpoint metadata; the
+Runtime Client projection folds it into the snapshot and publishes the
+`context_compacted` event with checkpoint generation and token-measurement
+provenance. It carries metadata only and never exposes summary text. Agent
+Status emits no event of its own: it is projection-only.
 
 ## 22. Known limitations
 

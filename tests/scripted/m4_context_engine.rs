@@ -2385,6 +2385,10 @@ async fn proactive_compaction_before_the_next_turn() {
     .run()
     .await;
 
+    let checkpoint = store
+        .load(&conversation())
+        .expect("load checkpoint")
+        .expect("successful compaction saves a checkpoint");
     let expected = vec![
         RuntimeEvent::AttemptStarted {
             attempt_id: AttemptId::new("attempt-1"),
@@ -2433,7 +2437,11 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
         RuntimeEvent::CompactionStarted,
-        RuntimeEvent::CompactionCompleted,
+        RuntimeEvent::CompactionCompleted {
+            generation: checkpoint.generation,
+            tokens_before: checkpoint.tokens_before,
+            estimated_tokens_after: checkpoint.estimated_tokens_after,
+        },
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
@@ -2621,6 +2629,10 @@ async fn overflow_compact_and_retry_succeeds() {
     .run()
     .await;
 
+    let checkpoint = store
+        .load(&conversation())
+        .expect("load checkpoint")
+        .expect("successful compaction saves a checkpoint");
     let expected = vec![
         RuntimeEvent::AttemptStarted {
             attempt_id: AttemptId::new("attempt-1"),
@@ -2641,7 +2653,11 @@ async fn overflow_compact_and_retry_succeeds() {
             error: overflow_error(),
         },
         RuntimeEvent::CompactionStarted,
-        RuntimeEvent::CompactionCompleted,
+        RuntimeEvent::CompactionCompleted {
+            generation: checkpoint.generation,
+            tokens_before: checkpoint.tokens_before,
+            estimated_tokens_after: checkpoint.estimated_tokens_after,
+        },
         RuntimeEvent::ModelRetryScheduled {
             attempt_number: 1,
             retry_delay_ms: None,
@@ -3045,7 +3061,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
             result
                 .events
                 .iter()
-                .all(|event| !matches!(event, RuntimeEvent::CompactionCompleted)),
+                .all(|event| !matches!(event, RuntimeEvent::CompactionCompleted { .. })),
             "no checkpoint may be committed"
         );
         assert!(
@@ -3425,7 +3441,7 @@ async fn no_progress_compaction_fails_without_retry() {
         !result
             .events
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted)),
+            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
         "no compaction completion without progress"
     );
     assert_single_terminal(&result.events);
@@ -3555,7 +3571,7 @@ async fn cancel_while_summary_generation_is_pending() {
     assert!(
         !result.events.iter().any(|event| matches!(
             event,
-            RuntimeEvent::CompactionCompleted | RuntimeEvent::CompactionFailed { .. }
+            RuntimeEvent::CompactionCompleted { .. } | RuntimeEvent::CompactionFailed { .. }
         )),
         "no post-cancel compaction facts"
     );

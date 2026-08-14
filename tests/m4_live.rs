@@ -199,7 +199,7 @@ async fn live_repeated_compaction() {
         let generated = result
             .events
             .iter()
-            .filter(|event| matches!(event, RuntimeEvent::CompactionCompleted))
+            .filter(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. }))
             .count();
         eprintln!(
             "M4 live: attempt {step}: {generated} compaction(s), {len} canonical messages",

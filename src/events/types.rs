@@ -55,6 +55,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::context::tokens::TokenMeasurement;
 use crate::message::types::ContentBlockIndex;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
@@ -294,8 +295,15 @@ pub enum RuntimeEvent {
 
     /// Context compaction started (compaction itself is a later milestone).
     CompactionStarted,
-    /// Context compaction completed.
-    CompactionCompleted,
+    /// Context compaction completed and its checkpoint is committed.
+    CompactionCompleted {
+        /// The committed checkpoint generation.
+        generation: u64,
+        /// The pre-compaction measurement, preserving its provenance.
+        tokens_before: TokenMeasurement,
+        /// The deterministic estimate of the rebuilt projection.
+        estimated_tokens_after: u64,
+    },
     /// Context compaction failed.
     CompactionFailed {
         /// Human-readable failure message.
@@ -406,6 +414,7 @@ pub enum AttemptLimit {
 #[cfg(test)]
 mod tests {
     use super::{AttemptFailure, AttemptLimit, AttemptOutcome, RuntimeEvent, RuntimeEventEnvelope};
+    use crate::context::tokens::{TokenMeasurement, TokenMeasurementSource};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::finish::ModelFinishReason;
     use crate::runtime::identity::{AttemptId, ConversationId, EventId, ToolCallId, ToolId};
@@ -589,7 +598,14 @@ mod tests {
             RuntimeEvent::AgentMessageCommitted {
                 message_id: crate::runtime::identity::MessageId::new("msg-1"),
             },
-            RuntimeEvent::CompactionCompleted,
+            RuntimeEvent::CompactionCompleted {
+                generation: 1,
+                tokens_before: TokenMeasurement {
+                    input_tokens: 100,
+                    source: TokenMeasurementSource::Estimated,
+                },
+                estimated_tokens_after: 50,
+            },
         ];
         for event in non_terminal {
             assert_eq!(
