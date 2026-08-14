@@ -49,8 +49,10 @@ jobs:
       # "rustX TUI runs on the supported Node LTS", not "whatever Node the
       # runner happens to preinstall".
       - name: Install the Node LTS through nvm
+        # `set -u` is deliberately not used: nvm's shell functions reference
+        # unset variables internally and abort under it.
         run: |
-          set -euo pipefail
+          set -eo pipefail
           export NVM_DIR="$HOME/.nvm"
           mkdir -p "$NVM_DIR"
           curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
@@ -61,8 +63,9 @@ jobs:
           corepack enable
           node --version
           pnpm --version
-          # Export the resolved LTS bin directory for the later steps.
-          echo "$(dirname "$(nvm which --lts)")" >> "$GITHUB_PATH"
+          # Put the resolved LTS bin directory ahead of the runner's
+          # preinstalled Node for every later step.
+          dirname "$(command -v node)" >> "$GITHUB_PATH"
 
       - name: Report the resolved toolchain
         run: |
