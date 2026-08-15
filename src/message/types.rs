@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::content::{FileReference, ImageReference, TextBlock};
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{AgentId, MessageId, ToolCallId, ToolId};
+use crate::runtime::identity::{
+    AgentId, CertifiedExtensionIdentity, MessageId, ToolCallId, ToolId,
+};
 use crate::tools::types::{ToolCall, ToolExecutionResult};
 
 /// The canonical conversation message.
@@ -151,6 +153,26 @@ pub enum UserSource {
     ExternalSystem,
     /// The runtime itself.
     Runtime,
+    /// A certified extension. The identity is assigned by rustX during
+    /// context admission; contributors never supply this provenance.
+    Extension {
+        /// The rustX-derived logical extension identity.
+        contributor: CertifiedExtensionIdentity,
+    },
+}
+
+impl UserSource {
+    /// The provenance namespaces the canonical message contract exposes.
+    /// Context Assembly can derive only `runtime` and `certified_extension`;
+    /// the remaining namespaces belong to other core-owned inbound paths.
+    pub const PROVENANCE_NAMESPACES: [&'static str; 6] = [
+        "human",
+        "agent",
+        "fleet",
+        "external_system",
+        "runtime",
+        "certified_extension",
+    ];
 }
 
 /// Typed kind of inbound information.
@@ -163,6 +185,23 @@ pub enum InboundKind {
     /// A runtime-provided compaction summary. It remains a `User` message so
     /// no fifth canonical message role is needed for runtime-derived context.
     CompactionSummary,
+    /// A model-visible context fact admitted through the rustX Context
+    /// Assembly path.
+    Context(ContextKind),
+}
+
+/// The semantic family of one admitted model-visible context fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextKind {
+    /// Workspace/project instructions.
+    WorkspaceInstructions,
+    /// Generic certified-extension/environment context.
+    ExtensionEnvironment,
+    /// Native capability/Skill guidance.
+    SkillGuidance,
+    /// Native runtime/Agent Status.
+    AgentStatus,
 }
 
 /// A content block inside a `UserMessageBlock`.

@@ -19,7 +19,7 @@ use crate::tools::types::ModelToolDefinition;
 ///
 /// The engine applies it only when the request context being measured is
 /// fingerprint-identical to the observed one — the same Surface revision,
-/// the same hydrated messages, and the same attachments; otherwise the
+/// the same hydrated messages, and the same Effective System Prompt; otherwise the
 /// measurement is dropped and a deterministic estimate is used instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderObservedInput {
@@ -39,9 +39,8 @@ pub trait TokenEstimator: Send + Sync {
     /// The deterministic estimated input tokens of one request context,
     /// including
     /// non-compacted contributors such as tool definitions and the exact
-    /// Agent Status attachment. This is the full request estimate: it feeds
-    /// the soft-limit threshold and the hard fit, so the Agent Status
-    /// snapshot can itself change the compaction decision.
+    /// Effective System Prompt. This is the full request estimate: it feeds
+    /// the soft-limit threshold and the hard fit.
     fn estimate_input(
         &self,
         projection: &ContextProjection,
@@ -50,11 +49,11 @@ pub trait TokenEstimator: Send + Sync {
 
     /// The deterministic estimated input tokens of one projection's
     /// conversation content only, excluding non-conversation contributors
-    /// such as tool definitions and the Agent Status attachment.
+    /// such as tool definitions and the Effective System Prompt.
     ///
     /// This is the recent-conversation estimate: it measures how much
     /// literal conversation history a retained suffix contributes. Tool
-    /// definitions and Agent Status affect the full request estimate, the
+    /// definitions and admitted Runtime context affect the full request estimate, the
     /// threshold, and the hard fit, but they must never count toward
     /// satisfying the `keep_recent_tokens` retention target.
     fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64;
@@ -73,24 +72,23 @@ pub type EstimatorFunction =
 /// ```
 ///
 /// applied over the runtime-owned canonical serialization of the projected
-/// canonical messages, the tool definitions, and the exact attachments, plus
-/// the configured per-request contributors. `ceil(x / 4)` is `(bytes + 3) /
-/// 4` over `u64`, so every byte counted contributes at most 4 bytes to one
-/// token. The formula is intentionally an estimate, never provider usage.
-/// Agent Status is real model input, so it participates in the full request
-/// estimate; the recent-conversation estimate ([`TokenEstimator::estimate_conversation_input`])
-/// excludes it.
+/// canonical messages, the tool definitions, and the exact Effective System
+/// Prompt. `ceil(x / 4)` is `(bytes + 3) / 4` over `u64`, so every byte counted
+/// contributes at most 4 bytes to one token. The formula is intentionally an
+/// estimate, never provider usage. The Effective System Prompt participates
+/// in the full request estimate; the recent-conversation estimate
+/// ([`TokenEstimator::estimate_conversation_input`]) excludes it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultTokenEstimator;
 
 impl DefaultTokenEstimator {
     /// The deterministic serialized bytes of the projected canonical
-    /// messages, the tool definitions, and the exact attachments.
+    /// messages, the tool definitions, and the exact Effective System Prompt.
     ///
     /// # Panics
     ///
-    /// Panics only if the canonical projection, tool definitions, or status
-    /// attachment fail to serialize, which is unreachable for the canonical
+    /// Panics only if the canonical projection, tool definitions, or system
+    /// prompt fail to serialize, which is unreachable for the canonical
     /// runtime-owned types.
     #[must_use]
     pub fn serialized_bytes(
@@ -103,21 +101,23 @@ impl DefaultTokenEstimator {
         let tools = serde_json::to_vec(tool_definitions)
             .expect("canonical tool definitions serialize")
             .len();
-        let status = projection.agent_status.as_ref().map_or(0, |status| {
-            serde_json::to_vec(status)
-                .expect("canonical agent status attachment serializes")
+        // An empty prompt means that no request-time prompt section exists;
+        // do not charge the JSON representation's two quote bytes as model
+        // input. Non-empty prompts remain part of the frozen deterministic
+        // request estimate.
+        let system_prompt = if projection.effective_system_prompt.is_empty() {
+            0
+        } else {
+            serde_json::to_vec(&projection.effective_system_prompt)
+                .expect("effective system prompt serializes")
                 .len()
-        });
-        let catalog = projection.skill_catalog.as_ref().map_or(0, |catalog| {
-            serde_json::to_vec(catalog)
-                .expect("canonical skill catalog attachment serializes")
-                .len()
-        });
-        (items + tools + status + catalog) as u64
+        };
+        (items + tools + system_prompt) as u64
     }
 
     /// The deterministic serialized bytes of the projected canonical
-    /// messages only, excluding tool definitions and the attachments.
+    /// messages only, excluding tool definitions and the Effective System
+    /// Prompt.
     ///
     /// # Panics
     ///
@@ -207,12 +207,10 @@ mod tests {
     /// counts tool definitions as part of the input.
     #[test]
     fn default_estimator_is_deterministic_and_includes_tools() {
-        use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
         let projection = crate::context::projection::ContextProjection {
             surface_revision: crate::conversation::SurfaceRevision::INITIAL,
             messages: Vec::new(),
-            agent_status: None,
-            skill_catalog: None,
+            effective_system_prompt: String::new(),
             estimated_input: crate::runtime::types::TokenMeasurement {
                 input_tokens: 0,
                 source: crate::runtime::types::TokenMeasurementSource::Estimated,
@@ -234,46 +232,19 @@ mod tests {
             with_tools > without_tools,
             "tool definitions must contribute to the planned request estimate"
         );
-        // The exact Agent Status attachment is actual model input: it
-        // contributes to the full request estimate but never to the
-        // recent-conversation estimate.
-        let with_status = crate::context::projection::ContextProjection {
-            agent_status: Some(AgentStatusAttachment {
-                target_message_id: crate::runtime::identity::MessageId::new("msg-inbound-1"),
-                rendered:
-                    "<system-reminder>\nCurrent time: 2026-08-08T16:31:00+08:00\n</system-reminder>"
-                        .to_owned(),
-            }),
+        let with_prompt = crate::context::projection::ContextProjection {
+            effective_system_prompt: "runtime status\n\nskill guidance".to_owned(),
             ..projection.clone()
         };
         assert!(
-            estimator.estimate_input(&with_status, &[])
+            estimator.estimate_input(&with_prompt, &[])
                 > estimator.estimate_input(&projection, &[]),
-            "the Agent Status attachment must contribute to the full request estimate"
+            "the Effective System Prompt must contribute to the full request estimate"
         );
         assert_eq!(
-            estimator.estimate_conversation_input(&with_status),
+            estimator.estimate_conversation_input(&with_prompt),
             estimator.estimate_conversation_input(&projection),
-            "the Agent Status attachment must never satisfy keep_recent_tokens"
-        );
-        // The exact Skill catalog attachment is actual model input: it
-        // contributes to the full request estimate but never to the
-        // recent-conversation estimate.
-        let with_catalog = crate::context::projection::ContextProjection {
-            skill_catalog: Some(SkillCatalogAttachment {
-                rendered: "## Skills\n\n- pdf: Create PDF documents.\n".to_owned(),
-            }),
-            ..projection.clone()
-        };
-        assert!(
-            estimator.estimate_input(&with_catalog, &[])
-                > estimator.estimate_input(&projection, &[]),
-            "the Skill catalog attachment must contribute to the full request estimate"
-        );
-        assert_eq!(
-            estimator.estimate_conversation_input(&with_catalog),
-            estimator.estimate_conversation_input(&projection),
-            "the Skill catalog attachment must never satisfy keep_recent_tokens"
+            "the Effective System Prompt must never satisfy keep_recent_tokens"
         );
     }
 }

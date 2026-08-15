@@ -88,7 +88,7 @@ stream and exactly one terminal `RuntimeEvent`:
   continuation-owning turn is retired completely (never split). The loop
   never fabricates, inspects, or reconstructs provider continuation state;
   a model that requires state the stream did not report fails explicitly.
-  An ordinary inbound drain and an Agent Status attachment never clear the
+  An ordinary inbound drain and an admitted Agent Status fact never clear the
   pending continuation.
 
 - Cancellation is observed at deterministic check points (before each
@@ -944,7 +944,7 @@ compact-and-retry remains bounded to one retry per model turn.
 compact-and-retry per model turn — the budget never persists across turns; a
 recoverable overflow never settles the attempt.
 
-## Fresh inbound and Agent Status
+## Context assembly, admission, and Agent Status
 
 Fresh inbound identity is explicit execution state, never inferred from
 message role, history shape, or timestamps:
@@ -974,16 +974,12 @@ message role, history shape, or timestamps:
   the ordered fresh inbound turn (for a mailbox batch, the highest-sequence
   item); the inbound sequence is the delivery-order authority, never
   `min`/`max` of producer timestamps, the drain time, or current time.
-- Agent Status is projection-only: never a canonical conversation fact,
-  never returned in `AgentExecutionResult.messages`, and never
-  emitted as a committed-message event. It is composed as structured
-  sections with stable section ids (`temporal` and `background_execution`
-  reserved), rendered by a canonical deterministic renderer, and placed on
-  provider wire structures by the adapter only.
-- The cross-layer `AgentStatusAttachment` is a Layer 0 contract in
-  `src/model/types.rs`: the context plane produces it, `ModelRequest` and
-  every adapter consume it, and model contracts never depend on context
-  implementation modules.
+- Agent Status is structured runtime-owned input before rendering, then
+  follows the normal Context Assembly path as a canonical
+  UserSource::Runtime / InboundKind::Context(ContextKind::AgentStatus)
+  UserMessageBlock. It is committed to the Message Ledger and Surface once
+  at admission; adapters never inject it. Equal rendered bytes at different
+  admitted steps remain distinct facts with distinct MessageIds.
 - A provider's section identity is captured exactly once at registration and
   frozen as runtime-owned metadata: `section_id()` is never queried again
   after registration, so post-registration identity changes can never shadow
@@ -1004,14 +1000,49 @@ message role, history shape, or timestamps:
 - Fresh inbound that has not been observed by a successful model invocation
   must remain literal in the projection: compaction may never retire it, and
   planning fails explicitly (`CannotFit`) rather than summarizing the
-  unobserved instruction. The Agent Status snapshot participates in the full
-  request token estimate and the projection fingerprint, and never
-  satisfies `keep_recent_tokens`. One request preparation samples exactly
-  one snapshot; an overflow compact-and-retry is a new preparation with a
-  freshly sampled snapshot.
-- The M4 context path is mandatory: every normal `AgentExecution` carries a
+  unobserved instruction. The admitted Agent Status fact participates in
+  normal canonical history, projection, and request token accounting, while
+  the current unobserved inbound material remains protected from compaction.
+  One admitted primary step samples and freezes exactly one dynamic-context
+  generation. An overflow compact-and-retry reuses its accepted status,
+  Skill, extension output, provenance, ordering, and ContextGeneration; it
+  does not rerun contributors or append duplicate context facts.
+- The context path is mandatory: every normal `AgentExecution` carries a
   `ContextRuntime`; there is no no-context execution mode and no Agent
   Status disable flag.
+
+### Issue #55 request boundary
+
+- ContextContributor receives only the finite immutable
+  ContributorInputSnapshot. It cannot mutate history, allocate MessageIds,
+  choose UserSource, claim a native lane, register a provider, admit a
+  request, or dispatch an adapter.
+- UserContextLane and SystemSectionLane are finite rustX-owned contracts;
+  there is no arbitrary numeric priority. Native-reserved single-owner
+  slots reject a second owner. Multi-extension entries sort by stable
+  canonical CertifiedExtensionIdentity, independent of registration,
+  discovery, address, or package generation.
+- The Agent Loop's generic pre-admission cancellation check, immediately
+  after transient assembly and immediately before admit_context, is the
+  request-start linearization point. Cancellation before it commits no
+  dynamic context, Surface advancement, RequestSnapshot, or provider
+  request. Once admit_context commits, later failure/cancellation cannot
+  roll back those historical facts.
+- Effective System Prompt is rustX-rendered from canonical System content
+  and ordered native/extension sections. The rendered string is frozen by
+  value in RequestSnapshot; native sections cannot be shadowed and an
+  extension cannot replace the entire prompt.
+- RequestSnapshot contains RequestIdentity, SurfaceRevision,
+  effective_system_prompt, ModelInvocationConfig, context window,
+  reasoning values, tool definitions, capability revision,
+  ContextGeneration, and opaque continuation state. It references only the
+  exact historical Surface revision; all request-time derived values that
+  are not durably addressable are values.
+- RequestSnapshot::reconstruct resolves that historical Surface and combines
+  it with the frozen fields. The Agent Loop compares the reconstructed
+  provider-neutral ModelRequest structurally with the actual request before
+  adapter translation. Current configuration, Skills, contributors,
+  filesystem state, and runtime status are never consulted.
 
 ## Runtime Client projection (Issue #37)
 
@@ -1149,14 +1180,14 @@ semantic normalization boundary. The frozen invariants:
   settlement: the Agent Loop remains the settlement authority, and the
   coordinator holds the exact cancellation trigger the attempt task runs
   against.
-- **One Agent Status composition per request.** For one model request
-  that receives Agent Status, `AgentStatusComposer::compose` runs exactly
-  once — one clock sample, one invocation of each registered provider —
-  and that single composed value fans out to both destinations: the
-  canonical model-facing rendered attachment and the Runtime Client
+- **One Agent Status composition per request.** For one admitted primary
+  model request that receives Agent Status, `AgentStatusComposer::compose`
+  runs exactly once — one clock sample, one invocation of each registered
+  provider — and that single composed value fans out to both destinations:
+  the canonical Runtime context UserMessageBlock and the Runtime Client
   projection. The client path never composes again, not even through a
   cloned composer sharing the same clock and providers, and never parses
-  the rendered attachment to recover structure.
+  rendered context text to recover structure.
 - **Mutations are acceptances.** A successful `submit_inbound`,
   `cancel_current_attempt`, `background_cancel`, or `shutdown` response
   means the runtime accepted/admitted the operation at its semantic
@@ -1307,18 +1338,12 @@ contracts and provider protocols. These invariants are frozen by M2:
   adapter: `ModelRequest.max_output_tokens` is a required `u32` and no
   adapter-local default exists.
 
-- An `agent_status` attachment on a `ModelRequest` is validated before any
-  provider I/O: the target message exists exactly once in the request
-  messages, is a user-role message with ordinary `InboundKind::Message`,
-  and is never a compaction summary. Malformed attachments are
-  `InvalidRequest` failures. The attachment is a Layer 0 contract in
-  `src/model/types.rs`; the model plane never depends on the context layer.
-  Adapters append the rendered status as one final content unit of the
-  target user message and never fabricate a separate message; with a stored
-  continuation, a target sliced out of the transmitted tail fails
-  explicitly instead of being silently dropped. The model-backed summarizer
-  always constructs requests with `agent_status = None`: summary generation
-  is not an inbound Assistant turn.
+- Model adapters receive canonical User context facts and the frozen
+  Effective System Prompt through the provider-neutral ModelRequest. They
+  perform protocol translation only. They never sample Agent Status, discover
+  Skills, invoke contributors, allocate MessageIds, mutate the Ledger or
+  Surface, admit context, or repair missing semantic context. Provider
+  wire-role merging is allowed only as a non-canonical encoding operation.
 
 ## Model selection and session model ownership (Issue #42)
 

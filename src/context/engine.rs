@@ -19,8 +19,8 @@
 //! compaction is applied by [`ConversationState::commit_compaction`].
 //!
 //! All decisions are deterministic pure functions of (Surface revision,
-//! hydrated active messages, tool definitions, observed provider usage,
-//! status/catalog attachments): the same inputs always produce the same
+//! hydrated active messages, tool definitions, observed provider usage, and
+//! Effective System Prompt): the same inputs always produce the same
 //! projection, plan, and estimate.
 //!
 //! The engine owns no provider knowledge: the window/reserve/recent-token
@@ -43,7 +43,6 @@ use crate::message::content::TextBlock;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
@@ -193,7 +192,7 @@ pub struct CompactionPlan {
     /// never compares measurements of different provenance.
     pub estimated_before: TokenMeasurement,
     /// The deterministic estimate of the pre-compaction request context,
-    /// computed with the same estimator and attachments used on the other
+    /// computed with the same estimator and Effective System Prompt used on the other
     /// side of the progress rule.
     pub estimated_before_tokens: u64,
     /// The planned post-compaction estimate: retained context plus the
@@ -206,12 +205,10 @@ pub struct CompactionPlan {
     /// including its instruction, serialized request, and canonical User
     /// wrapper.
     pub summary_input_tokens: u64,
-    /// The exact Agent Status attachment of the request preparation this
-    /// plan belongs to, when one exists.
-    pub agent_status: Option<AgentStatusAttachment>,
-    /// The exact Skill catalog attachment of the attempt's capability
-    /// snapshot, when one exists.
-    pub skill_catalog: Option<SkillCatalogAttachment>,
+    /// The exact Effective System Prompt of the request preparation this
+    /// plan belongs to. It is reused after compaction and is never rebuilt by
+    /// a provider adapter.
+    pub effective_system_prompt: String,
 }
 
 impl CompactionPlan {
@@ -342,8 +339,8 @@ impl ContextEngine {
     /// The estimated input is `ProviderReported` only when an observed
     /// provider measurement applies to exactly this request context
     /// (identical fingerprint, including the Surface revision and the exact
-    /// Agent Status attachment); otherwise it is a deterministic estimate
-    /// that includes the attachments and the tool definitions. Estimates
+    /// Effective System Prompt); otherwise it is a deterministic estimate
+    /// that includes the Effective System Prompt and tool definitions. Estimates
     /// never become provider usage.
     ///
     /// # Errors
@@ -355,8 +352,7 @@ impl ContextEngine {
         state: &ConversationState,
         tool_definitions: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
-        agent_status: Option<&AgentStatusAttachment>,
-        skill_catalog: Option<&SkillCatalogAttachment>,
+        effective_system_prompt: &str,
     ) -> Result<ContextProjection, ContextError> {
         let (messages, _) = state
             .structure()
@@ -364,8 +360,7 @@ impl ContextEngine {
         Ok(self.measured_projection(
             state.revision(),
             messages,
-            agent_status,
-            skill_catalog,
+            effective_system_prompt,
             tool_definitions,
             observed,
         ))
@@ -387,7 +382,7 @@ impl ContextEngine {
     /// 2. otherwise the most-retaining candidate that fits the hard limit.
     ///
     /// The recent-token target is measured over conversation content only:
-    /// tool definitions and attachments never count toward satisfying
+    /// tool definitions and the Effective System Prompt never count toward satisfying
     /// `keep_recent_tokens`, though they still affect the full request
     /// estimate, the threshold, and the hard fit. A single oversized message
     /// never produces a half-message Surface node: if no complete-message
@@ -449,8 +444,7 @@ impl ContextEngine {
                     &projection_of(
                         state.revision(),
                         &planned_items,
-                        agent_status_of(current_projection),
-                        skill_catalog_of(current_projection),
+                        &current_projection.effective_system_prompt,
                     ),
                     tool_definitions,
                 )
@@ -501,7 +495,7 @@ impl ContextEngine {
             retired: active[first..=chosen.end].to_vec(),
             estimated_before: current_projection.estimated_input,
             // The deterministic estimate of the pre-compaction request
-            // context, provenance-free and including the same attachments:
+            // context, provenance-free and including the same system prompt:
             // the anti-loop progress rule compares this to the deterministic
             // estimate of the post-compaction context and never mixes a
             // provider-reported measurement with an estimate.
@@ -509,16 +503,14 @@ impl ContextEngine {
                 &projection_of(
                     current_projection.surface_revision,
                     &current_projection.messages,
-                    agent_status_of(current_projection),
-                    skill_catalog_of(current_projection),
+                    &current_projection.effective_system_prompt,
                 ),
                 tool_definitions,
             ),
             planned_estimate_after: chosen.planned,
             summary_reservation: reservation,
             summary_input_tokens: chosen.summary_input_tokens,
-            agent_status: current_projection.agent_status.clone(),
-            skill_catalog: current_projection.skill_catalog.clone(),
+            effective_system_prompt: current_projection.effective_system_prompt.clone(),
         })
     }
 
@@ -542,7 +534,7 @@ impl ContextEngine {
     /// post-compaction estimate must strictly decrease below the
     /// deterministic pre-compaction estimate. Both sides of the comparison
     /// come from the same estimator over the actual request context —
-    /// including the plan's exact attachments — so the decision never
+    /// including the plan's exact Effective System Prompt — so the decision never
     /// depends on incomparable token provenance.
     ///
     /// # Errors
@@ -602,8 +594,7 @@ impl ContextEngine {
         let projection = self.measured_projection(
             state.revision().next(),
             projected_messages,
-            plan.agent_status.as_ref(),
-            plan.skill_catalog.as_ref(),
+            &plan.effective_system_prompt,
             tool_definitions,
             None,
         );
@@ -643,16 +634,14 @@ impl ContextEngine {
         &self,
         surface_revision: SurfaceRevision,
         messages: Vec<MessageBlock>,
-        agent_status: Option<&AgentStatusAttachment>,
-        skill_catalog: Option<&SkillCatalogAttachment>,
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
     ) -> ContextProjection {
         let mut projection = ContextProjection {
             surface_revision,
             messages,
-            agent_status: agent_status.cloned(),
-            skill_catalog: skill_catalog.cloned(),
+            effective_system_prompt: effective_system_prompt.to_owned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
@@ -689,8 +678,9 @@ struct Candidate {
 /// never replaced by a runtime summary. A later `System` message therefore
 /// bounds the *current* compactable run at that point, but it never pins
 /// older conversational messages (they are compactable in the run before it)
-/// and it never resurrects retired Surface history. The complete Effective
-/// System Prompt architecture belongs to Issue #55.
+/// and it never resurrects retired Surface history. The request-time
+/// Effective System Prompt is assembled before this engine and is carried
+/// through compaction unchanged.
 fn compactable_run(index: &StructuralIndex) -> Result<(usize, usize), ContextError> {
     let systems = index.system_positions();
     let first = (0..index.len())
@@ -784,37 +774,27 @@ fn retained_items(active: &[MessageBlock], first: usize, end: usize) -> Vec<Mess
     items
 }
 
-/// Wraps a message list into an attachment-free projection for the
-/// conversation-content estimate.
+/// Wraps a message list into a projection for the conversation-content
+/// estimate, without a request-time system prompt.
 fn bare_projection(revision: SurfaceRevision, messages: &[MessageBlock]) -> ContextProjection {
-    projection_of(revision, messages, None, None)
+    projection_of(revision, messages, "")
 }
 
 /// Wraps a message list into a projection for estimation.
 fn projection_of(
     revision: SurfaceRevision,
     messages: &[MessageBlock],
-    agent_status: Option<&AgentStatusAttachment>,
-    skill_catalog: Option<&SkillCatalogAttachment>,
+    effective_system_prompt: &str,
 ) -> ContextProjection {
     ContextProjection {
         surface_revision: revision,
         messages: messages.to_vec(),
-        agent_status: agent_status.cloned(),
-        skill_catalog: skill_catalog.cloned(),
+        effective_system_prompt: effective_system_prompt.to_owned(),
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,
         },
     }
-}
-
-fn agent_status_of(projection: &ContextProjection) -> Option<&AgentStatusAttachment> {
-    projection.agent_status.as_ref()
-}
-
-fn skill_catalog_of(projection: &ContextProjection) -> Option<&SkillCatalogAttachment> {
-    projection.skill_catalog.as_ref()
 }
 
 fn no_progress(message: &str) -> ContextError {

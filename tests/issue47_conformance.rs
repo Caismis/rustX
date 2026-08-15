@@ -447,6 +447,10 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             !body_text(&requests[0]).contains(CREDENTIAL_VALUE),
             "{scenario}: a credential never reaches the request body"
         );
+        assert!(
+            body_text(&requests[0]).contains("<system-reminder>"),
+            "{scenario}: Agent Status reached the provider as canonical context"
+        );
         emulator.finish().await;
     }
 }
@@ -507,8 +511,8 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
 // Scenario C — a real workspace Skill
 // ---------------------------------------------------------------------------
 
-/// rustX discovers a real workspace Skill, projects its catalog into the
-/// provider request as system context, and executes the real Read of the
+/// rustX discovers a real workspace Skill, admits its catalog through the
+/// normal canonical User-context path, and executes the real Read of the
 /// Skill's own `SKILL.md`. Python implements no part of that.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
@@ -556,7 +560,18 @@ async fn a_real_skill_reaches_the_provider_and_is_read_by_the_real_tool() {
     let first = body_text(&requests[0]);
     assert!(
         first.contains(SKILL_NAME) && first.contains(SKILL_DESCRIPTION),
-        "the Skill catalog reached the provider as system context"
+        "the Skill catalog reached the provider through the unified context path"
+    );
+    let wire_messages = requests[0]["body"]["messages"]
+        .as_array()
+        .expect("Chat Completions messages");
+    assert!(
+        wire_messages.iter().any(|message| {
+            message["role"] == "user"
+                && message["content"].to_string().contains("## Skills")
+                && message["content"].to_string().contains(SKILL_NAME)
+        }),
+        "the provider saw Skill guidance as an ordinary canonical User-context message"
     );
     assert!(
         body_text(&requests[1]).contains(SKILL_BODY_MARKER),

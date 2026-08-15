@@ -160,7 +160,9 @@ def skill_read_turn() -> Scenario:
             Expect(
                 protocol=OPENAI_CHAT_COMPLETIONS,
                 model=CHAT_MODEL,
-                # The Skill catalog reached the provider as system context.
+                # The Skill catalog reached the provider through the normal
+                # canonical User-context path; the Rust driver also asserts
+                # the final wire role.
                 body_contains=(SKILL_PROMPT, SKILL_NAME, SKILL_DESCRIPTION),
                 tools_include=("read",),
             ),

@@ -180,6 +180,125 @@ id_type! {
     ArtifactId
 }
 
+/// The rustX-owned logical identity of a context contributor.
+///
+/// The identity is independent from registration order, process-local object
+/// identity, and package/content generation.  The Context Assembly boundary
+/// derives trusted native provenance itself; contributors never provide it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ContextContributorIdentity {
+    /// A rustX-native semantic owner.
+    Native(NativeContextContributor),
+    /// A certified extension with a stable logical key.
+    CertifiedExtension(CertifiedExtensionIdentity),
+}
+
+/// Native semantic owners that may publish model-visible context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeContextContributor {
+    /// Workspace/project instructions.
+    WorkspaceInstructions,
+    /// The native capability/Skill guidance owner.
+    SkillGuidance,
+    /// The native runtime/Agent Status owner.
+    AgentStatus,
+    /// The core runtime/system identity owner.
+    CoreSystemIdentity,
+    /// The native agent profile/persona owner.
+    AgentProfile,
+}
+
+impl NativeContextContributor {
+    /// Every native semantic owner, in contract order. This is the source
+    /// used by the compatibility manifest and reserved-identity validation;
+    /// callers must not maintain a second list of native slots.
+    pub const ALL: [Self; 5] = [
+        Self::WorkspaceInstructions,
+        Self::SkillGuidance,
+        Self::AgentStatus,
+        Self::CoreSystemIdentity,
+        Self::AgentProfile,
+    ];
+
+    /// The canonical extension-key spelling reserved for this native owner.
+    #[must_use]
+    pub const fn logical_key(self) -> &'static str {
+        match self {
+            Self::WorkspaceInstructions => "workspace-instructions",
+            Self::SkillGuidance => "skill-guidance",
+            Self::AgentStatus => "agent-status",
+            Self::CoreSystemIdentity => "core-runtime-identity",
+            Self::AgentProfile => "agent-profile",
+        }
+    }
+
+    /// The machine-readable manifest spelling of this native slot.
+    #[must_use]
+    pub const fn manifest_name(self) -> &'static str {
+        match self {
+            Self::WorkspaceInstructions => "workspace_instructions",
+            Self::SkillGuidance => "skill_guidance",
+            Self::AgentStatus => "agent_status",
+            Self::CoreSystemIdentity => "core_runtime_identity",
+            Self::AgentProfile => "agent_profile",
+        }
+    }
+}
+
+/// The stable logical key of one certified extension.
+///
+/// Package/content attestation is intentionally not part of this type.  A
+/// package may be upgraded while preserving its logical ordering identity;
+/// the assembly generation records the attestation separately.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CertifiedExtensionIdentity(String);
+
+impl CertifiedExtensionIdentity {
+    /// Validates and canonicalizes a configured logical extension key.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation message when the key is empty, too long, or uses
+    /// a character or boundary that is not part of the stable identity
+    /// grammar.
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into().trim().to_ascii_lowercase();
+        if value.is_empty() {
+            return Err("extension logical identity must not be empty".to_owned());
+        }
+        if value.len() > 128 {
+            return Err("extension logical identity must be at most 128 bytes".to_owned());
+        }
+        if !value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._/-".contains(&byte)
+        }) {
+            return Err(format!(
+                "extension logical identity {value:?} contains an unsupported character"
+            ));
+        }
+        if value.starts_with('.') || value.ends_with('.') || value.contains("..") {
+            return Err(format!(
+                "extension logical identity {value:?} has an invalid dot boundary"
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// The canonical logical key.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for CertifiedExtensionIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A monotonic revision counter for the capability set observed by an attempt.
 ///
 /// A running attempt snapshots one immutable `CapabilityRevision` when it

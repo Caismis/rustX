@@ -1,26 +1,24 @@
-//! M6 deterministic tests: the Skill catalog attachment in model context
-//! and trusted system wire placement.
+//! Regression tests for the unified model-visible context boundary.
 //!
-//! Every provider test runs against the local fixture server: no provider
-//! network access.
+//! Skill guidance and Agent Status are canonical context facts before these
+//! adapters run. The adapters receive one frozen Effective System Prompt and
+//! perform protocol translation only.
 
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
     AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
-use rustx::model::types::{ModelProtocol, ModelRequest, SkillCatalogAttachment};
-use rustx::runtime::identity::MessageId;
+use rustx::model::{ModelProtocol, ModelRequest, RequestIdentity, RequestSnapshot};
+use rustx::runtime::identity::{AttemptId, CapabilityRevision, MessageId, TurnId};
 
 #[path = "common/mod.rs"]
 mod common;
 
-const CATALOG: &str = "## Skills\n\n- pdf: Create, edit, inspect, and transform PDF documents.\n";
 const SYSTEM_TEXT: &str = "You are a helpful agent.";
+const SKILL_TEXT: &str = "## Skills\n\n- pdf: Create PDF documents.\n";
 
-/// A canonical request with trusted system content, one Assistant turn, and the
-/// Skill catalog attachment.
-fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
+fn request(protocol: ModelProtocol) -> ModelRequest {
     ModelRequest {
         invocation: common::invocation(protocol, "m6-test"),
         messages: vec![
@@ -50,18 +48,13 @@ fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
             }),
         ],
         tools: Vec::new(),
-        agent_status: None,
-        skill_catalog: with_catalog.then(|| SkillCatalogAttachment {
-            rendered: CATALOG.to_owned(),
-        }),
+        effective_system_prompt: format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}"),
         continuation: None,
     }
 }
 
-/// The `Anthropic` adapter places the catalog in the top-level `system`
-/// content along with canonical trusted system content.
 #[tokio::test]
-async fn anthropic_places_the_catalog_in_top_level_system_content() {
+async fn anthropic_receives_only_the_frozen_effective_prompt() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         common::sse_fixture("anthropic", "text.sse")
     })
@@ -69,72 +62,22 @@ async fn anthropic_places_the_catalog_in_top_level_system_content() {
     let adapter = rustx::model::AnthropicMessagesAdapter::new(
         rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
     );
-    let events =
-        common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, true)).await;
+    let events = common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages)).await;
     assert!(matches!(
         events.last(),
         Some(rustx::model::ModelEvent::Completed { .. })
     ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let system = body
-        .get("system")
-        .expect("top-level system content")
-        .as_array()
-        .expect("system array");
-    let texts: Vec<&str> = system
-        .iter()
-        .map(|block| block.get("text").expect("text").as_str().expect("string"))
-        .collect();
-    assert_eq!(
-        texts,
-        vec![SYSTEM_TEXT, CATALOG],
-        "the catalog follows the canonical trusted system content"
-    );
-    // The catalog never appears inside a user message.
-    let messages_text =
-        serde_json::to_string(body.get("messages").expect("messages")).expect("serialize");
-    assert!(
-        !messages_text.contains(CATALOG),
-        "the catalog is never attached to a user message"
-    );
+    let system = body["system"].as_array().expect("system array");
+    assert_eq!(system.len(), 1);
+    assert_eq!(system[0]["text"], format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}"));
+    let messages = serde_json::to_string(&body["messages"]).expect("messages serialize");
+    assert!(!messages.contains(SKILL_TEXT));
 }
 
-/// Without an active Skill set the catalog attachment is absent entirely
-/// and the Anthropic system content carries only the canonical blocks.
 #[tokio::test]
-async fn anthropic_omits_the_catalog_when_no_skill_is_active() {
-    let server = common::FixtureServer::start(|_attempt, _head| {
-        common::sse_fixture("anthropic", "text.sse")
-    })
-    .await;
-    let adapter = rustx::model::AnthropicMessagesAdapter::new(
-        rustx::model::AnthropicAdapterConfig::new("test-key", server.url("")),
-    );
-    let events =
-        common::collect_events(&adapter, request(ModelProtocol::AnthropicMessages, false)).await;
-    assert!(matches!(
-        events.last(),
-        Some(rustx::model::ModelEvent::Completed { .. })
-    ));
-    let body: serde_json::Value =
-        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let system = body
-        .get("system")
-        .expect("system")
-        .as_array()
-        .expect("array");
-    let texts: Vec<&str> = system
-        .iter()
-        .map(|block| block.get("text").expect("text").as_str().expect("string"))
-        .collect();
-    assert_eq!(texts, vec![SYSTEM_TEXT]);
-}
-
-/// The `OpenAI` Chat Completions adapter translates the catalog through the
-/// system-level message mechanism, never attached to a user message.
-#[tokio::test]
-async fn chat_completions_places_the_catalog_in_a_system_message() {
+async fn chat_completions_translates_the_prompt_without_mutating_user_facts() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         common::sse_fixture("openai_chat", "plain_text.sse")
     })
@@ -142,97 +85,27 @@ async fn chat_completions_places_the_catalog_in_a_system_message() {
     let adapter = rustx::model::OpenAiChatCompletionsAdapter::new(
         rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
-    let events = common::collect_events(
-        &adapter,
-        request(ModelProtocol::OpenAiChatCompletions, true),
-    )
-    .await;
-    assert!(matches!(
-        events.last(),
-        Some(rustx::model::ModelEvent::Completed { .. })
-    ));
-    let body: serde_json::Value =
-        serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let messages = body
-        .get("messages")
-        .expect("messages")
-        .as_array()
-        .expect("array");
-    let roles: Vec<&str> = messages
-        .iter()
-        .map(|message| {
-            message
-                .get("role")
-                .and_then(serde_json::Value::as_str)
-                .expect("role")
-        })
-        .collect();
-    assert_eq!(roles, vec!["system", "system", "assistant", "user"]);
-    let system_messages: Vec<&str> = messages
-        .iter()
-        .filter(|message| message.get("role") == Some(&serde_json::json!("system")))
-        .map(|message| {
-            message
-                .get("content")
-                .expect("content")
-                .as_str()
-                .expect("text")
-        })
-        .collect();
-    assert_eq!(
-        system_messages,
-        vec![SYSTEM_TEXT, CATALOG],
-        "the catalog is a system message after the canonical system messages"
-    );
-    let user_messages_text = serde_json::to_string(
-        &messages
-            .iter()
-            .filter(|message| message.get("role") == Some(&serde_json::json!("user")))
-            .collect::<Vec<_>>(),
-    )
-    .expect("serialize");
-    assert!(
-        !user_messages_text.contains(CATALOG),
-        "the catalog is never attached to a user message"
-    );
-}
-
-/// The `OpenAI` Responses adapter combines the catalog with the canonical
-/// system instructions in the trusted `instructions` channel.
-#[tokio::test]
-async fn responses_places_the_catalog_in_the_instructions_channel() {
-    let server = common::FixtureServer::start(|_attempt, _head| {
-        common::sse_fixture("openai_responses", "plain_text.sse")
-    })
-    .await;
-    let adapter = rustx::model::OpenAiResponsesAdapter::new(
-        rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
-    );
     let events =
-        common::collect_events(&adapter, request(ModelProtocol::OpenAiResponses, true)).await;
+        common::collect_events(&adapter, request(ModelProtocol::OpenAiChatCompletions)).await;
     assert!(matches!(
         events.last(),
         Some(rustx::model::ModelEvent::Completed { .. })
     ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
-    let instructions = body
-        .get("instructions")
-        .expect("instructions channel")
-        .as_str()
-        .expect("string");
-    assert!(
-        instructions.contains(SYSTEM_TEXT) && instructions.contains(CATALOG),
-        "the instructions channel combines canonical system instructions with the catalog"
+    let messages = body["messages"].as_array().expect("messages array");
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(
+        messages[0]["content"],
+        format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}")
     );
+    assert_eq!(messages[1]["role"], "assistant");
+    assert_eq!(messages[2]["role"], "user");
+    assert!(!messages[2].to_string().contains(SKILL_TEXT));
 }
 
-/// A Responses stored continuation still sends the catalog: the catalog is
-/// rebuilt from the request attachment on every request and never
-/// disappears because canonical history before the continuation boundary
-/// was sliced away.
 #[tokio::test]
-async fn responses_continuation_keeps_sending_the_catalog() {
+async fn responses_keeps_the_prompt_across_a_continuation_boundary() {
     let server = common::FixtureServer::start(|_attempt, _head| {
         common::sse_fixture("openai_responses", "plain_text.sse")
     })
@@ -240,7 +113,7 @@ async fn responses_continuation_keeps_sending_the_catalog() {
     let adapter = rustx::model::OpenAiResponsesAdapter::new(
         rustx::model::OpenAiAdapterConfig::new("test-key", server.url("/v1")),
     );
-    let mut request = request(ModelProtocol::OpenAiResponses, true);
+    let mut request = request(ModelProtocol::OpenAiResponses);
     request.continuation = Some(
         rustx::runtime::continuation::ProviderContinuationState::OpenAiResponses(
             rustx::runtime::continuation::OpenAiResponsesContinuation::Stored {
@@ -255,129 +128,95 @@ async fn responses_continuation_keeps_sending_the_catalog() {
     ));
     let body: serde_json::Value =
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
+    assert_eq!(body["previous_response_id"], "resp_1");
     assert_eq!(
-        body.get("previous_response_id"),
-        Some(&serde_json::json!("resp_1")),
-        "the stored continuation is sent"
-    );
-    // The input items are only the continuation tail (system and agent
-    // history are sliced away)...
-    let input_text = serde_json::to_string(body.get("input").expect("input")).expect("serialize");
-    assert!(
-        !input_text.contains(SYSTEM_TEXT),
-        "canonical system history is sliced away in the tail"
-    );
-    // ...but the catalog survives in the instructions channel.
-    let instructions = body
-        .get("instructions")
-        .expect("instructions channel")
-        .as_str()
-        .expect("string");
-    assert!(
-        instructions.contains(CATALOG),
-        "the catalog is re-sent with every continuation request even though          the canonical system history was sliced away"
+        body["instructions"],
+        format!("{SYSTEM_TEXT}\n\n{SKILL_TEXT}")
     );
 }
 
-/// A large Skill catalog contributes to `CannotFit`: the hard-fit
-/// calculation includes the exact catalog attachment on both sides of the
-/// compaction progress comparison.
 #[test]
-fn large_catalog_contributes_to_cannot_fit() {
-    use rustx::context::{CompactionBudgets, ContextConfig, ContextEngine, ContextRuntime};
-    let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
-        std::sync::Arc::new(rustx::context::DefaultTokenEstimator);
-    let engine = ContextEngine::new(
-        ContextConfig {
-            context_window_tokens: 2000,
+fn effective_prompt_is_part_of_projection_measurement() {
+    let engine = rustx::context::ContextEngine::new(
+        rustx::context::ContextConfig {
+            context_window_tokens: 2_000,
             reserve_tokens: 0,
             keep_recent_tokens: 0,
         },
-        estimator.clone(),
+        std::sync::Arc::new(rustx::context::DefaultTokenEstimator),
     )
     .expect("engine");
-    let state = rustx::conversation::ConversationState::from_messages([MessageBlock::User(
-        UserMessageBlock {
-            id: MessageId::new("msg-u1"),
+    let state = rustx::conversation::ConversationState::new();
+    let without = engine
+        .build_projection(&state, &[], None, "")
+        .expect("projection");
+    let with_prompt = engine
+        .build_projection(&state, &[], None, SKILL_TEXT)
+        .expect("projection");
+    assert!(with_prompt.estimated_input.input_tokens > without.estimated_input.input_tokens);
+    assert_ne!(with_prompt.fingerprint(), without.fingerprint());
+}
+
+#[test]
+fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
+    let mut conversation = rustx::conversation::ConversationState::new();
+    conversation
+        .commit(MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("historical-user"),
             content: vec![UserContentBlock::Text(TextBlock {
-                text: "hello".to_owned(),
+                text: "historical input".to_owned(),
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
             timestamp: None,
+        }))
+        .expect("commit historical message");
+    let historical_revision = conversation.revision();
+    let snapshot = RequestSnapshot::new(
+        RequestIdentity {
+            attempt_id: AttemptId::new("attempt-snapshot"),
+            turn: TurnId::new("turn-1"),
+            retry_number: 0,
         },
-    )])
-    .expect("bootstrap conversation");
-    let catalog = SkillCatalogAttachment {
-        rendered: "## Skills\n".repeat(5000),
-    };
-    let with_catalog = engine
-        .build_projection(&state, &[], None, None, Some(&catalog))
-        .expect("projection");
-    let soft_limit = engine.soft_input_limit(512).expect("soft limit");
-    assert!(
-        with_catalog.estimated_input.input_tokens > soft_limit,
-        "a large catalog must exceed the soft limit"
+        historical_revision,
+        "frozen effective system prompt".to_owned(),
+        common::invocation(ModelProtocol::OpenAiChatCompletions, "frozen-model"),
+        128_000,
+        None,
+        false,
+        Vec::new(),
+        CapabilityRevision::new(7),
+        rustx::context::ContextGeneration {
+            id: 1,
+            contributors: Vec::new(),
+        },
+        None,
     );
-    assert!(
-        engine
-            .should_compact(&with_catalog, 512)
-            .expect("threshold"),
-        "a large catalog must trigger compaction"
-    );
-    assert!(
-        !engine
-            .fits_under_soft_limit(&with_catalog, 512)
-            .expect("fit check"),
-        "a large catalog can contribute to CannotFit"
-    );
-    let recent = estimator.estimate_conversation_input(&with_catalog);
-    let without_catalog = engine
-        .build_projection(&state, &[], None, None, None)
-        .expect("projection");
-    assert_eq!(
-        recent,
-        estimator.estimate_conversation_input(&without_catalog),
-        "the catalog never counts toward keep_recent_tokens"
-    );
+    let expected = snapshot
+        .reconstruct(&conversation)
+        .expect("historical request reconstructs");
 
-    // Compaction planning carries the exact attachment: a plan built with
-    // the catalog cannot silently drop it.
-    // A plan with the huge catalog cannot fit: the catalog participates in
-    // the hard-fit calculation and can therefore contribute to CannotFit.
-    let plan_error = engine
-        .plan_compaction(
-            &state,
-            &with_catalog,
-            &[],
-            CompactionBudgets::new(512, 512, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect_err("the huge catalog cannot fit");
-    assert_eq!(plan_error.kind, rustx::context::ContextErrorKind::CannotFit);
+    conversation
+        .commit(MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("live-user"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "live state must not leak backward".to_owned(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        }))
+        .expect("commit later live message");
+    assert_ne!(conversation.revision(), historical_revision);
 
-    // With a moderate catalog the plan succeeds and carries the exact
-    // attachment, so compaction planning and application use the same
-    // catalog snapshot on both sides of the progress comparison.
-    let moderate = engine
-        .build_projection(&state, &[], None, None, Some(&catalog))
-        .expect("projection");
-    let _ = moderate;
-    let moderate_catalog = SkillCatalogAttachment {
-        rendered: "## Skills\n".to_owned(),
-    };
-    let with_moderate = engine
-        .build_projection(&state, &[], None, None, Some(&moderate_catalog))
-        .expect("projection");
-    let plan = engine
-        .plan_compaction(
-            &state,
-            &with_moderate,
-            &[],
-            CompactionBudgets::new(512, 512, 1_000_000),
-            &rustx::context::CompactionConstraints::default(),
-        )
-        .expect("plan");
-    assert_eq!(plan.skill_catalog, Some(moderate_catalog));
-    let _ = ContextRuntime::for_attempt;
+    let rebuilt = snapshot
+        .reconstruct(&conversation)
+        .expect("historical request remains reconstructable");
+    assert_eq!(rebuilt, expected);
+    assert_eq!(rebuilt.messages.len(), 1);
+    assert_eq!(rebuilt.messages[0], expected.messages[0]);
+
+    let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
+    let decoded: RequestSnapshot = serde_json::from_str(&encoded).expect("deserialize snapshot");
+    assert_eq!(decoded, snapshot, "the frozen boundary is reconstructable");
 }

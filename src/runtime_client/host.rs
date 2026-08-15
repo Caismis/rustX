@@ -2256,22 +2256,31 @@ mod tests {
         assert_eq!(settled_events.len(), 1);
         assert_eq!(settled, 1);
 
-        // The first model request observed the admitted message with Agent
-        // Status.
+        // The first model request observed the admitted Runtime Agent Status
+        // fact through canonical history.
         let requests = adapter.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].messages.iter().any(|message| {
             matches!(message, MessageBlock::User(user) if user.id == message_id)
         }));
-        assert!(requests[0].agent_status.is_some());
+        assert!(requests[0].messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus,
+                        )
+            )
+        }));
 
         // The snapshot carries the committed canonical history and the
         // settled attempt.
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.messages.len(),
-            2,
-            "user message + Assistant message"
+            3,
+            "user message + admitted Agent Status + Assistant message"
         );
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
@@ -2828,7 +2837,7 @@ mod tests {
         let (mirror, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             mirror.messages.len(),
-            2,
+            3,
             "the projection mirrors the attempt's committed history"
         );
         assert!(fixture.host.has_current_attempt());
@@ -2927,15 +2936,19 @@ mod tests {
             roles,
             vec![
                 "user",
+                "user",
                 "assistant",
                 "tool",
                 "user",
+                "user",
                 "assistant",
+                "user",
                 "user",
                 "assistant",
             ],
-            "one authoritative history, extended across the tool turn, the \
-             safe-boundary drain, and both attempts"
+            "one authoritative history, including one canonical Runtime \
+             context fact for each fresh inbound step, extended across the \
+             tool turn, the safe-boundary drain, and both attempts"
         );
     }
 
@@ -3770,10 +3783,9 @@ mod tests {
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     }
 
-    /// Agent Status is projected from the exact same composition the model
-    /// path consumes: the client event's rendered text equals the model
-    /// request's rendered attachment, and the structured extension facts
-    /// are preserved.
+    /// Agent Status is admitted from the exact same composition the model
+    /// path consumes: the client event's rendered text equals the canonical
+    /// Runtime context fact sent in the model request.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn agent_status_projection_shares_one_composition() {
         let mut composer = composer();
@@ -3814,11 +3826,25 @@ mod tests {
         let requests = adapter.requests();
         assert_eq!(requests.len(), 1);
         let model_rendered = requests[0]
-            .agent_status
-            .as_ref()
-            .expect("model path carries Agent Status")
-            .rendered
-            .clone();
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::User(user)
+                    if user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus,
+                        ) =>
+                {
+                    user.content.first().and_then(|content| match content {
+                        crate::message::types::UserContentBlock::Text(text) => {
+                            Some(text.text.clone())
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("model path carries canonical Agent Status");
         assert_eq!(
             status_event.rendered, model_rendered,
             "the client view derives from the same composition as the model path"

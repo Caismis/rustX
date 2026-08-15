@@ -2481,6 +2481,26 @@ fn block_id(block: &MessageBlock) -> String {
     }
 }
 
+/// The M3 ordering assertions concern the inbound/assistant/tool ledger
+/// sequence. Issue #55 also admits one native Runtime context fact for each
+/// fresh inbound step, so those facts are intentionally ignored by these
+/// legacy ordering projections while their dedicated context tests assert
+/// their canonical admission separately.
+fn non_context_block_id(block: &MessageBlock) -> Option<String> {
+    if matches!(
+        block,
+        MessageBlock::User(user)
+            if matches!(
+                user.kind,
+                rustx::message::types::InboundKind::Context(_)
+            )
+    ) {
+        None
+    } else {
+        Some(block_id(block))
+    }
+}
+
 /// Runs the attempt with the given mailbox bound as the canonical
 /// conversation mailbox of the tool runtime.
 async fn run_with_mailbox(
@@ -2657,7 +2677,11 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     // result, then the distinct timestamped inbound messages in sequence
     // order, followed by the final Assistant message. The drain never splits
     // the tool-result batch.
-    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
+    let ids: Vec<String> = result
+        .messages()
+        .iter()
+        .filter_map(non_context_block_id)
+        .collect();
     assert_eq!(
         ids,
         vec![
@@ -2759,7 +2783,11 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
         2,
         "exactly one subsequent model request sees the correction batch"
     );
-    let ids: Vec<String> = requests[1].messages.iter().map(block_id).collect();
+    let ids: Vec<String> = requests[1]
+        .messages
+        .iter()
+        .filter_map(non_context_block_id)
+        .collect();
     assert_eq!(
         ids,
         vec![
@@ -2774,7 +2802,16 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     assert_eq!(
         requests[1].messages[3..]
             .iter()
-            .filter(|block| matches!(block, MessageBlock::User(_)))
+            .filter(|block| {
+                matches!(
+                    block,
+                    MessageBlock::User(user)
+                        if !matches!(
+                            user.kind,
+                            rustx::message::types::InboundKind::Context(_)
+                        )
+                )
+            })
             .count(),
         2,
         "the correction messages remain separate canonical user messages"
@@ -2830,7 +2867,11 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
+    let ids: Vec<String> = result
+        .messages()
+        .iter()
+        .filter_map(non_context_block_id)
+        .collect();
     assert_eq!(
         ids,
         vec![
@@ -3294,7 +3335,11 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
         3,
         "turn 3 settles only after both boundaries drained their batches"
     );
-    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
+    let ids: Vec<String> = result
+        .messages()
+        .iter()
+        .filter_map(non_context_block_id)
+        .collect();
     assert_eq!(
         ids,
         vec![

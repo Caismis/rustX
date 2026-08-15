@@ -1335,21 +1335,42 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     let requests = model.requests();
     assert_eq!(requests.len(), 3);
     // Request 2 is a foreground tool-result continuation: no Agent Status.
-    assert!(requests[1].agent_status.is_none());
-    // Request 3 is the fresh terminal inbound turn: its Agent Status shows
+    assert!(!requests[1].messages.iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    )
+        )
+    }));
+    // Request 3 is the fresh terminal inbound turn: its canonical Agent
+    // Status fact shows
     // only the remaining active task.
     let status = requests[2]
-        .agent_status
-        .as_ref()
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    ) =>
+            {
+                user.content.first().and_then(|content| match content {
+                    rustx::message::types::UserContentBlock::Text(text) => Some(text.text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
         .expect("fresh terminal inbound carries Agent Status");
     assert!(
-        status.rendered.contains("exec_2"),
+        status.contains("exec_2"),
         "the remaining active task appears"
     );
-    assert!(
-        !status.rendered.contains("exec_1"),
-        "the terminal task is excluded"
-    );
+    assert!(!status.contains("exec_1"), "the terminal task is excluded");
     assert!(
         requests[2]
             .messages
@@ -1423,7 +1444,16 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
     assert!(
-        requests[1].agent_status.is_none(),
+        !requests[1].messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind
+                        == rustx::message::types::InboundKind::Context(
+                            rustx::message::types::ContextKind::AgentStatus,
+                        )
+            )
+        }),
         "foreground tool-result continuation carries no Agent Status"
     );
 }
@@ -1440,7 +1470,6 @@ fn background_status_accounting() {
     };
     use rustx::context::tokens::DefaultTokenEstimator;
     use rustx::context::{ContextEngine, TokenEstimator as _};
-    use rustx::model::types::AgentStatusAttachment;
     use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let engine = ContextEngine::new(
@@ -1452,40 +1481,37 @@ fn background_status_accounting() {
         estimator,
     )
     .expect("engine");
-    let attachment = AgentStatusAttachment {
-        target_message_id: MessageId::new("msg-inbound-1"),
-        rendered: render_agent_status(&AgentStatus {
-            sections: vec![
-                AgentStatusSection {
-                    id: AgentStatusSectionId::new("temporal"),
-                    data: AgentStatusSectionData::Temporal {
-                        current_time: utc("2026-08-09T12:00:00Z"),
-                        timezone: None,
-                        inbound_message_time: utc("2026-08-09T12:00:00Z"),
-                    },
+    let rendered = render_agent_status(&AgentStatus {
+        sections: vec![
+            AgentStatusSection {
+                id: AgentStatusSectionId::new("temporal"),
+                data: AgentStatusSectionData::Temporal {
+                    current_time: utc("2026-08-09T12:00:00Z"),
+                    timezone: None,
+                    inbound_message_time: utc("2026-08-09T12:00:00Z"),
                 },
-                AgentStatusSection {
-                    id: AgentStatusSectionId::new("background_execution"),
-                    data: AgentStatusSectionData::BackgroundExecution {
-                        executions: vec![BackgroundExecutionSnapshot {
-                            execution_id: ToolExecutionId::new("exec_1"),
-                            tool_id: ToolId::new("tool-bash"),
-                            tool_name: "bash".to_owned(),
-                            state: BackgroundLifecycle::Running,
-                            progress: None,
-                            result: None,
-                        }],
-                    },
+            },
+            AgentStatusSection {
+                id: AgentStatusSectionId::new("background_execution"),
+                data: AgentStatusSectionData::BackgroundExecution {
+                    executions: vec![BackgroundExecutionSnapshot {
+                        execution_id: ToolExecutionId::new("exec_1"),
+                        tool_id: ToolId::new("tool-bash"),
+                        tool_name: "bash".to_owned(),
+                        state: BackgroundLifecycle::Running,
+                        progress: None,
+                        result: None,
+                    }],
                 },
-            ],
-        }),
-    };
+            },
+        ],
+    });
     let empty = rustx::conversation::ConversationState::new();
     let with_status = engine
-        .build_projection(&empty, &[], None, Some(&attachment), None)
+        .build_projection(&empty, &[], None, &rendered)
         .expect("projection with status");
     let without_status = engine
-        .build_projection(&empty, &[], None, None, None)
+        .build_projection(&empty, &[], None, "")
         .expect("projection without status");
     assert_ne!(
         with_status.fingerprint(),
@@ -1508,8 +1534,7 @@ fn background_status_accounting() {
     let projection = ContextProjection {
         surface_revision: rustx::conversation::SurfaceRevision::INITIAL,
         messages: Vec::new(),
-        agent_status: Some(attachment),
-        skill_catalog: None,
+        effective_system_prompt: rendered,
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,

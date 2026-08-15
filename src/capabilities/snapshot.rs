@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::model::types::SkillCatalogAttachment;
 use crate::protocol::manifest::CapabilitiesManifest;
 use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
@@ -38,7 +37,6 @@ pub struct CapabilitySnapshot {
     python_environment: Option<PythonEnvironment>,
     node_environment: Option<NodeEnvironment>,
     effective_environment: ToolEnvironment,
-    skill_catalog: Option<SkillCatalogAttachment>,
 }
 
 /// Two snapshots are equal when their capability content is equal: the
@@ -86,9 +84,6 @@ impl CapabilitySnapshot {
         node_environment: Option<NodeEnvironment>,
         effective_environment: ToolEnvironment,
     ) -> Self {
-        let skill_catalog = skills
-            .render_catalog()
-            .map(|rendered| SkillCatalogAttachment { rendered });
         Self {
             conversation_id,
             workspace_root,
@@ -98,7 +93,6 @@ impl CapabilitySnapshot {
             python_environment,
             node_environment,
             effective_environment,
-            skill_catalog,
         }
     }
 
@@ -160,15 +154,12 @@ impl CapabilitySnapshot {
         &self.effective_environment
     }
 
-    /// The Layer-0 Skill catalog attachment, when any Skill is active.
-    ///
-    /// The attachment is projection-only: it is never a canonical
-    /// conversation fact and is never returned in
-    /// `AgentExecutionResult.messages`, and never emitted as a
-    /// committed-message event.
+    /// The exact rendered Skill guidance of this immutable capability
+    /// snapshot. Context Assembly admits it as a normal sourced canonical
+    /// User context fact; it is not a request attachment.
     #[must_use]
-    pub fn skill_catalog_attachment(&self) -> Option<&SkillCatalogAttachment> {
-        self.skill_catalog.as_ref()
+    pub fn skill_catalog(&self) -> Option<String> {
+        self.skills.render_catalog()
     }
 
     /// The deterministic `CapabilitiesManifest` data of this snapshot.

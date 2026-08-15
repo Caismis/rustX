@@ -980,8 +980,8 @@ async fn commit_is_busy_while_a_lease_is_active_then_commits_atomically() {
     let next_lease = conversation.coordinator.acquire_attempt_lease();
     assert_eq!(next_lease.revision(), committed.revision());
     assert_eq!(
-        next_lease.snapshot().skill_catalog_attachment(),
-        committed.skill_catalog_attachment()
+        next_lease.snapshot().skill_catalog(),
+        committed.skill_catalog()
     );
 }
 
@@ -1420,10 +1420,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     .expect("coordinator");
     let snapshot = prepare_and_commit(&coordinator).await;
     let lease = coordinator.acquire_attempt_lease();
-    let catalog = snapshot
-        .skill_catalog_attachment()
-        .expect("catalog")
-        .clone();
+    let catalog = snapshot.skill_catalog().expect("catalog").clone();
 
     // A two-turn model script: turn 1 is a tool-call turn, turn 2 stops.
     let call = support::fake::ScriptedCall {
@@ -1504,33 +1501,33 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     let requests = model.requests();
     assert_eq!(requests.len(), 2, "two model turns");
     for request in &requests {
-        assert_eq!(
-            request
-                .skill_catalog
-                .as_ref()
-                .expect("catalog on every turn"),
-            &catalog,
-            "every model turn uses the attempt's immutable Skill catalog"
-        );
+        assert!(request.messages.iter().any(|message| {
+            matches!(
+                message,
+                rustx::message::types::MessageBlock::User(user)
+                    if user.kind
+                        == rustx::message::types::InboundKind::Context(
+                            rustx::message::types::ContextKind::SkillGuidance,
+                        )
+                    && user.content.iter().any(|content| {
+                        matches!(
+                            content,
+                            rustx::message::types::UserContentBlock::Text(text)
+                                if text.text == catalog
+                        )
+                    })
+            )
+        }));
     }
-    // The catalog is never canonical history, never returned in the result
-    // messages, and never a committed-message event.
+    // The catalog is canonical history and is therefore present in the
+    // settled result; it is never a separate provider attachment/event.
     assert!(
-        result.messages().iter().all(|message| {
-            !serde_json::to_string(message)
+        result.messages().iter().any(|message| {
+            serde_json::to_string(message)
                 .expect("serialize")
                 .contains("## Skills")
         }),
-        "the Skill catalog must never appear in canonical history"
-    );
-    assert!(
-        result
-            .events
-            .iter()
-            .all(|event| !serde_json::to_string(event)
-                .expect("serialize")
-                .contains("## Skills")),
-        "the Skill catalog must never appear in committed-message events"
+        "the committed ledger contains the admitted Skill guidance fact"
     );
     assert_eq!(
         coordinator.active_attempts(),

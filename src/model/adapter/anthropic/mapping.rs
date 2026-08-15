@@ -272,7 +272,14 @@ fn translate_messages(
     request: &crate::model::types::ModelRequest,
     tools: &ValidatedTools,
 ) -> Result<(Vec<WireTextBlock>, Vec<WireRequestMessage>), ModelError> {
-    let mut system: Vec<WireTextBlock> = Vec::new();
+    let mut system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
+        Vec::new()
+    } else {
+        vec![WireTextBlock {
+            r#type: "text",
+            text: request.effective_system_prompt.clone(),
+        }]
+    };
     let mut messages: Vec<WireRequestMessage> = Vec::new();
     let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
 
@@ -284,6 +291,9 @@ fn translate_messages(
     for (position, block) in request.messages.iter().enumerate() {
         match block {
             MessageBlock::System(system_block) => {
+                if !request.effective_system_prompt.is_empty() {
+                    continue;
+                }
                 for text in &system_block.content {
                     system.push(WireTextBlock {
                         r#type: "text",
@@ -309,21 +319,6 @@ fn translate_messages(
                         }
                     }
                 }
-                // The target fresh inbound user message receives one final
-                // text block containing the rendered Agent Status. The flush
-                // above already guarantees the status can never land between
-                // an assistant tool_use and its tool_result, or between the
-                // tool results of one foreground batch.
-                if let Some(status) = request
-                    .agent_status
-                    .as_ref()
-                    .filter(|status| status.target_message_id == user.id)
-                {
-                    content.push(serde_json::json!({
-                        "type": "text",
-                        "text": status.rendered,
-                    }));
-                }
                 messages.push(WireRequestMessage {
                     role: "user",
                     content,
@@ -347,18 +342,6 @@ fn translate_messages(
         }
     }
     flush_tool_results(&mut pending_tool_results, &mut messages);
-
-    // The Skill catalog is trusted system context: it is placed in the
-    // Anthropic top-level system content along with the canonical trusted
-    // system blocks. A continuation that slices canonical history away
-    // never loses the catalog, because system content is rebuilt from the
-    // request attachment on every request.
-    if let Some(catalog) = &request.skill_catalog {
-        system.push(WireTextBlock {
-            r#type: "text",
-            text: catalog.rendered.clone(),
-        });
-    }
 
     if messages.is_empty() {
         return Err(ModelError {

@@ -742,7 +742,7 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     assert_eq!(reattached, settled_cursor);
     assert_eq!(
         snapshot.messages.len(),
-        2,
+        3,
         "the settled attempt and canonical history survived detach"
     );
 }
@@ -881,7 +881,7 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
     // The authoritative snapshot reflects committed state at its cursor.
     let (snapshot, snapshot_cursor) = snapshot_of(&mut *driver, 4).await;
     assert_eq!(snapshot_cursor, rest.last().expect("settled").cursor);
-    assert_eq!(snapshot.messages.len(), 2);
+    assert_eq!(snapshot.messages.len(), 3);
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
@@ -1632,7 +1632,7 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
     // through its cursor: the inbound message is already committed.
     let (mid, mid_cursor) = snapshot_of(&mut *driver, 3).await;
     assert!(mid_cursor > initial_cursor);
-    assert_eq!(mid.messages.len(), 1);
+    assert_eq!(mid.messages.len(), 2);
 
     // Subscribing after that cursor observes only later events, with no gap
     // and no replay of what the snapshot already contains.
@@ -1646,7 +1646,7 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
 
     let (settled, settled_cursor) = snapshot_of(&mut *driver, 5).await;
     assert_eq!(settled_cursor, events.last().expect("settled").cursor);
-    assert_eq!(settled.messages.len(), 2);
+    assert_eq!(settled.messages.len(), 3);
 }
 
 /// An unserviceable cursor fails with the typed `resync_required`, a fresh
@@ -1695,7 +1695,11 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
     // A fresh authoritative snapshot repairs every externally visible fact,
     // and its cursor is always serviceable.
     let (repaired, repaired_cursor) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(repaired.messages.len(), 1, "the inbound message committed");
+    assert_eq!(
+        repaired.messages.len(),
+        2,
+        "the inbound message and admitted Agent Status fact committed"
+    );
     subscribe(&mut *driver, 5, repaired_cursor).await;
 
     // Continuing from the repaired cursor is contiguous: one further

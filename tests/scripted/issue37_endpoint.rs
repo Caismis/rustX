@@ -286,10 +286,14 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     let messages = response["result"]["snapshot"]["messages"]
         .as_array()
         .expect("the snapshot carries canonical history");
-    assert_eq!(messages.len(), 2, "one inbound message and one agent reply");
+    assert_eq!(
+        messages.len(),
+        3,
+        "one inbound message, one admitted Agent Status fact, and one agent reply"
+    );
     assert_eq!(
         host.snapshot().expect("snapshot").0.messages.len(),
-        2,
+        3,
         "the framed view matches the authoritative projection"
     );
 }

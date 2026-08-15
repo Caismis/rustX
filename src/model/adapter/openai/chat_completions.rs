@@ -1162,9 +1162,23 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     let mut system_messages = Vec::new();
     let mut transcript_messages = Vec::new();
     let reasoning_replay = request.invocation.compat.chat_reasoning_replay;
+    if !request.effective_system_prompt.is_empty() {
+        system_messages.push(TranslatedChatMessage {
+            message: ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
+                content: ChatCompletionRequestSystemMessageContent::Text(
+                    request.effective_system_prompt.clone(),
+                ),
+                name: None,
+            }),
+            reasoning: None,
+        });
+    }
     for block in &request.messages {
         let (translated, reasoning) = match block {
             MessageBlock::System(system) => {
+                if !request.effective_system_prompt.is_empty() {
+                    continue;
+                }
                 let texts: Vec<String> = system
                     .content
                     .iter()
@@ -1193,10 +1207,7 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
                     None,
                 )
             }
-            MessageBlock::User(user) => (
-                translate_user_message(user, request.agent_status.as_ref())?,
-                None,
-            ),
+            MessageBlock::User(user) => (translate_user_message(user)?, None),
             MessageBlock::Assistant(assistant) => {
                 let (message, reasoning) =
                     translate_assistant_message(assistant, reasoning_replay)?;
@@ -1217,12 +1228,6 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
             transcript_messages.push(translated);
         }
     }
-    // The Skill catalog is trusted system context: it is translated through
-    // the provider's system-level message mechanism together with the
-    // canonical trusted system context, as one deterministic system message
-    // after the canonical system messages. It is never attached to a user
-    // message.
-    append_skill_catalog(request, &mut system_messages);
     let mut messages = system_messages;
     messages.extend(transcript_messages);
     if messages.is_empty() {
@@ -1233,22 +1238,8 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
     Ok(messages)
 }
 
-fn append_skill_catalog(request: &ModelRequest, messages: &mut Vec<TranslatedChatMessage>) {
-    let Some(catalog) = &request.skill_catalog else {
-        return;
-    };
-    messages.push(TranslatedChatMessage {
-        message: ChatCompletionRequestMessage::System(ChatCompletionRequestSystemMessage {
-            content: ChatCompletionRequestSystemMessageContent::Text(catalog.rendered.clone()),
-            name: None,
-        }),
-        reasoning: None,
-    });
-}
-
 fn translate_user_message(
     user: &crate::message::types::UserMessageBlock,
-    agent_status: Option<&crate::model::types::AgentStatusAttachment>,
 ) -> Result<ChatCompletionRequestMessage, ModelError> {
     let mut parts = Vec::new();
     for content in &user.content {
@@ -1267,16 +1258,6 @@ fn translate_user_message(
                 ));
             }
         }
-    }
-    // The target fresh inbound user message receives one final rendered Agent
-    // Status text part. The status is never a separate canonical message and
-    // never appended to other user messages of the batch.
-    if let Some(status) = agent_status.filter(|status| status.target_message_id == user.id) {
-        parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-            ChatCompletionRequestMessageContentPartText {
-                text: status.rendered.clone(),
-            },
-        ));
     }
     Ok(ChatCompletionRequestMessage::User(
         ChatCompletionRequestUserMessage {

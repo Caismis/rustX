@@ -481,8 +481,7 @@ fn the_invocation_configuration_is_credential_free_and_serializable() {
         invocation,
         messages: Vec::new(),
         tools: Vec::new(),
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         continuation: None,
     };
     assert_eq!(request.max_output_tokens(), 256);

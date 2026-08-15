@@ -7,12 +7,11 @@
 //! - **mandatory**: every normal `AgentExecution` composes it whenever a
 //!   pending fresh inbound turn exists; there is no disable flag and no
 //!   legacy no-status execution mode;
-//! - **projection-only**: it is never a canonical conversation fact, never
-//!   returned in `AgentExecutionResult.messages`, and never
-//!   emitted as a committed-message event;
+//! - **historical**: once accepted it is a canonical Runtime-sourced User
+//!   context fact in the Message Ledger and Surface;
 //! - **provider-neutral**: composition produces structured sections, a
-//!   canonical deterministic renderer turns them into one text attachment,
-//!   and provider adapters own the final wire placement.
+//!   canonical deterministic renderer turns them into one bounded text value,
+//!   and Context Assembly admits that value through the normal context path.
 //!
 //! The composition flow is frozen:
 //!
@@ -20,8 +19,8 @@
 //! runtime facts
 //!     → structured AgentStatus sections
 //!     → canonical deterministic renderer
-//!     → rendered AgentStatusAttachment
-//!     → provider wire compiler
+//!     → rendered Runtime context value
+//!     → Context Assembly → canonical User message
 //! ```
 //!
 //! The conversation background registry is authoritative; the executing
@@ -32,17 +31,12 @@
 //! A provider adapter never receives raw runtime state and never invents the
 //! status text itself.
 //!
-//! The cross-layer [`AgentStatusAttachment`](crate::model::types::AgentStatusAttachment)
-//! is a Layer 0 contract owned by `crate::model::types`: this module
-//! *produces* the attachment through composition and rendering, but model
-//! contracts never depend on context implementation modules.
-//!
 //! Section ordering is deterministic and frozen:
 //!
 //! ```text
 //! 1. mandatory temporal section
 //! 2. background_execution when active entries exist
-//! 3. extension providers in explicit registration order
+//! 3. extension providers in canonical section-identity order
 //! ```
 //!
 //! A provider's section identity is runtime-owned registration metadata: it
@@ -391,17 +385,20 @@ impl AgentStatusComposer {
         Ok(())
     }
 
-    /// The registered extension provider ids, in registration order.
+    /// The registered extension provider ids, in canonical identity order.
     #[must_use]
     pub fn provider_ids(&self) -> Vec<AgentStatusSectionId> {
-        self.providers
+        let mut ids = self
+            .providers
             .iter()
             .map(|registered| registered.id.clone())
-            .collect()
+            .collect::<Vec<_>>();
+        ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        ids
     }
 
     /// Composes one status snapshot: the mandatory temporal section first,
-    /// then every extension section in registration order.
+    /// then every extension section in stable logical identity order.
     ///
     /// The clock is sampled exactly once per invocation. The composer owns
     /// the conversion from extension output into the internal composed
@@ -426,7 +423,9 @@ impl AgentStatusComposer {
                 },
             });
         }
-        for registered in &self.providers {
+        let mut providers = self.providers.iter().collect::<Vec<_>>();
+        providers.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        for registered in providers {
             match registered.provider.section(context) {
                 Ok(Some(facts)) => sections.push(AgentStatusSection {
                     id: registered.id.clone(),

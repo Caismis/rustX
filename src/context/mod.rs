@@ -11,6 +11,8 @@
 //!         ↓
 //! Conversation Surface  active identity/order @ SurfaceRevision
 //!         ↓
+//! Context Assembly      bounded proposals + admission-ready context
+//!         ↓
 //! Context Engine        finite projection + token pressure + compaction
 //!                       planning
 //!         ↓
@@ -22,13 +24,13 @@
 //! genuine canonical conversational fact and rewrites the Surface. Ledger
 //! facts are never edited, deleted, or overwritten.
 //!
-//! No provider SDK or wire type exists in this module: the engine projects
-//! canonical context, the Agent Status composer produces structured status
-//! sections and a deterministic renderer produces the attachment text, and
-//! adapters decide how that canonical context is encoded on the wire.
+//! No provider SDK or wire type exists in this module: Context Assembly settles
+//! trusted semantic context, the engine projects the Surface, and adapters
+//! receive the final Effective System Prompt.
 //! [`ContextRuntime`] bundles the engine, the summary service, and the Agent
 //! Status composer for `AgentExecution`.
 
+pub mod assembly;
 pub mod engine;
 pub mod error;
 pub mod projection;
@@ -40,6 +42,13 @@ use std::sync::Arc;
 
 use crate::model::session::AttemptModelSnapshot;
 
+pub use assembly::{
+    AcceptedContext, AcceptedSystemSection, AcceptedUserContext, CONTEXT_COMPATIBILITY_ABI_VERSION,
+    ContextAssembly, ContextAssemblyError, ContextCompatibilityManifest, ContextContributor,
+    ContextGeneration, ContextProposal, ContextProposalKind, ContributorGeneration,
+    ContributorInputSnapshot, NativeContextInput, SystemPromptSectionProposal, SystemSectionLane,
+    UserContextLane, UserMessageProposal, render_effective_system_prompt,
+};
 pub use engine::{
     CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
     SessionContextPolicy,
@@ -72,9 +81,12 @@ pub struct ContextRuntime {
     /// The provider-neutral summary service.
     pub(crate) summarizer: Arc<dyn ContextSummarizer>,
     /// The Agent Status composer: the structured status sections and the
-    /// deterministic renderer that produces the ephemeral attachment. Agent
-    /// Status is mandatory for rustX agents and owned by the context plane.
+    /// deterministic renderer that produces the canonical Runtime context
+    /// fact. Agent Status is owned by the context plane.
     pub(crate) status_composer: AgentStatusComposer,
+    /// The one rustX-owned finite context-assembly contract. Extensions only
+    /// receive immutable invocation snapshots through this value.
+    pub(crate) assembly: ContextAssembly,
     /// The primary/summary output budgets and the summary input limit,
     /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
@@ -99,6 +111,29 @@ impl ContextRuntime {
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
         status_composer: AgentStatusComposer,
+        model: &AttemptModelSnapshot,
+    ) -> Result<Self, ContextError> {
+        Self::for_attempt_with_assembly(
+            policy,
+            estimator,
+            status_composer,
+            ContextAssembly::new(),
+            model,
+        )
+    }
+
+    /// Creates a production context runtime with the supplied certified
+    /// contributor registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a context configuration error when the primary or summary
+    /// model cannot produce a valid context budget.
+    pub fn for_attempt_with_assembly(
+        policy: SessionContextPolicy,
+        estimator: Arc<dyn TokenEstimator>,
+        status_composer: AgentStatusComposer,
+        assembly: ContextAssembly,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
         if policy.summary_output_cap == Some(0) {
@@ -143,6 +178,7 @@ impl ContextRuntime {
             engine,
             summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
             status_composer,
+            assembly,
             compaction_budgets,
         })
     }
@@ -160,10 +196,29 @@ impl ContextRuntime {
         status_composer: AgentStatusComposer,
         compaction_budgets: CompactionBudgets,
     ) -> Self {
+        Self::with_scripted_summarizer_and_assembly(
+            engine,
+            summarizer,
+            status_composer,
+            ContextAssembly::new(),
+            compaction_budgets,
+        )
+    }
+
+    /// Test-only constructor with an explicit contributor registry.
+    #[cfg(test)]
+    pub(crate) fn with_scripted_summarizer_and_assembly(
+        engine: ContextEngine,
+        summarizer: Arc<dyn ContextSummarizer>,
+        status_composer: AgentStatusComposer,
+        assembly: ContextAssembly,
+        compaction_budgets: CompactionBudgets,
+    ) -> Self {
         Self {
             engine,
             summarizer,
             status_composer,
+            assembly,
             compaction_budgets,
         }
     }
