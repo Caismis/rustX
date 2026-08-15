@@ -532,11 +532,12 @@ Only after the local executor is stable, implement:
 
 ## Testing strategy
 
-Three test layers are required:
+Four test layers are required:
 
 1. Unit tests for pure state machines, transformations, ordering, and validation.
 2. Deterministic runtime fixtures using mock model and tool executors.
-3. Live integration tests using real model endpoints, MCP servers, and process environments.
+3. Deterministic composed conformance through the real provider boundary: the real catalog, adapter, HTTP client, stream parser, Agent Loop, context engine, tool runtime, capability plane, and Runtime Client projection, against the external scripted provider emulator (`test-support/fake-provider`, Issue #47). Scenarios are strict ordered scripts; race-sensitive tests are ordered by provider-side gates rather than sleeps.
+4. Live integration tests using real model endpoints, MCP servers, and process environments.
 
 Core semantics must never depend exclusively on nondeterministic live-model tests.
 

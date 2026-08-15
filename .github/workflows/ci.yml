@@ -23,14 +23,44 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # The provider emulator (Issue #47) is an external process the
+      # conformance suite launches with `uv run`. Without it those tests skip
+      # themselves, which is why the run below also sets
+      # RUSTX_REQUIRE_PROVIDER_EMULATOR.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Run the provider-emulator tests
+        working-directory: test-support/fake-provider
+        run: uv run --frozen pytest
+
+      # One `cargo test` run covers the whole suite, conformance included, so
+      # the workspace is compiled once. The environment variable turns a
+      # missing Python toolchain into a hard failure instead of a silent skip.
       - name: Run tests
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-targets --all-features
+
+      - name: Run the Agent Loop conformance suite explicitly
+        env:
+          RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
+        run: cargo test --test issue47_conformance --all-features
 
       - name: Check whitespace
         run: git diff --check
@@ -44,6 +74,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # The real-child integration suite drives the shared provider emulator,
+      # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync the provider emulator environment
+        working-directory: test-support/fake-provider
+        run: uv sync --frozen
 
       # Node comes from nvm's LTS line, declared explicitly. The intent is
       # "rustX TUI runs on the supported Node LTS", not "whatever Node the

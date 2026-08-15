@@ -1,13 +1,34 @@
-//! Shared deterministic test infrastructure: a minimal local HTTP fixture
-//! server.
+//! Shared deterministic test infrastructure.
 //!
-//! Deterministic adapter tests must be network-free with respect to real
-//! providers. A test web framework is deliberately avoided; this module is a
-//! small raw-TCP HTTP/1.1 responder that serves fixture bodies, counts
-//! attempts, and records request bodies so tests can assert exact HTTP
-//! behavior (one attempt, no retry, correct serialization).
+//! # Two provider fixtures, two bounded purposes
+//!
+//! ```text
+//! FixtureServer (this module)        low-level adapter tests: request
+//!                                    serialization, stream parsing, error
+//!                                    normalization, one-attempt/no-retry.
+//!                                    One adapter, no Agent Loop, no runtime.
+//!
+//! ProviderEmulator (Issue #47)       composed Agent Loop conformance through
+//!                                    the real runtime, over a real external
+//!                                    provider process with strict ordered
+//!                                    scenarios and deterministic gates.
+//! ```
+//!
+//! [`FixtureServer`] is deliberately retained: an adapter translation or
+//! stream-normalization test needs one canned body and an attempt counter,
+//! and routing it through an external process and a scripted scenario would
+//! add a subprocess, a Python toolchain, and a scenario definition to a test
+//! that asserts one JSON field. It is **not** the implementation of composed
+//! conformance: a test that exercises the Agent Loop, the context engine, the
+//! tool runtime, or the capability plane belongs in
+//! `tests/issue47_conformance.rs` over [`provider_emulator`].
+//!
+//! [`FixtureServer`] itself is a small raw-TCP HTTP/1.1 responder that serves
+//! fixture bodies, counts attempts, and records request bodies.
 
 #![allow(dead_code)] // every helper is used only by some test binaries
+
+pub mod provider_emulator;
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};

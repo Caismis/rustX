@@ -22,6 +22,8 @@ External SDK types must terminate at adapter boundaries. Provider SDK types, MCP
 
 Test seams must not be published API. A fixture that substitutes a runtime-owned dependency — a provider adapter behind a validated catalog binding, a summary service behind a context runtime — must be `#[cfg(test)] pub(crate)` and must be exercised from the crate's own test build. `#[doc(hidden)] pub` hides a seam from documentation but leaves it callable by a consumer, and is not an acceptable substitute. Suites needing such a seam live under `tests/scripted/` and compile into the crate through `src/lib.rs`; `tests/*.rs` binaries use published API only.
 
+Composed Agent Loop conformance must not use a seam at all. There is one canonical external provider-emulation boundary — `test-support/fake-provider`, an external Python 3.12 process managed by uv — and a test that exercises the Agent Loop, the context engine, the tool runtime, or the capability plane end to end must reach it through the real catalog, adapter, HTTP client, and stream parser. A scripted injected adapter and the raw Rust HTTP fixture remain valid for internal state machines and for single-adapter translation tests respectively; neither is an implementation of composed conformance. Python is test-support only and must never become a rustX production runtime dependency.
+
 Changes that alter architectural boundaries must update `docs/architecture.md`.
 
 Changes that alter runtime invariants must update `docs/invariants.md`.
@@ -87,6 +89,9 @@ The baseline CI gate is:
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test --all-targets --all-features`
+- `uv sync --frozen` and `uv run --frozen pytest` in `test-support/fake-provider`
+
+The Rust job installs Python 3.12 and uv and runs with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, so the Agent Loop conformance suite fails on a missing toolchain instead of skipping itself.
 
 Additional deterministic runtime fixtures will be added as the executor becomes functional.
 

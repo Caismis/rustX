@@ -11,16 +11,18 @@
  * ```
  *
  * A fake protocol process alone would not prove this client speaks the bytes
- * rustX actually writes. The model provider is a local SSE fixture, so the
- * runtime exercises its own adapter, its own credential resolution, and its
- * own streaming path with no network and no credential in CI.
+ * rustX actually writes. The model provider is the shared external emulator
+ * (issue #47), so the runtime exercises its own adapter, its own credential
+ * resolution, and its own streaming path with no network and no credential in
+ * CI — and the TUI owns no provider protocol of its own.
  *
  * Readiness is protocol synchronization throughout: the client writes a
  * request and awaits its correlated response, or awaits an event. Nothing
  * sleeps, and no ordering is established by a timer.
  *
  * The suite skips itself with a clear reason when the binary has not been
- * built, so a Node-only checkout still runs the rest of the tests.
+ * built or the provider emulator's toolchain is missing, so a partial
+ * checkout still runs the rest of the tests.
  */
 
 import assert from "node:assert/strict";
@@ -34,7 +36,7 @@ import { ChildRuntimeProcess } from "../src/runtime/child-process.ts";
 import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientSession } from "../src/runtime/session.ts";
 import { CommandDispatcher } from "../src/commands/dispatcher.ts";
-import { ProviderFixture } from "./support/provider-fixture.ts";
+import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { until } from "./support/scripted-peer.ts";
 
 /** The cargo target directory, overridable for a non-default layout. */
@@ -42,9 +44,10 @@ const BINARY =
   process.env.RUSTX_BINARY ??
   fileURLToPath(new URL("../../target/debug/rustx", import.meta.url));
 
-const AVAILABLE = existsSync(BINARY);
-const SKIP = AVAILABLE
-  ? undefined
+const SKIP = existsSync(BINARY)
+  ? (await ProviderEmulator.available())
+    ? undefined
+    : "uv is not installed; the shared provider emulator cannot run"
   : `the rustx binary is not built at ${BINARY}; run \`cargo build --bin rustx\``;
 
 const CREDENTIAL_VARIABLE = "RUSTX_TUI_INTEGRATION_KEY";
@@ -103,14 +106,14 @@ interface Harness {
   child: ChildRuntimeProcess;
   connection: RuntimeClientConnection;
   session: RuntimeClientSession;
-  provider: ProviderFixture;
+  provider: ProviderEmulator;
 }
 
 describe("real rustx child integration", { skip: SKIP }, () => {
   let harness: Harness | undefined;
 
   before(async () => {
-    const provider = await ProviderFixture.start();
+    const provider = await ProviderEmulator.start("tui_integration");
     const root = mkdtempSync(join(tmpdir(), "rustx-tui-"));
     const workspace = join(root, "workspace");
     mkdirSync(workspace, { recursive: true });
@@ -150,7 +153,9 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     }
     harness.child.closeStdin();
     await harness.child.waitOrTerminate(10_000);
-    await harness.provider.stop();
+    // The scenario is asserted on the provider side too: every declared
+    // step consumed, in order, with no unexpected request.
+    await harness.provider.finish();
   });
 
   it("completes the whole lifecycle against the real binary", async () => {
@@ -232,11 +237,17 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       outcome: { type: "completed", finish_reason: { type: "stop" } },
     });
 
-    // The provider request carried the catalog's own request parameters,
-    // which the runtime — not this client — assembled.
-    const body = JSON.parse(provider.requestBodies[0] ?? "{}");
+    // Exactly one provider request, carrying the catalog's own request
+    // parameters, which the runtime — not this client — assembled. The
+    // emulator asserted the same fields on arrival; this reads back the
+    // record it kept.
+    const requests = await provider.requests();
+    assert.equal(requests.length, 1);
+    const body = requests[0]?.body as Record<string, unknown>;
     assert.equal(body.model, "integration-model");
     assert.equal(body.temperature, 0.25);
+    assert.deepEqual(requests[0]?.credentialHeaders, ["authorization"]);
+    assert.ok(!JSON.stringify(body).includes(CREDENTIAL_VALUE));
 
     // --- the A -> B invariant against the real runtime ---------------------
     const updated = await session.modelSet({ model: "fixture/second-model" });

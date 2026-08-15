@@ -14,3 +14,9 @@
 
 # TUI client
 /tui/node_modules
+
+# Provider emulator (uv manages the environment; the lockfile is committed)
+/test-support/fake-provider/.venv
+/test-support/fake-provider/.pytest_cache
+__pycache__/
+*.pyc
