@@ -1348,7 +1348,7 @@ mod tests {
                 conversation_id,
                 workspace,
                 base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
-                mcp_servers: Vec::new(),
+                mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: crate::tools::environment::ToolEnvironment::new(),
                 environment_store_root: dir.path().join("skill-env"),
             },

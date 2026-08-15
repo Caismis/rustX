@@ -89,7 +89,8 @@ fn committed_baseline_session_selects_a_catalog_model_and_configures_runtime_pol
     assert_eq!(session.context.reserve_tokens, 4_096);
     assert_eq!(session.context.keep_recent_tokens, 12_000);
     assert_eq!(session.context.summary_output_cap, Some(1_024));
-    assert_eq!(session.mcp_servers.len(), 0);
+    assert!(session.mcp_servers.is_empty());
+    assert!(session.mcp_tool_policies.is_empty());
     assert_eq!(session.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
 
     let policies = session.native_tools.to_policies();

@@ -58,7 +58,7 @@ impl RuntimeClientFixture {
             composer: AgentStatusComposer::default(),
             initial_messages: Vec::new(),
             workspace_fixtures: Vec::new(),
-            mcp_servers: Vec::new(),
+            mcp_servers: std::collections::BTreeMap::new(),
             session_model: None,
             context_policy: SessionContextPolicy {
                 reserve_tokens: 0,
@@ -107,7 +107,7 @@ pub struct RuntimeClientFixtureBuilder {
     /// Workspace content written before capability preparation.
     workspace_fixtures: Vec<WorkspaceFixture>,
     /// MCP servers the capability coordinator connects.
-    mcp_servers: Vec<rustx::tools::mcp::McpServerConfig>,
+    mcp_servers: rustx::tools::mcp::McpServerBindings,
     /// An explicit session model authority, when the test needs a specific
     /// catalog (several models, reasoning profiles, or an explicit summary
     /// model). Defaults to the one scripted model.
@@ -179,7 +179,7 @@ impl RuntimeClientFixtureBuilder {
 
     /// Connects MCP servers to the capability coordinator.
     #[must_use]
-    pub fn mcp_servers(mut self, servers: Vec<rustx::tools::mcp::McpServerConfig>) -> Self {
+    pub fn mcp_servers(mut self, servers: rustx::tools::mcp::McpServerBindings) -> Self {
         self.mcp_servers = servers;
         self
     }

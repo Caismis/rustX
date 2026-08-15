@@ -14,15 +14,22 @@
 //!   server), records the observation, and returns;
 //! - when pagination is enabled, a multi-page `tools/list` catalog of
 //!   `[alpha, beta, gamma, delta, echo]` served two tools per page.
+//!
+//! [`legacy`] is the one deliberate exception to the official-rmcp rule: a
+//! hand-written pre-2026 wire fixture for the one peer shape an rmcp server
+//! cannot represent.
 
+pub mod legacy;
+
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, JsonObject,
-    PaginatedRequestParams, ProgressNotificationParam, ServerCapabilities, ServerInfo,
-    SubscriptionFilter, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, DiscoverResult,
+    JsonObject, PaginatedRequestParams, ProgressNotificationParam, ProtocolVersion,
+    ServerCapabilities, ServerInfo, SubscriptionFilter, Tool,
 };
 use rmcp::service::{RequestContext, SubscriptionContext};
 use rmcp::{RoleServer, ServerHandler, ServiceExt};
@@ -37,10 +44,34 @@ pub const CANCEL_FILE_ENV: &str = "RUSTX_M7_FIXTURE_CANCEL_FILE";
 /// The environment variable selecting the paginated `tools/list` catalog
 /// page size (self-spawned stdio fixtures).
 pub const PAGE_SIZE_ENV: &str = "RUSTX_M7_FIXTURE_PAGE_SIZE";
+/// The environment variable narrowing the protocol revisions the fixture
+/// server supports, as a comma-separated list (self-spawned stdio fixtures).
+///
+/// This is the deterministic protocol-negotiation seam: the value flows
+/// straight into rmcp's `ServerHandler::supported_protocol_versions`, which
+/// bounds `server/discover` advertisement, `initialize` negotiation, and
+/// per-request version validation alike.
+pub const PROTOCOL_VERSIONS_ENV: &str = "RUSTX_M7_FIXTURE_PROTOCOL_VERSIONS";
+/// Parses a comma-separated protocol revision list.
+///
+/// Every MCP revision string is accepted, including ones no SDK knows: that
+/// is exactly what an unsupported-revision fixture needs.
+#[must_use]
+pub fn parse_protocol_versions(value: &str) -> Vec<ProtocolVersion> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            serde_json::from_value::<ProtocolVersion>(serde_json::Value::String(entry.to_owned()))
+                .expect("a protocol revision string always deserializes")
+        })
+        .collect()
+}
 
 impl FixtureServer {
     /// Builds a fixture from the self-spawn environment: cancellation
-    /// marker file and pagination page size, when set.
+    /// marker file, pagination page size, and protocol behavior, when set.
     #[must_use]
     pub fn from_env() -> Self {
         Self {
@@ -49,8 +80,20 @@ impl FixtureServer {
             page_size: std::env::var(PAGE_SIZE_ENV)
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok()),
+            supported_versions: std::env::var(PROTOCOL_VERSIONS_ENV)
+                .ok()
+                .map(|value| parse_protocol_versions(&value)),
             ..Self::default()
         }
+    }
+
+    /// The revisions this fixture serves, newest first.
+    fn versions(&self) -> Vec<ProtocolVersion> {
+        self.supported_versions.clone().unwrap_or_else(|| {
+            let mut versions = ProtocolVersion::KNOWN_VERSIONS.to_vec();
+            versions.sort_by(|left, right| right.as_str().cmp(left.as_str()));
+            versions
+        })
     }
 
     /// The fixture tool catalog for the current state. In pagination mode
@@ -98,6 +141,14 @@ pub struct FixtureServer {
     pub list_changed_supported: bool,
     /// When set, `tools/list` paginates its catalog with this page size.
     pub page_size: Option<usize>,
+    /// When set, the exact protocol revisions this server supports; `None`
+    /// means every revision the SDK knows.
+    pub supported_versions: Option<Vec<ProtocolVersion>>,
+    /// The number of `subscriptions/listen` streams this server has accepted.
+    ///
+    /// A client that installed more than one invalidation mechanism per
+    /// connection shows up here as a count above one.
+    pub listen_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FixtureServer {
@@ -117,7 +168,30 @@ impl ServerHandler for FixtureServer {
         if self.list_changed_supported {
             capabilities = capabilities.enable_tool_list_changed();
         }
-        ServerInfo::new(capabilities.build())
+        let mut info = ServerInfo::new(capabilities.build());
+        // The legacy `initialize` fallback echoes this revision whenever the
+        // client asks for one the fixture does not serve, so it must be a
+        // revision the fixture really serves.
+        if let Some(newest) = self.versions().first() {
+            info.protocol_version = newest.clone();
+        }
+        info
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Owned(self.versions())
+    }
+
+    async fn discover(
+        &self,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<DiscoverResult, rmcp::ErrorData> {
+        // Overridden only so the advertised set matches `versions()` even
+        // when the fixture narrows it.
+        Ok(DiscoverResult::from_server_info(
+            self.versions(),
+            self.get_info(),
+        ))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -171,6 +245,7 @@ impl ServerHandler for FixtureServer {
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), rmcp::ErrorData> {
+        self.listen_calls.fetch_add(1, Ordering::Release);
         *self.sink.lock().await = Some(context.sink().clone());
         context.cancelled().await;
         Ok(())
@@ -207,15 +282,28 @@ impl ServerHandler for FixtureServer {
                             )
                         })?;
                 }
-                let sink = sink.lock().await.clone().ok_or_else(|| {
-                    rmcp::ErrorData::internal_error("subscription is not ready", None)
-                })?;
-                sink.notify_tool_list_changed().await.map_err(|error| {
-                    rmcp::ErrorData::internal_error(
-                        format!("cannot notify tool list change: {error}"),
-                        None,
-                    )
-                })?;
+                // Inline-lifecycle clients open a `subscriptions/listen`
+                // stream; legacy clients get the plain
+                // `notifications/tools/list_changed` their revision defines.
+                if let Some(sink) = sink.lock().await.clone() {
+                    sink.notify_tool_list_changed().await.map_err(|error| {
+                        rmcp::ErrorData::internal_error(
+                            format!("cannot notify tool list change: {error}"),
+                            None,
+                        )
+                    })?;
+                } else {
+                    context
+                        .peer
+                        .notify_tool_list_changed()
+                        .await
+                        .map_err(|error| {
+                            rmcp::ErrorData::internal_error(
+                                format!("cannot notify tool list change: {error}"),
+                                None,
+                            )
+                        })?;
+                }
                 Ok(CallToolResult::success(vec![ContentBlock::text("fixture changed")]).into())
             } else if request.name == "slow" {
                 if let Some(token) = context.meta.get_progress_token() {

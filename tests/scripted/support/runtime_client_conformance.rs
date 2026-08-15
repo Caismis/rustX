@@ -1542,24 +1542,26 @@ pub async fn capability_projection_covers_mcp_origins(
     if fixture::serve_if_fixture_mode(fixture::FixtureServer::from_env()).await {
         return;
     }
-    let server = rustx::tools::mcp::McpServerConfig {
-        server_id: rustx::runtime::identity::McpServerId::new("fixture"),
-        transport: rustx::tools::mcp::McpTransportConfig::Stdio {
-            program: std::env::current_exe()
-                .expect("test executable")
-                .display()
-                .to_string(),
-            args: fixture::fixture_spawn_args(test_name),
-            cwd: None,
-            environment: std::collections::BTreeMap::from([(
-                fixture::FIXTURE_MODE_ENV.to_owned(),
-                "1".to_owned(),
-            )]),
+    let servers = rustx::tools::mcp::McpServerBindings::from([(
+        rustx::runtime::identity::McpServerId::new("fixture"),
+        rustx::tools::mcp::McpServerBinding {
+            transport: rustx::tools::mcp::McpTransportConfig::Stdio {
+                program: std::env::current_exe()
+                    .expect("test executable")
+                    .display()
+                    .to_string(),
+                args: fixture::fixture_spawn_args(test_name),
+                cwd: None,
+                environment: std::collections::BTreeMap::from([(
+                    fixture::FIXTURE_MODE_ENV.to_owned(),
+                    "1".to_owned(),
+                )]),
+            },
+            policy: rustx::tools::types::ToolInvocationPolicy::default(),
         },
-        policy: rustx::tools::types::ToolInvocationPolicy::default(),
-    };
+    )]);
     let fixture = ConformanceFixture::builder(&conversation(factory, "mcp"))
-        .mcp_servers(vec![server])
+        .mcp_servers(servers)
         .build()
         .await;
     let mut driver = connect(&fixture, factory);

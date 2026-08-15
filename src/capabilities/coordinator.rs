@@ -17,7 +17,7 @@ use crate::skills::environments::{
 use crate::skills::{SkillDiscovery, SkillSnapshot, merge_dependency_manifests};
 use crate::tools::environment::{ToolEnvironment, ToolEnvironmentOverlay};
 use crate::tools::executor::ToolRegistry;
-use crate::tools::mcp::{McpInvalidationState, McpServerConfig, McpServerRuntime};
+use crate::tools::mcp::{McpInvalidationState, McpServerBindings, McpServerRuntime};
 use crate::tools::python::{PythonToolDiscovery, PythonToolExecutor, PythonToolStore};
 use crate::tools::workspace::Workspace;
 
@@ -30,8 +30,9 @@ pub struct CapabilityCoordinatorConfig {
     pub workspace: Workspace,
     /// The deterministic native/runtime registry used as the composition base.
     pub base_tool_registry: Arc<ToolRegistry>,
-    /// The immutable configured MCP server set for this coordinator.
-    pub mcp_servers: Vec<McpServerConfig>,
+    /// The immutable configured MCP server set for this coordinator, keyed
+    /// by the one authoritative server identity.
+    pub mcp_servers: McpServerBindings,
     /// The base authorized `ToolEnvironment` (without Skill overlays).
     pub base_environment: ToolEnvironment,
     /// The caller-configured runtime-private environment store root,
@@ -54,7 +55,7 @@ struct CoordinatorInner {
     conversation_id: ConversationId,
     workspace: Workspace,
     base_tool_registry: Arc<ToolRegistry>,
-    mcp_servers: Vec<McpServerConfig>,
+    mcp_servers: McpServerBindings,
     mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
     /// The one shared MCP invalidation synchronization boundary: epoch
     /// mutation (`tools/list_changed`) and epoch validation + snapshot swap
@@ -204,17 +205,18 @@ impl CapabilityCoordinator {
                 },
             );
         }
-        let mut server_ids = std::collections::BTreeSet::new();
-        for server in &config.mcp_servers {
-            if server.server_id.as_str().is_empty() || !server_ids.insert(server.server_id.clone())
-            {
-                return Err(CapabilityPreparationError::Mcp(
-                    "MCP server ids must be non-empty and unique".to_owned(),
-                ));
-            }
+        // Uniqueness and ordering are structural: `McpServerBindings` is a
+        // `BTreeMap` keyed by identity. Only emptiness stays checkable.
+        if config
+            .mcp_servers
+            .keys()
+            .any(|server_id| server_id.as_str().is_empty())
+        {
+            return Err(CapabilityPreparationError::Mcp(
+                "MCP server ids must be non-empty".to_owned(),
+            ));
         }
-        let mut mcp_servers = config.mcp_servers;
-        mcp_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+        let mcp_servers = config.mcp_servers;
         let python_store = PythonToolStore::new(environment_store.root().join("m7-tools"))
             .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
         let initial_skills = Arc::new(SkillSnapshot::new(Vec::new()));
@@ -379,39 +381,41 @@ impl CapabilityCoordinator {
         }
         let mut mcp_tools = Vec::new();
         let mut mcp_epochs = BTreeMap::new();
-        for server in &self.inner.mcp_servers {
+        // `BTreeMap` iteration is the deterministic identity order.
+        for (server_id, binding) in &self.inner.mcp_servers {
             let mut runtimes = self.inner.mcp_runtimes.lock().await;
-            let runtime = if let Some(runtime) = runtimes.get(&server.server_id) {
+            let runtime = if let Some(runtime) = runtimes.get(server_id) {
                 runtime.clone()
             } else {
                 let runtime = McpServerRuntime::connect(
-                    server,
+                    server_id,
+                    binding,
                     &self.inner.workspace,
                     self.inner.mcp_invalidation.clone(),
                 )
                 .await
                 .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
-                runtimes.insert(server.server_id.clone(), runtime.clone());
+                runtimes.insert(server_id.clone(), runtime.clone());
                 runtime
             };
             drop(runtimes);
             // The epoch snapshot is taken under the shared invalidation
             // guard; the pagination itself never holds it.
-            let epoch_before = self.inner.mcp_invalidation.epoch(&server.server_id);
+            let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
             let tools = runtime
                 .list_tools()
                 .await
                 .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
-            let epoch_after = self.inner.mcp_invalidation.epoch(&server.server_id);
+            let epoch_after = self.inner.mcp_invalidation.epoch(server_id);
             if epoch_before != epoch_after {
                 return Err(CapabilityPreparationError::Mcp(
                     "MCP tool catalog changed during discovery".to_owned(),
                 ));
             }
-            mcp_epochs.insert(server.server_id.clone(), epoch_after);
+            mcp_epochs.insert(server_id.clone(), epoch_after);
             mcp_tools.extend(crate::tools::mcp::definitions(
-                &server.server_id,
-                server.policy,
+                server_id,
+                binding.policy,
                 &runtime,
                 tools,
             ));
@@ -849,7 +853,7 @@ body
             conversation_id: crate::runtime::identity::ConversationId::new("conv-test"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            mcp_servers: Vec::new(),
+            mcp_servers: std::collections::BTreeMap::new(),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
         })
@@ -1001,22 +1005,24 @@ mod mcp_race_tests {
             conversation_id: ConversationId::new("mcp-race"),
             workspace,
             base_tool_registry: Arc::new(ToolRegistry::new()),
-            mcp_servers: vec![crate::tools::mcp::McpServerConfig {
-                server_id: server_id.clone(),
-                transport: McpTransportConfig::Stdio {
-                    program: std::env::current_exe()
-                        .expect("test executable")
-                        .display()
-                        .to_string(),
-                    args: fixture_spawn_args(test_name),
-                    cwd: None,
-                    environment: std::collections::BTreeMap::from([(
-                        crate::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
-                        "1".to_owned(),
-                    )]),
+            mcp_servers: std::collections::BTreeMap::from([(
+                server_id.clone(),
+                crate::tools::mcp::McpServerBinding {
+                    transport: McpTransportConfig::Stdio {
+                        program: std::env::current_exe()
+                            .expect("test executable")
+                            .display()
+                            .to_string(),
+                        args: fixture_spawn_args(test_name),
+                        cwd: None,
+                        environment: std::collections::BTreeMap::from([(
+                            crate::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                            "1".to_owned(),
+                        )]),
+                    },
+                    policy: crate::tools::types::ToolInvocationPolicy::default(),
                 },
-                policy: crate::tools::types::ToolInvocationPolicy::default(),
-            }],
+            )]),
             base_environment: ToolEnvironment::new(),
             environment_store_root: dir.path().join("skill-env"),
         })

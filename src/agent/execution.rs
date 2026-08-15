@@ -2181,7 +2181,7 @@ mod tests {
                 conversation_id: tool_runtime.conversation_id().clone(),
                 workspace: tool_runtime.workspace().clone(),
                 base_tool_registry: tools,
-                mcp_servers: Vec::new(),
+                mcp_servers: std::collections::BTreeMap::new(),
                 base_environment: tool_runtime.environment().clone(),
                 environment_store_root: dir.path().join("env-store"),
             },

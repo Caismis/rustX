@@ -99,9 +99,10 @@ tools/native/bash/        the Bash subsystem: registration (mod.rs), the
                            per-invocation process supervisor
                            (supervisor.rs) — the supervisor is not a
                            separate tool
-tools/mcp/                MCP 2026-07-28 adapter: configured server runtime,
-                           paginated discovery, list-change invalidation,
-                           canonical calls, progress, cancellation
+tools/mcp/                MCP adapter: protocol-revision negotiation,
+                           configured server runtime, paginated discovery,
+                           list-change invalidation, canonical calls,
+                           progress, cancellation
 tools/python.rs           immutable ToolVersion discovery/publication,
                            PythonToolEnvironment materialization, and the
                            canonical Python executor
@@ -1159,14 +1160,35 @@ foreground/background ownership, and result types. The Agent Loop has no
 origin-specific dispatch path.
 
 The base/native/runtime registry is immutable input to capability preparation.
-Each candidate composes it with MCP definitions sorted by `McpServerId` and
-remote name, then Python definitions sorted by canonical model-facing name.
+Each candidate composes it with MCP definitions in `McpServerId` order (the
+configured server set is a `BTreeMap` keyed by that identity, so the order is
+structural rather than a sorting pass) and then remote name, then Python definitions sorted by canonical model-facing name.
 The candidate owns a new `ToolRegistry`; a committed `CapabilitySnapshot`
 owns that exact registry. A duplicate model-facing name rejects the complete
 candidate.
 
 `McpServerRuntime` owns one configured server's rmcp peer, transport, progress
-dispatcher, list-change subscription, and supervised stdio owner when used.
+dispatcher, list-change invalidation mechanism, and supervised stdio owner
+when used. It is constructed from an `McpServerId` and an identity-free
+`McpServerBinding`: the coordinator's `BTreeMap<McpServerId,
+McpServerBinding>` key is the one authoritative server identity, so duplicate
+identity is structurally impossible and no ordering pass exists.
+
+Connection setup negotiates a protocol revision rather than requiring one.
+rustX offers the resolved rmcp build's complete `ProtocolVersion::
+KNOWN_VERSIONS`, newest first, through `ClientLifecycleMode::Auto`: rmcp
+probes the MCP 2026-07-28 inline `server/discover` lifecycle, walks the
+offered list down whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`,
+and falls back to the legacy `initialize` handshake only when the peer proves
+it does not know `server/discover`. rustX then validates the negotiated
+revision against its own offered set — the legacy handshake lets a server
+echo any revision — and a peer with no shared revision fails with a bounded
+`McpError::ProtocolCompatibility` naming both sides. The negotiated revision
+also selects the invalidation mechanism: `subscriptions/listen` from
+2026-07-28 onwards, the plain `notifications/tools/list_changed` client
+callback before it. At most one invalidation mechanism is installed per
+connection; when the server advertises `tools.listChanged`, exactly one
+revision-appropriate mechanism is installed.
 Executors capture an `Arc` to that runtime. The observed remote tool surface
 and binding are immutable for a capability revision, but rustX does not claim
 to snapshot the implementation behavior of the independent remote server.
@@ -2052,7 +2074,22 @@ Representative local session configuration:
     "keepRecentTokens": 20000,
     "summaryOutputCap": 2048
   },
-  "mcpServers": [],
+  "mcpServers": {
+    "exa": {
+      "type": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "headers": { "x-api-key": "YOUR_EXA_API_KEY" }
+    },
+    "exa-local": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": { "EXA_API_KEY": "YOUR_EXA_API_KEY" }
+    }
+  },
+  "mcpToolPolicies": {
+    "exa": { "execution": "foreground_only", "concurrency": "parallel" }
+  },
   "nativeTools": {
     "bash": { "execution": "model_selectable", "concurrency": "sequential" }
   },
@@ -2060,10 +2097,31 @@ Representative local session configuration:
 }
 ```
 
-This empty `mcpServers` field is intentionally startup-safe and is not a
-canonical MCP connection-configuration example. The user-facing MCP shape is
-being revised under [issue #46](https://github.com/Caismis/rustX/issues/46);
-that issue owns the named-map connection contract and protocol negotiation.
+`mcpServers` is an ecosystem-compatible named map keyed by MCP server
+identity: an entry is the same object an MCP server's own documentation
+publishes, so it stays copy-pasteable. The map key is the only identity;
+there is no `serverId` field, no nested `transport` object, and no embedded
+rustX policy. The canonical spellings are `type: "http"` with `url`
+(plus optional `headers`) and `type: "stdio"` with `command` (plus optional
+`args`, `env`, and a workspace-relative `cwd`). The two shorthand forms the
+ecosystem's own READMEs use are accepted and normalize identically: a bare
+`url` infers HTTP, a bare `command` infers stdio. Nothing else is accepted —
+no `streamable-http`/`streamable_http` alias, no `sse`, no `ws` — and every
+ambiguous or contradictory entry (`url` with `command`, `type: "http"` with
+`args`, an unknown field, a blank `url`/`command`) fails startup.
+
+`mcpToolPolicies` is the separate rustX-owned overlay keyed by the same
+identity. It carries the invocation policy rustX applies to every tool of one
+server; a server without an entry gets the deterministic default
+(`foreground_only` + `sequential`), and an entry naming a server `mcpServers`
+does not declare fails startup. Keeping it outside the connection object is
+what keeps `mcpServers` recognizable as ordinary MCP configuration.
+
+Normalization happens exactly once, at this boundary: `LocalSessionConfig`
+validates each entry and turns it into a typed
+`BTreeMap<McpServerId, McpServerBinding>`. The shorthand spellings never
+reach `McpServerRuntime`, the `CapabilityCoordinator`, the Agent Loop, or the
+TUI.
 
 A session override may not declare a key the selected reasoning profile owns
 (`temperature` above belongs to the `on` profile, so `requestParams` declares

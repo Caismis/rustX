@@ -1,10 +1,34 @@
-//! MCP 2026-07-28 adapter.
+//! The MCP adapter.
 //!
 //! The SDK is intentionally contained in this module. Discovery turns every
 //! remote tool into a canonical definition and executor; the agent loop only
 //! sees the normal `ToolExecutor` boundary. A server runtime owns one shared
 //! rmcp peer, transport, notification subscription, and (for stdio) the
 //! rustX interactive process owner.
+//!
+//! # Protocol revisions
+//!
+//! rustX does not pin one compile-time protocol revision. It offers the
+//! complete set of revisions the resolved `rmcp` build knows
+//! ([`ProtocolVersion::KNOWN_VERSIONS`]), newest first, and lets rmcp's own
+//! lifecycle machinery pick the mutually supported one:
+//!
+//! - [`rmcp::ClientLifecycleMode::Auto`] first probes `server/discover` (the
+//!   MCP 2026-07-28 inline lifecycle), walking the offered list downwards
+//!   whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`;
+//! - a peer that does not know `server/discover` at all answers
+//!   `METHOD_NOT_FOUND`, and rmcp falls back to the legacy
+//!   `initialize`/`notifications/initialized` handshake using the newest
+//!   pre-inline revision rustX speaks.
+//!
+//! rustX then validates the negotiated revision against its own supported
+//! set (the legacy handshake lets a server echo any revision it likes) and
+//! selects the invalidation mechanism that revision actually defines:
+//! `subscriptions/listen` from 2026-07-28 onwards, the plain
+//! `notifications/tools/list_changed` client callback before it. At most one
+//! invalidation mechanism is installed per connection; when the server
+//! advertises `tools.listChanged`, exactly one revision-appropriate
+//! mechanism is installed.
 
 #[cfg(feature = "mcp-fixture")]
 #[doc(hidden)]
@@ -41,8 +65,39 @@ use crate::tools::types::{
 };
 use crate::tools::workspace::Workspace;
 
-/// The MCP protocol revision implemented by M7.
-pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+/// The MCP protocol revisions rustX offers, most preferred first.
+///
+/// The set is the resolved `rmcp` build's own
+/// [`ProtocolVersion::KNOWN_VERSIONS`] — rustX narrows nothing, because the
+/// only MCP surface it uses (`tools/list` with cursor pagination,
+/// `tools/call`, progress notifications, `notifications/cancelled`, and
+/// `tools/list_changed`) exists in every revision that SDK knows. The order
+/// is newest-first: MCP revisions are ISO-8601 dates, so a descending
+/// lexicographic sort is a descending chronological sort.
+#[must_use]
+pub fn supported_protocol_versions() -> Vec<ProtocolVersion> {
+    let mut versions = ProtocolVersion::KNOWN_VERSIONS.to_vec();
+    versions.sort_by(|left, right| right.as_str().cmp(left.as_str()));
+    versions
+}
+
+/// Whether a revision defines the inline (`server/discover` +
+/// `subscriptions/listen`) lifecycle rather than the legacy
+/// `initialize` handshake and bare `tools/list_changed` notification.
+fn uses_inline_lifecycle(version: &ProtocolVersion) -> bool {
+    // rmcp compares revisions by their ISO-8601 string exactly this way.
+    version.as_str() >= ProtocolVersion::V_2026_07_28.as_str()
+}
+
+/// The revision rustX offers to a peer that only speaks the legacy
+/// `initialize` handshake: the newest known revision that predates the
+/// inline lifecycle.
+fn legacy_handshake_version() -> ProtocolVersion {
+    supported_protocol_versions()
+        .into_iter()
+        .find(|version| !uses_inline_lifecycle(version))
+        .unwrap_or(ProtocolVersion::LATEST)
+}
 
 /// The one shared `tools/list_changed` invalidation synchronization boundary
 /// of a capability coordinator.
@@ -186,26 +241,32 @@ impl std::fmt::Debug for McpTransportConfig {
 }
 
 /// One immutable MCP server binding.
+///
+/// The binding deliberately carries no identity field: an MCP server set is
+/// keyed by [`McpServerId`], and the key is the one authoritative identity.
 #[derive(Clone, PartialEq, Eq)]
-pub struct McpServerConfig {
-    /// Non-empty stable server identity.
-    pub server_id: McpServerId,
+pub struct McpServerBinding {
     /// The configured transport.
     pub transport: McpTransportConfig,
     /// One origin-independent policy for all tools from this server.
     pub policy: ToolInvocationPolicy,
 }
 
-impl std::fmt::Debug for McpServerConfig {
+impl std::fmt::Debug for McpServerBinding {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("McpServerConfig")
-            .field("server_id", &self.server_id)
+            .debug_struct("McpServerBinding")
             .field("transport", &self.transport)
             .field("policy", &self.policy)
             .finish()
     }
 }
+
+/// The deterministic keyed MCP server set of one capability owner.
+///
+/// One identity maps to exactly one binding by construction, so no duplicate
+/// check and no ordering pass exists anywhere downstream.
+pub type McpServerBindings = BTreeMap<McpServerId, McpServerBinding>;
 
 /// A preparation/execution failure at the MCP adapter boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,6 +275,8 @@ pub enum McpError {
     Configuration(String),
     /// Discovery or lifecycle setup failed.
     Discovery(String),
+    /// Client and server share no MCP protocol revision rustX can speak.
+    ProtocolCompatibility(String),
     /// The remote call or response could not be translated.
     Execution(String),
     /// The owned stdio process tree could not be proven terminal, so no
@@ -228,6 +291,9 @@ impl std::fmt::Display for McpError {
                 write!(formatter, "MCP configuration failed: {message}")
             }
             Self::Discovery(message) => write!(formatter, "MCP discovery failed: {message}"),
+            Self::ProtocolCompatibility(message) => {
+                write!(formatter, "MCP protocol negotiation failed: {message}")
+            }
             Self::Execution(message) => write!(formatter, "MCP execution failed: {message}"),
             Self::PhysicalSettlement(message) => {
                 write!(formatter, "MCP physical settlement is unproven: {message}")
@@ -241,6 +307,7 @@ impl std::error::Error for McpError {}
 /// One shared runtime for every tool exposed by a configured server.
 pub struct McpServerRuntime {
     server_id: McpServerId,
+    protocol_version: ProtocolVersion,
     peer: rmcp::Peer<RoleClient>,
     service: Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     handler: McpClientHandler,
@@ -254,31 +321,45 @@ impl std::fmt::Debug for McpServerRuntime {
         formatter
             .debug_struct("McpServerRuntime")
             .field("server_id", &self.server_id)
+            .field("protocol_version", &self.protocol_version)
             .field("change_epoch", &self.change_epoch())
             .finish_non_exhaustive()
     }
 }
 
 impl McpServerRuntime {
-    /// Connects one configured server with the current Discover lifecycle.
+    /// Connects one configured server, negotiating a mutually supported MCP
+    /// protocol revision.
+    ///
+    /// `server_id` is the authoritative identity of the binding; the binding
+    /// itself carries none.
     ///
     /// # Errors
     ///
-    /// Returns an error when transport construction, discovery, capability
-    /// validation, or subscription setup fails.
+    /// Returns [`McpError::ProtocolCompatibility`] when no revision is shared
+    /// with the peer, and another variant when transport construction,
+    /// discovery, capability validation, or subscription setup fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the connection's invalidation sink is installed twice,
+    /// which the single-install control flow below makes impossible.
     #[allow(clippy::too_many_lines)]
     pub async fn connect(
-        config: &McpServerConfig,
+        server_id: &McpServerId,
+        binding: &McpServerBinding,
         workspace: &Workspace,
         invalidation: Arc<McpInvalidationState>,
     ) -> Result<Arc<Self>, McpError> {
-        if config.server_id.as_str().is_empty() {
+        // Defensive: `McpServerBindings` keys come from validated session
+        // configuration, but `connect` is reachable without that parser.
+        if server_id.as_str().is_empty() {
             return Err(McpError::Configuration(
                 "server_id must be non-empty".to_owned(),
             ));
         }
         let handler = McpClientHandler::new();
-        let (service, process) = match &config.transport {
+        let (service, process) = match &binding.transport {
             McpTransportConfig::Stdio {
                 program,
                 args,
@@ -361,13 +442,19 @@ impl McpServerRuntime {
             }
         };
         let peer = service.peer().clone();
-        let info = peer.peer_info().ok_or_else(|| {
-            McpError::Discovery("server/discover returned no peer info".to_owned())
-        })?;
-        if info.protocol_version != ProtocolVersion::V_2026_07_28 {
-            return Err(McpError::Discovery(format!(
-                "unsupported MCP protocol revision {}",
-                info.protocol_version
+        let info = peer
+            .peer_info()
+            .ok_or_else(|| McpError::Discovery("MCP handshake returned no peer info".to_owned()))?;
+        // rmcp's discover lifecycle already rejects a peer with no shared
+        // revision, but the legacy `initialize` handshake lets a server echo
+        // whichever revision it likes. This is the one authority on what
+        // rustX actually agreed to speak.
+        let supported = supported_protocol_versions();
+        if !supported.contains(&info.protocol_version) {
+            return Err(McpError::ProtocolCompatibility(format!(
+                "server negotiated MCP revision {}, which rustX does not speak (rustX speaks {})",
+                info.protocol_version,
+                joined_versions(&supported)
             )));
         }
         if info.capabilities.tools.is_none() {
@@ -376,7 +463,8 @@ impl McpServerRuntime {
             ));
         }
         let runtime = Arc::new(Self {
-            server_id: config.server_id.clone(),
+            server_id: server_id.clone(),
+            protocol_version: info.protocol_version.clone(),
             peer,
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
             handler,
@@ -390,38 +478,67 @@ impl McpServerRuntime {
             .as_ref()
             .is_some_and(|tools| tools.list_changed == Some(true))
         {
-            let mut subscription = runtime
-                .peer
-                .listen(SubscriptionFilter::builder().tools_list_changed().build())
-                .await
-                .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))?;
-            let server_id = runtime.server_id.clone();
-            let invalidation = runtime.invalidation.clone();
-            let change_notify = runtime.change_notify.clone();
-            tokio::spawn(async move {
-                while let Ok(Some(notification)) = subscription.next().await {
-                    if matches!(
-                        notification,
-                        ServerNotification::ToolListChangedNotification(_)
-                    ) {
-                        // The one shared invalidation boundary: the epoch
-                        // mutation serializes against preparation epoch
-                        // snapshots and the commit's epoch validation + swap.
-                        let mut guard = invalidation.lock();
-                        guard.advance(&server_id);
-                        drop(guard);
-                        change_notify.notify_waiters();
-                    }
-                }
-            });
+            // Reached only when the server advertises `tools.listChanged`,
+            // so at most one invalidation mechanism exists per connection and
+            // exactly one revision-appropriate mechanism is installed here.
+            // Both feed the same epoch and the same notify, so neither
+            // duplicates the other's subscription, discovery, or published
+            // tools.
+            if uses_inline_lifecycle(&info.protocol_version) {
+                runtime.subscribe_tool_list_changed().await?;
+            } else {
+                runtime
+                    .handler
+                    .install_tool_list_changed_sink(ToolListChangedSink {
+                        server_id: runtime.server_id.clone(),
+                        invalidation: runtime.invalidation.clone(),
+                        change_notify: runtime.change_notify.clone(),
+                    });
+            }
         }
         Ok(runtime)
+    }
+
+    /// Opens the MCP 2026-07-28 `subscriptions/listen` stream that carries
+    /// `tools/list_changed` for inline-lifecycle peers.
+    async fn subscribe_tool_list_changed(self: &Arc<Self>) -> Result<(), McpError> {
+        let mut subscription = self
+            .peer
+            .listen(SubscriptionFilter::builder().tools_list_changed().build())
+            .await
+            .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))?;
+        let server_id = self.server_id.clone();
+        let invalidation = self.invalidation.clone();
+        let change_notify = self.change_notify.clone();
+        tokio::spawn(async move {
+            while let Ok(Some(notification)) = subscription.next().await {
+                if matches!(
+                    notification,
+                    ServerNotification::ToolListChangedNotification(_)
+                ) {
+                    // The one shared invalidation boundary: the epoch
+                    // mutation serializes against preparation epoch
+                    // snapshots and the commit's epoch validation + swap.
+                    let mut guard = invalidation.lock();
+                    guard.advance(&server_id);
+                    drop(guard);
+                    change_notify.notify_waiters();
+                }
+            }
+        });
+        Ok(())
     }
 
     /// The server identity captured by each MCP executor.
     #[must_use]
     pub fn server_id(&self) -> &McpServerId {
         &self.server_id
+    }
+
+    /// The MCP protocol revision this connection actually negotiated.
+    #[must_use]
+    pub const fn protocol_version(&self) -> &ProtocolVersion {
+        &self.protocol_version
     }
 
     /// The invalidation epoch at the current observation point.
@@ -568,12 +685,40 @@ where
     handler
         .serve_with_lifecycle(
             transport,
-            rmcp::ClientLifecycleMode::Discover {
-                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+            // `Auto` runs the real negotiation: it probes the inline
+            // `server/discover` lifecycle, walks the offered revisions down
+            // whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`, and
+            // falls back to the legacy `initialize` handshake only when the
+            // peer proves it does not know `server/discover` at all.
+            rmcp::ClientLifecycleMode::Auto {
+                preferred_versions: supported_protocol_versions(),
+                legacy_version: Some(legacy_handshake_version()),
             },
         )
         .await
-        .map_err(|error| McpError::Discovery(bound_error(&error.to_string())))
+        .map_err(|error| match error {
+            rmcp::service::ClientInitializeError::NoCompatibleProtocolVersion {
+                client_supported,
+                server_supported,
+            } => McpError::ProtocolCompatibility(bound_error(&format!(
+                "rustX speaks {}; the server speaks {}",
+                joined_versions(&client_supported),
+                if server_supported.is_empty() {
+                    "no revision it disclosed".to_owned()
+                } else {
+                    joined_versions(&server_supported)
+                }
+            ))),
+            error => McpError::Discovery(bound_error(&error.to_string())),
+        })
+}
+
+fn joined_versions(versions: &[ProtocolVersion]) -> String {
+    versions
+        .iter()
+        .map(ProtocolVersion::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A canonicalized MCP tool definition at the adapter boundary.
@@ -695,10 +840,24 @@ fn hex_digest(bytes: &[u8]) -> String {
     result
 }
 
+/// The pre-inline-lifecycle `tools/list_changed` destination.
+///
+/// Revisions before MCP 2026-07-28 have no `subscriptions/listen`: the server
+/// simply emits `notifications/tools/list_changed`, which rmcp routes to the
+/// client handler. The sink feeds that notification into the exact same
+/// invalidation epoch and notify the inline subscription path uses.
+struct ToolListChangedSink {
+    server_id: McpServerId,
+    invalidation: Arc<McpInvalidationState>,
+    change_notify: Arc<tokio::sync::Notify>,
+}
+
 #[derive(Clone)]
 struct McpClientHandler {
     info: ClientInfo,
     progress: ProgressDispatcher,
+    /// Installed at most once, and only for a legacy-revision connection.
+    tool_list_changed: Arc<std::sync::OnceLock<ToolListChangedSink>>,
 }
 
 impl McpClientHandler {
@@ -708,9 +867,21 @@ impl McpClientHandler {
                 ClientCapabilities::default(),
                 Implementation::new("rustx", env!("CARGO_PKG_VERSION")),
             )
-            .with_protocol_version(ProtocolVersion::V_2026_07_28),
+            // Only the legacy `initialize` handshake reads this field; the
+            // inline lifecycle carries the negotiated candidate in each
+            // request's `_meta`. Keeping it equal to the lifecycle's
+            // `legacy_version` keeps the two paths from disagreeing.
+            .with_protocol_version(legacy_handshake_version()),
             progress: ProgressDispatcher::new(),
+            tool_list_changed: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    fn install_tool_list_changed_sink(&self, sink: ToolListChangedSink) {
+        assert!(
+            self.tool_list_changed.set(sink).is_ok(),
+            "an MCP connection installs its invalidation sink exactly once"
+        );
     }
 }
 
@@ -721,6 +892,18 @@ impl ClientHandler for McpClientHandler {
         _context: rmcp::service::NotificationContext<RoleClient>,
     ) {
         self.progress.handle_notification(params).await;
+    }
+
+    async fn on_tool_list_changed(&self, _context: rmcp::service::NotificationContext<RoleClient>) {
+        let Some(sink) = self.tool_list_changed.get() else {
+            return;
+        };
+        // The one shared invalidation boundary, exactly as the inline
+        // subscription path uses it.
+        let mut guard = sink.invalidation.lock();
+        guard.advance(&sink.server_id);
+        drop(guard);
+        sink.change_notify.notify_waiters();
     }
 
     fn get_info(&self) -> ClientInfo {
