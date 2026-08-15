@@ -290,7 +290,7 @@ pub fn effective_capabilities(
 /// This is the only provider-configuration channel of a [`ModelRequest`]
 /// ([`crate::model::types::ModelRequest`]): it is immutable for the whole
 /// attempt, carries no credential and no adapter object, and never leaks
-/// into canonical history.
+/// into canonical conversation facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelInvocationConfig {
@@ -985,7 +985,7 @@ pub fn validate_content_modalities(
     messages: &[crate::message::types::MessageBlock],
     capabilities: &ModelCapabilities,
 ) -> Result<(), ModelError> {
-    use crate::message::types::{AgentContentBlock, MessageBlock, UserContentBlock};
+    use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
     use crate::tools::types::ToolResultContent;
 
     let mut required: Vec<Modality> = Vec::new();
@@ -1006,14 +1006,14 @@ pub fn validate_content_modalities(
                     }
                 }
             }
-            MessageBlock::Agent(agent) => {
-                for content in &agent.content {
+            MessageBlock::Assistant(assistant) => {
+                for content in &assistant.content {
                     match content {
-                        AgentContentBlock::Image(_) => require(Modality::Image),
-                        AgentContentBlock::Text(_)
-                        | AgentContentBlock::Refusal(_)
-                        | AgentContentBlock::Reasoning(_)
-                        | AgentContentBlock::ToolCall(_) => require(Modality::Text),
+                        AssistantContentBlock::Image(_) => require(Modality::Image),
+                        AssistantContentBlock::Text(_)
+                        | AssistantContentBlock::Refusal(_)
+                        | AssistantContentBlock::Reasoning(_)
+                        | AssistantContentBlock::ToolCall(_) => require(Modality::Text),
                     }
                 }
             }

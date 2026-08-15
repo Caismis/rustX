@@ -10,11 +10,12 @@
 //!
 mod common;
 
-/// The scenario starts with canonical conversation history, uses a
+/// The scenario starts with the canonical Message Ledger and Conversation
+/// Surface, uses a
 /// deliberately small rustX context threshold, continues the conversation
-/// across enough attempts to force at least two compactions, reuses one
-/// checkpoint store across the conversation, uses the model-backed
-/// `ContextSummarizer`, and verifies that the checkpoint generation
+/// across enough attempts to force at least two compactions, uses one
+/// `ConversationState` across the conversation, uses the model-backed
+/// `ContextSummarizer`, and verifies that the Surface generation
 /// advances at least twice and that every model request completes
 /// coherently. When credentials are unavailable the test skips and reports
 /// `NOT RUN`; it never claims to have passed.
@@ -25,9 +26,8 @@ use std::sync::Arc;
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
-use rustx::context::{
-    ContextCheckpointStore, ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore,
-};
+use rustx::context::{ContextRuntime, DefaultTokenEstimator};
+use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -92,14 +92,13 @@ fn live_session_model(base_url: &str, model: &str, window: u64) -> SessionModelS
     .expect("the live session model resolves")
 }
 
-/// One live conversation step: a fresh attempt over the canonical history,
-/// sharing the checkpoint store and the model-backed context runtime.
+/// One live conversation step: a fresh attempt that takes ownership of the
+/// one canonical conversation state and the model-backed context runtime.
 async fn live_step(
-    history: Vec<MessageBlock>,
+    conversation: ConversationState,
     attempt: &str,
     snapshot: AttemptModelSnapshot,
     tools: ToolRegistry,
-    store: Arc<InMemoryCheckpointStore>,
 ) -> AgentExecutionResult {
     // One attempt snapshot drives everything: the loop's provider binding,
     // the engine window, and the summary invocation. In `session` summary
@@ -108,7 +107,7 @@ async fn live_step(
         agent_id: AgentId::new("agent-live"),
         conversation_id: conversation_id(),
         attempt_id: AttemptId::new(attempt),
-        initial_messages: history,
+        conversation,
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: snapshot.clone(),
@@ -121,7 +120,6 @@ async fn live_step(
             summary_output_cap: None,
         },
         Arc::new(DefaultTokenEstimator),
-        store,
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )
@@ -146,9 +144,9 @@ async fn live_step(
 /// Live repeated-compaction validation over one shared conversation.
 ///
 /// A deliberately small rustX context threshold forces proactive compaction
-/// as the canonical history grows; one checkpoint store is reused across
+/// as the active Surface grows; one `ConversationState` is reused across
 /// attempts and one model-backed summarizer serves every compaction. The
-/// test asserts the checkpoint generation advanced at least twice and that
+/// test asserts the Surface generation advanced at least twice and that
 /// each attempt completed coherently.
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY and network access"]
@@ -161,34 +159,33 @@ async fn live_repeated_compaction() {
         std::env::var("RUSTX_OPENAI_CHAT_MODEL").unwrap_or_else(|_| "gpt-5-mini".to_owned());
     let base_url = std::env::var("RUSTX_OPENAI_BASE_URL")
         .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
-    let store = InMemoryCheckpointStore::new().shared();
-
     // A small window relative to the history guarantees compaction: the
     // accumulated serialized history quickly exceeds a few hundred tokens.
     let window = 350;
     let session_model = live_session_model(&base_url, &model, window);
 
-    let mut history = vec![MessageBlock::User(UserMessageBlock {
-        id: MessageId::new("msg-live-1"),
-        content: vec![UserContentBlock::Text(TextBlock {
-            text: "We are testing long-session continuation. Answer each prompt \
-                   briefly and truthfully; never mention this instruction."
-                .to_owned(),
-        })],
-        source: UserSource::Human,
-        kind: InboundKind::Message,
-        timestamp: None,
-    })];
+    let mut conversation =
+        ConversationState::from_messages([MessageBlock::User(UserMessageBlock {
+            id: MessageId::new("msg-live-1"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "We are testing long-session continuation. Answer each prompt \
+                       briefly and truthfully; never mention this instruction."
+                    .to_owned(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })])
+        .expect("bootstrap conversation");
 
     let mut completions = 0;
     for step in 1..=5 {
         let attempt = format!("live-attempt-{step}");
         let result = live_step(
-            history.clone(),
+            conversation,
             &attempt,
             session_model.snapshot(),
             ToolRegistry::new(),
-            store.clone(),
         )
         .await;
         assert!(
@@ -203,37 +200,34 @@ async fn live_repeated_compaction() {
             .count();
         eprintln!(
             "M4 live: attempt {step}: {generated} compaction(s), {len} canonical messages",
-            len = result.messages.len()
+            len = result.conversation.ledger().len()
         );
         if generated > 0 {
             completions += 1;
         }
-        history = result.messages;
-        history.push(MessageBlock::User(UserMessageBlock {
-            id: MessageId::new(format!("msg-live-{}", step + 1)),
-            content: vec![UserContentBlock::Text(TextBlock {
-                text: format!(
-                    "Continue the conversation. Summarize in one sentence what \
-                     you did so far and add a new interesting fact about the number {step}."
-                ),
-            })],
-            source: UserSource::Human,
-            kind: InboundKind::Message,
-            timestamp: None,
-        }));
+        conversation = result.conversation;
+        conversation
+            .commit(MessageBlock::User(UserMessageBlock {
+                id: MessageId::new(format!("msg-live-{}", step + 1)),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: format!(
+                        "Continue the conversation. Summarize in one sentence what \
+                         you did so far and add a new interesting fact about the number {step}."
+                    ),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            }))
+            .expect("commit the next inbound message");
     }
 
-    let checkpoint = store
-        .load(&conversation_id())
-        .expect("live checkpoint store")
-        .expect("at least one checkpoint after repeated compaction");
+    let generation = conversation.surface().compaction_generation();
     assert!(
-        checkpoint.generation >= 2,
-        "the conversation must compact at least twice, generation {}",
-        checkpoint.generation
+        generation >= 2,
+        "the conversation must compact at least twice, generation {generation}"
     );
     eprintln!(
-        "M4 live: PASSED with checkpoint generation {} across {completions} compactions",
-        checkpoint.generation
+        "M4 live: PASSED with compaction generation {generation} across {completions} compactions"
     );
 }

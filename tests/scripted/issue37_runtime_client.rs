@@ -591,13 +591,17 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         .messages
         .iter()
         .find_map(|message| match message {
-            MessageBlock::Agent(agent) => agent.content.iter().find_map(|block| match block {
-                rustx::message::types::AgentContentBlock::Text(text) => Some(text.text.clone()),
-                _ => None,
-            }),
+            MessageBlock::Assistant(assistant) => {
+                assistant.content.iter().find_map(|block| match block {
+                    rustx::message::types::AssistantContentBlock::Text(text) => {
+                        Some(text.text.clone())
+                    }
+                    _ => None,
+                })
+            }
             _ => None,
         })
-        .expect("committed agent text");
+        .expect("committed Assistant text");
     assert_eq!(committed_text, "hello world");
     assert!(
         final_snapshot

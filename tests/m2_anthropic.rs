@@ -1073,23 +1073,25 @@ async fn previous_thinking_replays_from_opaque_state() {
         "thinking": "Previous chain.",
         "signature": "sig-prev",
     });
-    // The canonical history contains a prior agent message with a signed
+    // The canonical history contains a prior Assistant message with a signed
     // thinking block whose state was captured by the adapter.
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![rustx::message::types::AgentContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: Some("Previous chain.".to_owned()),
-                    provider_state: Some(ProviderContinuationState::Anthropic(
-                        AnthropicContinuation {
-                            opaque: opaque.clone(),
-                        },
-                    )),
-                },
-            )],
-        }),
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: Some("Previous chain.".to_owned()),
+                        provider_state: Some(ProviderContinuationState::Anthropic(
+                            AnthropicContinuation {
+                                opaque: opaque.clone(),
+                            },
+                        )),
+                    },
+                )],
+            },
+        ),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
@@ -1113,15 +1115,17 @@ async fn stateless_previous_thinking_fails_explicitly() {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![rustx::message::types::AgentContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: Some("Unsigned chain.".to_owned()),
-                    provider_state: None,
-                },
-            )],
-        }),
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: Some("Unsigned chain.".to_owned()),
+                        provider_state: None,
+                    },
+                )],
+            },
+        ),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert_eq!(events.len(), 1, "rejected before the network");
@@ -1185,19 +1189,21 @@ async fn continuation_contradiction_with_boundary_is_rejected() {
     let mut request = simple_request(ModelProtocol::AnthropicMessages, "claude-test", "hi");
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![rustx::message::types::AgentContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: None,
-                    provider_state: Some(ProviderContinuationState::Anthropic(
-                        AnthropicContinuation {
-                            opaque: serde_json::json!({"signature": "sig-a"}),
-                        },
-                    )),
-                },
-            )],
-        }),
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-prev"),
+                content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: None,
+                        provider_state: Some(ProviderContinuationState::Anthropic(
+                            AnthropicContinuation {
+                                opaque: serde_json::json!({"signature": "sig-a"}),
+                            },
+                        )),
+                    },
+                )],
+            },
+        ),
     );
     request.continuation = Some(ProviderContinuationState::Anthropic(
         AnthropicContinuation {
@@ -1285,19 +1291,21 @@ async fn redacted_thinking_replays_losslessly() {
     });
     request.messages.insert(
         0,
-        rustx::message::types::MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
-            id: rustx::runtime::identity::MessageId::new("msg-redacted"),
-            content: vec![rustx::message::types::AgentContentBlock::Reasoning(
-                rustx::message::types::ReasoningBlock {
-                    text: None,
-                    provider_state: Some(ProviderContinuationState::Anthropic(
-                        AnthropicContinuation {
-                            opaque: opaque.clone(),
-                        },
-                    )),
-                },
-            )],
-        }),
+        rustx::message::types::MessageBlock::Assistant(
+            rustx::message::types::AssistantMessageBlock {
+                id: rustx::runtime::identity::MessageId::new("msg-redacted"),
+                content: vec![rustx::message::types::AssistantContentBlock::Reasoning(
+                    rustx::message::types::ReasoningBlock {
+                        text: None,
+                        provider_state: Some(ProviderContinuationState::Anthropic(
+                            AnthropicContinuation {
+                                opaque: opaque.clone(),
+                            },
+                        )),
+                    },
+                )],
+            },
+        ),
     );
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
@@ -1449,12 +1457,12 @@ async fn thinking_without_signature_is_a_provider_failure() {
     );
 }
 
-/// `Agent tool call → Tool result → User A → User B` translates in logical
+/// `Assistant tool call → Tool result → User A → User B` translates in logical
 /// order: the complete tool-result group flushes before the inbound
 /// messages, and A/B stay separate wire user messages (never merged).
 #[tokio::test]
 async fn tool_then_consecutive_inbound_users_translate_in_order() {
-    use rustx::message::types::{AgentMessageBlock, ToolMessageBlock, UserMessageBlock};
+    use rustx::message::types::{AssistantMessageBlock, ToolMessageBlock, UserMessageBlock};
     use rustx::runtime::identity::MessageId;
     let server =
         common::FixtureServer::start(|_attempt, _head| sse_fixture("anthropic", "text.sse")).await;
@@ -1473,9 +1481,9 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-a1"),
-            content: vec![rustx::message::types::AgentContentBlock::ToolCall(
+            content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
                 rustx::tools::types::ToolCall {
                     id: ToolCallId::new("call_1"),
                     tool_id: rustx::runtime::identity::ToolId::new("tool-list"),

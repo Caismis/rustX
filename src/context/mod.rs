@@ -1,29 +1,38 @@
-//! The M4 context plane: deterministic context assembly, token accounting,
-//! compaction, checkpoints, Agent Status composition, and provider-context
-//! compilation.
+//! The context plane: deterministic finite context assembly, token
+//! accounting, compaction planning, Agent Status composition, and the
+//! provider-neutral model-context boundary.
 //!
-//! The core invariant is:
+//! M7.5 (Issue #54) supersedes the M4 projection-only compaction model. The
+//! canonical conversation model lives in [`crate::conversation`]; the
+//! context plane is a consumer of it:
 //!
 //! ```text
-//! Canonical history is durable truth.
-//! Context is a deterministic projection of that truth.
-//! Compaction changes the projection, never canonical history.
-//! Agent Status is an ephemeral projection of runtime facts, never history.
+//! Message Ledger        immutable committed facts
+//!         ↓
+//! Conversation Surface  active identity/order @ SurfaceRevision
+//!         ↓
+//! Context Engine        finite projection + token pressure + compaction
+//!                       planning
+//!         ↓
+//! canonical User(Runtime / CompactionSummary) commit
+//! + one complete-message Surface Replace
 //! ```
+//!
+//! Compaction is no longer "a projection that hides history": it commits a
+//! genuine canonical conversational fact and rewrites the Surface. Ledger
+//! facts are never edited, deleted, or overwritten.
 //!
 //! No provider SDK or wire type exists in this module: the engine projects
 //! canonical context, the Agent Status composer produces structured status
 //! sections and a deterministic renderer produces the attachment text, and
 //! adapters decide how that canonical context is encoded on the wire.
-//! [`ContextRuntime`] bundles the engine, the summary service, the Agent
-//! Status composer, and the checkpoint store for `AgentExecution`.
+//! [`ContextRuntime`] bundles the engine, the summary service, and the Agent
+//! Status composer for `AgentExecution`.
 
-pub mod checkpoint;
 pub mod engine;
 pub mod error;
 pub mod projection;
 pub mod status;
-pub mod structure;
 pub mod summarizer;
 pub mod tokens;
 
@@ -31,50 +40,43 @@ use std::sync::Arc;
 
 use crate::model::session::AttemptModelSnapshot;
 
-pub use checkpoint::{
-    ContextBoundary, ContextCheckpoint, ContextCheckpointStore, InMemoryCheckpointStore,
-    summary_message_id,
-};
 pub use engine::{
     CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,
     SessionContextPolicy,
 };
 pub use error::{ContextError, ContextErrorKind};
-pub use projection::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
+pub use projection::ContextProjection;
 pub use status::{
     AgentStatus, AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError,
     AgentStatusFact, AgentStatusRenderContext, AgentStatusSection, AgentStatusSectionData,
     AgentStatusSectionId, AgentStatusSectionProvider, SystemClock, render_agent_status,
 };
-pub use summarizer::{
-    ContextSummarizer, ModelBackedSummarizer, SplitTurnSummaryInput, SummaryInputItem,
-    SummaryRequest,
-};
+pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ProviderObservedInput, TokenEstimator,
     bytes_to_tokens,
 };
 
-/// The M4 context runtime bundle handed to an `AgentExecution`.
+/// The context runtime bundle handed to an `AgentExecution`.
 ///
-/// The bundle owns the deterministic engine, the summary service, the Agent
-/// Status composer, and the checkpoint store; `AgentExecution` owns the
-/// integration point. The summary service and checkpoint store are shared
-/// (cheaply clonable) so one store can be reused across attempts of one
-/// conversation.
+/// The bundle owns the deterministic engine, the summary service, and the
+/// Agent Status composer; `AgentExecution` owns the integration point and
+/// the attempt's [`ConversationState`](crate::conversation::ConversationState).
+/// There is deliberately no separate summary store: compaction lineage is
+/// derived from Conversation Surface history, so no second authority can
+/// drift from it.
 pub struct ContextRuntime {
     /// The deterministic context engine, configured for this attempt's
     /// model context window.
     pub(crate) engine: ContextEngine,
     /// The provider-neutral summary service.
     pub(crate) summarizer: Arc<dyn ContextSummarizer>,
-    /// The checkpoint persistence abstraction.
-    pub(crate) checkpoint_store: Arc<dyn ContextCheckpointStore>,
     /// The Agent Status composer: the structured status sections and the
     /// deterministic renderer that produces the ephemeral attachment. Agent
     /// Status is mandatory for rustX agents and owned by the context plane.
     pub(crate) status_composer: AgentStatusComposer,
-    /// The primary and summary output budgets frozen at attempt admission.
+    /// The primary/summary output budgets and the summary input limit,
+    /// frozen at attempt admission.
     pub(crate) compaction_budgets: CompactionBudgets,
 }
 
@@ -84,17 +86,18 @@ impl ContextRuntime {
     /// The engine's context window comes from the attempt's **immutable
     /// model snapshot**, never from a window captured at process start, and
     /// the summarizer is derived from that same snapshot's frozen summary
-    /// policy. There is deliberately no production path that supplies an
-    /// unrelated summarizer beside the attempt's model.
+    /// policy. The summary invocation's own window additionally bounds how
+    /// large a selected Surface span may be, so compaction can never build
+    /// an impossible summary-model request.
     ///
     /// # Errors
     ///
     /// Returns an engine construction error when the derived configuration
-    /// leaves no positive effective input budget.
+    /// leaves no positive effective input budget, for the primary model or
+    /// for the summary model.
     pub fn for_attempt(
         policy: SessionContextPolicy,
         estimator: Arc<dyn TokenEstimator>,
-        checkpoint_store: Arc<dyn ContextCheckpointStore>,
         status_composer: AgentStatusComposer,
         model: &AttemptModelSnapshot,
     ) -> Result<Self, ContextError> {
@@ -112,14 +115,33 @@ impl ContextRuntime {
             Some(cap) => model.summary_invocation().with_output_cap(cap),
             None => model.summary_invocation().clone(),
         };
+        // The summary request is a bounded one-off: no tools, no Agent
+        // Status, no Skill catalog, no continuation. Its input bound is
+        // therefore the summary model's own window minus its output budget;
+        // the session's conversational safety reserve belongs to the primary
+        // loop, not to this single request.
+        let summary_input_limit = summary
+            .context_window()
+            .checked_sub(u64::from(summary.max_output_tokens()))
+            .filter(|limit| *limit > 0)
+            .ok_or_else(|| {
+                ContextError::new(
+                    ContextErrorKind::InvalidConfiguration,
+                    format!(
+                        "the summary model context window {} must exceed its output budget {}",
+                        summary.context_window(),
+                        summary.max_output_tokens()
+                    ),
+                )
+            })?;
         let compaction_budgets = CompactionBudgets::new(
             model.primary().max_output_tokens(),
             summary.max_output_tokens(),
+            summary_input_limit,
         );
         Ok(Self {
             engine,
             summarizer: Arc::new(ModelBackedSummarizer::new(summary)),
-            checkpoint_store,
             status_composer,
             compaction_budgets,
         })
@@ -135,14 +157,12 @@ impl ContextRuntime {
     pub(crate) fn with_scripted_summarizer(
         engine: ContextEngine,
         summarizer: Arc<dyn ContextSummarizer>,
-        checkpoint_store: Arc<dyn ContextCheckpointStore>,
         status_composer: AgentStatusComposer,
         compaction_budgets: CompactionBudgets,
     ) -> Self {
         Self {
             engine,
             summarizer,
-            checkpoint_store,
             status_composer,
             compaction_budgets,
         }

@@ -58,10 +58,11 @@ SKILL_BODY_MARKER = "skill-body-marker-a17c"
 # -- compaction ------------------------------------------------------------
 
 COMPACTION_MARKER = "compaction-filler-marker-93be"
-#: ~200 KB of deterministic filler. The Rust driver configures a 40k-token
-#: window with a 1k reserve and a 1k output budget, so the soft input limit
-#: is ~152 KB of serialized projection: turn one sits far below it and turn
-#: two sits far above. The threshold is crossed by construction, never by
+#: ~200 KB of deterministic filler, worth roughly 53k estimated tokens. The
+#: Rust driver configures a 56k-token window with an 8k reserve and a 1k
+#: output budget, so turn two provably crosses the soft input limit while the
+#: complete-message compaction span provably still fits the summary model's
+#: own request budget. Both bounds are crossed by construction, never by
 #: hoping a random amount of text happens to be enough.
 FILLER = (COMPACTION_MARKER + " ") + " ".join(
     f"compaction filler block {index:05d}." for index in range(6800)

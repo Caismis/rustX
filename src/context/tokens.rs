@@ -17,12 +17,13 @@ use crate::tools::types::ModelToolDefinition;
 /// An observed provider-reported input measurement, tied to the exact
 /// projection it measured.
 ///
-/// The engine applies it only when the projection being measured is
-/// fingerprint-identical to the observed one; otherwise the measurement is
-/// dropped and a deterministic estimate is used instead.
+/// The engine applies it only when the request context being measured is
+/// fingerprint-identical to the observed one — the same Surface revision,
+/// the same hydrated messages, and the same attachments; otherwise the
+/// measurement is dropped and a deterministic estimate is used instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderObservedInput {
-    /// The fingerprint of the projection the provider request used.
+    /// The fingerprint of the request context the provider request used.
     pub fingerprint: u64,
     /// The reported `ModelUsage.input_tokens` of that request.
     pub input_tokens: u64,
@@ -35,7 +36,8 @@ pub struct ProviderObservedInput {
 /// scripted token weights and production can use the default provider-neutral
 /// fallback ([`DefaultTokenEstimator`]).
 pub trait TokenEstimator: Send + Sync {
-    /// The deterministic estimated input tokens of one projection, including
+    /// The deterministic estimated input tokens of one request context,
+    /// including
     /// non-compacted contributors such as tool definitions and the exact
     /// Agent Status attachment. This is the full request estimate: it feeds
     /// the soft-limit threshold and the hard fit, so the Agent Status
@@ -70,8 +72,8 @@ pub type EstimatorFunction =
 /// ceil(deterministic UTF-8 serialized bytes / 4)
 /// ```
 ///
-/// applied over the runtime-owned canonical serialization of the projection
-/// items, the tool definitions, and the exact Agent Status attachment, plus
+/// applied over the runtime-owned canonical serialization of the projected
+/// canonical messages, the tool definitions, and the exact attachments, plus
 /// the configured per-request contributors. `ceil(x / 4)` is `(bytes + 3) /
 /// 4` over `u64`, so every byte counted contributes at most 4 bytes to one
 /// token. The formula is intentionally an estimate, never provider usage.
@@ -82,8 +84,8 @@ pub type EstimatorFunction =
 pub struct DefaultTokenEstimator;
 
 impl DefaultTokenEstimator {
-    /// The deterministic serialized bytes of the projection items, the tool
-    /// definitions, and the exact Agent Status attachment.
+    /// The deterministic serialized bytes of the projected canonical
+    /// messages, the tool definitions, and the exact attachments.
     ///
     /// # Panics
     ///
@@ -95,8 +97,8 @@ impl DefaultTokenEstimator {
         projection: &ContextProjection,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let items = serde_json::to_vec(&projection.items)
-            .expect("canonical projection items serialize")
+        let items = serde_json::to_vec(&projection.messages)
+            .expect("canonical projection messages serialize")
             .len();
         let tools = serde_json::to_vec(tool_definitions)
             .expect("canonical tool definitions serialize")
@@ -114,8 +116,8 @@ impl DefaultTokenEstimator {
         (items + tools + status + catalog) as u64
     }
 
-    /// The deterministic serialized bytes of the projection items only,
-    /// excluding tool definitions and the Agent Status attachment.
+    /// The deterministic serialized bytes of the projected canonical
+    /// messages only, excluding tool definitions and the attachments.
     ///
     /// # Panics
     ///
@@ -123,8 +125,8 @@ impl DefaultTokenEstimator {
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn conversation_bytes(projection: &ContextProjection) -> u64 {
-        serde_json::to_vec(&projection.items)
-            .expect("canonical projection items serialize")
+        serde_json::to_vec(&projection.messages)
+            .expect("canonical projection messages serialize")
             .len() as u64
     }
 }
@@ -207,14 +209,14 @@ mod tests {
     fn default_estimator_is_deterministic_and_includes_tools() {
         use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
         let projection = crate::context::projection::ContextProjection {
-            items: Vec::new(),
+            surface_revision: crate::conversation::SurfaceRevision::INITIAL,
+            messages: Vec::new(),
             agent_status: None,
             skill_catalog: None,
             estimated_input: crate::runtime::types::TokenMeasurement {
                 input_tokens: 0,
                 source: crate::runtime::types::TokenMeasurementSource::Estimated,
             },
-            checkpoint_generation: None,
         };
         let estimator = DefaultTokenEstimator;
         let without_tools = estimator.estimate_input(&projection, &[]);

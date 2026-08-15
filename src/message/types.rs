@@ -1,7 +1,7 @@
 //! The canonical conversation model.
 //!
 //! The canonical conversation contains exactly four top-level message roles:
-//! [`MessageBlock::System`], [`MessageBlock::User`], [`MessageBlock::Agent`],
+//! [`MessageBlock::System`], [`MessageBlock::User`], [`MessageBlock::Assistant`],
 //! and [`MessageBlock::Tool`]. These four semantics are frozen; provider
 //! roles such as `OpenAI`'s `developer` are adapter concerns, not canonical
 //! roles, and are never mapped to a fifth role.
@@ -10,7 +10,7 @@
 //! information supplied to the current agent, regardless of whether a human,
 //! another agent, the fleet, an external system, or the runtime produced it.
 //! Streaming deltas are `ModelEvent` facts and never become message blocks;
-//! only completed generations are committed as `AgentMessageBlock` values.
+//! only completed generations are committed as `AssistantMessageBlock` values.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ use crate::tools::types::{ToolCall, ToolExecutionResult};
 
 /// The canonical conversation message.
 ///
-/// The `role` discriminator is stable: `system`, `user`, `agent`, `tool`.
+/// The `role` discriminator is stable: `system`, `user`, `assistant`, `tool`.
 /// No additional top-level role exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
@@ -32,7 +32,7 @@ pub enum MessageBlock {
     /// Inbound information supplied to the current agent.
     User(UserMessageBlock),
     /// One completed model generation produced by the current agent.
-    Agent(AgentMessageBlock),
+    Assistant(AssistantMessageBlock),
     /// The result of one tool call produced by the current agent.
     Tool(ToolMessageBlock),
 }
@@ -104,7 +104,7 @@ pub enum SystemAuthority {
 /// canonical home for anything inbound, including messages from other agents
 /// (with [`UserSource::Agent`] provenance) and, in the future, runtime
 /// compaction summaries (with [`InboundKind::CompactionSummary`] kind). It
-/// must never become `AgentMessageBlock` or `ToolMessageBlock`, which are
+/// must never become `AssistantMessageBlock` or `ToolMessageBlock`, which are
 /// reserved for output and actions of the current agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserMessageBlock {
@@ -160,9 +160,8 @@ pub enum InboundKind {
     /// An ordinary inbound message.
     #[default]
     Message,
-    /// A future runtime compaction summary: inbound runtime-provided
-    /// historical context. Compaction itself is not implemented in M1; the
-    /// kind exists so no fifth message role is ever needed for it.
+    /// A runtime-provided compaction summary. It remains a `User` message so
+    /// no fifth canonical message role is needed for runtime-derived context.
     CompactionSummary,
 }
 
@@ -180,23 +179,23 @@ pub enum UserContentBlock {
 
 /// One completed model generation produced by the current agent.
 ///
-/// One generation becomes one immutable `AgentMessageBlock` containing
+/// One generation becomes one immutable `AssistantMessageBlock` containing
 /// multiple content blocks. Streaming deltas are never committed here; they
 /// belong to `ModelEvent` until the generation completes. `send_message`
 /// results and other inbound material from other agents never appear in this
 /// role.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentMessageBlock {
+pub struct AssistantMessageBlock {
     /// Durable message identity.
     pub id: MessageId,
     /// The completed generation content.
-    pub content: Vec<AgentContentBlock>,
+    pub content: Vec<AssistantContentBlock>,
 }
 
-/// A content block inside an `AgentMessageBlock`.
+/// A content block inside an `AssistantMessageBlock`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AgentContentBlock {
+pub enum AssistantContentBlock {
     /// Generated text.
     Text(TextBlock),
     /// Model reasoning, with optional provider continuation state.
@@ -255,7 +254,7 @@ pub struct ToolMessageBlock {
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority,
+        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
         SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::message::content::TextBlock;
@@ -281,9 +280,9 @@ mod tests {
             kind: InboundKind::Message,
             timestamp: None,
         });
-        let agent = MessageBlock::Agent(AgentMessageBlock {
-            id: MessageId::new("msg-agent-1"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+        let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("msg-assistant-1"),
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "ok".to_owned(),
             })],
         });
@@ -303,12 +302,22 @@ mod tests {
         for (block, role) in [
             (system, "system"),
             (user, "user"),
-            (agent, "agent"),
+            (assistant, "assistant"),
             (tool, "tool"),
         ] {
             let value = serde_json::to_value(&block).expect("serialize block");
             assert_eq!(value["role"], role, "unexpected discriminator");
         }
+
+        let legacy_agent = serde_json::json!({
+            "role": "agent",
+            "id": "msg-agent-legacy",
+            "content": [{"type": "text", "text": "must reject"}],
+        });
+        assert!(
+            serde_json::from_value::<MessageBlock>(legacy_agent).is_err(),
+            "the canonical role discriminator must be assistant"
+        );
     }
 
     /// An inbound message from another agent stays a `UserMessageBlock`.
@@ -335,12 +344,12 @@ mod tests {
                 ..
             })
         ));
-        assert!(!matches!(block, MessageBlock::Agent(_)));
+        assert!(!matches!(block, MessageBlock::Assistant(_)));
         assert!(!matches!(block, MessageBlock::Tool(_)));
     }
 
-    /// A future compaction summary remains a `UserMessageBlock`; no fifth
-    /// role is required.
+    /// A runtime compaction summary remains a `UserMessageBlock`; no fifth
+    /// canonical role is required.
     #[test]
     fn compaction_summary_is_user_role() {
         let block = MessageBlock::User(UserMessageBlock {

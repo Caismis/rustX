@@ -10,7 +10,7 @@ use common::{
     collect_events, describe_events, error_fixture, model_tool, simple_request, sse_fixture,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{AgentContentBlock, ContentBlockIndex, MessageBlock};
+use rustx::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use rustx::model::finish::ModelFinishReason;
 use rustx::model::{
     ModelErrorKind, ModelEvent, ModelProtocol, ModelRequest, ModelUsage, OpenAiAdapterConfig,
@@ -748,13 +748,13 @@ async fn stateless_continuation_replays_items_without_duplication() {
     })
     .await;
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
-    // The canonical history ends with the previous agent generation followed
+    // The canonical history ends with the previous Assistant generation followed
     // by the new user prompt.
     request.messages.insert(
         0,
-        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
             id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "Previous answer.".to_owned(),
             })],
         }),
@@ -839,9 +839,9 @@ async fn stored_continuation_sends_only_tail_context() {
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
     request.messages.insert(
         0,
-        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
             id: rustx::runtime::identity::MessageId::new("msg-prev"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "Old generation.".to_owned(),
             })],
         }),
@@ -894,9 +894,9 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
         let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
         request.messages.insert(
             0,
-            MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+            MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
                 id: rustx::runtime::identity::MessageId::new("msg-prev"),
-                content: vec![AgentContentBlock::Text(TextBlock {
+                content: vec![AssistantContentBlock::Text(TextBlock {
                     text: "Old.".to_owned(),
                 })],
             }),
@@ -909,7 +909,7 @@ async fn storage_mode_continuation_contradiction_is_rejected() {
     }
 }
 
-/// A continuation request without a preceding agent boundary fails
+/// A continuation request without a preceding Assistant boundary fails
 /// explicitly instead of guessing.
 #[tokio::test]
 async fn continuation_without_boundary_fails() {
@@ -1004,9 +1004,9 @@ async fn reasoning_without_provider_state_is_unsupported() {
     let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "hi");
     request.messages.insert(
         0,
-        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
             id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
-            content: vec![AgentContentBlock::Reasoning(
+            content: vec![AssistantContentBlock::Reasoning(
                 rustx::message::types::ReasoningBlock {
                     text: Some("Visible reasoning text.".to_owned()),
                     provider_state: None,
@@ -1042,9 +1042,9 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
     })];
     request.messages.insert(
         0,
-        MessageBlock::Agent(rustx::message::types::AgentMessageBlock {
+        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
             id: rustx::runtime::identity::MessageId::new("msg-reasoning"),
-            content: vec![AgentContentBlock::Reasoning(
+            content: vec![AssistantContentBlock::Reasoning(
                 rustx::message::types::ReasoningBlock {
                     text: None,
                     provider_state: Some(ProviderContinuationState::OpenAiResponses(
@@ -1124,7 +1124,7 @@ async fn request_serialization_is_model_facing_only() {
 #[tokio::test]
 async fn continuation_tail_preserves_tool_then_users_order() {
     use rustx::message::types::{
-        AgentMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+        AssistantMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
     };
     use rustx::runtime::identity::MessageId;
     let server = common::FixtureServer::start(|_attempt, _head| {
@@ -1144,9 +1144,9 @@ async fn continuation_tail_preserves_tool_then_users_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-boundary"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "Old generation.".to_owned(),
             })],
         }),
@@ -1210,11 +1210,11 @@ async fn continuation_tail_preserves_tool_then_users_order() {
         "B translated at index 2"
     );
 }
-/// The no-tool tail form `Agent boundary → User A → User B` with a
+/// The no-tool tail form `Assistant boundary → User A → User B` with a
 /// continuation keeps both inbound messages as distinct ordered items.
 #[tokio::test]
 async fn continuation_no_tool_tail_preserves_both_users() {
-    use rustx::message::types::{AgentMessageBlock, UserContentBlock, UserMessageBlock};
+    use rustx::message::types::{AssistantMessageBlock, UserContentBlock, UserMessageBlock};
     use rustx::runtime::identity::MessageId;
     let server = common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_responses", "stored_completed.sse")
@@ -1233,9 +1233,9 @@ async fn continuation_no_tool_tail_preserves_both_users() {
         })
     };
     request.messages = vec![
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-boundary"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "Old generation.".to_owned(),
             })],
         }),

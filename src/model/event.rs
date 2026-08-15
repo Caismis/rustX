@@ -5,7 +5,7 @@
 //! continuation state, and final completion or failure. It is not the
 //! durable `RuntimeEvent` journal and it is never placed into the canonical
 //! conversation history. Only the completed generation becomes an
-//! `AgentMessageBlock`.
+//! `AssistantMessageBlock`.
 //!
 //! Every content-targeted event carries a [`ContentBlockIndex`] identifying
 //! the ordered output block it belongs to, so interleaved text, reasoning,
@@ -15,7 +15,7 @@
 //! The stream distinguishes every content semantic the canonical message
 //! model distinguishes: a refusal streams through [`ModelEvent::RefusalDelta`]
 //! and assembles into
-//! [`AgentContentBlock::Refusal`](crate::message::types::AgentContentBlock::Refusal),
+//! [`AssistantContentBlock::Refusal`](crate::message::types::AssistantContentBlock::Refusal),
 //! never into plain text.
 
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ use crate::tools::types::{ToolCall, ToolCallStart};
 /// A normalized model streaming event.
 ///
 /// M2 adapters convert provider streams into these events, and the agent
-/// kernel assembles one final `AgentMessageBlock` from them.
+/// kernel assembles one final `AssistantMessageBlock` from them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ModelEvent {
@@ -55,7 +55,7 @@ pub enum ModelEvent {
     ///
     /// Refusal content streams as refusal, never as ordinary text, so the
     /// completed message can assemble an
-    /// [`AgentContentBlock::Refusal`](crate::message::types::AgentContentBlock::Refusal)
+    /// [`AssistantContentBlock::Refusal`](crate::message::types::AssistantContentBlock::Refusal)
     /// without provider-specific hidden state.
     RefusalDelta {
         /// The refusal block the delta belongs to.
@@ -118,7 +118,7 @@ pub enum ModelEvent {
 #[cfg(test)]
 mod tests {
     use super::ModelEvent;
-    use crate::message::types::{AgentContentBlock, ContentBlockIndex, MessageBlock};
+    use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
@@ -218,28 +218,28 @@ mod tests {
     ///
     /// This is a minimal, test-local projection of what M2 assembly must
     /// produce; M1 defines the stream contract only.
-    fn assemble(events: &[ModelEvent]) -> Vec<AgentContentBlock> {
-        let mut blocks: Vec<AgentContentBlock> = Vec::new();
+    fn assemble(events: &[ModelEvent]) -> Vec<AssistantContentBlock> {
+        let mut blocks: Vec<AssistantContentBlock> = Vec::new();
         let mut tool_calls: std::collections::BTreeMap<ToolCallId, (ToolCallStart, String)> =
             std::collections::BTreeMap::new();
         for event in events {
             match event {
                 ModelEvent::TextDelta { block_index, text } => {
                     let idx = block_index.get() as usize;
-                    if let Some(AgentContentBlock::Text(block)) = blocks.get_mut(idx) {
+                    if let Some(AssistantContentBlock::Text(block)) = blocks.get_mut(idx) {
                         block.text.push_str(text);
                     } else {
-                        blocks.push(AgentContentBlock::Text(
+                        blocks.push(AssistantContentBlock::Text(
                             crate::message::content::TextBlock { text: text.clone() },
                         ));
                     }
                 }
                 ModelEvent::ReasoningDelta { block_index, text } => {
                     let idx = block_index.get() as usize;
-                    if let Some(AgentContentBlock::Reasoning(block)) = blocks.get_mut(idx) {
+                    if let Some(AssistantContentBlock::Reasoning(block)) = blocks.get_mut(idx) {
                         block.text.get_or_insert_with(String::new).push_str(text);
                     } else {
-                        blocks.push(AgentContentBlock::Reasoning(
+                        blocks.push(AssistantContentBlock::Reasoning(
                             crate::message::types::ReasoningBlock {
                                 text: Some(text.clone()),
                                 provider_state: None,
@@ -249,10 +249,10 @@ mod tests {
                 }
                 ModelEvent::RefusalDelta { block_index, text } => {
                     let idx = block_index.get() as usize;
-                    if let Some(AgentContentBlock::Refusal(block)) = blocks.get_mut(idx) {
+                    if let Some(AssistantContentBlock::Refusal(block)) = blocks.get_mut(idx) {
                         block.text.push_str(text);
                     } else {
-                        blocks.push(AgentContentBlock::Refusal(
+                        blocks.push(AssistantContentBlock::Refusal(
                             crate::message::types::RefusalBlock { text: text.clone() },
                         ));
                     }
@@ -263,13 +263,15 @@ mod tests {
                         // Providers may expose continuation state before any
                         // reasoning delta; the reasoning block is created
                         // implicitly at the declared index.
-                        blocks.push(AgentContentBlock::Reasoning(
+                        blocks.push(AssistantContentBlock::Reasoning(
                             crate::message::types::ReasoningBlock {
                                 text: None,
                                 provider_state: Some(state.clone()),
                             },
                         ));
-                    } else if let Some(AgentContentBlock::Reasoning(block)) = blocks.get_mut(idx) {
+                    } else if let Some(AssistantContentBlock::Reasoning(block)) =
+                        blocks.get_mut(idx)
+                    {
                         block.provider_state = Some(state.clone());
                     }
                 }
@@ -278,7 +280,7 @@ mod tests {
                     call,
                 } => {
                     tool_calls.insert(call.id.clone(), (call.clone(), String::new()));
-                    blocks.push(AgentContentBlock::ToolCall(ToolCall {
+                    blocks.push(AssistantContentBlock::ToolCall(ToolCall {
                         id: call.id.clone(),
                         tool_id: call.tool_id.clone(),
                         name: call.name.clone(),
@@ -296,7 +298,7 @@ mod tests {
                 }
                 ModelEvent::ToolCallCompleted { block_index, call } => {
                     let idx = block_index.get() as usize;
-                    blocks[idx] = AgentContentBlock::ToolCall(call.clone());
+                    blocks[idx] = AssistantContentBlock::ToolCall(call.clone());
                 }
                 _ => {}
             }
@@ -349,21 +351,21 @@ mod tests {
         assert_eq!(blocks.len(), 4, "exactly four blocks in order");
         assert!(matches!(
             &blocks[0],
-            AgentContentBlock::Reasoning(r)
+            AssistantContentBlock::Reasoning(r)
                 if r.text.as_deref() == Some("First reasoning.") && r.provider_state.is_none()
         ));
         assert!(matches!(
             &blocks[1],
-            AgentContentBlock::ToolCall(c) if c.id.as_str() == "call_01" && c.arguments == serde_json::json!({"path": "."})
+            AssistantContentBlock::ToolCall(c) if c.id.as_str() == "call_01" && c.arguments == serde_json::json!({"path": "."})
         ));
         assert!(matches!(
             &blocks[2],
-            AgentContentBlock::Reasoning(r)
+            AssistantContentBlock::Reasoning(r)
                 if r.text.as_deref() == Some("Second reasoning after the tool call.")
         ));
         assert!(matches!(
             &blocks[3],
-            AgentContentBlock::Text(t) if t.text == "Final answer."
+            AssistantContentBlock::Text(t) if t.text == "Final answer."
         ));
     }
 
@@ -392,7 +394,7 @@ mod tests {
         ];
         let blocks = assemble(&events);
         assert_eq!(blocks.len(), 2);
-        let AgentContentBlock::Reasoning(reasoning) = &blocks[0] else {
+        let AssistantContentBlock::Reasoning(reasoning) = &blocks[0] else {
             panic!("block 0 must be a reasoning block");
         };
         assert_eq!(reasoning.text, None, "no visible reasoning text");
@@ -402,11 +404,13 @@ mod tests {
                 OpenAiResponsesContinuation::Stateless { .. }
             ))
         ));
-        assert!(matches!(&blocks[1], AgentContentBlock::Text(t) if t.text == "Visible answer."));
+        assert!(
+            matches!(&blocks[1], AssistantContentBlock::Text(t) if t.text == "Visible answer.")
+        );
     }
 
     /// Reasoning followed by refusal assembles in order, and the refusal
-    /// becomes `AgentContentBlock::Refusal`, never `Text`.
+    /// becomes `AssistantContentBlock::Refusal`, never `Text`.
     #[test]
     fn reasoning_then_refusal_assembles_in_order() {
         let events = [
@@ -423,15 +427,15 @@ mod tests {
         assert_eq!(blocks.len(), 2, "reasoning and refusal remain two blocks");
         assert!(matches!(
             &blocks[0],
-            AgentContentBlock::Reasoning(r)
+            AssistantContentBlock::Reasoning(r)
                 if r.text.as_deref() == Some("The request cannot be satisfied.")
         ));
         assert!(matches!(
             &blocks[1],
-            AgentContentBlock::Refusal(r) if r.text == "I cannot comply with that request."
+            AssistantContentBlock::Refusal(r) if r.text == "I cannot comply with that request."
         ));
         assert!(
-            !matches!(&blocks[1], AgentContentBlock::Text(_)),
+            !matches!(&blocks[1], AssistantContentBlock::Text(_)),
             "refusal must never assemble as plain text"
         );
     }
@@ -456,7 +460,7 @@ mod tests {
         ];
         let blocks = assemble(&events);
         assert_eq!(blocks.len(), 1);
-        let AgentContentBlock::Refusal(refusal) = &blocks[0] else {
+        let AssistantContentBlock::Refusal(refusal) = &blocks[0] else {
             panic!("the block must be a refusal block");
         };
         assert_eq!(

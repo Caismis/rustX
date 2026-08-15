@@ -14,7 +14,8 @@
 //! - fresh inbound is protected from compaction until observed;
 //! - Agent Status participates in full token accounting and fingerprinting;
 //! - provider adapters own wire placement;
-//! - the status never enters canonical history, checkpoints, or results.
+//! - the status never enters canonical history, compaction summaries, or
+//!   results.
 
 use super::{common, support};
 
@@ -27,14 +28,14 @@ use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, Ini
 use rustx::context::{
     AgentStatusClock, AgentStatusComposer, AgentStatusCompositionError, AgentStatusFact,
     AgentStatusRenderContext, AgentStatusSectionData, AgentStatusSectionId,
-    AgentStatusSectionProvider, CompactionBudgets, ContextCheckpointStore, ContextConfig,
-    ContextEngine, ContextError, ContextErrorKind, ContextRuntime, InMemoryCheckpointStore,
-    ProviderObservedInput, TokenEstimator, render_agent_status,
+    AgentStatusSectionProvider, CompactionBudgets, ContextConfig, ContextEngine, ContextError,
+    ContextErrorKind, ContextRuntime, ProviderObservedInput, TokenEstimator, render_agent_status,
 };
+use rustx::conversation::{ConversationState, summary_message_id};
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
@@ -259,14 +260,14 @@ fn summary_user(id: &str, text: &str) -> MessageBlock {
     })
 }
 
-fn text_block(text: &str) -> AgentContentBlock {
-    AgentContentBlock::Text(TextBlock {
+fn text_block(text: &str) -> AssistantContentBlock {
+    AssistantContentBlock::Text(TextBlock {
         text: text.to_owned(),
     })
 }
 
-fn agent(id: &str, blocks: Vec<AgentContentBlock>) -> MessageBlock {
-    MessageBlock::Agent(AgentMessageBlock {
+fn assistant(id: &str, blocks: Vec<AssistantContentBlock>) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new(id),
         content: blocks,
     })
@@ -287,7 +288,8 @@ fn request(
         agent_id: AgentId::new("agent-status"),
         conversation_id: conversation(),
         attempt_id: AttemptId::new(attempt),
-        initial_messages,
+        conversation: ConversationState::from_messages(initial_messages)
+            .expect("bootstrap conversation"),
         initial_turn_trigger: trigger,
         timezone,
         model: support::attempt_model_with_window(
@@ -324,15 +326,13 @@ fn runtime(
     window: u64,
     estimator: Arc<dyn TokenEstimator>,
     summarizer: FakeContextSummarizer,
-    store: Arc<InMemoryCheckpointStore>,
     clock: Arc<dyn AgentStatusClock>,
 ) -> ContextRuntime {
     ContextRuntime::with_scripted_summarizer(
         engine(window, 0, 0, estimator),
         Arc::new(summarizer),
-        store,
         AgentStatusComposer::new(clock),
-        CompactionBudgets::new(1, 1),
+        CompactionBudgets::new(1, 1, 1_000_000),
     )
 }
 
@@ -377,7 +377,7 @@ fn block_id(message: &MessageBlock) -> String {
     match message {
         MessageBlock::System(system) => system.id.as_str().to_owned(),
         MessageBlock::User(user) => user.id.as_str().to_owned(),
-        MessageBlock::Agent(agent) => agent.id.as_str().to_owned(),
+        MessageBlock::Assistant(assistant) => assistant.id.as_str().to_owned(),
         MessageBlock::Tool(tool) => tool.id.as_str().to_owned(),
     }
 }
@@ -843,7 +843,6 @@ async fn initial_human_inbound_produces_exactly_one_status() {
     let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let inbound_time = utc("2026-08-08T16:30:58Z");
     let initial = fresh_user(
         "msg-inbound-1",
@@ -868,7 +867,6 @@ async fn initial_human_inbound_produces_exactly_one_status() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
         &tool_runtime,
@@ -897,10 +895,10 @@ async fn initial_human_inbound_produces_exactly_one_status() {
     assert_eq!(requests[0].messages.len(), 1);
     assert_eq!(&requests[0].messages[0], &initial);
     // The result history carries the canonical messages only (the inbound
-    // user message and the committed agent turn), never the projection-only
+    // user message and the committed Assistant turn), never the projection-only
     // status artifact.
-    assert_eq!(result.messages.len(), 2);
-    assert_no_status_in_history(&result.messages);
+    assert_eq!(result.messages().len(), 2);
+    assert_no_status_in_history(result.messages());
 }
 
 /// A runtime-originated fresh inbound turn triggers Agent Status exactly
@@ -910,7 +908,6 @@ async fn runtime_originated_inbound_triggers_status() {
     let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let inbound_time = utc("2026-08-08T16:30:58Z");
     let initial = fresh_user(
         "msg-runtime-1",
@@ -935,7 +932,6 @@ async fn runtime_originated_inbound_triggers_status() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
         &tool_runtime,
@@ -955,7 +951,7 @@ async fn runtime_originated_inbound_triggers_status() {
             .contains("Inbound message time: 2026-08-08T16:30:58Z"),
         "the runtime inbound message timestamp drives inbound_message_time"
     );
-    assert_no_status_in_history(&result.messages);
+    assert_no_status_in_history(result.messages());
 }
 
 /// Freshness is never inferred from role or history shape: a historical
@@ -968,7 +964,6 @@ async fn no_role_heuristic_triggers_status() {
     let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let initial = vec![
         summary_user("msg-summary-1", "earlier history"),
         historical_user("msg-old-1", "old message"),
@@ -989,7 +984,6 @@ async fn no_role_heuristic_triggers_status() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
         &tool_runtime,
@@ -1014,7 +1008,6 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
     let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let initial = fresh_user(
         "msg-inbound-1",
         "deploy it",
@@ -1034,7 +1027,6 @@ async fn explicit_fresh_trigger_carries_mandatory_status() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-08T16:31:00Z"))),
         ),
         &tool_runtime,
@@ -1063,7 +1055,6 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
     let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let mailbox = ConversationInboundMailbox::new(conversation());
     mailbox
         .enqueue(UserMessageBlock {
@@ -1103,7 +1094,6 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
         &tool_runtime,
@@ -1153,7 +1143,7 @@ async fn drained_batch_produces_one_status_targeting_the_final_message() {
         1,
         "at most one status snapshot per request"
     );
-    assert_no_status_in_history(&result.messages);
+    assert_no_status_in_history(result.messages());
 }
 
 /// The mailbox sequence is the delivery-order authority: producer wall-clock
@@ -1165,7 +1155,6 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
     let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let mailbox = ConversationInboundMailbox::new(conversation());
     // A: sequence 1, LATER wall-clock timestamp.
     mailbox
@@ -1207,7 +1196,6 @@ async fn non_monotonic_producer_timestamps_follow_inbound_order() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-08T13:00:00Z"))),
         ),
         &tool_runtime,
@@ -1241,7 +1229,6 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
     let model = fake_model(vec![stop_script(), stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let mailbox = ConversationInboundMailbox::new(conversation());
     mailbox
         .enqueue(UserMessageBlock {
@@ -1281,7 +1268,6 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
         &tool_runtime,
@@ -1324,7 +1310,7 @@ async fn correction_batch_reaches_the_model_as_one_turn() {
     );
     let status = batch_request.agent_status.as_ref().expect("one status");
     assert_eq!(status.target_message_id, MessageId::new("msg-b"));
-    assert_no_status_in_history(&result.messages);
+    assert_no_status_in_history(result.messages());
 }
 
 /// A foreground-tool-only continuation never receives Agent Status: the
@@ -1352,7 +1338,6 @@ async fn foreground_tool_continuation_has_no_status() {
     )
     .register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let inbound_time = utc("2026-08-07T12:00:00Z");
     let initial = fresh_user("msg-inbound-1", "run it", UserSource::Human, inbound_time);
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
@@ -1372,7 +1357,6 @@ async fn foreground_tool_continuation_has_no_status() {
             10_000_000,
             weighted(10, 10, 10),
             FakeContextSummarizer::new(Vec::new()),
-            store,
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
         &tool_runtime,
@@ -1392,7 +1376,7 @@ async fn foreground_tool_continuation_has_no_status() {
         requests[1].agent_status.is_none(),
         "the foreground-tool-only continuation must carry no Agent Status"
     );
-    assert_no_status_in_history(&result.messages);
+    assert_no_status_in_history(result.messages());
 }
 
 // ---------------------------------------------------------------------------
@@ -1407,7 +1391,6 @@ async fn fresh_inbound_is_protected_from_compaction() {
     let model = fake_model(vec![stop_script()]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
     let inbound_time = utc("2026-08-07T12:00:00Z");
     let initial = vec![
@@ -1437,7 +1420,6 @@ async fn fresh_inbound_is_protected_from_compaction() {
             250,
             weighted(100, 10, 0),
             summarizer,
-            store.clone(),
             Arc::new(FixedClock(utc("2026-08-07T13:00:00Z"))),
         ),
         &tool_runtime,
@@ -1464,35 +1446,41 @@ async fn fresh_inbound_is_protected_from_compaction() {
     assert_eq!(
         ids,
         vec![
-            rustx::context::summary_message_id(&conversation(), 1).to_string(),
+            summary_message_id(&conversation(), 1).to_string(),
             "msg-inbound-1".to_owned(),
         ],
         "older history compacts away but the fresh inbound message stays literal"
     );
     let status = requests[0].agent_status.as_ref().expect("status");
     assert_eq!(status.target_message_id, MessageId::new("msg-inbound-1"));
-    // Canonical history is untouched by compaction and status.
-    let history_ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    // Every original ledger fact survives compaction; the canonical runtime
+    // summary joins the ledger as one more committed fact.
+    let ledger_ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
-        history_ids,
+        ledger_ids,
         vec![
             "msg-old-1".to_owned(),
             "msg-old-2".to_owned(),
             "msg-inbound-1".to_owned(),
+            summary_message_id(&conversation(), 1).to_string(),
             "attempt-1-agent-1".to_owned(),
         ]
     );
-    assert_no_status_in_history(&result.messages);
-    // The checkpoint itself never contains the status footer.
-    let checkpoint = store
-        .load(&conversation())
-        .expect("store")
-        .expect("checkpoint exists");
+    assert_no_status_in_history(result.messages());
+    // The committed summary itself never contains the status footer.
+    let summary = result
+        .messages()
+        .iter()
+        .find(|message| {
+            matches!(message, MessageBlock::User(user)
+            if user.kind == InboundKind::CompactionSummary)
+        })
+        .expect("the canonical compaction summary is committed");
     assert!(
-        !serde_json::to_string(&checkpoint)
-            .expect("serialize checkpoint")
+        !serde_json::to_string(summary)
+            .expect("serialize summary")
             .contains("<system-reminder>"),
-        "the checkpoint must never contain the Agent Status footer"
+        "the canonical summary must never contain the Agent Status footer"
     );
 }
 
@@ -1503,32 +1491,32 @@ async fn fresh_inbound_is_protected_from_compaction() {
 #[test]
 fn unobservable_fresh_inbound_yields_cannot_fit_not_summary() {
     let engine = engine(10_000_000, 0, 0, weighted(10, 10, 10));
-    let history = vec![fresh_user(
+    let state = ConversationState::from_messages([fresh_user(
         "msg-inbound-1",
         "do not summarize me",
         UserSource::Human,
         utc("2026-08-07T12:00:00Z"),
-    )];
+    )])
+    .expect("bootstrap conversation");
     let projection = engine
-        .build_projection(&history, None, &[], None, None, None)
+        .build_projection(&state, &[], None, None, None)
         .expect("projection");
     let fresh = FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")]).expect("turn");
     let error = engine
         .plan_compaction(
-            &history,
-            None,
+            &state,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0),
+            CompactionBudgets::new(0, 0, 1_000_000),
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
             },
         )
-        .expect_err("the only cut would retire the fresh inbound message");
+        .expect_err("the only span would retire the fresh inbound message");
     assert_eq!(
         error.kind,
-        ContextErrorKind::CannotFit,
+        ContextErrorKind::NoProgress,
         "an impossible fresh-inbound-preserving projection must fail explicitly"
     );
 }
@@ -1539,14 +1527,15 @@ fn unobservable_fresh_inbound_yields_cannot_fit_not_summary() {
 #[test]
 fn status_snapshot_changes_the_compaction_decision() {
     let engine = engine(100, 0, 5, weighted(10, 10, 10));
-    let history = vec![user(
+    let state = ConversationState::from_messages([user(
         "msg-u1",
         "hi",
         UserSource::Human,
         Some(utc("2026-08-07T12:00:00Z")),
-    )];
+    )])
+    .expect("bootstrap conversation");
     let without_status = engine
-        .build_projection(&history, None, &[], None, None, None)
+        .build_projection(&state, &[], None, None, None)
         .expect("projection");
     // Soft limit with max_output_tokens = 10: 100 - 0 - 10 = 90.
     assert!(
@@ -1559,8 +1548,7 @@ fn status_snapshot_changes_the_compaction_decision() {
     // tokens, so history + status == 90 == soft limit.
     let with_status = engine
         .build_projection(
-            &history,
-            None,
+            &state,
             &[],
             None,
             Some(&AgentStatusAttachment {
@@ -1588,12 +1576,13 @@ fn status_snapshot_changes_the_compaction_decision() {
 #[test]
 fn status_snapshot_changes_fingerprint_and_observed_measurement_scope() {
     let engine = engine(10_000_000, 0, 0, weighted(10, 10, 10));
-    let history = vec![user(
+    let state = ConversationState::from_messages([user(
         "msg-u1",
         "hi",
         UserSource::Human,
         Some(utc("2026-08-07T12:00:00Z")),
-    )];
+    )])
+    .expect("bootstrap conversation");
     let snapshot_one = AgentStatusAttachment {
         target_message_id: MessageId::new("msg-u1"),
         rendered: "<system-reminder>\nCurrent time: 2026-08-08T16:31:00Z\n</system-reminder>"
@@ -1606,34 +1595,20 @@ fn status_snapshot_changes_fingerprint_and_observed_measurement_scope() {
     };
     let observed = ProviderObservedInput {
         fingerprint: engine
-            .build_projection(&history, None, &[], None, Some(&snapshot_one), None)
+            .build_projection(&state, &[], None, Some(&snapshot_one), None)
             .expect("projection one")
             .fingerprint(),
         input_tokens: 42,
     };
     let with_one = engine
-        .build_projection(
-            &history,
-            None,
-            &[],
-            Some(&observed),
-            Some(&snapshot_one),
-            None,
-        )
+        .build_projection(&state, &[], Some(&observed), Some(&snapshot_one), None)
         .expect("projection one measured");
     assert_eq!(
         with_one.estimated_input.source,
         TokenMeasurementSource::ProviderReported
     );
     let with_two = engine
-        .build_projection(
-            &history,
-            None,
-            &[],
-            Some(&observed),
-            Some(&snapshot_two),
-            None,
-        )
+        .build_projection(&state, &[], Some(&observed), Some(&snapshot_two), None)
         .expect("projection two");
     assert_eq!(
         with_two.estimated_input.source,
@@ -1677,7 +1652,6 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
     ]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let store = InMemoryCheckpointStore::new().shared();
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S1".to_owned())]);
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller_mailbox = mailbox.clone();
@@ -1711,7 +1685,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             .expect("enqueue B");
         release.send_replace(true);
     });
-    // Window 400: the turn-2 projection (u0 + agent-1 + A + B + status =
+    // Window 400: the turn-2 projection (u0 + Assistant-1 + A + B + status =
     // 338) fits, but the provider overflows anyway; the retry compacts.
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -1729,7 +1703,6 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             400,
             weighted(100, 10, 0),
             summarizer,
-            store.clone(),
             Arc::new(ScriptedClock::new(vec![
                 utc("2026-08-07T13:00:00Z"),
                 utc("2026-08-07T13:05:00Z"),
@@ -1783,7 +1756,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
     assert_eq!(
         retry_ids,
         vec![
-            rustx::context::summary_message_id(&conversation(), 1).to_string(),
+            summary_message_id(&conversation(), 1).to_string(),
             "msg-a".to_owned(),
             "msg-b".to_owned(),
         ]
@@ -1792,29 +1765,34 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
         requests[2].continuation.is_none(),
         "successful compaction remains the only continuation invalidation boundary"
     );
-    // Canonical history is unchanged by status composition: no footer, no
-    // fabricated message.
-    let history_ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    // The Message Ledger is unchanged by status composition: no footer, no
+    // fabricated message, every original fact intact plus the summary.
+    let ledger_ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
-        history_ids,
+        ledger_ids,
         vec![
             "msg-u0".to_owned(),
             "attempt-1-agent-1".to_owned(),
             "msg-a".to_owned(),
             "msg-b".to_owned(),
+            summary_message_id(&conversation(), 1).to_string(),
             "attempt-1-agent-2-retry-1".to_owned(),
         ]
     );
-    assert_no_status_in_history(&result.messages);
-    let checkpoint = store
-        .load(&conversation())
-        .expect("store")
-        .expect("checkpoint");
+    assert_no_status_in_history(result.messages());
+    let summary = result
+        .messages()
+        .iter()
+        .find(|message| {
+            matches!(message, MessageBlock::User(user)
+            if user.kind == InboundKind::CompactionSummary)
+        })
+        .expect("the canonical compaction summary is committed");
     assert!(
-        !serde_json::to_string(&checkpoint)
-            .expect("serialize checkpoint")
+        !serde_json::to_string(summary)
+            .expect("serialize summary")
             .contains("<system-reminder>"),
-        "the checkpoint must never contain the Agent Status footer"
+        "the canonical summary must never contain the Agent Status footer"
     );
 }
 
@@ -1942,11 +1920,11 @@ async fn chat_completions_continuation_without_status_has_no_footer() {
         ModelProtocol::OpenAiChatCompletions,
         vec![
             inbound_user("msg-u0", "start"),
-            agent(
+            assistant(
                 "attempt-1-agent-1",
                 vec![
                     text_block("calling"),
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-alpha"),
                         name: "alpha".to_owned(),
@@ -1993,7 +1971,7 @@ async fn responses_stored_continuation_appends_status_in_the_transmitted_tail() 
     let mut request = status_request(
         ModelProtocol::OpenAiResponses,
         vec![
-            agent("attempt-1-agent-1", vec![text_block("previous turn")]),
+            assistant("attempt-1-agent-1", vec![text_block("previous turn")]),
             inbound_user("msg-a", "deploy it"),
             inbound_user("msg-b", "actually do not deploy it"),
         ],
@@ -2009,7 +1987,7 @@ async fn responses_stored_continuation_appends_status_in_the_transmitted_tail() 
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert_eq!(body["previous_response_id"], "resp_prev");
     let input = body["input"].as_array().expect("input items");
-    // The stored continuation slices the canonical request: only the agent
+    // The stored continuation slices the canonical request: only the Assistant
     // boundary and the tail after it are transmitted.
     let user_texts: Vec<String> = input
         .iter()
@@ -2064,7 +2042,7 @@ async fn responses_stateless_continuation_appends_status_after_preserved_items()
     let mut request = status_request(
         ModelProtocol::OpenAiResponses,
         vec![
-            agent("attempt-1-agent-1", vec![text_block("previous turn")]),
+            assistant("attempt-1-agent-1", vec![text_block("previous turn")]),
             inbound_user("msg-b", "actually do not deploy it"),
         ],
     );
@@ -2117,11 +2095,11 @@ async fn anthropic_appends_status_without_breaking_tool_result_grouping() {
         ModelProtocol::AnthropicMessages,
         vec![
             inbound_user("msg-u0", "start"),
-            agent(
+            assistant(
                 "attempt-1-agent-1",
                 vec![
                     text_block("calling"),
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-alpha"),
                         name: "alpha".to_owned(),

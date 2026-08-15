@@ -133,7 +133,7 @@ fn message_id_of(message: &MessageBlock) -> crate::runtime::identity::MessageId 
     match message {
         MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
-        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
     }
 }
@@ -401,11 +401,11 @@ mod tests {
     #[test]
     fn agent_status_target_rejects_non_user_and_summary_targets() {
         use crate::message::types::{
-            AgentMessageBlock, MessageBlock, SystemAuthority, SystemMessageBlock,
+            AssistantMessageBlock, MessageBlock, SystemAuthority, SystemMessageBlock,
         };
         let mut r = request();
         r.agent_status = Some(attachment("msg-agent-1"));
-        r.messages = vec![MessageBlock::Agent(AgentMessageBlock {
+        r.messages = vec![MessageBlock::Assistant(AssistantMessageBlock {
             id: crate::runtime::identity::MessageId::new("msg-agent-1"),
             content: Vec::new(),
         })];

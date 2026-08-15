@@ -35,7 +35,7 @@ use rustx::local_runtime::composition::{
     LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{MessageBlock, UserContentBlock};
+use rustx::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
 use rustx::runtime_client::attachment::RuntimeAttachment;
@@ -76,11 +76,24 @@ const SKILL_BODY_MARKER: &str = "skill-body-marker-a17c";
 const COMPACTION_MARKER: &str = "compaction-filler-marker-93be";
 const SUMMARY_TEXT: &str = "conformance summary: the assistant produced one long report.";
 
-/// The compaction window. A 40k-token window with a 1k reserve and a 1k
-/// output budget puts the soft input limit near 152 KB of serialized
-/// projection: turn one is a few KB and turn two carries the emulator's
-/// ~200 KB reply, so the threshold is crossed by construction.
-const COMPACTION_CONTEXT_WINDOW: u64 = 40_000;
+/// The compaction window and reserve.
+///
+/// The emulator's scripted turn-one reply is ~200 KB, which the frozen
+/// `ceil(bytes / 4)` estimator values at roughly 53k tokens. Two bounds have
+/// to hold at once, and both are structural, not statistical:
+///
+/// ```text
+/// trigger:  window - reserve - output   <=  the turn-two request estimate
+/// summary:  the selected span estimate  <=  window - summary output
+/// ```
+///
+/// A 56k window with an 8k reserve satisfies both with several thousand
+/// tokens of margin on each side: the primary request provably crosses its
+/// soft limit, and the complete-message span provably fits the summary
+/// model's own request budget. Compaction never splits a message to get
+/// there.
+const COMPACTION_CONTEXT_WINDOW: u64 = 56_000;
+const COMPACTION_RESERVE_TOKENS: u64 = 8_192;
 
 // ---------------------------------------------------------------------------
 // The composed driver
@@ -104,6 +117,8 @@ struct Setup {
     model: String,
     /// The declared context window of every catalog model.
     context_window: u64,
+    /// The session's safety reserve.
+    reserve_tokens: u64,
     /// Tokens of recent history kept literal.
     keep_recent_tokens: u64,
     /// The explicit summary-model policy, when the session declares one.
@@ -115,6 +130,7 @@ impl Setup {
         Self {
             model: model.to_owned(),
             context_window: 128_000,
+            reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
             summary_model: None,
         }
@@ -235,19 +251,21 @@ impl Driver {
         }
     }
 
-    /// The committed agent text of the conversation, concatenated.
-    fn committed_agent_text(&self) -> String {
+    /// The committed Assistant text of the conversation, concatenated.
+    fn committed_assistant_text(&self) -> String {
         let (snapshot, _) = self.host().snapshot().expect("snapshot");
         snapshot
             .messages
             .iter()
             .filter_map(|message| match message {
-                MessageBlock::Agent(agent) => Some(agent),
+                MessageBlock::Assistant(assistant) => Some(assistant),
                 _ => None,
             })
-            .flat_map(|agent| agent.content.iter())
+            .flat_map(|assistant| assistant.content.iter())
             .filter_map(|block| match block {
-                rustx::message::types::AgentContentBlock::Text(text) => Some(text.text.as_str()),
+                rustx::message::types::AssistantContentBlock::Text(text) => {
+                    Some(text.text.as_str())
+                }
                 _ => None,
             })
             .collect()
@@ -327,7 +345,7 @@ fn session_json(setup: &Setup) -> String {
         "agentId": "agent-issue47",
         "model": model,
         "context": {
-            "reserveTokens": 1024,
+            "reserveTokens": setup.reserve_tokens,
             "keepRecentTokens": setup.keep_recent_tokens,
         },
     })
@@ -375,7 +393,7 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "{scenario}: {outcome:?}"
         );
         assert_eq!(
-            driver.committed_agent_text(),
+            driver.committed_assistant_text(),
             "Hello world",
             "{scenario}: the streamed deltas commit as one canonical message"
         );
@@ -466,7 +484,7 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
             .any(|event| matches!(event, RuntimeClientEvent::ToolExecutionSettled { .. })),
         "the real tool plane executed the call: {events:?}"
     );
-    assert!(driver.committed_agent_text().contains(NOTE_MARKER));
+    assert!(driver.committed_assistant_text().contains(NOTE_MARKER));
 
     let requests = emulator.requests().await;
     assert_eq!(
@@ -581,7 +599,7 @@ async fn a_provider_failure_settles_once_without_a_retry() {
             .count(),
         1
     );
-    assert!(driver.committed_agent_text().is_empty());
+    assert!(driver.committed_assistant_text().is_empty());
     assert_eq!(
         emulator.requests().await.len(),
         1,
@@ -644,7 +662,7 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     );
     assert!(
         !driver
-            .committed_agent_text()
+            .committed_assistant_text()
             .contains("remainder that cancellation must prevent"),
         "content the gate held back can never be committed"
     );
@@ -660,13 +678,27 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
 // Scenario F — compaction through the real provider boundary
 // ---------------------------------------------------------------------------
 
-/// Compaction invokes the real provider and the compacted projection reaches
-/// the next primary request, on both summary-model policies.
+/// Compaction invokes the real provider and the rewritten Conversation
+/// Surface reaches the next primary request, on both summary-model policies.
+///
+/// This is the composed, external proof of the M7.5 semantics:
+///
+/// ```text
+/// real summary provider invocation
+///   → canonical User(Runtime / CompactionSummary) Message Ledger commit
+///   → Conversation Surface rewrite
+///   → the next real provider request carries the summary
+///   → the retired original filler is absent from the active provider context
+///     while remaining a committed ledger fact
+/// ```
 ///
 /// The trigger is structural, not statistical: the catalog window, the
 /// reserve, the output budget, and the emulator's scripted reply size fix
 /// the threshold crossing exactly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// The composed compaction proof is one scenario observed end to end; keeping
+// it together preserves the request ordering that is the whole point.
+#[allow(clippy::too_many_lines)]
 async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
     for (scenario, summary_model, expected_summary_model) in [
         ("compaction_session_summary", None, CHAT_MODEL),
@@ -681,6 +713,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         };
         let setup = Setup {
             context_window: COMPACTION_CONTEXT_WINDOW,
+            reserve_tokens: COMPACTION_RESERVE_TOKENS,
             keep_recent_tokens: 256,
             summary_model,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
@@ -704,13 +737,57 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             events
                 .iter()
                 .any(|event| matches!(event, RuntimeClientEvent::ContextCompacted { .. })),
-            "{scenario}: the runtime committed a checkpoint: {events:?}"
+            "{scenario}: the runtime committed the canonical compaction: {events:?}"
         );
 
         let (snapshot, _) = driver.host().snapshot().expect("snapshot");
         assert_eq!(
             snapshot.context.compaction_count, 1,
             "{scenario}: exactly one compaction"
+        );
+        let latest = snapshot
+            .context
+            .latest_compaction
+            .as_ref()
+            .expect("the committed compaction metadata");
+        assert_eq!(
+            latest.generation, 1,
+            "{scenario}: one compaction generation"
+        );
+
+        // The runtime compaction summary is a canonical Message Ledger fact,
+        // externally visible like any other committed message — not a
+        // private context value.
+        let summary_message = snapshot
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary => {
+                    Some(user)
+                }
+                _ => None,
+            })
+            .expect("the canonical compaction summary is committed to the ledger");
+        assert_eq!(
+            summary_message.id, latest.summary_message_id,
+            "{scenario}: the compaction metadata names the committed summary"
+        );
+        assert_eq!(
+            summary_message.source,
+            UserSource::Runtime,
+            "{scenario}: the summary carries runtime provenance"
+        );
+        // Compaction never rewrote the ledger: the retired original is still
+        // there, byte for byte.
+        assert!(
+            snapshot.messages.iter().any(|message| matches!(
+                message,
+                MessageBlock::Assistant(assistant)
+                    if serde_json::to_string(assistant)
+                        .expect("serialize the retired Assistant message")
+                        .contains(COMPACTION_MARKER)
+            )),
+            "{scenario}: the retired original stays an immutable ledger fact"
         );
 
         let requests = emulator.requests().await;
@@ -731,7 +808,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         let third = body_text(&requests[2]);
         assert!(
             third.contains(SUMMARY_TEXT) && !third.contains(COMPACTION_MARKER),
-            "{scenario}: the compacted projection replaced the retired history"
+            "{scenario}: the rewritten surface replaced the retired history"
         );
         emulator.finish().await;
     }

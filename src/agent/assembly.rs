@@ -1,6 +1,6 @@
 //! Canonical model stream assembly and validation.
 //!
-//! The agent loop owns `AgentMessageBlock` assembly from the canonical
+//! The agent loop owns `AssistantMessageBlock` assembly from the canonical
 //! `ModelEvent` stream (M2 explicitly deferred this to the loop). This module
 //! validates the stream contract and assembles one ordered message:
 //!
@@ -26,7 +26,9 @@
 use std::collections::BTreeMap;
 
 use crate::message::content::TextBlock;
-use crate::message::types::{AgentContentBlock, ContentBlockIndex, ReasoningBlock, RefusalBlock};
+use crate::message::types::{
+    AssistantContentBlock, ContentBlockIndex, ReasoningBlock, RefusalBlock,
+};
 use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
@@ -39,7 +41,7 @@ use crate::tools::types::ToolCall;
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssembledTurn {
     /// The assembled content blocks in index order, after refusal rollback.
-    pub content: Vec<AgentContentBlock>,
+    pub content: Vec<AssistantContentBlock>,
     /// The fully assembled tool calls of this turn, in block order. These
     /// are the calls the loop must execute before the model continues.
     pub tool_calls: Vec<ToolCall>,
@@ -64,7 +66,7 @@ struct PendingCall {
 /// maps stream facts to runtime events and assigns message identities.
 #[derive(Debug, Default)]
 pub struct ModelEventAssembler {
-    blocks: Vec<Option<AgentContentBlock>>,
+    blocks: Vec<Option<AssistantContentBlock>>,
     tool_calls: BTreeMap<ToolCallId, PendingCall>,
     completed_calls: Vec<(ContentBlockIndex, ToolCall)>,
     continuation: Option<(ContentBlockIndex, ProviderContinuationState)>,
@@ -160,7 +162,7 @@ impl ModelEventAssembler {
     ) -> Result<(), RuntimeError> {
         let block = self.block_at(block_index, BlockKind::Text)?;
         match block {
-            AgentContentBlock::Text(text_block) => {
+            AssistantContentBlock::Text(text_block) => {
                 text_block.text.push_str(text);
                 Ok(())
             }
@@ -176,7 +178,7 @@ impl ModelEventAssembler {
     ) -> Result<(), RuntimeError> {
         let block = self.block_at(block_index, BlockKind::Reasoning)?;
         match block {
-            AgentContentBlock::Reasoning(reasoning) => {
+            AssistantContentBlock::Reasoning(reasoning) => {
                 reasoning
                     .text
                     .get_or_insert_with(String::new)
@@ -195,7 +197,7 @@ impl ModelEventAssembler {
     ) -> Result<(), RuntimeError> {
         let block = self.block_at(block_index, BlockKind::Refusal)?;
         match block {
-            AgentContentBlock::Refusal(refusal) => {
+            AssistantContentBlock::Refusal(refusal) => {
                 refusal.text.push_str(text);
                 Ok(())
             }
@@ -252,7 +254,7 @@ impl ModelEventAssembler {
             let Some(block) = block else {
                 return Err(violation("assembly contains a missing block"));
             };
-            if !refusal || matches!(block, AgentContentBlock::Refusal(_)) {
+            if !refusal || matches!(block, AssistantContentBlock::Refusal(_)) {
                 content.push(block);
             }
         }
@@ -273,7 +275,7 @@ impl ModelEventAssembler {
         &mut self,
         block_index: ContentBlockIndex,
         kind: BlockKind,
-    ) -> Result<&mut AgentContentBlock, RuntimeError> {
+    ) -> Result<&mut AssistantContentBlock, RuntimeError> {
         let index = block_index.get() as usize;
         if index > self.blocks.len() {
             return Err(violation(&format!(
@@ -319,12 +321,13 @@ impl ModelEventAssembler {
                 "tool-call start targets a foreign or skipped block {block_index}"
             )));
         }
-        self.blocks.push(Some(AgentContentBlock::ToolCall(ToolCall {
-            id: call.id.clone(),
-            tool_id: call.tool_id.clone(),
-            name: call.name.clone(),
-            arguments: serde_json::Value::Object(serde_json::Map::new()),
-        })));
+        self.blocks
+            .push(Some(AssistantContentBlock::ToolCall(ToolCall {
+                id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+                name: call.name.clone(),
+                arguments: serde_json::Value::Object(serde_json::Map::new()),
+            })));
         self.tool_calls.insert(
             call.id.clone(),
             PendingCall {
@@ -360,7 +363,7 @@ impl ModelEventAssembler {
         }
         pending.completed = true;
         let index = block_index.get() as usize;
-        self.blocks[index] = Some(AgentContentBlock::ToolCall(call.clone()));
+        self.blocks[index] = Some(AssistantContentBlock::ToolCall(call.clone()));
         self.completed_calls.push((block_index, call.clone()));
         Ok(())
     }
@@ -378,7 +381,7 @@ impl ModelEventAssembler {
         }
         if index == self.blocks.len() {
             self.blocks
-                .push(Some(AgentContentBlock::Reasoning(ReasoningBlock {
+                .push(Some(AssistantContentBlock::Reasoning(ReasoningBlock {
                     text: None,
                     provider_state: None,
                 })));
@@ -388,7 +391,7 @@ impl ModelEventAssembler {
             .get_mut(index)
             .and_then(Option::as_mut)
             .expect("block exists after creation");
-        let AgentContentBlock::Reasoning(reasoning) = block else {
+        let AssistantContentBlock::Reasoning(reasoning) = block else {
             return Err(violation(&format!(
                 "continuation state targets a non-reasoning block {block_index}"
             )));
@@ -421,27 +424,27 @@ enum BlockKind {
 }
 
 impl BlockKind {
-    fn placeholder(self) -> AgentContentBlock {
+    fn placeholder(self) -> AssistantContentBlock {
         match self {
-            Self::Text => AgentContentBlock::Text(TextBlock {
+            Self::Text => AssistantContentBlock::Text(TextBlock {
                 text: String::new(),
             }),
-            Self::Reasoning => AgentContentBlock::Reasoning(ReasoningBlock {
+            Self::Reasoning => AssistantContentBlock::Reasoning(ReasoningBlock {
                 text: None,
                 provider_state: None,
             }),
-            Self::Refusal => AgentContentBlock::Refusal(RefusalBlock {
+            Self::Refusal => AssistantContentBlock::Refusal(RefusalBlock {
                 text: String::new(),
             }),
         }
     }
 
-    fn matches(self, block: &AgentContentBlock) -> bool {
+    fn matches(self, block: &AssistantContentBlock) -> bool {
         matches!(
             (self, block),
-            (Self::Text, AgentContentBlock::Text(_))
-                | (Self::Reasoning, AgentContentBlock::Reasoning(_))
-                | (Self::Refusal, AgentContentBlock::Refusal(_))
+            (Self::Text, AssistantContentBlock::Text(_))
+                | (Self::Reasoning, AssistantContentBlock::Reasoning(_))
+                | (Self::Refusal, AssistantContentBlock::Refusal(_))
         )
     }
 
@@ -457,7 +460,7 @@ impl BlockKind {
 #[cfg(test)]
 mod tests {
     use super::{AssembledTurn, ModelEventAssembler};
-    use crate::message::types::{AgentContentBlock, ContentBlockIndex};
+    use crate::message::types::{AssistantContentBlock, ContentBlockIndex};
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::event::ModelEvent;
     use crate::model::finish::ModelFinishReason;
@@ -546,7 +549,7 @@ mod tests {
             &ModelFinishReason::Stop,
         );
         assert_eq!(turn.content.len(), 1);
-        let AgentContentBlock::Text(block) = &turn.content[0] else {
+        let AssistantContentBlock::Text(block) = &turn.content[0] else {
             panic!("expected a text block");
         };
         assert_eq!(block.text, "hello world");
@@ -569,11 +572,14 @@ mod tests {
             &ModelFinishReason::ToolCalls,
         );
         assert_eq!(turn.content.len(), 3);
-        assert!(matches!(&turn.content[0], AgentContentBlock::Reasoning(_)));
+        assert!(matches!(
+            &turn.content[0],
+            AssistantContentBlock::Reasoning(_)
+        ));
         assert!(
-            matches!(&turn.content[1], AgentContentBlock::ToolCall(call) if call.id.as_str() == "call-1")
+            matches!(&turn.content[1], AssistantContentBlock::ToolCall(call) if call.id.as_str() == "call-1")
         );
-        assert!(matches!(&turn.content[2], AgentContentBlock::Text(t) if t.text == "Answer."));
+        assert!(matches!(&turn.content[2], AssistantContentBlock::Text(t) if t.text == "Answer."));
         assert_eq!(turn.tool_calls.len(), 1);
         assert_eq!(turn.tool_calls[0].arguments, serde_json::json!({"x": 1}));
     }
@@ -592,7 +598,7 @@ mod tests {
         );
         assert_eq!(turn.content.len(), 1);
         assert!(
-            matches!(&turn.content[0], AgentContentBlock::Refusal(r) if r.text == "I cannot comply.")
+            matches!(&turn.content[0], AssistantContentBlock::Refusal(r) if r.text == "I cannot comply.")
         );
         assert!(turn.tool_calls.is_empty());
     }
@@ -608,7 +614,7 @@ mod tests {
             ],
             &ModelFinishReason::Refusal,
         );
-        let AgentContentBlock::Refusal(block) = &turn.content[0] else {
+        let AssistantContentBlock::Refusal(block) = &turn.content[0] else {
             panic!("expected a refusal block");
         };
         assert_eq!(block.text, "I cannot comply.");

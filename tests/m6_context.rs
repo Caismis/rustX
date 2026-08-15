@@ -6,7 +6,7 @@
 
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
+    AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::types::{ModelProtocol, ModelRequest, SkillCatalogAttachment};
@@ -18,7 +18,7 @@ mod common;
 const CATALOG: &str = "## Skills\n\n- pdf: Create, edit, inspect, and transform PDF documents.\n";
 const SYSTEM_TEXT: &str = "You are a helpful agent.";
 
-/// A canonical request with trusted system content, one agent turn, and the
+/// A canonical request with trusted system content, one Assistant turn, and the
 /// Skill catalog attachment.
 fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
     ModelRequest {
@@ -31,11 +31,13 @@ fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
                     text: SYSTEM_TEXT.to_owned(),
                 }],
             }),
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("msg-agent-1"),
-                content: vec![rustx::message::types::AgentContentBlock::Text(TextBlock {
-                    text: "earlier turn".to_owned(),
-                })],
+                content: vec![rustx::message::types::AssistantContentBlock::Text(
+                    TextBlock {
+                        text: "earlier turn".to_owned(),
+                    },
+                )],
             }),
             MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-user-1"),
@@ -294,20 +296,23 @@ fn large_catalog_contributes_to_cannot_fit() {
         estimator.clone(),
     )
     .expect("engine");
-    let history = vec![MessageBlock::User(UserMessageBlock {
-        id: MessageId::new("msg-u1"),
-        content: vec![UserContentBlock::Text(TextBlock {
-            text: "hello".to_owned(),
-        })],
-        source: UserSource::Human,
-        kind: InboundKind::Message,
-        timestamp: None,
-    })];
+    let state = rustx::conversation::ConversationState::from_messages([MessageBlock::User(
+        UserMessageBlock {
+            id: MessageId::new("msg-u1"),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "hello".to_owned(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        },
+    )])
+    .expect("bootstrap conversation");
     let catalog = SkillCatalogAttachment {
         rendered: "## Skills\n".repeat(5000),
     };
     let with_catalog = engine
-        .build_projection(&history, None, &[], None, None, Some(&catalog))
+        .build_projection(&state, &[], None, None, Some(&catalog))
         .expect("projection");
     let soft_limit = engine.soft_input_limit(512).expect("soft limit");
     assert!(
@@ -328,7 +333,7 @@ fn large_catalog_contributes_to_cannot_fit() {
     );
     let recent = estimator.estimate_conversation_input(&with_catalog);
     let without_catalog = engine
-        .build_projection(&history, None, &[], None, None, None)
+        .build_projection(&state, &[], None, None, None)
         .expect("projection");
     assert_eq!(
         recent,
@@ -342,11 +347,10 @@ fn large_catalog_contributes_to_cannot_fit() {
     // the hard-fit calculation and can therefore contribute to CannotFit.
     let plan_error = engine
         .plan_compaction(
-            &history,
-            None,
+            &state,
             &with_catalog,
             &[],
-            CompactionBudgets::new(512, 512),
+            CompactionBudgets::new(512, 512, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("the huge catalog cannot fit");
@@ -356,22 +360,21 @@ fn large_catalog_contributes_to_cannot_fit() {
     // attachment, so compaction planning and application use the same
     // catalog snapshot on both sides of the progress comparison.
     let moderate = engine
-        .build_projection(&history, None, &[], None, None, Some(&catalog))
+        .build_projection(&state, &[], None, None, Some(&catalog))
         .expect("projection");
     let _ = moderate;
     let moderate_catalog = SkillCatalogAttachment {
         rendered: "## Skills\n".to_owned(),
     };
     let with_moderate = engine
-        .build_projection(&history, None, &[], None, None, Some(&moderate_catalog))
+        .build_projection(&state, &[], None, None, Some(&moderate_catalog))
         .expect("projection");
     let plan = engine
         .plan_compaction(
-            &history,
-            None,
+            &state,
             &with_moderate,
             &[],
-            CompactionBudgets::new(512, 512),
+            CompactionBudgets::new(512, 512, 1_000_000),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");

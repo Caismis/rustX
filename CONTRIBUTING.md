@@ -101,7 +101,7 @@ Use short imperative English commit messages, for example:
 
 - `Define canonical message blocks`
 - `Implement attempt state machine`
-- `Add split-turn compaction fixture`
+- `Add complete-message compaction fixture`
 
 Keep commits focused on one coherent architectural or functional change.
 

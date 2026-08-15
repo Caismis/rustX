@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use rustx::context::{
-    ContextError, ContextErrorKind, ContextProjection, ContextSummarizer, ProjectionItem,
-    SummaryRequest, TokenEstimator,
+    ContextError, ContextErrorKind, ContextProjection, ContextSummarizer, SummaryRequest,
+    TokenEstimator,
 };
 use rustx::message::types::{InboundKind, MessageBlock};
 use rustx::tools::types::ModelToolDefinition;
@@ -33,9 +33,9 @@ pub enum FakeSummaryStep {
 /// A scripted deterministic summary service.
 ///
 /// The script is a queue of invocation scripts: `summarize` pops the next
-/// step per invocation and records every request, so tests can prove
-/// incremental behavior (previous summary supplied, only newly retired
-/// material supplied) and cancellation without network access.
+/// step per invocation and records every request, so tests can prove which
+/// exact Surface span was selected, and cancellation, without network
+/// access.
 pub struct FakeContextSummarizer {
     scripts: Mutex<VecDeque<FakeSummaryStep>>,
     requests: Arc<Mutex<Vec<SummaryRequest>>>,
@@ -114,8 +114,7 @@ impl ContextSummarizer for FakeContextSummarizer {
 /// Weights:
 ///
 /// - `per_message`: one whole user/tool/system message.
-/// - `per_block`: one content block of an agent message (and of a
-///   projection-only agent slice).
+/// - `per_block`: one content block of an Assistant message.
 /// - `per_tool`: one tool definition.
 /// - `per_summary_byte`: one summary text byte; a compaction summary message
 ///   weighs `ceil(bytes / 4)`, mirroring the default estimator formula, so
@@ -177,30 +176,25 @@ impl ScriptedEstimator {
     /// The conversation-content estimate: message/block/summary weights only,
     /// never the fixed per-tool overhead.
     fn items_estimate(&self, projection: &ContextProjection) -> u64 {
-        let mut total = 0;
-        for item in &projection.items {
-            match item {
-                ProjectionItem::AgentSlice { content, .. } => {
-                    total += content.len() as u64 * self.per_block;
-                }
-                ProjectionItem::Message(message) => {
-                    if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
-                        total += *weight;
-                    } else if is_summary(message) {
-                        total += (summary_text(message).len() as u64).div_ceil(4);
-                    } else if matches!(message, MessageBlock::Agent(_)) {
-                        let blocks = match message {
-                            MessageBlock::Agent(agent) => agent.content.len() as u64,
-                            _ => 0,
-                        };
-                        total += blocks * self.per_block;
-                    } else {
-                        total += self.per_message;
-                    }
-                }
-            }
+        projection
+            .messages
+            .iter()
+            .map(|message| self.message_estimate(message))
+            .sum()
+    }
+
+    /// The weight of one complete canonical message.
+    #[must_use]
+    pub fn message_estimate(&self, message: &MessageBlock) -> u64 {
+        if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
+            *weight
+        } else if is_summary(message) {
+            (summary_text(message).len() as u64).div_ceil(4)
+        } else if let MessageBlock::Assistant(assistant) = message {
+            assistant.content.len() as u64 * self.per_block
+        } else {
+            self.per_message
         }
-        total
     }
 }
 
@@ -208,7 +202,7 @@ fn message_id(message: &MessageBlock) -> rustx::runtime::identity::MessageId {
     match message {
         MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
-        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
     }
 }

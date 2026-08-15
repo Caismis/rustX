@@ -641,15 +641,18 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
         attempt_id: AttemptId::new("attempt-1"),
-        initial_messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                text: "go".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            timestamp: None,
-        })],
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "go".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -657,9 +660,7 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
 }
 
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{
-        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    };
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
@@ -669,7 +670,6 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )
@@ -719,7 +719,7 @@ async fn run_with_mailbox(
 
 fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
     result
-        .messages
+        .messages()
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
@@ -808,7 +808,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         other => panic!("expected JSON, got {other:?}"),
     };
     assert_eq!(accepted["execution_id"], "exec_1");
-    let committed_count = result.messages.len();
+    let committed_count = result.messages().len();
     let terminal_events = result
         .events
         .iter()
@@ -834,7 +834,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
         "background-exec_1-terminal"
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         committed_count,
         "the settled attempt is never altered by the background completion"
     );
@@ -1480,11 +1480,12 @@ fn background_status_accounting() {
             ],
         }),
     };
+    let empty = rustx::conversation::ConversationState::new();
     let with_status = engine
-        .build_projection(&[], None, &[], None, Some(&attachment), None)
+        .build_projection(&empty, &[], None, Some(&attachment), None)
         .expect("projection with status");
     let without_status = engine
-        .build_projection(&[], None, &[], None, None, None)
+        .build_projection(&empty, &[], None, None, None)
         .expect("projection without status");
     assert_ne!(
         with_status.fingerprint(),
@@ -1505,14 +1506,14 @@ fn background_status_accounting() {
     );
     // keep_recent_tokens is measured over conversation content only.
     let projection = ContextProjection {
-        items: Vec::new(),
+        surface_revision: rustx::conversation::SurfaceRevision::INITIAL,
+        messages: Vec::new(),
         agent_status: Some(attachment),
         skill_catalog: None,
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,
         },
-        checkpoint_generation: None,
     };
     assert_eq!(
         estimator.estimate_conversation_input(&projection),

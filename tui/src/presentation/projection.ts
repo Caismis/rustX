@@ -328,7 +328,7 @@ export function reduce(
     case "message_committed": {
       const messageId = messageIdOf(event.message);
       const transcript =
-        event.message.role === "agent" && event.attempt_id !== undefined
+        event.message.role === "assistant" && event.attempt_id !== undefined
           ? dropStreaming(state.transcript, event.attempt_id)
           : state.transcript;
       next.transcript = [

@@ -15,8 +15,7 @@ use std::sync::Arc;
 
 use super::model::scripted_session_model;
 use rustx::context::{
-    AgentStatusComposer, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    TokenEstimator,
+    AgentStatusComposer, DefaultTokenEstimator, SessionContextPolicy, TokenEstimator,
 };
 use rustx::message::types::MessageBlock;
 use rustx::model::session::SessionModelState;
@@ -250,7 +249,6 @@ impl RuntimeClientFixtureBuilder {
             context: RuntimeClientContextConfig {
                 policy: self.context_policy,
                 estimator,
-                checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: self.composer,
             },
             tool_runtime,

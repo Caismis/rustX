@@ -80,7 +80,7 @@ function renderCommitted(entry: TranscriptCommitted): RenderedEntryBlock[] {
       return [{ markdown: `${style.cyan(`▌ ${label}${kind}`)}\n${body}` }];
     }
 
-    case "agent":
+    case "assistant":
       return message.content
         .map((block) => {
           switch (block.type) {

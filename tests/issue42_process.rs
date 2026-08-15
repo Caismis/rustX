@@ -289,21 +289,21 @@ async fn the_process_serves_a_real_conversation_runtime() {
         let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
             panic!("snapshot_get must succeed: {response:?}");
         };
-        if let Some(agent) = snapshot.messages.iter().find_map(|message| match message {
-            rustx::message::types::MessageBlock::Agent(agent) => Some(agent.clone()),
+        if let Some(assistant) = snapshot.messages.iter().find_map(|message| match message {
+            rustx::message::types::MessageBlock::Assistant(assistant) => Some(assistant.clone()),
             _ => None,
         }) {
-            committed = Some(agent);
+            committed = Some(assistant);
             break;
         }
         tokio::task::yield_now().await;
     }
-    let agent = committed.expect("the attempt must commit an assistant message");
-    let text = agent
+    let assistant = committed.expect("the attempt must commit an assistant message");
+    let text = assistant
         .content
         .iter()
         .find_map(|block| match block {
-            rustx::message::types::AgentContentBlock::Text(text) => Some(text.text.clone()),
+            rustx::message::types::AssistantContentBlock::Text(text) => Some(text.text.clone()),
             _ => None,
         })
         .expect("the assistant message carries text");

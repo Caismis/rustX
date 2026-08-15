@@ -825,7 +825,7 @@ fn lifecycle_events(result: &AgentExecutionResult) -> Vec<&'static str> {
 /// Tool messages committed to canonical history, in order.
 fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
     result
-        .messages
+        .messages()
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
@@ -891,15 +891,18 @@ fn request(
         agent_id: AgentId::new("agent-a"),
         conversation_id,
         attempt_id: AttemptId::new("attempt-1"),
-        initial_messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                text: "go".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            timestamp: None,
-        })],
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "go".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -908,9 +911,7 @@ fn request(
 
 /// A context runtime with no compaction pressure.
 fn context_runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{
-        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    };
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
@@ -920,7 +921,6 @@ fn context_runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::Context
             summary_output_cap: None,
         },
         estimator,
-        Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )

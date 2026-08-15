@@ -22,7 +22,7 @@ import type { PresentationState } from "../src/presentation/state.ts";
 import type { ForegroundToolExecution } from "../src/protocol/types.ts";
 import { markdownTheme } from "../src/ui/theme.ts";
 import {
-  agentMessage,
+  assistantMessage,
   attemptModel,
   backgroundExecution,
   runtimeInbound,
@@ -63,7 +63,7 @@ describe("transcript rendering", () => {
     const state = base({
       messages: [
         {
-          role: "agent",
+          role: "assistant",
           id: "m1",
           content: [
             { type: "reasoning", text: "internal" },
@@ -90,7 +90,7 @@ describe("transcript rendering", () => {
     const state = base({
       messages: [
         {
-          role: "agent",
+          role: "assistant",
           id: "m1",
           content: [
             {
@@ -121,7 +121,7 @@ describe("transcript rendering", () => {
   it("renders reasoning the provider did not expose without inventing text", () => {
     const state = base({
       messages: [
-        { role: "agent", id: "m1", content: [{ type: "reasoning" }] },
+        { role: "assistant", id: "m1", content: [{ type: "reasoning" }] },
       ],
     });
     assert.match(
@@ -149,7 +149,7 @@ describe("transcript rendering", () => {
   });
 
   it("renders a committed assistant message after the stream", () => {
-    const state = base({ messages: [agentMessage("m1", "final answer")] });
+    const state = base({ messages: [assistantMessage("m1", "final answer")] });
     assert.equal(
       plain(renderEntry(state.transcript[0]!)),
       "▌ answer\nfinal answer",

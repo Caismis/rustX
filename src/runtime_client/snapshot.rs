@@ -26,6 +26,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use super::event::RuntimeClientOutcome;
+use crate::conversation::SurfaceRevision;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::model::types::ModelUsage;
@@ -55,11 +56,14 @@ pub struct RuntimeClientSnapshot {
     /// Whether the runtime has accepted shutdown and stopped admitting new
     /// inbound work. This is runtime-owned state, not a client observation.
     pub shutting_down: bool,
-    /// The committed canonical conversation messages, in canonical order.
+    /// The committed canonical Message Ledger records, in commit order.
     ///
-    /// This is a read model of canonical history: it is repaired from
-    /// authoritative commit observations and is never independently
-    /// mutable.
+    /// This is a read model of the immutable Message Ledger: it is repaired
+    /// from authoritative commit observations and is never independently
+    /// mutable. It includes the runtime compaction summary, which is a
+    /// canonical Ledger fact like any other, and it keeps every retired
+    /// original: compaction rewrites the Conversation Surface, never the
+    /// Ledger.
     pub messages: Vec<MessageBlock>,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,8 +79,10 @@ pub struct RuntimeClientSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatusView>,
     /// Runtime-owned context-compaction diagnostics. The values describe
-    /// committed `RuntimeEvent::CompactionCompleted` facts; they never
-    /// replace canonical history or expose summary content.
+    /// committed `RuntimeEvent::CompactionCompleted` facts by identity;
+    /// they are never a second Conversation Surface authority and never
+    /// carry summary content (the committed summary itself appears in
+    /// `messages`, like every other canonical Ledger fact).
     #[serde(default)]
     pub context: RuntimeClientContextView,
     /// The active capability projection.
@@ -100,23 +106,32 @@ pub struct RuntimeClientSnapshot {
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientContextView {
     /// Runtime Client projection statistic: the number of committed
-    /// completion events folded into this read model. Checkpoint generation
-    /// remains the context-owned identity.
+    /// compaction completions folded into this read model. The compaction
+    /// generation remains the conversation-owned identity.
     pub compaction_count: u64,
-    /// The latest committed checkpoint metadata, when compaction occurred.
+    /// The latest committed compaction metadata, when compaction occurred.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_compaction: Option<RuntimeClientCompactionView>,
 }
 
-/// Public metadata for one committed context checkpoint.
+/// Public metadata for one committed compaction.
+///
+/// Every field is derived from already-committed conversation state. The
+/// view names the canonical summary message by identity; its content is an
+/// ordinary Ledger fact in [`RuntimeClientSnapshot::messages`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientCompactionView {
-    /// The monotonically increasing checkpoint generation.
+    /// The compaction generation maintained in the current Conversation
+    /// Surface head.
     pub generation: u64,
+    /// The identity of the committed canonical compaction summary message.
+    pub summary_message_id: MessageId,
+    /// The Conversation Surface revision established by the rewrite.
+    pub surface_revision: SurfaceRevision,
     /// The pre-compaction input measurement and its provenance.
     pub tokens_before: TokenMeasurement,
-    /// The deterministic estimate of the rebuilt projection.
+    /// The deterministic estimate of the rebuilt request context.
     pub estimated_tokens_after: u64,
 }
 
@@ -136,10 +151,10 @@ pub struct RuntimeClientAttempt {
     /// The latest normalized usage of a completed model request, when any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_usage: Option<ModelUsage>,
-    /// The in-flight agent output, when a message is streaming: enough
+    /// The in-flight Assistant output, when a message is streaming: enough
     /// accumulated state to repair every client-visible streaming effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_flight: Option<InFlightAgentMessage>,
+    pub in_flight: Option<InFlightAssistantMessage>,
     /// The foreground tool executions of the attempt in call-assembly
     /// order.
     #[serde(default)]
@@ -167,7 +182,7 @@ pub enum RuntimeClientAttemptPhase {
     },
 }
 
-/// The accumulated in-flight output of one streaming agent message.
+/// The accumulated in-flight output of one streaming Assistant message.
 ///
 /// This is the repair state of streaming: a snapshot taken mid-stream
 /// carries every accumulated delta through its cursor, so a client
@@ -175,7 +190,7 @@ pub enum RuntimeClientAttemptPhase {
 /// observed incrementally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct InFlightAgentMessage {
+pub struct InFlightAssistantMessage {
     /// The provisional message identity.
     pub message_id: MessageId,
     /// The ordered content blocks assembled so far.
@@ -183,7 +198,7 @@ pub struct InFlightAgentMessage {
     pub blocks: Vec<InFlightBlock>,
 }
 
-/// One ordered block of an in-flight agent message.
+/// One ordered block of an in-flight Assistant message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InFlightBlock {

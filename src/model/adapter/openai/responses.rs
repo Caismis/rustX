@@ -17,7 +17,7 @@ use async_openai::error::OpenAIError;
 use futures_util::StreamExt;
 
 use crate::message::types::ContentBlockIndex;
-use crate::message::types::{AgentContentBlock, MessageBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
@@ -1274,8 +1274,8 @@ fn translate_inputs(
             MessageBlock::User(user) => {
                 input_items.push(translate_user_input(user, request.agent_status.as_ref())?);
             }
-            MessageBlock::Agent(agent) => {
-                input_items.extend(translate_agent_inputs(agent)?);
+            MessageBlock::Assistant(assistant) => {
+                input_items.extend(translate_assistant_inputs(assistant)?);
             }
             MessageBlock::Tool(tool) => {
                 input_items.push(translate_tool_result(tool)?);
@@ -1293,17 +1293,17 @@ fn translate_inputs(
 }
 
 /// The canonical context occurring after the continuation boundary: the
-/// latest preceding `AgentMessageBlock` is the boundary, and everything after
-/// it is the tail. Requests with continuation state but no preceding agent
+/// latest preceding `AssistantMessageBlock` is the boundary, and everything after
+/// it is the tail. Requests with continuation state but no preceding Assistant
 /// boundary fail explicitly rather than guessing.
 fn tail_after_boundary(request: &ModelRequest) -> Result<&[MessageBlock], ModelError> {
     let boundary = request
         .messages
         .iter()
-        .rposition(|block| matches!(block, MessageBlock::Agent(_)))
+        .rposition(|block| matches!(block, MessageBlock::Assistant(_)))
         .ok_or_else(|| {
             invalid_request(
-                "continuation request has no preceding agent message to use as the \
+                "continuation request has no preceding Assistant message to use as the \
                  continuation boundary",
             )
         })?;
@@ -1348,27 +1348,27 @@ fn translate_user_input(
     }))
 }
 
-fn translate_agent_inputs(
-    agent: &crate::message::types::AgentMessageBlock,
+fn translate_assistant_inputs(
+    assistant: &crate::message::types::AssistantMessageBlock,
 ) -> Result<Vec<serde_json::Value>, ModelError> {
     let mut items = Vec::new();
     let mut message_content = Vec::new();
     let mut tool_calls = Vec::new();
-    for content in &agent.content {
+    for content in &assistant.content {
         match content {
-            AgentContentBlock::Text(text) => {
+            AssistantContentBlock::Text(text) => {
                 message_content.push(serde_json::json!({
                     "type": "input_text",
                     "text": text.text,
                 }));
             }
-            AgentContentBlock::Refusal(refusal) => {
+            AssistantContentBlock::Refusal(refusal) => {
                 message_content.push(serde_json::json!({
                     "type": "refusal",
                     "refusal": refusal.text,
                 }));
             }
-            AgentContentBlock::Reasoning(reasoning) => {
+            AssistantContentBlock::Reasoning(reasoning) => {
                 // Canonical readable reasoning text is not sufficient evidence
                 // to reconstruct a provider-native reasoning item: provider
                 // ids, summary structure, and encrypted content cannot be
@@ -1390,7 +1390,7 @@ fn translate_agent_inputs(
                     }
                 }
             }
-            AgentContentBlock::ToolCall(call) => {
+            AssistantContentBlock::ToolCall(call) => {
                 let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
                     unsupported(format!(
                         "tool call arguments are not JSON-serializable: {e}"
@@ -1403,7 +1403,7 @@ fn translate_agent_inputs(
                     "arguments": arguments,
                 }));
             }
-            AgentContentBlock::Image(_) => {
+            AssistantContentBlock::Image(_) => {
                 return Err(unsupported(
                     "OpenAI Responses cannot represent generated image references",
                 ));

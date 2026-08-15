@@ -477,7 +477,7 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
     match message {
         MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
-        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
     }
 }
@@ -1138,15 +1138,15 @@ mod tests {
 
     /// Canonical ordering: a mailbox-drained A/B batch history with the
     /// drained-batch fresh turn `[A, B]` remains valid even when earlier
-    /// canonical messages (for example a committed agent turn) intervene.
+    /// canonical messages (for example a committed Assistant turn) intervene.
     #[test]
     fn drained_batch_order_remains_valid_in_mixed_history() {
-        use crate::message::types::{AgentContentBlock, AgentMessageBlock};
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
         let history = vec![
             MessageBlock::User(human("m-u0", "start")),
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("m-agent-1"),
-                content: vec![AgentContentBlock::Text(
+                content: vec![AssistantContentBlock::Text(
                     crate::message::content::TextBlock {
                         text: "done".to_owned(),
                     },

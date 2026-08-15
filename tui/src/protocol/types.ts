@@ -121,7 +121,7 @@ export interface ToolCallStart {
   name: string;
 }
 
-export type AgentContentBlock =
+export type AssistantContentBlock =
   | ({ type: "text" } & TextBlock)
   | ({ type: "reasoning" } & ReasoningBlock)
   | ({ type: "tool_call" } & ToolCall)
@@ -142,9 +142,9 @@ export interface UserMessageBlock {
   timestamp?: string;
 }
 
-export interface AgentMessageBlock {
+export interface AssistantMessageBlock {
   id: MessageId;
-  content: AgentContentBlock[];
+  content: AssistantContentBlock[];
 }
 
 export interface ToolMessageBlock {
@@ -157,7 +157,7 @@ export interface ToolMessageBlock {
 export type MessageBlock =
   | ({ role: "system" } & SystemMessageBlock)
   | ({ role: "user" } & UserMessageBlock)
-  | ({ role: "agent" } & AgentMessageBlock)
+  | ({ role: "assistant" } & AssistantMessageBlock)
   | ({ role: "tool" } & ToolMessageBlock);
 
 // ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ export type InFlightBlock =
       arguments: string;
     };
 
-export interface InFlightAgentMessage {
+export interface InFlightAssistantMessage {
   message_id: MessageId;
   blocks?: InFlightBlock[];
 }
@@ -450,7 +450,7 @@ export interface RuntimeClientAttempt {
   phase: RuntimeClientAttemptPhase;
   turn: number;
   last_usage?: ModelUsage;
-  in_flight?: InFlightAgentMessage;
+  in_flight?: InFlightAssistantMessage;
   foreground?: ForegroundToolExecution[];
   /** The immutable model this attempt froze at admission. */
   model: AttemptModelView;
@@ -539,7 +539,15 @@ export interface TokenMeasurement {
 }
 
 export interface RuntimeClientCompactionView {
+  /** The compaction generation, derived from Conversation Surface history. */
   generation: number;
+  /**
+   * The identity of the committed canonical compaction summary. Its content
+   * is an ordinary Message Ledger fact in `RuntimeClientSnapshot.messages`.
+   */
+  summary_message_id: MessageId;
+  /** The Conversation Surface revision the rewrite established. */
+  surface_revision: number;
   tokens_before: TokenMeasurement;
   estimated_tokens_after: number;
 }

@@ -7,8 +7,8 @@
 //! - **mandatory**: every normal `AgentExecution` composes it whenever a
 //!   pending fresh inbound turn exists; there is no disable flag and no
 //!   legacy no-status execution mode;
-//! - **projection-only**: it is never canonical history, never checkpoint
-//!   history, never returned in `AgentExecutionResult.messages`, and never
+//! - **projection-only**: it is never a canonical conversation fact, never
+//!   returned in `AgentExecutionResult.messages`, and never
 //!   emitted as a committed-message event;
 //! - **provider-neutral**: composition produces structured sections, a
 //!   canonical deterministic renderer turns them into one text attachment,

@@ -7,7 +7,7 @@ mod common;
 use common::{describe_events, simple_request, sse_fixture};
 use rustx::message::content::{ImageReference, TextBlock};
 use rustx::message::types::{
-    AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
     SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::{
@@ -72,13 +72,13 @@ fn history_request(protocol: ModelProtocol, model: &str) -> ModelRequest {
             kind: InboundKind::Message,
             timestamp: None,
         }),
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-a1"),
             content: vec![
-                AgentContentBlock::Text(TextBlock {
+                AssistantContentBlock::Text(TextBlock {
                     text: "Sure.".to_owned(),
                 }),
-                AgentContentBlock::ToolCall(rustx::tools::types::ToolCall {
+                AssistantContentBlock::ToolCall(rustx::tools::types::ToolCall {
                     id: ToolCallId::new("call_1"),
                     tool_id: ToolId::new("tool-list"),
                     name: "list_directory".to_owned(),
@@ -181,9 +181,9 @@ async fn chat_replays_previous_reasoning() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Reasoning);
     request.messages.insert(
         2,
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r"),
-            content: vec![AgentContentBlock::Reasoning(
+            content: vec![AssistantContentBlock::Reasoning(
                 rustx::message::types::ReasoningBlock {
                     text: Some("Think.".to_owned()),
                     provider_state: None,
@@ -239,9 +239,9 @@ async fn chat_reasoning_replay_dialects_are_explicit() {
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
         request.messages.insert(
             2,
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-{attempt}")),
-                content: vec![AgentContentBlock::Reasoning(
+                content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
                         text: Some("Think.".to_owned()),
                         provider_state: None,
@@ -281,10 +281,10 @@ async fn chat_omit_ignores_unavailable_reasoning() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
     request.messages.insert(
         2,
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r-omit-unavailable"),
             content: vec![
-                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
                     text: None,
                     provider_state: Some(
                         rustx::runtime::continuation::ProviderContinuationState::Anthropic(
@@ -294,7 +294,7 @@ async fn chat_omit_ignores_unavailable_reasoning() {
                         ),
                     ),
                 }),
-                AgentContentBlock::Text(TextBlock {
+                AssistantContentBlock::Text(TextBlock {
                     text: "Visible answer.".to_owned(),
                 }),
             ],
@@ -332,21 +332,21 @@ async fn chat_omit_ignores_multiple_reasoning_blocks() {
     request.invocation.compat.chat_reasoning_replay = Some(ChatReasoningReplay::Omit);
     request.messages.insert(
         2,
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-r-omit-multiple"),
             content: vec![
-                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
                     text: Some("first".to_owned()),
                     provider_state: None,
                 }),
-                AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
                     text: None,
                     provider_state: None,
                 }),
-                AgentContentBlock::Text(TextBlock {
+                AssistantContentBlock::Text(TextBlock {
                     text: "Keep this text.".to_owned(),
                 }),
-                AgentContentBlock::ToolCall(rustx::tools::types::ToolCall {
+                AssistantContentBlock::ToolCall(rustx::tools::types::ToolCall {
                     id: ToolCallId::new("call-omit"),
                     tool_id: ToolId::new("tool-list"),
                     name: "list_directory".to_owned(),
@@ -392,9 +392,9 @@ async fn chat_replay_modes_reject_unavailable_reasoning_text() {
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
         request.messages.insert(
             2,
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-unavailable-{dialect:?}")),
-                content: vec![AgentContentBlock::Reasoning(
+                content: vec![AssistantContentBlock::Reasoning(
                     rustx::message::types::ReasoningBlock {
                         text: None,
                         provider_state: None,
@@ -427,14 +427,14 @@ async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
         request.invocation.compat.chat_reasoning_replay = Some(dialect);
         request.messages.insert(
             2,
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new(format!("msg-r-multiple-{dialect:?}")),
                 content: vec![
-                    AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
                         text: Some("first".to_owned()),
                         provider_state: None,
                     }),
-                    AgentContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
                         text: Some("second".to_owned()),
                         provider_state: None,
                     }),
@@ -450,7 +450,7 @@ async fn chat_replay_modes_reject_multiple_reasoning_blocks() {
     }
 }
 
-/// Chat Completions translates a full canonical history (system, user, agent
+/// Chat Completions translates a full canonical history (system, user, Assistant
 /// with tool calls, tool result, user) into provider messages without
 /// changing any canonical role.
 #[tokio::test]

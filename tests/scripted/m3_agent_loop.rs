@@ -19,7 +19,7 @@ use rustx::agent::{
 };
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::types::{
-    AgentContentBlock, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
@@ -47,18 +47,21 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
         attempt_id: AttemptId::new(attempt),
-        initial_messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                text: "What is 2+2?".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            // A historical (non-fresh) inbound message: the M3 loop
-            // invariants are exercised without Agent Status, expressed as an
-            // explicit pure-continuation trigger.
-            timestamp: None,
-        })],
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "What is 2+2?".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                // A historical (non-fresh) inbound message: the M3 loop
+                // invariants are exercised without Agent Status, expressed as an
+                // explicit pure-continuation trigger.
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -69,9 +72,7 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
 /// scripted request: the mandatory M4 path is active, but no compaction or
 /// summary activity can ever trigger in these loop-contract tests.
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{
-        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    };
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
@@ -82,7 +83,6 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        std::sync::Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )
@@ -214,7 +214,7 @@ fn fail(kind: rustx::model::ModelErrorKind, message: &str) -> ModelEvent {
     }
 }
 
-fn agent_message_id(turn: u32) -> MessageId {
+fn assistant_message_id(turn: u32) -> MessageId {
     MessageId::new(format!("attempt-1-agent-{turn}"))
 }
 
@@ -243,16 +243,16 @@ async fn text_execution_completes_with_exact_trace() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             delta: "hello".to_owned(),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             delta: " world".to_owned(),
         },
@@ -274,10 +274,11 @@ async fn text_execution_completes_with_exact_trace() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
-        panic!("final message must be an agent message");
+    let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
+    else {
+        panic!("final message must be an Assistant message");
     };
-    let AgentContentBlock::Text(block) = &agent.content[0] else {
+    let AssistantContentBlock::Text(block) = &assistant.content[0] else {
         panic!("final message must contain text");
     };
     assert_eq!(block.text, "hello world");
@@ -301,19 +302,20 @@ async fn several_deltas_assemble_in_stream_order() {
         .events
         .iter()
         .filter_map(|event| match event {
-            RuntimeEvent::AgentTextDelta { delta, .. } => Some(delta.as_str()),
+            RuntimeEvent::AssistantTextDelta { delta, .. } => Some(delta.as_str()),
             _ => None,
         })
         .collect();
     assert_eq!(deltas, vec!["a", "b", "c"], "delta order preserved");
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
-        panic!("final message must be an agent message");
+    let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
+    else {
+        panic!("final message must be an Assistant message");
     };
-    let texts: Vec<&str> = agent
+    let texts: Vec<&str> = assistant
         .content
         .iter()
         .filter_map(|block| match block {
-            AgentContentBlock::Text(block) => Some(block.text.as_str()),
+            AssistantContentBlock::Text(block) => Some(block.text.as_str()),
             _ => None,
         })
         .collect();
@@ -370,9 +372,9 @@ async fn model_failure_before_content_fails_attempt() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
-        "no agent message is committed from a failed turn"
+        "no Assistant message is committed from a failed turn"
     );
 }
 
@@ -396,7 +398,7 @@ async fn model_failure_after_partial_content_commits_nothing() {
         result
             .events
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::AgentTextDelta { .. })),
+            .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
         "streamed deltas remain in the trace"
     );
     assert_single_terminal(&result.events);
@@ -406,7 +408,7 @@ async fn model_failure_after_partial_content_commits_nothing() {
             error: AttemptFailure::Model { .. }
         }
     ));
-    assert_eq!(result.messages.len(), 1, "nothing committed");
+    assert_eq!(result.messages().len(), 1, "nothing committed");
 }
 
 /// Every scenario ends with exactly one terminal event.
@@ -602,11 +604,11 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
         RuntimeEvent::ToolCallStarted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call: rustx::tools::types::ToolCallStart {
                 id: ToolCallId::new("call-1"),
@@ -615,13 +617,13 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             },
         },
         RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call_id: ToolCallId::new("call-1"),
             arguments_delta: r#"{"path":"."}"#.to_owned(),
         },
         RuntimeEvent::ToolCallCompleted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call: ToolCall {
                 id: ToolCallId::new("call-1"),
@@ -648,11 +650,11 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(2),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(2),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(2),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(2),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             delta: "done".to_owned(),
         },
@@ -710,13 +712,13 @@ async fn single_tool_call_then_continuation() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         4,
-        "input + two agent messages + tool message"
+        "input + two Assistant messages + tool message"
     );
-    assert!(matches!(result.messages[1], MessageBlock::Agent(_)));
-    assert!(matches!(result.messages[2], MessageBlock::Tool(_)));
-    assert!(matches!(result.messages[3], MessageBlock::Agent(_)));
+    assert!(matches!(result.messages()[1], MessageBlock::Assistant(_)));
+    assert!(matches!(result.messages()[2], MessageBlock::Tool(_)));
+    assert!(matches!(result.messages()[3], MessageBlock::Assistant(_)));
 }
 
 /// The tool receives the exact canonical arguments.
@@ -812,11 +814,11 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
         RuntimeEvent::ToolCallStarted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call: rustx::tools::types::ToolCallStart {
                 id: ToolCallId::new("call-1"),
@@ -825,13 +827,13 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
             },
         },
         RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call_id: ToolCallId::new("call-1"),
             arguments_delta: "{}".to_owned(),
         },
         RuntimeEvent::ToolCallCompleted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             call: ToolCall {
                 id: ToolCallId::new("call-1"),
@@ -911,9 +913,9 @@ async fn unknown_tool_fails_deterministically() {
         "no continuation is attempted after an unknown tool"
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
-        "the agent tool-call message is never committed: preflight rejects          the structurally unresolvable call before the message commit"
+        "the Assistant tool-call message is never committed: preflight rejects          the structurally unresolvable call before the message commit"
     );
 }
 
@@ -1108,11 +1110,11 @@ async fn cancellation_during_generation_after_partial_text() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(1),
             block_index: rustx::message::types::ContentBlockIndex::new(0),
             delta: "partial".to_owned(),
         },
@@ -1130,7 +1132,7 @@ async fn cancellation_during_generation_after_partial_text() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "no message committed on cancellation"
     );
@@ -1222,7 +1224,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
         "no continuation starts after cancellation"
     );
     let tool_messages: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|message| matches!(message, MessageBlock::Tool(_)))
         .collect();
@@ -1341,7 +1343,7 @@ async fn cancellation_interrupts_later_tool_call() {
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     let tool_messages: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|message| matches!(message, MessageBlock::Tool(_)))
         .collect();
@@ -1428,7 +1430,7 @@ async fn cancellation_during_continuation_generation() {
         result
             .events
             .iter()
-            .any(|event| matches!(event, RuntimeEvent::AgentTextDelta { .. })),
+            .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
         "continuation deltas before cancellation remain in the trace"
     );
     assert_outcome(
@@ -1526,10 +1528,10 @@ async fn continuation_state_propagates_losslessly() {
         Some(state.clone()),
         "the boundary continuation state is propagated losslessly"
     );
-    let MessageBlock::Agent(agent) = &result.messages[1] else {
-        panic!("first committed message must be the agent message");
+    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
+        panic!("first committed message must be the Assistant message");
     };
-    let AgentContentBlock::Reasoning(reasoning) = &agent.content[0] else {
+    let AssistantContentBlock::Reasoning(reasoning) = &assistant.content[0] else {
         panic!("first block must be a reasoning block");
     };
     assert_eq!(
@@ -1678,10 +1680,10 @@ async fn no_reasoning_state_is_fabricated() {
         None,
         "no continuation state exists to propagate"
     );
-    let MessageBlock::Agent(agent) = &result.messages[1] else {
-        panic!("first committed message must be the agent message");
+    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
+        panic!("first committed message must be the Assistant message");
     };
-    let AgentContentBlock::Reasoning(reasoning) = &agent.content[0] else {
+    let AssistantContentBlock::Reasoning(reasoning) = &assistant.content[0] else {
         panic!("first block must be a reasoning block");
     };
     assert_eq!(reasoning.text.as_deref(), Some("Visible reasoning."));
@@ -1715,7 +1717,7 @@ async fn unsupported_capability_stays_terminal_failure() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "the failure never becomes a committed message"
     );
@@ -1821,14 +1823,19 @@ async fn refusal_semantics_preserved() {
             finish_reason: ModelFinishReason::Refusal,
         },
     );
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
-        panic!("final message must be an agent message");
+    let MessageBlock::Assistant(assistant) = result.messages().last().expect("Assistant message")
+    else {
+        panic!("final message must be an Assistant message");
     };
-    assert_eq!(agent.content.len(), 1, "provisional content rolled back");
+    assert_eq!(
+        assistant.content.len(),
+        1,
+        "provisional content rolled back"
+    );
     assert!(
         matches!(
-            &agent.content[0],
-            AgentContentBlock::Refusal(block) if block.text == "I cannot comply."
+            &assistant.content[0],
+            AssistantContentBlock::Refusal(block) if block.text == "I cannot comply."
         ),
         "the refusal block is preserved, never flattened into text"
     );
@@ -1970,7 +1977,7 @@ async fn identical_inputs_produce_identical_traces() {
     let result_first = run(&first, tools_first, &cancellation).await;
     let result_second = run(&second, tools_second, &cancellation).await;
     assert_eq!(result_first.events, result_second.events);
-    assert_eq!(result_first.messages, result_second.messages);
+    assert_eq!(result_first.messages(), result_second.messages());
     assert_eq!(result_first.outcome, result_second.outcome);
     assert_eq!(result_first.terminal_state, result_second.terminal_state);
 }
@@ -2469,7 +2476,7 @@ fn block_id(block: &MessageBlock) -> String {
     match block {
         MessageBlock::System(system) => system.id.to_string(),
         MessageBlock::User(user) => user.id.to_string(),
-        MessageBlock::Agent(agent) => agent.id.to_string(),
+        MessageBlock::Assistant(assistant) => assistant.id.to_string(),
         MessageBlock::Tool(tool) => tool.id.to_string(),
     }
 }
@@ -2561,7 +2568,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
         },
     );
     let user_blocks: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|block| matches!(block, MessageBlock::User(_)))
         .collect();
@@ -2576,7 +2583,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     assert_eq!(
         ids,
         vec!["msg-user-1", "attempt-1-agent-1", "attempt-1-tool-1-call-1"],
-        "the continuation carries input + agent + tool result only"
+        "the continuation carries input + Assistant + tool result only"
     );
 }
 
@@ -2646,11 +2653,11 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    // Canonical history before the continuation: agent tool call, tool
+    // Canonical history before the continuation: Assistant tool call, tool
     // result, then the distinct timestamped inbound messages in sequence
-    // order, followed by the final agent message. The drain never splits
+    // order, followed by the final Assistant message. The drain never splits
     // the tool-result batch.
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![
@@ -2823,7 +2830,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![
@@ -2832,7 +2839,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             "msg-stop-a".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ],
-        "turn 1 AgentMessage, the drained inbound message, then the final turn"
+        "turn 1 AssistantMessage, the drained inbound message, then the final turn"
     );
     let requests = model.requests();
     assert!(
@@ -2932,7 +2939,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     );
     assert!(
         !result
-            .messages
+            .messages()
             .iter()
             .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-cancel-a"))),
         "the pending message is not appended to attempt history"
@@ -3021,7 +3028,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
         },
     );
     let committed: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-commit-a")))
         .collect();
@@ -3082,7 +3089,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     ));
     assert!(
         !result
-            .messages
+            .messages()
             .iter()
             .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-fail-a"))),
         "no post-failure drain appends the pending message"
@@ -3287,7 +3294,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
         3,
         "turn 3 settles only after both boundaries drained their batches"
     );
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![

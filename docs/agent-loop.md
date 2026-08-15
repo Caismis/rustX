@@ -17,7 +17,7 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - safe-boundary inbound mailbox consumption (one finite drain per boundary)
 - cancellation observation and terminal cancellation outcome
 - the recorded `RuntimeEvent` trace
-- the committed in-memory conversation state of the attempt
+- the moved `ConversationState` owned by the attempt while it runs
 - the pending fresh inbound trigger lifecycle (`FreshInboundTurn`) and its
   composition into exactly one Agent Status snapshot per request preparation
 
@@ -54,12 +54,12 @@ canonical boundary in `src/tools/executor.rs`:
   `ToolExecutionContext` that carries conversation identity, the runtime
   `CancellationSignal`, the workspace boundary, the progress reporter, the
   artifact store, and the explicit authorized environment.
-- The loop preflights every model-issued call **before** the agent
+- The loop preflights every model-issued call **before** the Assistant
   tool-call message is committed: registry identity resolution,
   execution-policy resolution, reserved-metadata extraction, and business
   argument validation against the canonical JSON Schema. An impossible
   identity mismatch or an unregistered tool is a runtime/model-stream
-  contract failure and the agent message is never committed; a business
+  contract failure and the Assistant message is never committed; a business
   schema violation is a normal failed result slot and the executor never
   runs.
 - The loop records the returned result verbatim and feeds it back to the
@@ -81,26 +81,26 @@ old execution to a current registry.
 
 ## 4. Continuation
 
-Continuation is canonical conversation state: the loop retains the full
-committed history and appends each completed agent message and tool
-result. The next model request carries the opaque
+Continuation is canonical conversation state: the loop retains the immutable
+Message Ledger plus the current Conversation Surface and appends each
+completed Assistant message and tool result. The next model request carries the opaque
 `ProviderContinuationState` boundary state reported by the previous turn
 (the state of the greatest-block-index reasoning block, propagated
 verbatim). Protocols without reconstructable state simply carry `None` —
 nothing is fabricated, and a model that cannot continue without state
 fails explicitly.
 
-The M4 context path is mandatory: every model request carries the *context
-projection* of the committed history (pinned system prefix, checkpoint
-summary, retained suffix) plus the ephemeral Agent Status attachment of the
-pending fresh inbound turn (when one exists), instead of the raw committed
-history, and the projection is what continuation state refers to. A
-successful compaction establishes a new context boundary and therefore
-invalidates the pending continuation; the M4 context engine enforces that
-the continuation-owning turn is retired completely, so an old opaque
-provider continuation is never paired with a new projection. See
-`docs/context-engine.md` sections 14 and 18-19. An ordinary inbound drain
-and an Agent Status attachment never clear the pending continuation.
+The context path is mandatory: every model request carries the finite
+projection of the current Surface (complete canonical messages in exact
+order) plus the ephemeral Agent Status attachment of a pending fresh inbound
+turn, instead of the full Ledger. A successful compaction appends one runtime
+User summary and applies one Surface Replace, establishing a new revision and
+invalidating the pending continuation; the continuation-owning turn is
+retired completely, so an old opaque provider continuation is never paired
+with a new projection. An ordinary inbound drain and an Agent Status
+attachment never clear the pending continuation. Issue #55 owns the Effective
+System Prompt and Request Snapshot; Issue #61 owns the larger
+`ConversationRuntime` extraction.
 
 ## 4.1 Fresh inbound lifecycle
 
@@ -188,7 +188,7 @@ settles cancelled exactly once.
 
 ### 7.1 Tool-call batch scheduling and structural settlement
 
-Every valid committed agent tool-call message is preflighted before commit
+Every valid committed Assistant tool-call message is preflighted before commit
 (see section 3). Once committed, its entire tool-result batch is settled
 structurally exactly once:
 
@@ -298,7 +298,7 @@ Ownership model:
 
 ```text
 mailbox          = coordination
-canonical history = durable truth
+  Message Ledger + Surface = conversation truth
 Event Journal    = execution facts
 ```
 
@@ -362,7 +362,7 @@ never retroactively join the preceding model/tool turn.
 
 A successfully assembled model turn with no tool calls does **not**
 settle the attempt immediately. After `ModelRequestCompleted`,
-`AgentMessage` commit, and `TurnCompleted`, the safe boundary snapshots the
+`AssistantMessage` commit, and `TurnCompleted`, the safe boundary snapshots the
 mailbox:
 
 ```text
@@ -400,10 +400,10 @@ not implemented in Issue #22.
 ### Continuation and compaction
 
 An ordinary inbound drain does not clear the pending provider continuation.
-The existing M4 compaction rule remains the only continuation invalidation
-boundary: a successful compaction caused by a drained batch still retires
-the continuation-owning turn and clears the continuation. A drained batch
-enters canonical history before the next M4 projection/compaction, so the
+Successful incompatible Surface replacement is the only continuation
+invalidation boundary: it retires the continuation-owning turn and clears the
+continuation exactly once after the semantic commit. A drained batch enters
+the Ledger and current Surface before the next projection/compaction, so the
 request corresponding to a selected batch always contains that batch.
 
 ## 10. Unsupported behavior (non-goals)
