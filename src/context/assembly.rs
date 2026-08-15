@@ -28,16 +28,21 @@ pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 1;
 pub enum UserContextLane {
     /// Claimed inbound input. This is not extension-controlled.
     ClaimedInbound,
-    /// Deferred context derived from an immutable observation of one
-    /// structurally settled tool batch (Issue #56). It is a native-reserved
-    /// lane: the Agent Loop stages the proposals, and no extension can claim
-    /// the lane or reorder it.
+    /// The semantic lane of the **native runtime observation owner**
+    /// ([`NativeContextContributor::ToolResultObservation`]).
     ///
-    /// The lane sits immediately after claimed inbound because a post-tool
-    /// observation describes what the environment just did for the tool batch
-    /// that precedes this step; the request-time workspace/extension/Skill
-    /// and Agent Status lanes still describe the *current* step and therefore
-    /// stay after it.
+    /// This lane describes *who owns the fact*, not *when the fact became
+    /// eligible*. Deferred post-tool proposals produced by a certified
+    /// extension keep that extension's own semantics and land in
+    /// [`UserContextLane::ExtensionEnvironment`]; only the native runtime
+    /// observation owner's facts belong here. The lane is native-reserved:
+    /// no extension can claim it.
+    ///
+    /// The lane sits immediately after claimed inbound because a native
+    /// runtime observation describes what the environment just did for the
+    /// tool batch that precedes this step, while the request-time
+    /// workspace/extension/Skill and Agent Status lanes describe the
+    /// *current* step.
     PostToolObservation,
     /// Workspace/project instructions, with one semantic owner.
     WorkspaceInstructions,
@@ -162,23 +167,142 @@ pub struct NativeContextInput {
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
     pub agent_profile: Option<String>,
-    /// Deferred post-tool context proposals staged by the Agent Loop after
-    /// one tool batch reached structural settlement (Issue #56).
-    ///
-    /// The Agent Loop is the staging owner: it runs the immutable
-    /// [`ToolResultObserver`] pass in canonical `ToolCall` batch order and
-    /// appends each observation's proposals in the order the observer
-    /// returned them, so this vector is already in the canonical deferred
-    /// order `(ToolCall batch position, proposal FIFO)`. Assembly preserves
-    /// that order through the [`UserContextLane::PostToolObservation`] lane
-    /// and never consults completion timing.
-    ///
-    /// These proposals are transient exactly like every other proposal: they
-    /// reach the pre-step policy inside the same final batch and become
-    /// canonical only at the Agent Loop's one admission boundary.
-    ///
-    /// [`ToolResultObserver`]: crate::agent::ToolResultObserver
-    pub post_tool_observations: Vec<UserMessageProposal>,
+}
+
+/// One deferred transient proposal staged by the Agent Loop before this
+/// step's assembly (Issue #56).
+///
+/// # Timing is not provenance
+///
+/// A deferred proposal is one whose *eligibility* was established earlier —
+/// by the immutable observation of a structurally settled tool batch — rather
+/// than during this step's contributor invocation. That is a **lifecycle
+/// timing** fact owned by the Agent Loop.
+///
+/// It says nothing about **semantic ownership**. The `producer` below is the
+/// trusted contributor identity the Agent Loop assigned from the observer's
+/// *registration*, never from anything the observer returned. Context
+/// Assembly then derives the lane, the trusted [`UserSource`], and the
+/// [`ContextKind`] from that identity alone, using exactly the same table it
+/// applies to the same owner's request-time proposals. A certified extension
+/// therefore keeps its extension provenance and its own lane when it produces
+/// deferred context; nothing is rewritten into native runtime context because
+/// of when it was produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredContextProposal {
+    /// The trusted semantic owner of the proposal, assigned by the Agent Loop
+    /// from the producing observer's registration.
+    pub producer: ContextContributorIdentity,
+    /// The transient proposal exactly as the producer returned it.
+    pub proposal: ContextProposal,
+}
+
+/// Whether a contribution's eligibility was established before this step or
+/// during it.
+///
+/// The phase is only an ordering tiebreak *inside* one `(lane, contributor)`
+/// bucket: a deferred fact describes the tool batch that precedes the step, so
+/// it precedes the same owner's request-time fact. It never selects a lane, a
+/// provenance, or a semantic family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ContributionPhase {
+    /// Staged before this step by a settled tool-batch observation.
+    Deferred,
+    /// Produced by this step's own assembly invocation.
+    RequestTime,
+}
+
+/// The canonical user-context semantics of one contributor identity.
+///
+/// This is the single table that maps *semantic ownership* to a lane, a
+/// trusted provenance, and a semantic family. Request-time and deferred
+/// proposals of the same owner resolve through it identically, which is what
+/// makes post-tool timing incapable of rewriting provenance.
+///
+/// `None` means the owner publishes no model-visible User context at all (it
+/// is an effective-system-prompt owner), so such a proposal is invalid.
+fn user_semantics(
+    identity: &ContextContributorIdentity,
+) -> Option<(UserContextLane, UserSource, ContextKind)> {
+    match identity {
+        ContextContributorIdentity::Native(owner) => match owner {
+            NativeContextContributor::WorkspaceInstructions => Some((
+                UserContextLane::WorkspaceInstructions,
+                UserSource::Runtime,
+                ContextKind::WorkspaceInstructions,
+            )),
+            NativeContextContributor::SkillGuidance => Some((
+                UserContextLane::SkillGuidance,
+                UserSource::Runtime,
+                ContextKind::SkillGuidance,
+            )),
+            NativeContextContributor::AgentStatus => Some((
+                UserContextLane::AgentStatus,
+                UserSource::Runtime,
+                ContextKind::AgentStatus,
+            )),
+            NativeContextContributor::ToolResultObservation => Some((
+                UserContextLane::PostToolObservation,
+                UserSource::Runtime,
+                ContextKind::PostToolObservation,
+            )),
+            NativeContextContributor::CoreSystemIdentity
+            | NativeContextContributor::AgentProfile => None,
+        },
+        ContextContributorIdentity::CertifiedExtension(extension) => Some((
+            UserContextLane::ExtensionEnvironment,
+            UserSource::Extension {
+                contributor: extension.clone(),
+            },
+            ContextKind::ExtensionEnvironment,
+        )),
+    }
+}
+
+/// [`user_semantics`] as a fallible lookup: an owner that publishes no
+/// model-visible User context cannot propose one, whatever its timing.
+fn user_lane_of(
+    identity: &ContextContributorIdentity,
+) -> Result<(UserContextLane, UserSource, ContextKind), ContextAssemblyError> {
+    user_semantics(identity).ok_or_else(|| {
+        ContextAssemblyError::InvalidProposal(format!(
+            "contributor {identity:?} owns no model-visible User context lane"
+        ))
+    })
+}
+
+/// [`system_semantics`] as a fallible lookup.
+fn system_lane_of(
+    identity: &ContextContributorIdentity,
+) -> Result<SystemSectionLane, ContextAssemblyError> {
+    system_semantics(identity).ok_or_else(|| {
+        ContextAssemblyError::InvalidProposal(format!(
+            "contributor {identity:?} owns no effective-system-prompt section lane"
+        ))
+    })
+}
+
+/// The canonical system-section lane of one contributor identity.
+///
+/// `None` means the owner publishes no effective-system-prompt section.
+fn system_semantics(identity: &ContextContributorIdentity) -> Option<SystemSectionLane> {
+    match identity {
+        ContextContributorIdentity::Native(owner) => match owner {
+            NativeContextContributor::CoreSystemIdentity => {
+                Some(SystemSectionLane::CoreRuntimeIdentity)
+            }
+            NativeContextContributor::AgentProfile => Some(SystemSectionLane::AgentProfile),
+            NativeContextContributor::SkillGuidance => {
+                Some(SystemSectionLane::NativeCapabilityGuidance)
+            }
+            NativeContextContributor::WorkspaceInstructions
+            | NativeContextContributor::AgentStatus
+            | NativeContextContributor::ToolResultObservation => None,
+        },
+        ContextContributorIdentity::CertifiedExtension(_) => {
+            Some(SystemSectionLane::CertifiedExtension)
+        }
+    }
 }
 
 /// A transient User context proposal. It contains no id, source, kind, lane,
@@ -402,8 +526,39 @@ impl core::fmt::Display for ContextAssemblyError {
 
 impl std::error::Error for ContextAssemblyError {}
 
-const MAX_PROPOSALS_PER_CONTRIBUTOR: usize = 128;
+/// The bounded number of transient proposals one contributor may return for
+/// one primary step.
+pub const MAX_PROPOSALS_PER_CONTRIBUTOR: usize = 128;
+
+/// The bounded number of deferred proposals one primary step may carry, over
+/// all producers together.
+///
+/// The Agent Loop enforces this same bound at its observer transaction
+/// boundary, so an unbounded observation pass is rejected before anything is
+/// staged; assembly re-checks it because assembly never trusts its input.
+pub const MAX_DEFERRED_CONTEXT_PROPOSALS: usize = 128;
+
 const MAX_CONTEXT_TEXT_BYTES: usize = 1024 * 1024;
+
+/// Validates one transient proposal against the bounded content contract.
+///
+/// This is the exact content validation [`ContextAssembly::assemble`] applies.
+/// It is public so the Agent Loop can run it at its observer transaction
+/// boundary and reject an oversized or empty deferred proposal *before* it is
+/// staged, instead of discovering it one step later.
+///
+/// # Errors
+///
+/// Returns [`ContextAssemblyError::InvalidProposal`] when the proposal body is
+/// empty or exceeds the bounded context size.
+pub fn validate_context_proposal(proposal: &ContextProposal) -> Result<(), ContextAssemblyError> {
+    match proposal {
+        ContextProposal::UserMessage(message) => text_content(&message.content).map(|_| ()),
+        ContextProposal::SystemPromptSection(section) => {
+            validate_text(&section.content, "system section")
+        }
+    }
+}
 
 #[derive(Clone)]
 struct RegisteredExtension {
@@ -502,22 +657,31 @@ impl ContextAssembly {
         ContextCompatibilityManifest::native()
     }
 
-    /// Assembles native and certified-extension proposals against one finite
-    /// immutable input snapshot. The returned User messages have trusted
-    /// source/kind but no `MessageId`; the Agent Loop allocates and commits ids
-    /// at its one admission boundary.
+    /// Assembles deferred, native, and certified-extension proposals against
+    /// one finite immutable input snapshot. The returned User messages have
+    /// trusted source/kind but no `MessageId`; the Agent Loop allocates and
+    /// commits ids at its one admission boundary.
+    ///
+    /// `deferred` carries the proposals whose eligibility the Agent Loop
+    /// established earlier, at the observer transaction boundary of a settled
+    /// tool batch. They are validated, laned, and given provenance here by the
+    /// *same* rules as request-time proposals of the same semantic owner:
+    /// assembly reads their producer identity and nothing else about their
+    /// timing.
     ///
     /// # Errors
     ///
-    /// Returns an error when native values or contributor proposals violate
-    /// the bounded assembly contract.
+    /// Returns an error when native values, deferred proposals, or contributor
+    /// proposals violate the bounded assembly contract.
     #[allow(clippy::too_many_lines)]
     pub async fn assemble(
         &self,
         input: &ContributorInputSnapshot,
         native: &NativeContextInput,
+        deferred: &[DeferredContextProposal],
     ) -> Result<AcceptedContext, ContextAssemblyError> {
         let mut entries = Vec::new();
+        let mut native_sections = Vec::new();
         let mut generations = vec![
             native
                 .workspace_instructions
@@ -539,82 +703,82 @@ impl ContextAssembly {
                 .agent_profile
                 .as_ref()
                 .map(|_| native_generation(NativeContextContributor::AgentProfile)),
-            (!native.post_tool_observations.is_empty())
-                .then(|| native_generation(NativeContextContributor::ToolResultObservation)),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
 
-        // Deferred post-tool observation context. The Agent Loop already
-        // staged these in canonical `(ToolCall batch position, proposal
-        // FIFO)` order; the enumerated sequence preserves exactly that order
-        // inside the native-reserved lane, so physical tool completion
-        // timing can never reach canonical history.
-        if native.post_tool_observations.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
+        // Deferred context. The Agent Loop already staged these in canonical
+        // `(ToolCall batch position, producer identity, proposal FIFO)` order,
+        // so the enumerated sequence preserves exactly that order inside each
+        // producer's own lane and physical tool completion timing can never
+        // reach canonical history. Provenance comes from `producer`, so a
+        // certified extension's deferred fact stays an extension fact.
+        if deferred.len() > MAX_DEFERRED_CONTEXT_PROPOSALS {
             return Err(ContextAssemblyError::ProposalLimitExceeded);
         }
-        for (sequence, proposal) in native.post_tool_observations.iter().enumerate() {
-            entries.push(ContributionEntry {
-                lane: UserContextLane::PostToolObservation,
-                identity: ContextContributorIdentity::Native(
-                    NativeContextContributor::ToolResultObservation,
-                ),
-                source: UserSource::Runtime,
-                kind: ContextKind::PostToolObservation,
-                content: text_content(&proposal.content)?,
-                sequence,
+        for (sequence, staged) in deferred.iter().enumerate() {
+            match &staged.proposal {
+                ContextProposal::UserMessage(message) => {
+                    let (lane, source, kind) = user_lane_of(&staged.producer)?;
+                    entries.push(ContributionEntry {
+                        lane,
+                        identity: staged.producer.clone(),
+                        source,
+                        kind,
+                        content: text_content(&message.content)?,
+                        phase: ContributionPhase::Deferred,
+                        sequence,
+                    });
+                }
+                ContextProposal::SystemPromptSection(section) => {
+                    let lane = system_lane_of(&staged.producer)?;
+                    validate_text(&section.content, "deferred system section")?;
+                    native_sections.push(AcceptedSystemSection {
+                        lane,
+                        contributor: staged.producer.clone(),
+                        content: section.content.clone(),
+                    });
+                }
+            }
+            generations.push(ContributorGeneration {
+                identity: staged.producer.clone(),
+                attestation: None,
             });
         }
 
         if let Some(text) = &native.workspace_instructions {
             entries.push(ContributionEntry::native_user(
-                UserContextLane::WorkspaceInstructions,
                 NativeContextContributor::WorkspaceInstructions,
-                ContextKind::WorkspaceInstructions,
                 text.clone(),
-                0,
             )?);
         }
         if let Some(text) = &native.skill_guidance {
             entries.push(ContributionEntry::native_user(
-                UserContextLane::SkillGuidance,
                 NativeContextContributor::SkillGuidance,
-                ContextKind::SkillGuidance,
                 text.clone(),
-                0,
             )?);
         }
         if let Some(text) = &native.agent_status {
             entries.push(ContributionEntry::native_user(
-                UserContextLane::AgentStatus,
                 NativeContextContributor::AgentStatus,
-                ContextKind::AgentStatus,
                 text.clone(),
-                0,
             )?);
         }
 
-        let mut native_sections = Vec::new();
         if let Some(text) = &native.core_runtime_identity {
             validate_text(text, "core runtime identity")?;
-            native_sections.push(AcceptedSystemSection {
-                lane: SystemSectionLane::CoreRuntimeIdentity,
-                contributor: ContextContributorIdentity::Native(
-                    NativeContextContributor::CoreSystemIdentity,
-                ),
-                content: text.clone(),
-            });
+            native_sections.push(native_section(
+                NativeContextContributor::CoreSystemIdentity,
+                text.clone(),
+            ));
         }
         if let Some(text) = &native.agent_profile {
             validate_text(text, "agent profile")?;
-            native_sections.push(AcceptedSystemSection {
-                lane: SystemSectionLane::AgentProfile,
-                contributor: ContextContributorIdentity::Native(
-                    NativeContextContributor::AgentProfile,
-                ),
-                content: text.clone(),
-            });
+            native_sections.push(native_section(
+                NativeContextContributor::AgentProfile,
+                text.clone(),
+            ));
         }
 
         let mut extensions = self.extensions.clone();
@@ -631,22 +795,23 @@ impl ContextAssembly {
             for (sequence, proposal) in proposals.into_iter().enumerate() {
                 match proposal {
                     ContextProposal::UserMessage(message) => {
+                        let (lane, source, kind) = user_lane_of(&registered.generation.identity)?;
                         let text = text_content(&message.content)?;
                         entries.push(ContributionEntry {
-                            lane: UserContextLane::ExtensionEnvironment,
+                            lane,
                             identity: registered.generation.identity.clone(),
-                            source: UserSource::Extension {
-                                contributor: registered.identity.clone(),
-                            },
-                            kind: ContextKind::ExtensionEnvironment,
+                            source,
+                            kind,
                             content: text,
+                            phase: ContributionPhase::RequestTime,
                             sequence,
                         });
                     }
                     ContextProposal::SystemPromptSection(section) => {
+                        let lane = system_lane_of(&registered.generation.identity)?;
                         validate_text(&section.content, "extension system section")?;
                         native_sections.push(AcceptedSystemSection {
-                            lane: SystemSectionLane::CertifiedExtension,
+                            lane,
                             contributor: registered.generation.identity.clone(),
                             content: section.content,
                         });
@@ -660,14 +825,26 @@ impl ContextAssembly {
             left.lane
                 .cmp(&right.lane)
                 .then_with(|| left.identity.cmp(&right.identity))
+                .then_with(|| left.phase.cmp(&right.phase))
                 .then_with(|| left.sequence.cmp(&right.sequence))
         });
+        // `sort_by` is stable, so deferred sections keep their staged order
+        // ahead of the same owner's request-time sections in one lane.
         native_sections.sort_by(|left, right| {
             left.lane
                 .cmp(&right.lane)
                 .then_with(|| left.contributor.cmp(&right.contributor))
         });
-        generations.sort();
+        // One logical owner appears exactly once in the accepted generation,
+        // even when it contributed both deferred and request-time proposals.
+        // The registered attestation wins over the deferred entry's absent
+        // one, so the generation still explains the exact package.
+        generations.sort_by(|left, right| {
+            left.identity
+                .cmp(&right.identity)
+                .then_with(|| right.attestation.cmp(&left.attestation))
+        });
+        generations.dedup_by(|later, first| later.identity == first.identity);
 
         Ok(AcceptedContext {
             user_messages: entries
@@ -694,28 +871,45 @@ struct ContributionEntry {
     source: UserSource,
     kind: ContextKind,
     content: Vec<UserContentBlock>,
+    phase: ContributionPhase,
     sequence: usize,
 }
 
 impl ContributionEntry {
+    /// One request-time native User context fact. Its lane, provenance, and
+    /// semantic family come from the same owner table the deferred path uses.
     fn native_user(
-        lane: UserContextLane,
         contributor: NativeContextContributor,
-        kind: ContextKind,
         text: String,
-        sequence: usize,
     ) -> Result<Self, ContextAssemblyError> {
+        let identity = ContextContributorIdentity::Native(contributor);
+        let (lane, source, kind) =
+            user_semantics(&identity).expect("this native owner publishes User context");
         validate_text(&text, "native context")?;
         Ok(Self {
             lane,
-            identity: ContextContributorIdentity::Native(contributor),
-            source: UserSource::Runtime,
+            identity,
+            source,
             kind,
             content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
                 text,
             })],
-            sequence,
+            phase: ContributionPhase::RequestTime,
+            sequence: 0,
         })
+    }
+}
+
+/// One request-time native effective-system-prompt section, laned through the
+/// same owner table the deferred path uses.
+fn native_section(contributor: NativeContextContributor, content: String) -> AcceptedSystemSection {
+    let contributor = ContextContributorIdentity::Native(contributor);
+    let lane =
+        system_semantics(&contributor).expect("this native owner publishes a system section");
+    AcceptedSystemSection {
+        lane,
+        contributor,
+        content,
     }
 }
 
@@ -854,11 +1048,11 @@ mod tests {
             )
             .expect("zeta");
         let a = left
-            .assemble(&input(), &NativeContextInput::default())
+            .assemble(&input(), &NativeContextInput::default(), &[])
             .await
             .expect("left");
         let b = right
-            .assemble(&input(), &NativeContextInput::default())
+            .assemble(&input(), &NativeContextInput::default(), &[])
             .await
             .expect("right");
         assert_eq!(a.user_messages, b.user_messages);
@@ -912,7 +1106,7 @@ mod tests {
             )
             .expect("register extension");
         let accepted = assembly
-            .assemble(&input(), &NativeContextInput::default())
+            .assemble(&input(), &NativeContextInput::default(), &[])
             .await
             .expect("assemble extension");
         assert_eq!(accepted.user_messages.len(), 1);
@@ -944,6 +1138,7 @@ mod tests {
                     agent_status: Some("same bytes".to_owned()),
                     ..NativeContextInput::default()
                 },
+                &[],
             )
             .await
             .expect("native proposal");
@@ -989,6 +1184,7 @@ mod tests {
                     agent_profile: Some("agent profile".to_owned()),
                     ..NativeContextInput::default()
                 },
+                &[],
             )
             .await
             .expect("system sections assemble");
@@ -1015,24 +1211,290 @@ mod tests {
         );
     }
 
-    /// Deferred post-tool proposals keep the exact staging order the Agent
-    /// Loop produced, are placed in the native-reserved
-    /// `PostToolObservation` lane, and sit between claimed inbound and every
-    /// request-time lane in the documented total order.
+    /// Helpers for the deferred-context suite.
+    fn user(text: &str) -> ContextProposal {
+        ContextProposal::UserMessage(UserMessageProposal {
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+        })
+    }
+
+    fn native_deferred(text: &str) -> DeferredContextProposal {
+        DeferredContextProposal {
+            producer: ContextContributorIdentity::Native(
+                NativeContextContributor::ToolResultObservation,
+            ),
+            proposal: user(text),
+        }
+    }
+
+    fn extension_deferred(key: &str, text: &str) -> DeferredContextProposal {
+        DeferredContextProposal {
+            producer: ContextContributorIdentity::CertifiedExtension(
+                CertifiedExtensionIdentity::new(key).expect("identity"),
+            ),
+            proposal: user(text),
+        }
+    }
+
+    fn texts(accepted: &AcceptedContext) -> Vec<String> {
+        accepted
+            .user_messages
+            .iter()
+            .map(|message| match &message.content[0] {
+                UserContentBlock::Text(text) => text.text.clone(),
+                _ => unreachable!("text proposals"),
+            })
+            .collect()
+    }
+
+    /// A deferred proposal owned by the **native** runtime observation owner
+    /// receives native runtime provenance, the native-reserved lane, and the
+    /// native semantic family — because of its producer identity, not because
+    /// it arrived after a tool batch.
     #[tokio::test]
-    async fn post_tool_observations_keep_staging_order_in_their_reserved_lane() {
+    async fn native_deferred_proposals_receive_native_provenance() {
+        let assembly = ContextAssembly::new();
+        let accepted = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[native_deferred("A1"), native_deferred("A2")],
+            )
+            .await
+            .expect("assemble native deferred context");
+        assert_eq!(
+            accepted
+                .user_messages
+                .iter()
+                .map(|message| (message.source.clone(), message.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (UserSource::Runtime, ContextKind::PostToolObservation),
+                (UserSource::Runtime, ContextKind::PostToolObservation),
+            ]
+        );
+        assert_eq!(texts(&accepted), vec!["A1".to_owned(), "A2".to_owned()]);
+        assert_eq!(
+            accepted.generation.contributors,
+            vec![ContributorGeneration {
+                identity: ContextContributorIdentity::Native(
+                    NativeContextContributor::ToolResultObservation,
+                ),
+                attestation: None,
+            }],
+            "the accepted generation explains the deferred-context owner exactly once"
+        );
+    }
+
+    /// A deferred proposal owned by a **certified extension** keeps that
+    /// extension's identity, its extension provenance, and its own semantic
+    /// lane. Post-tool timing does not convert it into native runtime context.
+    #[tokio::test]
+    async fn extension_deferred_proposals_preserve_extension_provenance() {
+        let assembly = ContextAssembly::new();
+        let accepted = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[extension_deferred("example.extension", "deferred")],
+            )
+            .await
+            .expect("assemble extension deferred context");
+        assert_eq!(accepted.user_messages.len(), 1);
+        assert_eq!(
+            accepted.user_messages[0].source,
+            UserSource::Extension {
+                contributor: CertifiedExtensionIdentity::new("example.extension")
+                    .expect("identity"),
+            },
+            "extension provenance survives deferred timing"
+        );
+        assert_eq!(
+            accepted.user_messages[0].kind,
+            ContextKind::ExtensionEnvironment,
+            "the semantic family follows the owner, not the timing"
+        );
+        assert_eq!(
+            accepted.generation.contributors[0].identity,
+            ContextContributorIdentity::CertifiedExtension(
+                CertifiedExtensionIdentity::new("example.extension").expect("identity"),
+            ),
+            "contributor identity is not rewritten to the native owner"
+        );
+        assert!(
+            !accepted
+                .user_messages
+                .iter()
+                .any(|message| message.kind == ContextKind::PostToolObservation
+                    || message.source == UserSource::Runtime),
+            "no part of the extension fact was converted into native runtime context"
+        );
+    }
+
+    /// The same extension's deferred and request-time proposals are the same
+    /// semantic fact family with the same provenance; only their order inside
+    /// the owner's lane records that one describes the preceding tool batch.
+    #[tokio::test]
+    async fn deferred_and_request_time_context_of_one_owner_agree_on_semantics() {
+        let mut assembly = ContextAssembly::new();
+        assembly
+            .register_extension(
+                "example.extension",
+                Some("package-1".to_owned()),
+                Arc::new(|_: &ContributorInputSnapshot| Ok(vec![user("request-time")])),
+            )
+            .expect("register extension");
+        let accepted = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[extension_deferred("example.extension", "deferred")],
+            )
+            .await
+            .expect("assemble mixed-phase extension context");
+        assert_eq!(
+            texts(&accepted),
+            vec!["deferred".to_owned(), "request-time".to_owned()],
+            "the deferred fact describes the preceding tool batch and precedes it"
+        );
+        assert_eq!(
+            accepted.user_messages[0].source, accepted.user_messages[1].source,
+            "one owner has one provenance regardless of timing"
+        );
+        assert_eq!(
+            accepted.user_messages[0].kind,
+            accepted.user_messages[1].kind
+        );
+        assert_eq!(
+            accepted.generation.contributors,
+            vec![ContributorGeneration {
+                identity: ContextContributorIdentity::CertifiedExtension(
+                    CertifiedExtensionIdentity::new("example.extension").expect("identity"),
+                ),
+                attestation: Some("package-1".to_owned()),
+            }],
+            "one owner appears once, with its registered attestation"
+        );
+    }
+
+    /// Deferred producers with different identities are ordered by lane and
+    /// logical identity, exactly like request-time contributors. The staging
+    /// order of the buffer decides nothing about relative placement between
+    /// owners, so no registration order is observable.
+    #[tokio::test]
+    async fn deferred_producers_keep_deterministic_identity_order() {
+        let assembly = ContextAssembly::new();
+        let staged = [
+            extension_deferred("zeta.extension", "z1"),
+            native_deferred("n1"),
+            extension_deferred("alpha.extension", "a1"),
+            extension_deferred("zeta.extension", "z2"),
+            native_deferred("n2"),
+            extension_deferred("alpha.extension", "a2"),
+        ];
+        let mut reversed = staged.clone();
+        reversed.reverse();
+
+        let forward = assembly
+            .assemble(&input(), &NativeContextInput::default(), &staged)
+            .await
+            .expect("forward staging");
+        assert_eq!(
+            forward
+                .user_messages
+                .iter()
+                .map(|message| (message.source.clone(), message.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (UserSource::Runtime, ContextKind::PostToolObservation),
+                (UserSource::Runtime, ContextKind::PostToolObservation),
+                (
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("alpha.extension")
+                            .expect("identity"),
+                    },
+                    ContextKind::ExtensionEnvironment
+                ),
+                (
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("alpha.extension")
+                            .expect("identity"),
+                    },
+                    ContextKind::ExtensionEnvironment
+                ),
+                (
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("zeta.extension")
+                            .expect("identity"),
+                    },
+                    ContextKind::ExtensionEnvironment
+                ),
+                (
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("zeta.extension")
+                            .expect("identity"),
+                    },
+                    ContextKind::ExtensionEnvironment
+                ),
+            ],
+            "owners are grouped by lane then logical identity"
+        );
+        assert_eq!(
+            texts(&forward),
+            vec![
+                "n1".to_owned(),
+                "n2".to_owned(),
+                "a1".to_owned(),
+                "a2".to_owned(),
+                "z1".to_owned(),
+                "z2".to_owned()
+            ],
+            "each owner keeps its own FIFO order"
+        );
+
+        let backward = assembly
+            .assemble(&input(), &NativeContextInput::default(), &reversed)
+            .await
+            .expect("reversed staging");
+        assert_eq!(
+            backward
+                .user_messages
+                .iter()
+                .map(|message| (message.source.clone(), message.kind))
+                .collect::<Vec<_>>(),
+            forward
+                .user_messages
+                .iter()
+                .map(|message| (message.source.clone(), message.kind))
+                .collect::<Vec<_>>(),
+            "the owner order never depends on staging/registration order"
+        );
+        assert_eq!(
+            texts(&backward),
+            vec![
+                "n2".to_owned(),
+                "n1".to_owned(),
+                "a2".to_owned(),
+                "a1".to_owned(),
+                "z2".to_owned(),
+                "z1".to_owned()
+            ],
+            "only each owner's own FIFO order follows the buffer"
+        );
+    }
+
+    /// Deferred proposals sit in their owner's lane inside the one total lane
+    /// order, together with every request-time proposal of that lane.
+    #[tokio::test]
+    async fn deferred_context_uses_the_one_total_lane_order() {
         let mut assembly = ContextAssembly::new();
         assembly
             .register_extension(
                 "example.extension",
                 None,
-                Arc::new(|_: &ContributorInputSnapshot| {
-                    Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
-                        content: vec![UserContentBlock::Text(TextBlock {
-                            text: "extension context".to_owned(),
-                        })],
-                    })])
-                }),
+                Arc::new(|_: &ContributorInputSnapshot| Ok(vec![user("extension context")])),
             )
             .expect("register extension");
         let accepted = assembly
@@ -1041,25 +1503,13 @@ mod tests {
                 &NativeContextInput {
                     workspace_instructions: Some("workspace".to_owned()),
                     agent_status: Some("status".to_owned()),
-                    post_tool_observations: vec![
-                        UserMessageProposal {
-                            content: vec![UserContentBlock::Text(TextBlock {
-                                text: "A1".to_owned(),
-                            })],
-                        },
-                        UserMessageProposal {
-                            content: vec![UserContentBlock::Text(TextBlock {
-                                text: "A2".to_owned(),
-                            })],
-                        },
-                        UserMessageProposal {
-                            content: vec![UserContentBlock::Text(TextBlock {
-                                text: "B1".to_owned(),
-                            })],
-                        },
-                    ],
                     ..NativeContextInput::default()
                 },
+                &[
+                    native_deferred("A1"),
+                    native_deferred("A2"),
+                    extension_deferred("example.extension", "deferred extension"),
+                ],
             )
             .await
             .expect("assemble deferred context");
@@ -1072,8 +1522,14 @@ mod tests {
             vec![
                 (ContextKind::PostToolObservation, UserSource::Runtime),
                 (ContextKind::PostToolObservation, UserSource::Runtime),
-                (ContextKind::PostToolObservation, UserSource::Runtime),
                 (ContextKind::WorkspaceInstructions, UserSource::Runtime),
+                (
+                    ContextKind::ExtensionEnvironment,
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("example.extension")
+                            .expect("identity"),
+                    }
+                ),
                 (
                     ContextKind::ExtensionEnvironment,
                     UserSource::Extension {
@@ -1083,51 +1539,100 @@ mod tests {
                 ),
                 (ContextKind::AgentStatus, UserSource::Runtime),
             ],
-            "the deferred lane precedes every request-time lane"
+            "the native observation lane is early; an extension's deferred fact stays in its own lane"
         );
         assert_eq!(
-            accepted.user_messages[..3]
-                .iter()
-                .map(|message| match &message.content[0] {
-                    UserContentBlock::Text(text) => text.text.clone(),
-                    _ => unreachable!("text proposals"),
-                })
-                .collect::<Vec<_>>(),
-            vec!["A1".to_owned(), "A2".to_owned(), "B1".to_owned()],
-            "staging order is preserved exactly"
+            texts(&accepted),
+            vec![
+                "A1".to_owned(),
+                "A2".to_owned(),
+                "workspace".to_owned(),
+                "deferred extension".to_owned(),
+                "extension context".to_owned(),
+                "status".to_owned(),
+            ]
         );
-        assert!(
-            accepted.generation.contributors.iter().any(|entry| {
-                entry.identity
-                    == ContextContributorIdentity::Native(
-                        NativeContextContributor::ToolResultObservation,
-                    )
-            }),
-            "the accepted generation explains the deferred-context owner"
+    }
+
+    /// A deferred system-prompt section is laned by its owner too, and an
+    /// owner with no lane for the proposed kind is rejected outright.
+    #[tokio::test]
+    async fn deferred_proposal_kinds_are_laned_by_owner() {
+        let assembly = ContextAssembly::new();
+        let accepted = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[DeferredContextProposal {
+                    producer: ContextContributorIdentity::CertifiedExtension(
+                        CertifiedExtensionIdentity::new("example.extension").expect("identity"),
+                    ),
+                    proposal: ContextProposal::SystemPromptSection(SystemPromptSectionProposal {
+                        content: "deferred section".to_owned(),
+                    }),
+                }],
+            )
+            .await
+            .expect("assemble deferred section");
+        assert_eq!(
+            accepted.system_sections,
+            vec![AcceptedSystemSection {
+                lane: SystemSectionLane::CertifiedExtension,
+                contributor: ContextContributorIdentity::CertifiedExtension(
+                    CertifiedExtensionIdentity::new("example.extension").expect("identity"),
+                ),
+                content: "deferred section".to_owned(),
+            }]
         );
+
+        let error = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[DeferredContextProposal {
+                    producer: ContextContributorIdentity::Native(
+                        NativeContextContributor::CoreSystemIdentity,
+                    ),
+                    proposal: user("core identity is not a User fact"),
+                }],
+            )
+            .await
+            .expect_err("an owner with no User lane cannot publish a User fact");
+        assert!(matches!(error, ContextAssemblyError::InvalidProposal(_)));
     }
 
     /// A deferred batch is bounded exactly like a contributor batch.
     #[tokio::test]
-    async fn post_tool_observations_are_bounded() {
+    async fn deferred_context_is_bounded() {
         let assembly = ContextAssembly::new();
         let error = assembly
             .assemble(
                 &input(),
-                &NativeContextInput {
-                    post_tool_observations: (0..=MAX_PROPOSALS_PER_CONTRIBUTOR)
-                        .map(|index| UserMessageProposal {
-                            content: vec![UserContentBlock::Text(TextBlock {
-                                text: format!("proposal {index}"),
-                            })],
-                        })
-                        .collect(),
-                    ..NativeContextInput::default()
-                },
+                &NativeContextInput::default(),
+                &(0..=MAX_DEFERRED_CONTEXT_PROPOSALS)
+                    .map(|index| native_deferred(&format!("proposal {index}")))
+                    .collect::<Vec<_>>(),
             )
             .await
             .expect_err("an unbounded deferred batch is rejected");
         assert_eq!(error, ContextAssemblyError::ProposalLimitExceeded);
+    }
+
+    /// Deferred content is validated by the same bounded content contract.
+    #[tokio::test]
+    async fn deferred_content_is_validated() {
+        let assembly = ContextAssembly::new();
+        let error = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput::default(),
+                &[native_deferred("")],
+            )
+            .await
+            .expect_err("an empty deferred proposal is rejected");
+        assert!(matches!(error, ContextAssemblyError::InvalidProposal(_)));
+        assert!(validate_context_proposal(&user("")).is_err());
+        assert!(validate_context_proposal(&user("bounded")).is_ok());
     }
 
     #[test]

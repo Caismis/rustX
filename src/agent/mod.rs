@@ -16,7 +16,8 @@
 //!   seams of Issue #56 — [`PreStepPolicy`] and [`ToolResultObserver`] — as
 //!   one required immutable per-attempt configuration. The loop remains the
 //!   lifecycle owner; neither seam receives canonical, tool-identity,
-//!   cancellation, or terminal authority.
+//!   cancellation, or terminal authority, and neither decides the semantic
+//!   ownership of the context it proposes.
 //!
 //! The kernel operates only on canonical contracts: it never references a
 //! provider protocol, a provider SDK type, or a provider concept.
@@ -32,8 +33,9 @@ pub use crate::runtime::inbound::InitialTurnTrigger;
 pub use cancellation::AgentCancellation;
 pub use execution::{AgentExecution, AgentExecutionRequest, AgentExecutionResult};
 pub use lifecycle::{
-    AlwaysEnter, AttemptLifecycle, LifecycleError, NoDeferredContext, PreStepBatch,
-    PreStepDecision, PreStepPolicy, ToolResultObservation, ToolResultObserver,
+    AlwaysEnter, AttemptLifecycle, LifecycleError, MAX_DEFERRED_PROPOSALS_PER_OBSERVATION,
+    NoDeferredContext, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreStepPolicy,
+    RegisteredToolResultObserver, ToolResultObservation, ToolResultObserver,
 };
 pub use observer::{AgentExecutionObserver, AgentStatusObservation};
 pub use state::{ExecutionState, ExecutionStateMachine};

@@ -488,22 +488,31 @@ Implemented in the current architecture:
 - `ToolResultObserver`: an immutable observation of each finalized tool
   result, run in canonical `ToolCall` order strictly after the owning batch
   reaches structural settlement. It carries canonical batch position,
-  `ToolCallId`, registry-resolved `ToolId`, typed `ToolOrigin`, resolved
-  `ToolInvocationMode`, and the committed `ToolExecutionResult`; the
-  model-facing tool name is deliberately absent so capability recognition is
-  a typed-identity question.
+  `ToolCallId`, registry-resolved `ToolId`, typed `ToolOrigin`, the committed
+  `ToolExecutionResult`, and an `ObservedToolInvocation` (resolved
+  `ToolInvocationMode` plus the validated business arguments, absent for a
+  preflight-rejected call). The model-facing tool name is deliberately absent
+  so capability recognition is a typed-identity question.
 - Bounded preflight refactor: both `PreflightOutcome` variants carry the
   registry-resolved `ToolId` and `ToolOrigin` from the same resolved
   `ToolDefinition`, so no second stored identity can disagree with the
   registry.
-- Deferred post-tool context: an Agent-Loop-owned transient buffer ordered by
-  `(canonical ToolCall batch position, proposal FIFO)`, admitted through the
-  ordinary Context Assembly path in the native-reserved
-  `UserContextLane::PostToolObservation` lane with rustX-assigned
-  `UserSource::Runtime` provenance and
-  `ContextKind::PostToolObservation`. The buffer is never canonical history.
-- Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`, and
-  `ToolResultObservationFailed`, each preserving exactly one terminal event.
+- Timing/ownership separation: observers are registered under the
+  rustX-owned `ContextContributorIdentity` vocabulary (at most one per
+  semantic owner). "Post-tool" is a lifecycle *timing* fact owned by the
+  Agent Loop; the lane, `UserSource`, and `ContextKind` come from the
+  producer identity through the same table Context Assembly applies to that
+  owner's request-time proposals. A certified extension keeps its identity
+  and provenance when it defers.
+- Deferred context: an Agent-Loop-owned transient buffer ordered by
+  `(canonical ToolCall batch position, producer identity, proposal FIFO)`,
+  admitted through the ordinary Context Assembly path. The buffer is never
+  canonical history. It is bounded at the observer transaction boundary —
+  per-observation count, running attempt total, and per-proposal content —
+  before anything is staged, and again in assembly.
+- Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`,
+  `ToolResultObservationFailed`, and `DeferredContextRejected`, each
+  preserving exactly one terminal event.
 
 Intentionally absent (no concrete native owner or consumer):
 `PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
@@ -520,7 +529,18 @@ Exit criteria:
   deferred context never interleaves between sibling results, even when B
   physically completes first.
 - Observer failure keeps the complete canonical result batch, commits no
-  deferred context, and settles the attempt exactly once.
+  deferred context — including proposals earlier observations of the same
+  pass produced — and settles the attempt exactly once.
+- A native producer's deferred proposal gets native provenance and a
+  certified extension's keeps extension identity/provenance; post-tool timing
+  rewrites no contributor identity; producers with different identities keep
+  a deterministic order that does not depend on registration order.
+- An observer can identify the native Read target path from the validated
+  invocation arguments, without any model-facing name, and a
+  preflight-rejected call exposes no invocation arguments.
+- A single observation above the per-observation bound, or observations that
+  together cross the aggregate bound, are rejected at the transaction
+  boundary and stage nothing.
 - An overflow retry re-evaluates neither the pre-step policy nor the
   contributors, and duplicates no deferred context.
 

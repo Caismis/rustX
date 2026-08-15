@@ -140,20 +140,54 @@ registration order, discovery timing, an address, a handle, or an index.
 The finite user lanes are ordered as:
 
 1. ClaimedInbound — already claimed canonical input, never extension-owned;
-2. PostToolObservation — deferred context proposed by the Issue #56
-   `ToolResultObserver` for the preceding structurally settled tool batch;
-   native-reserved and staged by the Agent Loop, never extension-owned;
+2. PostToolObservation — the lane of the **native runtime observation owner**
+   (`NativeContextContributor::ToolResultObservation`); native-reserved,
+   never extension-owned;
 3. WorkspaceInstructions — one native semantic owner;
 4. ExtensionEnvironment — multiple certified extensions;
 5. SkillGuidance — one native-reserved owner;
 6. AgentStatus — one native-reserved owner.
 
-The deferred lane sits directly after claimed inbound because a post-tool
-observation describes what the environment just did for the *preceding* tool
-batch, while every later lane describes the *current* request. Within the
-lane the order is the Agent Loop's staging order, which is
-`(canonical ToolCall batch position, proposal FIFO)`; physical tool
-completion timing never reaches it.
+The native observation lane sits directly after claimed inbound because that
+owner's facts describe what the environment just did for the *preceding* tool
+batch, while every later lane describes the *current* request.
+
+### Timing is not ownership
+
+A lane names *who owns a fact*, never *when the fact became eligible*. The
+Issue #56 `ToolResultObserver` seam establishes eligibility — a proposal it
+returns is *deferred*, admitted at the next primary step rather than this one —
+and eligibility is a lifecycle-timing property owned by the Agent Loop.
+
+Semantic ownership stays here. Every deferred proposal reaches assembly
+carrying the trusted `ContextContributorIdentity` the Agent Loop stamped from
+its observer's *registration*, and assembly derives the lane, the `UserSource`,
+and the `ContextKind` from that identity through the same table it applies to
+that owner's request-time proposals:
+
+| producer identity | lane | `UserSource` | `ContextKind` |
+| --- | --- | --- | --- |
+| `Native(ToolResultObservation)` | `PostToolObservation` | `Runtime` | `PostToolObservation` |
+| `Native(WorkspaceInstructions)` | `WorkspaceInstructions` | `Runtime` | `WorkspaceInstructions` |
+| `Native(SkillGuidance)` | `SkillGuidance` | `Runtime` | `SkillGuidance` |
+| `Native(AgentStatus)` | `AgentStatus` | `Runtime` | `AgentStatus` |
+| `CertifiedExtension(key)` | `ExtensionEnvironment` | `Extension { key }` | `ExtensionEnvironment` |
+
+So a certified extension that produces deferred post-tool context keeps its
+extension identity, its extension provenance, and its own lane. There is no
+rule converting post-tool proposals into native runtime context.
+
+Inside one `(lane, contributor)` bucket, a deferred fact precedes the same
+owner's request-time fact, because it describes the batch that precedes the
+step. Beyond that the order is the Agent Loop's staging order, which is
+`(canonical ToolCall batch position, producer identity, proposal FIFO)`;
+physical tool completion timing and observer registration order never reach
+it. Owners with no lane for a proposed kind (`CoreSystemIdentity` and
+`AgentProfile` publish no User context) are rejected rather than relaned.
+
+The deferred batch is bounded by `MAX_DEFERRED_CONTEXT_PROPOSALS` over all
+producers together; the Agent Loop enforces the same bound earlier, at its
+observer transaction boundary.
 
 The finite system-section lanes are ordered as:
 
@@ -320,10 +354,11 @@ The Agent Loop owns the model-step admission boundary in
 AgentExecution::prepare_model_request:
 
 ~~~text
-Agent-Loop-owned deferred post-tool proposals (staged after the previous
-tool batch reached structural settlement)
-    ↓ drained into NativeContextInput
-ContextAssembly::assemble (transient proposals)
+Agent-Loop-owned deferred proposals (staged after the previous tool batch
+reached structural settlement, each stamped with its producer identity)
+    ↓ drained into the assemble() deferred argument
+ContextAssembly::assemble (transient proposals; lanes and provenance
+                           derived from producer identity)
     ↓
 PreStepPolicy → Enter | Reject(reason)          (Issue #56)
     ↓ test synchronization seam, when enabled
@@ -347,8 +382,8 @@ channel, never a sleep.
 A pre-step rejection or policy failure settles the attempt at the same
 boundary and with the same guarantee: no accepted dynamic context, no Surface
 advancement, no RequestSnapshot, and no provider request. Because deferred
-post-tool proposals enter the *same* final batch, an observer cannot commit
-context around the policy either.
+proposals enter the *same* final batch, an observer cannot commit context
+around the policy either — whatever identity it produces context for.
 
 After admit_context commits, the accepted context is historical. Provider
 failure, disconnect, timeout, or cancellation does not roll back the ledger,

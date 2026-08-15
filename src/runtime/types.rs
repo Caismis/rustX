@@ -130,6 +130,18 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// A tool-result observation pass produced deferred context that violates
+    /// the bounded deferred-context contract (Issue #56).
+    ///
+    /// The check runs at the observer transaction boundary, before anything is
+    /// staged, so the whole observation pass is discarded and no partial
+    /// deferred state survives. Like every observation failure this happens
+    /// after structural settlement, so the committed Assistant tool-call
+    /// message keeps its complete canonical `ToolMessage` batch.
+    DeferredContextRejected {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
 }
 
 /// A runtime-owned UTC clock boundary.
