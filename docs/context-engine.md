@@ -466,20 +466,22 @@ reconstructions.
 ## 9. Settled RequestSnapshot ownership
 
 During execution, `AgentExecution` collects the immutable snapshots for the
-actual primary provider requests in order. At `RuntimeClientHost::finish_attempt`
-— after the Agent Loop has settled and before its result is dropped — the
-snapshot vector is transferred into the host's append-only
-`runtime_client::RequestHistory` while the same host lock transfers the one
-`ConversationState` back to the host. A duplicate `RequestIdentity` is
-rejected as a coordination defect; equal content is never deduplicated.
+actual primary provider requests in order. At the conversation runtime's
+`finish_attempt` (Issue #61) — after the Agent Loop has settled and before
+its result is dropped — the snapshot vector is transferred into the
+runtime-owned append-only `runtime_client::RequestHistory` while the same
+coordinator lock transfers the one `ConversationState` back to the runtime.
+A duplicate `RequestIdentity` is rejected as a coordination defect; equal
+content is never deduplicated.
 
 `RequestHistory` owns frozen non-history facts only. It does not copy messages,
 allocate a second Surface, or replace Message Ledger authority. After
-settlement, `RuntimeClientHost::request_history` exposes an immutable read
-clone and `reconstruct_request` looks up the snapshot and hydrates its exact
-historical Surface revision from the host-owned ConversationState. While an
-attempt is running, the host explicitly reports historical reconstruction as
-unavailable because the single ConversationState is moved into that attempt.
+settlement, `RuntimeClientHost::request_history` forwards to the runtime,
+which exposes an immutable read clone, and `reconstruct_request` looks up the
+snapshot and hydrates its exact historical Surface revision from the
+runtime-owned ConversationState. While an attempt is running, reconstruction
+is explicitly unavailable because the single ConversationState is moved into
+that attempt.
 Issue #11 may later persist this same semantic object; this milestone does
 not add SQLite or a generic persistence layer.
 

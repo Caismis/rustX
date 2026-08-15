@@ -15,7 +15,9 @@
 //!         +--> context policy/estimator/status pieces
 //!         |
 //!         v
-//! RuntimeClientHost
+//! ConversationRuntime (Issue #61: the semantic conversation coordinator)
+//!         |
+//!         +--> RuntimeClientHost (projection/control/attachment adapter)
 //!         |
 //!         v
 //! RuntimeClientEndpoint
@@ -29,14 +31,15 @@
 //! > One local runtime process owns one conversation session. That session
 //! > owns one authoritative mutable session-model configuration, one
 //! > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one
-//! > context policy domain, and one `RuntimeClientHost`. Runtime
+//! > context policy domain, and one `ConversationRuntime`. Runtime
 //! > Client attachments may come and go without replacing those semantic
-//! > owners.
+//! > owners, and the conversation executes identically with zero
+//! > attachments.
 //!
 //! A client — including the Issue #39 TUI — owns the child process
 //! lifecycle and nothing else. It never assembles provider adapters, model
-//! parameters, context engines, tool registries, capability coordinators, or
-//! summary models.
+//! parameters, context engines, tool registries, capability coordinators,
+//! or summary models.
 //!
 //! # Ordering
 //!
@@ -56,9 +59,13 @@ use crate::model::catalog::{
 };
 use crate::model::invocation::{ModelBindingRegistry, ModelInvocationError};
 use crate::model::session::SessionModelState;
+use crate::runtime::conversation_runtime::{
+    ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
+    RuntimeConversationConfig,
+};
 use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
-    HostConstructionError, RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig,
+    HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
 };
 use crate::tools::executor::ToolRegistry;
 use crate::tools::native::{NativeToolResources, register_native_tools};
@@ -129,9 +136,11 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
 ///
 /// It owns the semantic owners of the process: exactly one
 /// `ConversationToolRuntime`, one `CapabilityCoordinator`, and one
-/// `RuntimeClientHost`. The endpoint handed to a transport is derived from
-/// that one host.
+/// `ConversationRuntime`. The Runtime Client host is the projection/control
+/// adapter over that runtime; the endpoint handed to a transport is derived
+/// from that adapter.
 pub struct LocalConversationRuntime {
+    runtime: ConversationRuntime,
     host: RuntimeClientHost,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
@@ -233,12 +242,12 @@ impl LocalConversationRuntime {
             })?;
 
         // 12-13. The context policy/estimator/status pieces and the one
-        // authoritative Runtime Client host.
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+        // authoritative conversation runtime coordinator.
+        let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: session.agent_id.clone(),
             model,
             timezone: session.timezone,
-            context: RuntimeClientContextConfig {
+            context: ConversationContextConfig {
                 policy: session.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
                 status_composer: crate::context::AgentStatusComposer::default(),
@@ -247,17 +256,31 @@ impl LocalConversationRuntime {
             capability: capability.clone(),
             clock: None,
             initial_messages: Vec::new(),
+        })?;
+
+        // 14. The Runtime Client projection/control/attachment adapter over
+        // that runtime.
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
             replay_limit: None,
         })?;
 
         Ok(Self {
+            runtime,
             host,
             tool_runtime,
             capability,
         })
     }
 
-    /// The one Runtime Client host of this process.
+    /// The one conversation runtime coordinator of this process.
+    #[must_use]
+    pub const fn runtime(&self) -> &ConversationRuntime {
+        &self.runtime
+    }
+
+    /// The one Runtime Client host (projection/control adapter) of this
+    /// process.
     #[must_use]
     pub const fn host(&self) -> &RuntimeClientHost {
         &self.host
@@ -275,7 +298,7 @@ impl LocalConversationRuntime {
         &self.capability
     }
 
-    /// 14. Creates the Runtime Client endpoint a transport wraps.
+    /// 15. Creates the Runtime Client endpoint a transport wraps.
     #[must_use]
     pub fn endpoint(&self) -> RuntimeClientEndpoint {
         RuntimeClientEndpoint::new(self.host.clone())
@@ -323,6 +346,8 @@ pub enum LocalRuntimeError {
         /// The failure detail.
         detail: String,
     },
+    /// The conversation runtime could not be constructed.
+    Runtime(ConversationRuntimeError),
     /// The Runtime Client host could not be constructed.
     Host(HostConstructionError),
 }
@@ -337,6 +362,7 @@ impl std::fmt::Display for LocalRuntimeError {
             Self::ToolRuntime { detail } => write!(f, "conversation tool runtime: {detail}"),
             Self::NativeTools { detail } => write!(f, "native tool composition: {detail}"),
             Self::Capability { detail } => write!(f, "capability plane: {detail}"),
+            Self::Runtime(error) => write!(f, "conversation runtime: {error}"),
             Self::Host(error) => write!(f, "runtime client host: {error}"),
         }
     }
@@ -359,6 +385,12 @@ impl From<ModelInvocationError> for LocalRuntimeError {
 impl From<LocalSessionConfigError> for LocalRuntimeError {
     fn from(error: LocalSessionConfigError) -> Self {
         Self::Session(error)
+    }
+}
+
+impl From<ConversationRuntimeError> for LocalRuntimeError {
+    fn from(error: ConversationRuntimeError) -> Self {
+        Self::Runtime(error)
     }
 }
 

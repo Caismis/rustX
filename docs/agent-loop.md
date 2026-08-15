@@ -105,8 +105,10 @@ facts admitted before the snapshot; they are not hidden request attachments.
 A successful compaction appends one runtime User summary and applies one
 Surface Replace, establishing a new revision and invalidating the pending
 continuation; the continuation-owning turn is retired completely, so an old
-opaque provider continuation is never paired with a new projection. Issue #61
-owns the larger `ConversationRuntime` extraction.
+opaque provider continuation is never paired with a new projection.
+Issue #61 extracted the enclosing `ConversationRuntime` coordinator from the
+Runtime Client boundary (see `docs/architecture.md`); the loop itself is
+unchanged by the extraction.
 
 ## 4.1 Fresh inbound lifecycle
 
@@ -200,14 +202,15 @@ provider-neutral `ModelRequest` with the reconstructed value before calling
 an adapter. It never reads current configuration, Skill discovery, live
 contributors, package contents, filesystem state, or current runtime status.
 
-Every actual primary request is retained after settlement:
-`RuntimeClientHost::finish_attempt` transfers `AgentExecutionResult`'s
-snapshots into the host-owned append-only `RequestHistory` before dropping
-the result. The host retains those frozen facts separately from the one
-historical ConversationState; it does not create a second transcript.
-`RuntimeClientHost::reconstruct_request` uses request identity, the retained
-snapshot, and its exact historical Surface revision after settlement. While
-an attempt runs, the host explicitly cannot reconstruct because the single
+Every actual primary request is retained after settlement: the
+conversation runtime's `finish_attempt` transfers `AgentExecutionResult`'s
+snapshots into the runtime-owned append-only `RequestHistory` before
+dropping the result. The runtime retains those frozen facts separately from
+the one historical ConversationState; it does not create a second
+transcript. `RuntimeClientHost::reconstruct_request` forwards to the
+runtime, which uses request identity, the retained snapshot, and its exact
+historical Surface revision after settlement. While an attempt runs,
+reconstruction is explicitly unavailable because the single
 ConversationState is moved into that attempt. No current model settings,
 contributors, Skills, clock, or status fill historical gaps.
 

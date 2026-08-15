@@ -530,6 +530,49 @@ Implemented in the current architecture:
   `ToolResultObservationFailed`, and `DeferredContextRejected`, each
   preserving exactly one terminal event.
 
+## Milestone 7.75 — Conversation runtime coordination extraction (Issue #61)
+
+Implemented in the current architecture:
+
+- `ConversationRuntime` (`src/runtime/conversation_runtime.rs`) is the
+  semantic conversation coordinator: session model authority, attempt-id
+  allocation, the current-attempt slot, attempt admission, between-attempt
+  `ConversationState`, `RequestHistory`, the shutdown gate, the
+  mailbox/admission relationship, and settlement handoff. It installs no
+  client-bound observation seams, so a conversation executes identically
+  with zero Runtime Client attachments (headless composition is the same
+  `AgentExecution`/Context Assembly/ToolRuntime/Capability/provider path).
+- `RuntimeClientHost` is the projection + control + attachment adapter over
+  the coordinator: it owns the projection read model (snapshot/cursor/
+  bounded replay/subscribers), the one-active-attachment policy, and
+  protocol adaptation, and it forwards control (`model_set`, `shutdown`,
+  `cancel_current_attempt`, background queries) to the coordinator. It no
+  longer owns canonical conversation/session/admission state.
+- One admission authority: every ordinary inbound producer (human submit
+  through the Runtime Client, runtime/agent inbound, background terminal
+  notifications) publishes into the conversation inbound mailbox; the
+  mailbox's shared wake handle notifies the coordinator's admission worker,
+  so an idle asynchronous enqueue is admitted without any client request.
+  `admit_next_attempt` owns the admission linearization (idle + gate
+  observation, finite drain, canonical commit, attempt-id allocation, model
+  freeze, current-attempt publication) under the one coordinator lock.
+- Observation handoff: the coordinator publishes semantic observations into
+  a shared leaf queue; every projection lock acquisition drains it first, so
+  `snapshot + cursor C` remains linearizable and `resume(after C)` observes
+  every later projected fact or fails explicitly with `resync_required`
+  (Issue #37 invariant preserved across the split).
+- Identity claims: one conversation runtime coordinator per
+  `ConversationToolRuntime` identity (claim at coordinator construction) and
+  one Runtime Client host per coordinator (claim at host construction);
+  both are one-time lifetime bindings with typed already-bound rejections.
+- Deterministic regressions: headless full turn (no attachment), idle
+  async wakeup, async-wake vs client-submit race, enqueue-vs-settlement
+  race, enqueue-during-active-attempt, safe-boundary tool-batch structure,
+  snapshot/cursor linearization races, model-update freeze at admission,
+  capability revision immutability, attachment independence, and one
+  human+runtime admission path — all with gates/barriers/Notify, never
+  sleeps.
+
 Intentionally absent (no concrete native owner or consumer):
 `PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
 replacement or retroactive blocking, pre-tool argument or identity
@@ -630,8 +673,10 @@ The spawnable local runtime *process* and its composition ownership already
 exist (Issue #42): `LocalConversationRuntime::compose` builds one conversation
 session — session model authority, `ConversationToolRuntime`, native
 registry, `CapabilityCoordinator` (prepared and committed before serving),
-  context policy/Surface pieces, one `RuntimeClientHost` — and serves its
-endpoint over the Issue #38 stdio/JSONL transport with a protocol-only stdout.
+  context policy/Surface pieces, one `ConversationRuntime` (Issue #61, the
+  semantic conversation coordinator), and one `RuntimeClientHost`
+  projection/control adapter over it — and serves its endpoint over the
+  Issue #38 stdio/JSONL transport with a protocol-only stdout.
 Model catalog and session configuration are explicit file paths.
 
 M10 productizes that established seam. It owns configuration discovery and

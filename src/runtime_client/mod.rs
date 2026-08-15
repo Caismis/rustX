@@ -4,7 +4,7 @@
 //! # Architecture
 //!
 //! ```text
-//! canonical runtime state / internal RuntimeEvent
+//! ConversationRuntime semantic facts/observations (Issue #61)
 //!                 |
 //!                 v
 //!  deterministic Runtime Client projection
@@ -21,6 +21,14 @@
 //! > All authoritative execution and conversation state originates from
 //! > rustX Runtime. External clients observe projections of that state;
 //! > they never become a second authority.
+//!
+//! Issue #61 extracted the conversation runtime coordinator
+//! ([`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime))
+//! from this boundary: the coordinator owns conversation/session/admission
+//! authority, and [`RuntimeClientHost`](host::RuntimeClientHost) is the
+//! projection + control + attachment adapter over it. A conversation runs
+//! the exact same admission/execution path with zero Runtime Client
+//! attachments.
 //!
 //! The internal [`RuntimeEvent`](crate::events::types::RuntimeEvent)
 //! vocabulary is an execution-fact vocabulary, **not** the wire contract.
@@ -39,9 +47,12 @@
 //!   semantic protocol entry point: it dispatches every v1 request,
 //!   `initialize` included, so a transport stays a framing adapter and
 //!   never owns negotiation or attachment admission.
-//! - [`RuntimeClientHost`](host::RuntimeClientHost) coordinates
-//!   admission and the current-attempt handle; `AgentExecution` remains
-//!   the attempt settlement authority.
+//! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
+//!   control + attachment adapter over the conversation runtime: it owns
+//!   the projection (snapshot read model, cursor allocation, bounded
+//!   replay, subscribers), the one-active-attachment v1 policy, and
+//!   protocol adaptation. `AgentExecution` remains the attempt settlement
+//!   authority and the conversation runtime remains the admission owner.
 //! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
 //!   the one linearization owner of the externally visible read model,
 //!   cursor allocation, event publication, bounded replay, and
@@ -86,8 +97,8 @@ pub use attachment::RuntimeAttachment;
 pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{
-    EventDelivery, EventSubscription, HostConstructionError, RuntimeClientContextConfig,
-    RuntimeClientHost, RuntimeClientHostConfig,
+    EventDelivery, EventSubscription, HostConstructionError, RuntimeClientHost,
+    RuntimeClientHostConfig,
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{

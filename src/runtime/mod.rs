@@ -21,6 +21,11 @@
 
 pub mod cancellation;
 pub mod continuation;
+/// The conversation runtime coordinator (Issue #61): the semantic owner of
+/// conversation coordination — session model state, attempt admission, the
+/// current-attempt slot, between-attempt canonical state, request history,
+/// the shutdown gate, and settlement handoff.
+pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
 /// The rustX-side driver of one long-lived interactive process (MCP stdio
@@ -53,6 +58,10 @@ pub mod types;
 pub use cancellation::CancellationSignal;
 pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
+};
+pub use conversation_runtime::{
+    CancelAttemptError, ConversationContextConfig, ConversationRuntime, ConversationRuntimeError,
+    InboundAdmission, InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,

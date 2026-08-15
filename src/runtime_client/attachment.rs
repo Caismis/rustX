@@ -17,12 +17,14 @@
 //! Detaching an attachment is **never** cancellation: it changes only
 //! attachment state and leaves every semantic runtime fact (the current
 //! attempt, conversation-owned background work, mailbox contents, canonical
-//! history, capability state) untouched.
+//! history, capability state) untouched. The attachment observes and
+//! controls the conversation runtime through the host's projection/control
+//! adapter; it owns no semantic runtime state itself.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::host::{EventDelivery, EventSubscription, HostInner};
+use super::host::{ClientInner, EventDelivery, EventSubscription};
 use super::types::{
     AttachmentId, RuntimeClientError, RuntimeClientRequest, RuntimeClientResponse,
     RuntimeClientResult,
@@ -36,8 +38,8 @@ use super::types::{
 pub struct RuntimeAttachment {
     /// The attachment identity.
     attachment_id: AttachmentId,
-    /// The shared host state.
-    inner: Arc<HostInner>,
+    /// The shared Runtime Client host state.
+    inner: Arc<ClientInner>,
     /// Whether this handle already detached explicitly.
     detached: AtomicBool,
     /// The active event subscription (created by the subscribe path),
@@ -47,7 +49,7 @@ pub struct RuntimeAttachment {
 
 impl RuntimeAttachment {
     /// Creates the attachment handle over the shared host state.
-    pub(crate) fn new(attachment_id: AttachmentId, inner: Arc<HostInner>) -> Self {
+    pub(crate) fn new(attachment_id: AttachmentId, inner: Arc<ClientInner>) -> Self {
         Self {
             attachment_id,
             inner,
@@ -76,20 +78,25 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
-        let host = super::host::RuntimeClientHost {
-            inner: self.inner.clone(),
-        };
         let result = match request {
             RuntimeClientRequest::Initialize { .. } => Err(RuntimeClientError::InvalidRequest {
                 message: "the attachment is already initialized".to_owned(),
             }),
-            RuntimeClientRequest::SubmitInbound { content, .. } => host.submit_inbound(content),
-            RuntimeClientRequest::CancelCurrentAttempt { .. } => host.cancel_current_attempt(),
-            RuntimeClientRequest::SnapshotGet { .. } => host
+            RuntimeClientRequest::SubmitInbound { content, .. } => {
+                self.inner.submit_inbound(content)
+            }
+            RuntimeClientRequest::CancelCurrentAttempt { .. } => {
+                self.inner.cancel_current_attempt()
+            }
+            RuntimeClientRequest::SnapshotGet { .. } => self
+                .inner
                 .snapshot()
                 .map(|(snapshot, cursor)| RuntimeClientResult::Snapshot { snapshot, cursor }),
             RuntimeClientRequest::SubscribeEvents { after_cursor, .. } => {
-                match host.subscribe_events(&self.attachment_id, after_cursor) {
+                match self
+                    .inner
+                    .subscribe_events(&self.attachment_id, after_cursor)
+                {
                     Ok((subscription, result)) => {
                         self.store_subscription(subscription);
                         Ok(result)
@@ -97,21 +104,21 @@ impl RuntimeAttachment {
                     Err(error) => Err(error),
                 }
             }
-            RuntimeClientRequest::CapabilityGet { .. } => host.capability(),
-            RuntimeClientRequest::ModelCatalogGet { .. } => host.model_catalog(),
-            RuntimeClientRequest::ModelGet { .. } => host.model_get(),
-            RuntimeClientRequest::ModelSet { config, .. } => host.model_set(*config),
+            RuntimeClientRequest::CapabilityGet { .. } => self.inner.capability(),
+            RuntimeClientRequest::ModelCatalogGet { .. } => self.inner.model_catalog(),
+            RuntimeClientRequest::ModelGet { .. } => self.inner.model_get(),
+            RuntimeClientRequest::ModelSet { config, .. } => self.inner.model_set(*config),
             RuntimeClientRequest::BackgroundStatus { execution_id, .. } => {
-                host.background_status(&execution_id)
+                self.inner.background_status(&execution_id)
             }
             RuntimeClientRequest::BackgroundCancel { execution_id, .. } => {
-                host.background_cancel(&execution_id)
+                self.inner.background_cancel(&execution_id)
             }
             RuntimeClientRequest::Detach { .. } => {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)
             }
-            RuntimeClientRequest::Shutdown { .. } => Ok(host.shutdown()),
+            RuntimeClientRequest::Shutdown { .. } => Ok(self.inner.shutdown()),
         };
         match result {
             Ok(result) => RuntimeClientResponse {
@@ -145,10 +152,10 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Err(RuntimeClientError::NotAttached);
         }
-        let host = super::host::RuntimeClientHost {
-            inner: self.inner.clone(),
-        };
-        match host.subscribe_events(&self.attachment_id, after_cursor) {
+        match self
+            .inner
+            .subscribe_events(&self.attachment_id, after_cursor)
+        {
             Ok((subscription, _result)) => {
                 self.store_subscription(subscription.clone());
                 Ok(subscription)
@@ -215,10 +222,7 @@ impl RuntimeAttachment {
         if self.detached.swap(true, Ordering::SeqCst) {
             return;
         }
-        super::host::RuntimeClientHost {
-            inner: self.inner.clone(),
-        }
-        .detach(&self.attachment_id);
+        self.inner.detach(&self.attachment_id);
         // Take the handle out under the attachment lock and drop it after
         // releasing that lock: dropping a subscription acquires the host
         // lock, and no path may hold the attachment lock across it.
@@ -258,10 +262,7 @@ impl RuntimeAttachment {
 impl Drop for RuntimeAttachment {
     fn drop(&mut self) {
         if !self.detached.swap(true, Ordering::SeqCst) {
-            super::host::RuntimeClientHost {
-                inner: self.inner.clone(),
-            }
-            .detach(&self.attachment_id);
+            self.inner.detach(&self.attachment_id);
         }
     }
 }

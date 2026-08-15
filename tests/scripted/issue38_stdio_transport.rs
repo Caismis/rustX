@@ -1457,21 +1457,32 @@ async fn a_blocked_consumer_stalls_the_transport_not_the_runtime() {
     sink.await_blocked().await;
 
     // 3. Submit work through the runtime harness while the transport is
-    //    provably stuck: the runtime must not depend on its consumer.
-    for message in ["first", "second"] {
-        fixture
-            .host
-            .submit_inbound(vec![UserContentBlock::Text(TextBlock {
-                text: message.to_owned(),
-            })])
-            .expect("the runtime keeps admitting inbound while the transport stalls");
-    }
+    //    provably stuck: the runtime must not depend on its consumer. The
+    //    second submit lands only after the first attempt settled, so the
+    //    second message provably enters the next attempt rather than the
+    //    first attempt's batch.
+    let mut emitted = fixture.model.emitted();
+    fixture
+        .host
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "first".to_owned(),
+        })])
+        .expect("the runtime keeps admitting inbound while the transport stalls");
+    tokio::time::timeout(LIVENESS_GUARD, emitted.wait_for(|count| *count >= 3))
+        .await
+        .expect("the first attempt must run to settlement under the stall")
+        .expect("the emitted channel stays open");
+    fixture
+        .host
+        .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+            text: "second".to_owned(),
+        })])
+        .expect("the runtime keeps admitting inbound while the transport stalls");
 
     // 4. The runtime ran to terminal settlement and beyond while stdout was
-    //    blocked: a second model invocation only happens after the first
+    //    blocked: the second model invocation only happens after the first
     //    attempt settled and the queued message drained, so reaching every
     //    scripted event proves settlement occurred under the stall.
-    let mut emitted = fixture.model.emitted();
     tokio::time::timeout(
         LIVENESS_GUARD,
         emitted.wait_for(|count| *count >= scripted_events),

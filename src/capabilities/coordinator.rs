@@ -76,6 +76,9 @@ struct CoordinatorInner {
     /// `ConversationToolRuntime` binding this is claimed once and never
     /// released, and every clone shares it.
     runtime_client_bound: AtomicBool,
+    /// Claimed by the one conversation runtime coordinator of this
+    /// identity.
+    coordinator_claimed: AtomicBool,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
@@ -250,6 +253,7 @@ impl CapabilityCoordinator {
                 condvar: Condvar::new(),
                 observer: Mutex::new(None),
                 runtime_client_bound: AtomicBool::new(false),
+                coordinator_claimed: AtomicBool::new(false),
                 #[cfg(test)]
                 commit_hook: Mutex::new(None),
             }),
@@ -273,6 +277,26 @@ impl CapabilityCoordinator {
     #[must_use]
     pub fn is_runtime_client_bound(&self) -> bool {
         self.inner.runtime_client_bound.load(Ordering::Acquire)
+    }
+
+    /// Claims the one-time conversation-runtime-coordinator binding of this
+    /// coordinator identity.
+    ///
+    /// Returns `true` for the one claim that wins and `false` for every
+    /// later claim on any clone. Never reset by dropping the bound
+    /// coordinator.
+    pub(crate) fn claim_conversation_runtime(&self) -> bool {
+        self.inner
+            .coordinator_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Whether this coordinator identity is already bound to a conversation
+    /// runtime coordinator.
+    #[must_use]
+    pub fn is_conversation_runtime_bound(&self) -> bool {
+        self.inner.coordinator_claimed.load(Ordering::Acquire)
     }
 
     /// The current active capability snapshot.
@@ -610,7 +634,8 @@ impl CapabilityCoordinator {
     ///
     /// Installation is crate-private: it is a runtime coordination seam,
     /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// claimed by `RuntimeClientHost::new` (over the conversation
+    /// runtime coordinator, Issue #61) is what guarantees a single
     /// installation, so no external caller can replace the Runtime Client
     /// observer.
     ///

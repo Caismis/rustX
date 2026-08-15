@@ -497,6 +497,13 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
 pub struct ConversationInboundMailbox {
     conversation_id: ConversationId,
     state: Arc<Mutex<MailboxState>>,
+    /// The shared admission wake handle: every successful enqueue notifies
+    /// it, so an idle conversation coordinator (Issue #61) wakes and admits
+    /// the asynchronous inbound without any client request. The wake
+    /// carries no payload and stores one permit even with no waiter, so an
+    /// enqueue between two waits is never missed. The wake is leaf-only:
+    /// the coordinator waits on it and never notifies it.
+    wake: Arc<tokio::sync::Notify>,
 }
 
 impl ConversationInboundMailbox {
@@ -512,6 +519,7 @@ impl ConversationInboundMailbox {
                 #[cfg(test)]
                 probe: None,
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -520,8 +528,8 @@ impl ConversationInboundMailbox {
     /// The observer fires at the mailbox linearization points (item
     /// published, batch detached) while the mailbox synchronization
     /// boundary is held. Installation is owned by the Runtime Client
-    /// boundary (Issue #37); exactly one observer is expected, and a later
-    /// installation replaces an earlier one.
+    /// adapter (Issue #37/#61); exactly one observer is expected, and a
+    /// later installation replaces an earlier one.
     ///
     /// Installation is crate-private: it is a runtime coordination seam,
     /// not a public extension point. The one-time Runtime Client binding
@@ -554,6 +562,7 @@ impl ConversationInboundMailbox {
                 observer: None,
                 probe: Some(probe),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -561,6 +570,17 @@ impl ConversationInboundMailbox {
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
+    }
+
+    /// The shared admission wake handle of this mailbox.
+    ///
+    /// Every successful enqueue notifies it at its publication linearization
+    /// point. The conversation coordinator (Issue #61) parks its admission
+    /// worker on this handle, so idle asynchronous inbound wakes the
+    /// runtime without a client request. The handle is crate-private: it is
+    /// a runtime coordination seam, not a public extension point.
+    pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.wake)
     }
 
     /// Enqueues one ordinary inbound message.
@@ -621,6 +641,12 @@ impl ConversationInboundMailbox {
                 .expect("the enqueued item was just published");
             observer.on_enqueued(item);
         }
+        // The admission wake fires at the same linearization point as the
+        // publication, so an idle coordinator admits the item without any
+        // client request. `notify_one` stores one permit even with no
+        // waiter, so an enqueue between two coordinator waits is never
+        // missed.
+        self.wake.notify_one();
         Ok(InboundSequence(sequence))
     }
 
@@ -943,6 +969,7 @@ mod tests {
                     enqueue_resume: None,
                 }),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         };
         mailbox.enqueue(human("m1", "A")).expect("enqueue A");
 
@@ -1005,6 +1032,7 @@ mod tests {
                     enqueue_resume: Some(resume_rx),
                 }),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         };
 
         let enqueueing = mailbox.clone();

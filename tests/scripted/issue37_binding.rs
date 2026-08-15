@@ -29,10 +29,13 @@ use rustx::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator}
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 
+use rustx::runtime::conversation_runtime::{
+    ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
+};
 use rustx::runtime::identity::AgentId;
 use rustx::runtime_client::{
-    HostConstructionError, RuntimeClientContextConfig, RuntimeClientEvent, RuntimeClientHost,
-    RuntimeClientHostConfig, RuntimeClientRequest, RuntimeClientResult,
+    HostConstructionError, RuntimeClientEvent, RuntimeClientHost, RuntimeClientHostConfig,
+    RuntimeClientRequest, RuntimeClientResult,
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::runtime::ConversationToolRuntime;
@@ -75,18 +78,26 @@ async fn new_bundle(conversation: &str) -> Bundle {
     }
 }
 
-/// Builds a host config over the given runtime bundle handles.
-fn config(
+/// Builds the conversation runtime coordinator and the host config over the
+/// given runtime bundle handles.
+///
+/// The one-time **coordinator** binding is claimed by `ConversationRuntime`
+/// construction, so a second runtime over any handle of the same identity
+/// is rejected with the typed already-bound error. The one-time **client**
+/// binding is claimed by host construction, so a second host over the same
+/// runtime is rejected with [`HostConstructionError::RuntimeClientAlreadyBound`].
+fn try_config(
     runtime: ConversationToolRuntime,
     coordinator: CapabilityCoordinator,
     model: Arc<FakeModel>,
-) -> RuntimeClientHostConfig {
+) -> Result<(ConversationRuntime, RuntimeClientHostConfig), rustx::runtime::ConversationRuntimeError>
+{
     let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
-    RuntimeClientHostConfig {
+    let conversation_runtime = ConversationRuntime::new(RuntimeConversationConfig {
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
         timezone: None,
-        context: RuntimeClientContextConfig {
+        context: ConversationContextConfig {
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -99,8 +110,24 @@ fn config(
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
-        replay_limit: None,
-    }
+    })?;
+    Ok((
+        conversation_runtime.clone(),
+        RuntimeClientHostConfig {
+            runtime: conversation_runtime,
+            replay_limit: None,
+        },
+    ))
+}
+
+/// Infallible construction; panics when the runtime identity is already
+/// bound to a conversation runtime.
+fn config(
+    runtime: ConversationToolRuntime,
+    coordinator: CapabilityCoordinator,
+    model: Arc<FakeModel>,
+) -> (ConversationRuntime, RuntimeClientHostConfig) {
+    try_config(runtime, coordinator, model).expect("conversation runtime")
 }
 
 fn one_turn_stop() -> Vec<FakeStep> {
@@ -200,21 +227,27 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
     let clone = bundle.runtime.clone();
     let second_clone = clone.clone();
     assert!(!bundle.runtime.is_runtime_client_bound());
-    assert!(!clone.is_runtime_client_bound());
+    assert!(!bundle.runtime.is_conversation_runtime_bound());
+    assert!(!clone.is_conversation_runtime_bound());
 
-    let _host = RuntimeClientHost::new(config(
+    let (runtime, host_config) = config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
         Arc::new(FakeModel::new(Vec::new())),
-    ))
-    .expect("the first host binds the runtime identity");
+    );
+    let _host =
+        RuntimeClientHost::new(host_config).expect("the first host binds the runtime identity");
 
-    // Every handle of the same identity observes the binding — including
-    // clones taken before the host existed and clones of clones.
+    // Every handle of the same identity observes both bindings — including
+    // clones taken before the coordinator existed and clones of clones.
+    assert!(bundle.runtime.is_conversation_runtime_bound());
+    assert!(clone.is_conversation_runtime_bound());
+    assert!(second_clone.is_conversation_runtime_bound());
+    assert!(bundle.coordinator.is_conversation_runtime_bound());
     assert!(bundle.runtime.is_runtime_client_bound());
     assert!(clone.is_runtime_client_bound());
-    assert!(second_clone.is_runtime_client_bound());
     assert!(bundle.coordinator.is_runtime_client_bound());
+    assert_eq!(runtime.conversation_id().as_str(), "conv-37-bind-clone");
 }
 
 /// A second host over a clone of the same runtime identity is rejected with
@@ -227,12 +260,12 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
 async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() {
     let bundle = new_bundle("conv-37-bind-reject").await;
     let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
-    let host_a = RuntimeClientHost::new(config(
+    let (runtime, host_config) = config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
         model.clone(),
-    ))
-    .expect("first host");
+    );
+    let host_a = RuntimeClientHost::new(host_config).expect("first host");
 
     let attachment = host_a
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
@@ -243,17 +276,16 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         .expect("subscribe");
     let (baseline, baseline_cursor) = host_a.snapshot().expect("snapshot");
 
-    // The rejected construction, over clones of the very same identities.
-    let rejected = RuntimeClientHost::new(config(
-        bundle.runtime.clone(),
-        bundle.coordinator.clone(),
-        Arc::new(FakeModel::new(Vec::new())),
-    ));
+    // The rejected construction: a second host over the very same
+    // conversation runtime handle.
+    let rejected = RuntimeClientHost::new(RuntimeClientHostConfig {
+        runtime: runtime.clone(),
+        replay_limit: None,
+    });
     match rejected {
         Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id }) => {
             assert_eq!(conversation_id.as_str(), "conv-37-bind-reject");
         }
-        Err(other) => panic!("expected already-bound, got {other:?}"),
         Ok(_) => panic!("a second host over one runtime identity must be rejected"),
     }
 
@@ -288,6 +320,21 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
             ),
         })
         .expect("enqueue");
+    // The enqueued message is admitted by the runtime's idle wakeup; the
+    // admitted attempt settles immediately (no model scripts). Waiting for
+    // its request-history transfer makes the runtime provably idle before
+    // the capability commit below, so the commit can never be rejected as
+    // Busy by an active attempt lease.
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            if !host_a.request_history().snapshots().is_empty() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the admitted attempt must settle before the capability commit");
     write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
     let candidate = bundle
         .coordinator
@@ -299,15 +346,10 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // ownership commit, so its arrival at the observer is exact.
     let background_id = dispatch_background(&bundle.runtime);
 
-    let (observed, _) = host_a.snapshot().expect("snapshot");
-    assert!(
-        observed
-            .inbound
-            .pending
-            .iter()
-            .any(|item| item.message.id.as_str() == "msg-seam"),
-        "the mailbox seam still reaches host A"
-    );
+    // The enqueued message is admitted by the runtime's idle wakeup, so
+    // the observation-seam proof is the committed canonical message: the
+    // seam still reaches host A even after the rejected second host.
+    let (observed, _) = await_message_committed(&host_a, "msg-seam").await;
     assert_eq!(
         observed.capabilities.revision,
         committed.revision(),
@@ -361,27 +403,38 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     let bundle = new_bundle("conv-37-bind-lifetime").await;
-    let host = RuntimeClientHost::new(config(
-        bundle.runtime.clone(),
-        bundle.coordinator.clone(),
-        Arc::new(FakeModel::new(Vec::new())),
-    ))
+    let host = RuntimeClientHost::new(
+        config(
+            bundle.runtime.clone(),
+            bundle.coordinator.clone(),
+            Arc::new(FakeModel::new(Vec::new())),
+        )
+        .1,
+    )
     .expect("first host");
     drop(host);
     assert!(
         bundle.runtime.is_runtime_client_bound(),
-        "the binding outlives the host it bound"
+        "the client binding outlives the host it bound"
+    );
+    assert!(
+        bundle.runtime.is_conversation_runtime_bound(),
+        "the coordinator binding outlives the runtime it bound"
     );
 
-    let rebind = RuntimeClientHost::new(config(
+    // A fresh coordinator over a surviving runtime bundle is rejected at
+    // coordinator construction: pre-M8 owns no recovery model.
+    let rebind = try_config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
         Arc::new(FakeModel::new(Vec::new())),
-    ));
+    );
     assert!(
         matches!(
             rebind,
-            Err(HostConstructionError::RuntimeClientAlreadyBound { .. })
+            Err(rustx::runtime::ConversationRuntimeError::RuntimeAlreadyBound {
+                conversation_id,
+            }) if conversation_id.as_str() == "conv-37-bind-lifetime"
         ),
         "a surviving runtime bundle is never rebound: pre-M8 owns no recovery model"
     );
@@ -390,11 +443,14 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     // same conversation id.
     let fresh = new_bundle("conv-37-bind-lifetime").await;
     assert!(!fresh.runtime.is_runtime_client_bound());
-    let host = RuntimeClientHost::new(config(
-        fresh.runtime.clone(),
-        fresh.coordinator.clone(),
-        Arc::new(FakeModel::new(Vec::new())),
-    ))
+    let host = RuntimeClientHost::new(
+        config(
+            fresh.runtime.clone(),
+            fresh.coordinator.clone(),
+            Arc::new(FakeModel::new(Vec::new())),
+        )
+        .1,
+    )
     .expect("a fresh runtime identity is bindable");
     host.snapshot().expect("the fresh host is operational");
     assert!(fresh.runtime.is_runtime_client_bound());
@@ -405,11 +461,14 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reconnect_replaces_the_attachment_not_the_host() {
     let bundle = new_bundle("conv-37-bind-reconnect").await;
-    let host = RuntimeClientHost::new(config(
-        bundle.runtime.clone(),
-        bundle.coordinator.clone(),
-        Arc::new(FakeModel::new(Vec::new())),
-    ))
+    let host = RuntimeClientHost::new(
+        config(
+            bundle.runtime.clone(),
+            bundle.coordinator.clone(),
+            Arc::new(FakeModel::new(Vec::new())),
+        )
+        .1,
+    )
     .expect("host");
 
     let first = host.endpoint();
@@ -452,6 +511,34 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
     host.snapshot().expect("the host served both attachments");
 }
 
+/// Waits until the runtime admitted the given inbound message into
+/// canonical history (the idle wakeup admits it immediately; the commit is
+/// the deterministic seam-arrival proof).
+async fn await_message_committed(
+    host: &RuntimeClientHost,
+    message_id: &str,
+) -> (
+    rustx::runtime_client::RuntimeClientSnapshot,
+    rustx::runtime_client::RuntimeClientCursor,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            let snapshot = host.snapshot().expect("snapshot");
+            if snapshot
+                .0
+                .messages
+                .iter()
+                .any(|message| matches!(message, rustx::message::types::MessageBlock::User(user) if user.id.as_str() == message_id))
+            {
+                return snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the runtime must admit the enqueued inbound message")
+}
+
 /// The `ConversationToolRuntime` is the one conversation authority at the
 /// Runtime Client host boundary.
 ///
@@ -466,11 +553,14 @@ async fn reconnect_replaces_the_attachment_not_the_host() {
 async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     let bundle = new_bundle("conv-37-authority").await;
     let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
-    let host = RuntimeClientHost::new(config(
-        bundle.runtime.clone(),
-        bundle.coordinator.clone(),
-        model.clone(),
-    ))
+    let host = RuntimeClientHost::new(
+        config(
+            bundle.runtime.clone(),
+            bundle.coordinator.clone(),
+            model.clone(),
+        )
+        .1,
+    )
     .expect("host");
     let authority = bundle.runtime.conversation_id().clone();
 

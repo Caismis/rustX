@@ -25,9 +25,9 @@
 //! ```
 //!
 //! Fold, cursor allocation, and publication happen under one
-//! synchronization boundary (the owning [`RuntimeClientHost`] state lock),
-//! so the snapshot/cursor invariant holds by synchronization, never by
-//! timing luck:
+//! synchronization boundary (the Runtime Client host's projection state
+//! lock), so the snapshot/cursor invariant holds by synchronization, never
+//! by timing luck:
 //!
 //! > The returned snapshot describes authoritative Runtime Client state at
 //! > cursor C. A subscription/resume after C observes every subsequently
@@ -214,13 +214,16 @@ pub(crate) enum SubscriberPoll {
     Exhausted,
 }
 
-/// The projection state guarded by the owning host's one synchronization
-/// boundary.
+/// The projection state guarded by the Runtime Client host's one
+/// synchronization boundary.
 ///
-/// This struct owns no lock: the [`RuntimeClientHost`]
+/// This struct owns no lock: the Runtime Client host
 /// ([`crate::runtime_client::host::RuntimeClientHost`]) guards exactly one
-/// instance with its state lock, making that lock the one linearization
-/// owner of every externally visible transition.
+/// instance with its projection state lock, making that lock the one
+/// linearization owner of every externally visible transition. The
+/// conversation runtime (Issue #61) publishes observations into the shared
+/// leaf queue; every acquisition of this lock drains that queue first, so
+/// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,

@@ -190,7 +190,11 @@ pub struct ConversationToolRuntime {
 /// `ConversationToolRuntime` identity.
 #[derive(Debug, Default)]
 struct RuntimeClientBinding {
+    /// Claimed by the one Runtime Client host of this identity.
     bound: AtomicBool,
+    /// Claimed by the one conversation runtime coordinator of this
+    /// identity.
+    coordinator_claimed: AtomicBool,
 }
 
 impl ConversationToolRuntime {
@@ -291,7 +295,10 @@ impl ConversationToolRuntime {
             artifacts,
             environment,
             background,
-            runtime_client: Arc::new(RuntimeClientBinding::default()),
+            runtime_client: Arc::new(RuntimeClientBinding {
+                bound: AtomicBool::new(false),
+                coordinator_claimed: AtomicBool::new(false),
+            }),
         })
     }
 
@@ -312,7 +319,8 @@ impl ConversationToolRuntime {
 
     /// Releases a claim taken by a host construction that then failed.
     ///
-    /// This exists only so a rejected `RuntimeClientHost::new` leaves no
+    /// This exists only so a rejected `RuntimeClientHost::new` (or a
+    /// rejected `ConversationRuntime` construction, Issue #61) leaves no
     /// trace; it is never called on host drop, and a successfully
     /// constructed host never releases its binding.
     pub(crate) fn release_runtime_client_claim(&self) {
@@ -324,6 +332,36 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn is_runtime_client_bound(&self) -> bool {
         self.runtime_client.bound.load(Ordering::Acquire)
+    }
+
+    /// Claims the one-time conversation-runtime-coordinator binding of this
+    /// runtime identity.
+    ///
+    /// Returns `true` for the one claim that wins and `false` for every
+    /// later claim on any clone. The transition is a single
+    /// `compare_exchange`, so concurrent claims cannot both succeed.
+    pub(crate) fn claim_conversation_runtime(&self) -> bool {
+        self.runtime_client
+            .coordinator_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Releases a coordinator claim taken by a construction that then
+    /// failed.
+    pub(crate) fn release_conversation_runtime_claim(&self) {
+        self.runtime_client
+            .coordinator_claimed
+            .store(false, Ordering::Release);
+    }
+
+    /// Whether this runtime identity is already bound to a conversation
+    /// runtime coordinator.
+    #[must_use]
+    pub fn is_conversation_runtime_bound(&self) -> bool {
+        self.runtime_client
+            .coordinator_claimed
+            .load(Ordering::Acquire)
     }
 
     /// The owning conversation.

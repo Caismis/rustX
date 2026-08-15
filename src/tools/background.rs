@@ -398,7 +398,8 @@ impl ConversationBackgroundRegistry {
     ///
     /// Installation is crate-private: it is a runtime coordination seam,
     /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` is what guarantees a single
+    /// claimed by `RuntimeClientHost::new` (over the conversation
+    /// runtime coordinator, Issue #61) is what guarantees a single
     /// installation, so no external caller can replace the Runtime Client
     /// observer.
     pub(crate) fn install_observer(&self, observer: Arc<dyn BackgroundObserver>) {
