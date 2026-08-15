@@ -204,15 +204,26 @@ contributors, package contents, filesystem state, or current runtime status.
 
 Every actual primary request is retained after settlement: the
 conversation runtime's `finish_attempt` transfers `AgentExecutionResult`'s
-snapshots into the runtime-owned append-only `RequestHistory` before
-dropping the result. The runtime retains those frozen facts separately from
-the one historical ConversationState; it does not create a second
-transcript. `RuntimeClientHost::reconstruct_request` forwards to the
-runtime, which uses request identity, the retained snapshot, and its exact
-historical Surface revision after settlement. While an attempt runs,
-reconstruction is explicitly unavailable because the single
-ConversationState is moved into that attempt. No current model settings,
-contributors, Skills, clock, or status fill historical gaps.
+snapshots into the runtime-owned append-only `RequestHistory` (now
+`src/runtime/request_history.rs`, runtime-owned semantic state, never
+client projection state) before dropping the result. The runtime retains
+those frozen facts separately from the one historical ConversationState;
+it does not create a second transcript. `RuntimeClientHost::reconstruct_request`
+forwards to the runtime, which uses request identity, the retained
+snapshot, and its exact historical Surface revision after settlement.
+While an attempt runs, reconstruction is explicitly unavailable because
+the single ConversationState is moved into that attempt. No current model
+settings, contributors, Skills, clock, or status fill historical gaps.
+
+While an attempt runs, the loop's observation seam also feeds the
+runtime-owned semantic record (`src/runtime/observation.rs`): the same
+`observe_event`/`observe_committed`/`observe_status` facts a Runtime
+Client projection would fold accumulate as derived read state (committed
+messages, attempt semantics, Agent Status, compaction), so a Runtime
+Client adapter constructed mid-attempt receives a coherent bootstrap
+without a second mutable conversation authority. The record is cleared at
+settlement, when the authoritative `ConversationState` returns to the
+coordinator.
 
 ## 4.3 Typed lifecycle interception (Issue #56)
 

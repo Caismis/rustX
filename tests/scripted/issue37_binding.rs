@@ -286,6 +286,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         Err(HostConstructionError::RuntimeClientAlreadyBound { conversation_id }) => {
             assert_eq!(conversation_id.as_str(), "conv-37-bind-reject");
         }
+        Err(HostConstructionError::ObservationBridgeAlreadyInstalled { .. }) => {
+            panic!("the binding claim must reject a second host before the bridge")
+        }
         Ok(_) => panic!("a second host over one runtime identity must be rejected"),
     }
 

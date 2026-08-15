@@ -1730,7 +1730,19 @@ conversation_runtime.rs       ConversationRuntime: the conversation
                               between-attempt ConversationState,
                               RequestHistory, the mailbox/admission
                               relationship, the shutdown gate, settlement
-                              handoff; publishes semantic observations
+                              handoff, and the adapter bootstrap
+                              handshake; publishes semantic observations
+runtime/observation.rs        the runtime-owned semantic observation
+                              contract (Issue #61): ConversationObservation,
+                              the leaf PendingObservations queue, and the
+                              runtime semantic record (committed messages,
+                              attempt semantics, Agent Status, compaction)
+                              folded while AgentExecution owns the one
+                              mutable ConversationState
+runtime/request_history.rs    append-only in-memory owner of frozen
+                              settled RequestSnapshots and reconstruction
+                              lookup (owned by ConversationRuntime);
+                              never a message transcript
 runtime/inbound.rs            ConversationInboundMailbox: inbound ordering
                               and finite batching authority, with the
                               shared admission wake handle
@@ -1742,17 +1754,14 @@ runtime_client/snapshot.rs     RuntimeClientSnapshot read model
 runtime_client/projection.rs   RuntimeClientProjection: the client read
                                model linearization owner (fold, cursor
                                allocation, bounded replay, subscribers)
+                               and the translation of semantic
+                               observations into the client vocabulary
 runtime_client/host.rs         RuntimeClientHost: the projection + control
                                + attachment adapter over ConversationRuntime
                                — attachment admission, snapshot/cursor
                                reads, event subscriptions, protocol
                                adaptation; it owns no canonical
                                conversation/session/admission state
-runtime_client/request_history.rs
-                               append-only in-memory owner of frozen
-                               settled RequestSnapshots and reconstruction
-                               lookup (owned by ConversationRuntime);
-                               never a message transcript
 runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                RAII/explicit detach, request dispatch,
                                event subscription delivery
@@ -1768,13 +1777,16 @@ Issue #61 extracted the conversation runtime coordinator from this
 boundary. The layering is:
 
 ```text
-ConversationRuntime semantic facts/observations
+ConversationRuntime semantic facts
+        |
+        v
+ConversationObservation (runtime-owned vocabulary)
         |
         v
 shared leaf observation queue (PendingObservations)
         |
         v
-RuntimeClientProjection (fold, cursor, replay, subscribers)
+RuntimeClientProjection (translation, fold, cursor, replay, subscribers)
         |
         v
 RuntimeClientHost (attachment / control adapter)
@@ -1782,6 +1794,10 @@ RuntimeClientHost (attachment / control adapter)
         v
 RuntimeClientEndpoint -> transports -> TUI
 ```
+
+The runtime never emits Runtime Client projection types: the observation
+vocabulary carries runtime-owned source types, and the projection owns the
+translation into `RuntimeClientEvent`/`RuntimeClientSnapshot`.
 
 A conversation runs the exact same admission/execution path with zero
 Runtime Client attachments: the coordinator is the semantic owner, and the
@@ -1813,13 +1829,45 @@ Runtime Client is a projection/control/attachment adapter over it.
   identity counters) with one lock; the Runtime Client host guards its
   projection state (snapshot read model, cursor allocation, bounded
   replay, subscribers, attachment admission/detach) with a second lock.
-  The coordinator publishes every semantic transition as an observation
-  into the shared leaf queue, and every host lock acquisition drains that
-  queue first, so the projection folds observations in the coordinator's
-  commit order. Snapshot/cursor, cancel-current, terminal settlement, and
-  admission therefore still linearize by synchronization, never by
-  timing — the coordinator's admission linearization is one documented
-  point, and the projection's snapshot/cursor linearization is another.
+  The coordinator publishes every semantic transition as a
+  runtime-owned `ConversationObservation` into the shared leaf queue,
+  and every host lock acquisition drains that queue first, so the
+  projection folds observations in the coordinator's commit order.
+  Snapshot/cursor, cancel-current, terminal settlement, and admission
+  therefore still linearize by synchronization, never by timing — the
+  coordinator's admission linearization is one documented point, and the
+  projection's snapshot/cursor linearization is another.
+- **Adapter bootstrap is one linearizable handshake.** A Runtime Client
+  adapter constructed over a conversation runtime — including while an
+  attempt is active — performs exactly one fallible step after its
+  binding claim: `ConversationRuntime::install_observation_bridge`.
+  The handshake captures the semantic bootstrap snapshot and installs
+  every observation seam at one per-authority cut:
+
+  ```text
+  phase 1 (the cut R): coordinator lock + runtime record lock held
+      install the observation queue
+      capture coordinator-owned facts (model, shutdown, canonical
+        messages while idle)
+      capture the runtime semantic record (committed messages, attempt
+        semantics, Agent Status, compaction while an attempt is active)
+  phase 2: mailbox lock held — install the mailbox observer and capture
+           the pending items in one section
+  phase 3: background registry lock held — install the observer and
+           capture the retained records in one section
+  phase 4: capability state lock held — install the observer and capture
+           the active snapshot in one section
+  ```
+
+  A transition that linearizes before its authority's cut is in the
+  captured seed and could not have been queued (the observer/sink did
+  not exist at its publication point); one that linearizes after the cut
+  is queued and not in the seed. Coordinator transitions serialize on
+  the coordinator lock and attempt observations serialize on the record
+  lock, so both linearize entirely before or entirely after the cut R.
+  No transition can fall between a seed and the live observation stream,
+  and none can be applied twice: `seed + live observations` is exactly
+  one complete projection.
 - **One conversation runtime per identity, one host per runtime.** One
   `ConversationToolRuntime` identity is bound to at most one
   `ConversationRuntime` and at most one `RuntimeClientHost` for that
@@ -1840,10 +1888,19 @@ Runtime Client is a projection/control/attachment adapter over it.
   (zero hosts) is fully supported: it installs no observation seams and
   admits asynchronous inbound through the mailbox's shared wake handle.
 
-  Every fallible validation runs before the claim and every step after it is
-  infallible, so the claim is the ownership-commit boundary and a rejected
-  construction has no semantic side effect: no observer is replaced, no
-  worker starts, and no mailbox, background, or capability state moves.
+  Every fallible validation runs before the claim, the binding claim is
+  the ownership-commit boundary, and the only fallible step after it is
+  the bridge handshake — on whose failure the claim is released again. A
+  rejected construction therefore has no semantic side effect: no
+  observer is replaced, no worker starts, no mailbox, background, or
+  capability state moves, and no claimed-but-invalid binding remains.
+- **Conversation runtime activation is explicit.** `ConversationRuntime::new`
+  requires a Tokio execution runtime and rejects construction outside
+  one with the typed `ConversationRuntimeError::NoExecutionRuntime`
+  error. The admission worker — the consumer that makes ordinary native
+  mailbox publication admit attempts — therefore exists before the
+  runtime is usable, and headless/native producers never depend on a
+  later Runtime Client call to activate admission.
 - **One conversation authority.** The `ConversationToolRuntime` owns the
   `ConversationId`, the canonical mailbox, the authoritative background
   registry, and both binding identities; the conversation runtime
@@ -1881,9 +1938,13 @@ Runtime Client is a projection/control/attachment adapter over it.
   RuntimeInner ──► authoritative subsystems (tool runtime, mailbox,
                    capability coordinator)
   RuntimeInner ──► shared leaf observation queue (PendingObservations)
+  RuntimeInner ──► runtime semantic record (committed messages, attempt
+                   semantics, Agent Status, compaction — the attempt-derived
+                   read state folded while AgentExecution owns the one
+                   mutable ConversationState; cleared at settlement)
 
   RuntimeClientHost ──► Arc<ClientInner>
-  ClientInner ──► Arc<ConversationRuntime> (control + seed reads)
+  ClientInner ──► Arc<ConversationRuntime> (control + bootstrap reads)
              ──► projection state
              ──► Arc<PendingObservations>
 
@@ -1917,28 +1978,31 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Lock order.** The graph is acyclic by construction:
 
   ```text
-  CoordinatorState ──► ConversationInboundMailbox ──► PendingObservations
-  CoordinatorState ──► PendingObservations
+  CoordinatorState ──► ConversationInboundMailbox ──► runtime record ──► PendingObservations
+  CoordinatorState ──► runtime record ──► PendingObservations
   ClientState ──────► PendingObservations
-  ConversationBackgroundRegistry ───► PendingObservations
-  CapabilityCoordinator ───────────► PendingObservations
+  ConversationBackgroundRegistry ───► runtime record ──► PendingObservations
+  CapabilityCoordinator ───────────► runtime record ──► PendingObservations
+  AgentExecution (attempt task, holds no lock) ──► runtime record ──► PendingObservations
+  bootstrap phase 1: CoordinatorState ──► runtime record ──► queue install
   mailbox wake / WakeGate ─────────► (leaf Notify only)
   ```
 
-  `PendingObservations` is a leaf (one mutex over a `VecDeque` plus a
-  `Notify`; it calls nothing). Every authoritative subsystem fires its
+  `PendingObservations` and the runtime semantic record are leaves (one
+  mutex each; they call nothing). Every authoritative subsystem fires its
   observer *while holding its own lock*, so every such observer only
-  appends an immutable observation to that leaf — no subsystem ever
-  acquires `CoordinatorState` or `ClientState`. The single downward edge
-  `CoordinatorState -> mailbox` exists only in `admit_next_attempt`, which
-  drains under the coordinator lock so the drain fact, the history
-  commits, and the attempt publication linearize together. The mailbox's
-  shared wake handle notifies the admission worker at every enqueue
-  publication — a leaf signal, never a lock — so idle asynchronous inbound
-  is admitted without any client request. Consequently an authoritative
-  commit never waits on the client lock, and subscriber notification can
-  never block authoritative runtime state. The `AgentExecutionObserver`
-  callbacks append to the leaf queue; that adds no incoming edge because
+  folds the record and appends an immutable observation to the leaf
+  queue — no subsystem ever acquires `CoordinatorState` or `ClientState`.
+  The single downward edge `CoordinatorState -> mailbox` exists only in
+  `admit_next_attempt`, which drains under the coordinator lock so the
+  drain fact, the history commits, and the attempt publication linearize
+  together. The mailbox's shared wake handle notifies the admission
+  worker at every enqueue publication — a leaf signal, never a lock — so
+  idle asynchronous inbound is admitted without any client request.
+  Consequently an authoritative commit never waits on the client lock,
+  and subscriber notification can never block authoritative runtime
+  state. The `AgentExecutionObserver` callbacks fold the record and
+  append to the leaf queue; that adds no incoming edge because
   `AgentExecution` is owned by its attempt task and holds no lock when it
   observes. Every client lock acquisition drains the pending queue first,
   so queued observations fold in the coordinator's commit order.

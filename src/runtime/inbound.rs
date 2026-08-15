@@ -523,29 +523,28 @@ impl ConversationInboundMailbox {
         }
     }
 
-    /// Installs the read-only fact observer of the mailbox.
+    /// Installs the observer and captures the currently pending items as
+    /// one atomic mailbox section.
     ///
-    /// The observer fires at the mailbox linearization points (item
-    /// published, batch detached) while the mailbox synchronization
-    /// boundary is held. Installation is owned by the Runtime Client
-    /// adapter (Issue #37/#61); exactly one observer is expected, and a
-    /// later installation replaces an earlier one.
-    ///
-    /// Installation is crate-private: it is a runtime coordination seam,
-    /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` is what guarantees a single
-    /// installation, so no external caller can replace the Runtime Client
-    /// observer.
+    /// This is the mailbox half of the Issue #61 adapter bootstrap
+    /// handshake: because installation and the pending-item snapshot share
+    /// the one mailbox synchronization boundary, an enqueue either
+    /// linearizes before the section (its item is in the returned pending
+    /// seed and no observation was fired — the observer did not exist yet)
+    /// or after it (the installed observer fires it into the bridge
+    /// queue). No enqueue can be lost between the seed and the live
+    /// observation stream and none can be applied twice.
     ///
     /// # Panics
     ///
-    /// Panics only if the mailbox lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
-    pub(crate) fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
-        self.state
-            .lock()
-            .expect("inbound mailbox lock poisoned")
-            .observer = Some(observer);
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn install_observer_and_pending(
+        &self,
+        observer: Arc<dyn InboundObserver>,
+    ) -> Vec<InboundItem> {
+        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        state.observer = Some(observer);
+        state.pending.iter().cloned().collect()
     }
 
     /// Creates an inbound mailbox with test-only synchronization hooks

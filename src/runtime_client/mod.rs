@@ -85,7 +85,6 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
-pub mod request_history;
 pub mod snapshot;
 pub mod transport;
 pub mod types;
@@ -100,7 +99,10 @@ pub use host::{
     EventDelivery, EventSubscription, HostConstructionError, RuntimeClientHost,
     RuntimeClientHostConfig,
 };
-pub use request_history::{RequestHistory, RequestHistoryError};
+// `RequestHistory` is runtime-owned semantic state (Issue #61); the Runtime
+// Client boundary re-exports it because the host serves it to clients, but
+// the type never lives under the projection read model.
+pub use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
     InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,

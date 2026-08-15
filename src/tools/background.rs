@@ -389,21 +389,24 @@ impl ConversationBackgroundRegistry {
         state.commit_hook = Some(hook);
     }
 
-    /// Installs the read-only state observer of the registry.
+    /// Installs the observer and captures every retained record snapshot
+    /// as one atomic registry section.
     ///
-    /// The observer fires at every published registry transition while the
-    /// registry synchronization boundary is held. Installation is owned by
-    /// the Runtime Client boundary (Issue #37); exactly one observer is
-    /// expected, and a later installation replaces an earlier one.
-    ///
-    /// Installation is crate-private: it is a runtime coordination seam,
-    /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` (over the conversation
-    /// runtime coordinator, Issue #61) is what guarantees a single
-    /// installation, so no external caller can replace the Runtime Client
-    /// observer.
-    pub(crate) fn install_observer(&self, observer: Arc<dyn BackgroundObserver>) {
-        self.state().observer = Some(observer);
+    /// This is the background-registry half of the Issue #61 adapter
+    /// bootstrap handshake: because installation and the record snapshot
+    /// share the one registry synchronization boundary, a transition
+    /// either linearizes before the section (its snapshot is in the
+    /// returned seed and no observation was fired — the observer did not
+    /// exist yet) or after it (the installed observer fires it into the
+    /// bridge queue). No transition can be lost between the seed and the
+    /// live observation stream and none can be applied twice.
+    pub(crate) fn install_observer_and_snapshots(
+        &self,
+        observer: Arc<dyn BackgroundObserver>,
+    ) -> Vec<BackgroundExecutionSnapshot> {
+        let mut state = self.state();
+        state.observer = Some(observer);
+        state.records.iter().map(snapshot_of).collect()
     }
 
     /// Fires the installed observer for one record snapshot while the

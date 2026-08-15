@@ -45,13 +45,22 @@
 //! # Observation handoff
 //!
 //! The conversation runtime publishes every semantically meaningful
-//! transition as an [`Observation`](super::projection::Observation) into the
-//! shared leaf [`PendingObservations`](crate::runtime::conversation_runtime::PendingObservations)
-//! queue, which the host installs as the runtime's projection sink at
-//! construction. Every host lock acquisition drains that queue first, so
-//! queued observations fold in enqueue order, ahead of whatever the
-//! acquiring caller is about to do. The projection fold, cursor allocation,
-//! and event publication therefore share the one host synchronization
+//! transition as a runtime-owned
+//! [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
+//! into the shared leaf
+//! [`PendingObservations`](crate::runtime::observation::PendingObservations)
+//! queue, which the runtime installs through its bootstrap handshake at
+//! host construction (see
+//! `ConversationRuntime::install_observation_bridge`). The handshake
+//! captures the semantic bootstrap snapshot and installs every subsystem
+//! observation seam at one per-authority linearization cut, so the
+//! projection's initial seed and the live observation stream cover the
+//! runtime's history with no gap and no duplication.
+//!
+//! Every host lock acquisition drains that queue first, so queued
+//! observations fold in enqueue order, ahead of whatever the acquiring
+//! caller is about to do. The projection fold, cursor allocation, and
+//! event publication therefore share the one host synchronization
 //! boundary with snapshot reads, subscription polls, and attachment
 //! admission, and the snapshot/cursor invariant holds by synchronization:
 //!
@@ -65,7 +74,8 @@
 //!   ClientState ─────────────► PendingObservations (leaf)
 //!       ▲
 //!       │  (never; see below)
-//!   coordinator / mailbox / background / capability ─► PendingObservations
+//!   coordinator ─► runtime record ─► PendingObservations
+//!   mailbox / background / capability ─► runtime record ─► PendingObservations
 //! ```
 //!
 //! No authoritative subsystem ever acquires `ClientState`. The mailbox, the
@@ -73,10 +83,10 @@
 //! task all fire their observers while their own boundary is held, so
 //! [`ClientObserver`] is never used: the conversation runtime's own
 //! observers (see `crate::runtime::conversation_runtime::RuntimeObserver`)
-//! append to the leaf queue instead. There is therefore no
-//! `subsystem -> ClientState` edge to pair with any `ClientState -> mailbox`
-//! call on the host surface, and subscriber notification can never block
-//! authoritative runtime state.
+//! fold the runtime semantic record and append to the leaf queue instead.
+//! There is therefore no `subsystem -> ClientState` edge to pair with any
+//! `ClientState -> mailbox` call on the host surface, and subscriber
+//! notification can never block authoritative runtime state.
 //!
 //! # Lifetime
 //!
@@ -101,8 +111,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use super::projection::{Observation, RuntimeClientProjection, SubscriberPoll, background_view};
-use super::request_history::{RequestHistory, RequestHistoryError};
+use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult,
@@ -111,9 +120,11 @@ use crate::model::session::SessionModelConfig;
 use crate::model::{ModelRequest, RequestIdentity};
 use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ModelUpdateError,
-    PendingObservations,
+    RuntimeBootstrapError,
 };
 use crate::runtime::identity::{ConversationId, ToolExecutionId};
+use crate::runtime::observation::PendingObservations;
+use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 
 /// The one Runtime Client host construction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +141,17 @@ pub enum HostConstructionError {
         /// The conversation whose runtime identity is already bound.
         conversation_id: ConversationId,
     },
+    /// An observation bridge is already installed over the conversation
+    /// runtime (a previous headless observation consumer), so the host
+    /// cannot establish its own projection handshake.
+    ///
+    /// Unreachable through the production composition path (the binding
+    /// claim gates it); reported typed so a failed construction releases
+    /// the binding claim instead of leaving a claimed-but-broken runtime.
+    ObservationBridgeAlreadyInstalled {
+        /// The conversation whose runtime already has a bridge.
+        conversation_id: ConversationId,
+    },
 }
 
 impl core::fmt::Display for HostConstructionError {
@@ -138,6 +160,10 @@ impl core::fmt::Display for HostConstructionError {
             Self::RuntimeClientAlreadyBound { conversation_id } => write!(
                 f,
                 "the runtime identity of conversation {conversation_id} is already bound to a Runtime Client host"
+            ),
+            Self::ObservationBridgeAlreadyInstalled { conversation_id } => write!(
+                f,
+                "the conversation runtime of {conversation_id} already has an observation bridge installed"
             ),
         }
     }
@@ -700,37 +726,83 @@ impl RuntimeClientHost {
     /// [`RuntimeClientEndpoint`](super::endpoint::RuntimeClientEndpoint)
     /// `initialize`), not to host reconstruction.
     ///
+    /// # Bootstrap linearization
+    ///
+    /// After the binding claim the host performs exactly one fallible
+    /// step: the runtime's observation bridge handshake
+    /// ([`ConversationRuntime::install_observation_bridge`]), which
+    /// installs the observation queue and every subsystem seam and
+    /// captures the semantic bootstrap snapshot at one per-authority
+    /// linearization cut. The projection then mirrors that snapshot, so
+    /// its initial state plus the live observation stream is exactly one
+    /// complete projection — with no lost transition and no duplicate —
+    /// whether or not an attempt is running at construction. If the
+    /// handshake fails (a previous headless bridge exists), the binding
+    /// claim is released and the failure is reported typed; a failed
+    /// construction never leaves a claimed-but-invalid binding.
+    ///
     /// # Errors
     ///
     /// Returns [`HostConstructionError::RuntimeClientAlreadyBound`] when
-    /// the runtime identity is already bound to a Runtime Client host.
+    /// the runtime identity is already bound to a Runtime Client host and
+    /// [`HostConstructionError::ObservationBridgeAlreadyInstalled`] when a
+    /// headless observation bridge already exists over the runtime.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
-        // ---- Fallible validation: the one-time binding claim. ----
+        // ---- Ownership commit: the one-time binding claim. ----
+        //
+        // The claim is the linearization point that gates every later
+        // step: a second construction fails here before touching the
+        // runtime, and this construction is the only one that can proceed.
         if !config.runtime.claim_client_binding() {
             return Err(HostConstructionError::RuntimeClientAlreadyBound {
                 conversation_id: config.runtime.conversation_id().clone(),
             });
         }
 
-        // ---- Infallible wiring: from here construction always succeeds. ----
+        // ---- The one fallible step after the claim: the bridge handshake.
+        //
+        // The runtime installs the observation queue and every subsystem
+        // observation seam and captures the semantic bootstrap snapshot
+        // at one per-authority cut. On failure the claim is released: a
+        // rejected construction must leave no trace.
         let replay_limit = config
             .replay_limit
             .unwrap_or(super::projection::RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT);
+        let pending = Arc::new(PendingObservations::new());
+        let seed = match config
+            .runtime
+            .install_observation_bridge(Arc::clone(&pending))
+        {
+            Ok(seed) => seed,
+            Err(RuntimeBootstrapError::BridgeAlreadyInstalled { conversation_id }) => {
+                config.runtime.release_client_binding();
+                return Err(HostConstructionError::ObservationBridgeAlreadyInstalled {
+                    conversation_id,
+                });
+            }
+        };
+
+        // ---- Infallible wiring: from here construction always succeeds. ----
+        //
         // The projection mirrors the runtime's authoritative seed exactly:
-        // canonical history, session model, active capability set, and the
-        // pre-existing background records. The seed is read under the
-        // coordinator lock, so any later runtime transition is published
-        // into the observation queue after it and folds in order.
-        let seed = config.runtime.projection_seed();
+        // canonical history, session model, the active attempt semantics
+        // (translated into the attempt view), Agent Status, compaction
+        // diagnostics, pending inbound, and the active capability
+        // snapshot. Everything the seed does not cover (the
+        // pre-existing background records, which the projection applies
+        // as ordinary observations) is applied in order before any live
+        // observation can fold.
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
-            seed.messages,
-            seed.capabilities,
-            seed.model,
+            seed.messages.clone(),
+            super::projection::capability_view(&seed.capabilities),
+            seed.model.clone(),
             replay_limit,
         );
+        projection.bootstrap(&seed);
         for existing in seed.background {
-            projection.apply(Observation::Background(existing));
+            projection
+                .apply(crate::runtime::observation::ConversationObservation::Background(existing));
         }
         let inner = Arc::new(ClientInner {
             conversation_id: seed.conversation_id,
@@ -741,30 +813,9 @@ impl RuntimeClientHost {
                 attachment: None,
                 next_attachment_seq: 0,
             }),
-            pending: Arc::new(PendingObservations::new()),
+            pending,
             worker_started: AtomicBool::new(false),
         });
-        inner
-            .runtime
-            .install_projection_sink(Arc::clone(&inner.pending));
-        // The observation seams bridge the authoritative subsystems into
-        // the shared leaf queue: installed here, after the one-time binding
-        // claim, so a rejected construction never touches them and a second
-        // host can never replace the first host's seams.
-        let observer: Arc<crate::runtime::conversation_runtime::RuntimeObserver> = Arc::new(
-            crate::runtime::conversation_runtime::RuntimeObserver::new(&inner.runtime.inner),
-        );
-        inner
-            .runtime
-            .tool_runtime()
-            .mailbox()
-            .install_observer(observer.clone());
-        inner
-            .runtime
-            .tool_runtime()
-            .background()
-            .install_observer(observer.clone());
-        inner.runtime.capability().install_observer(observer);
         inner.runtime.ensure_worker();
         inner.ensure_worker();
         Ok(Self { inner })
@@ -1216,6 +1267,7 @@ mod tests {
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::types::RuntimeClock;
     use crate::runtime_client::event::RuntimeClientEvent;
+    use crate::runtime_client::host::HostConstructionError;
     use crate::runtime_client::snapshot::RuntimeClientAttemptPhase;
     use crate::runtime_client::types::{
         RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent, RuntimeClientRequest,
@@ -3199,6 +3251,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                bootstrap_gate: None,
             },
         )
         .await;
@@ -3277,6 +3330,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                bootstrap_gate: None,
             },
         )
         .await;
@@ -3850,6 +3904,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
+                bootstrap_gate: None,
             },
         )
         .await;
@@ -4076,6 +4131,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                bootstrap_gate: None,
             },
         )
         .await;
@@ -4425,5 +4481,533 @@ mod tests {
                 coordinator,
             },
         )
+    }
+
+    /// A fixture over one conversation runtime **without** a Runtime
+    /// Client host, so a test controls host construction itself (the
+    /// Issue #61 bootstrap regressions).
+    struct RuntimeOnlyFixture {
+        _dir: tempfile::TempDir,
+        runtime: ConversationRuntime,
+        coordinator: crate::capabilities::CapabilityCoordinator,
+        workspace: std::path::PathBuf,
+    }
+
+    /// Builds the conversation runtime alone (no host), with the given
+    /// scripts, tool registry, and optional coordinator probe.
+    async fn runtime_only_fixture(
+        scripts: Vec<Vec<GatedStep>>,
+        tools: ToolRegistry,
+        probe: Option<CoordinatorProbe>,
+    ) -> (Arc<GatedAdapter>, RuntimeOnlyFixture) {
+        let adapter = Arc::new(GatedAdapter::new(scripts));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-host");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(tools),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter.clone()),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
+                status_composer: composer(),
+            },
+            tool_runtime,
+            capability: coordinator.clone(),
+            clock: Some(Arc::new(FixedRuntimeClock)),
+            initial_messages: Vec::new(),
+        };
+        let runtime = match probe {
+            Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
+            None => ConversationRuntime::new(config).expect("runtime"),
+        };
+        (
+            adapter,
+            RuntimeOnlyFixture {
+                _dir: dir,
+                runtime,
+                coordinator,
+                workspace,
+            },
+        )
+    }
+
+    /// Polls the runtime-owned semantic record until the active attempt's
+    /// in-flight text contains the given marker. The record is updated at
+    /// every observation linearization point; the poll only ever yields
+    /// and re-reads the record, never sleeps, and the timeout is a
+    /// liveness guard, not part of the correctness proof.
+    async fn await_in_flight_text(runtime: &ConversationRuntime, marker: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                let record = runtime.semantic_record();
+                if let Some(attempt) = &record.attempt
+                    && let Some(in_flight) = &attempt.in_flight
+                    && in_flight.blocks.iter().any(|block| match block {
+                        crate::runtime::observation::RuntimeInFlightBlock::Text {
+                            text, ..
+                        }
+                        | crate::runtime::observation::RuntimeInFlightBlock::Reasoning {
+                            text,
+                            ..
+                        }
+                        | crate::runtime::observation::RuntimeInFlightBlock::Refusal {
+                            text, ..
+                        } => text.contains(marker),
+                        crate::runtime::observation::RuntimeInFlightBlock::ToolCall {
+                            arguments,
+                            ..
+                        } => arguments.contains(marker),
+                    })
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the scripted attempt must stream the marker text");
+    }
+
+    /// A marker-bearing alternate session model configuration.
+    fn marked_model_config(
+        runtime: &ConversationRuntime,
+        marker: &str,
+    ) -> crate::model::session::SessionModelConfig {
+        let mut config = runtime.model_config();
+        config
+            .request_params
+            .insert(marker.to_owned(), serde_json::json!("changed"));
+        config
+    }
+
+    /// Bootstrap race, transition after the cut (Test A): a session model
+    /// update that linearizes **after** the bootstrap cut must arrive
+    /// through the live observation stream — never be lost between the
+    /// seed and the installed bridge.
+    ///
+    /// The host construction is deterministically parked by the runtime's
+    /// `bootstrap_gate` right after the cut (the section that installs
+    /// the queue and captures the coordinator/record seed) and before the
+    /// subsystem installations; the model transition runs while the
+    /// construction is parked, and the released construction must fold it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bootstrap_model_transition_after_the_cut_is_never_lost() {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let (_adapter, fixture) = runtime_only_fixture(
+            vec![one_turn_stop()],
+            ToolRegistry::new(),
+            Some(CoordinatorProbe {
+                admission_gate: None,
+                settlement_gate: None,
+                bootstrap_gate: Some(gate.clone()),
+            }),
+        )
+        .await;
+        gate.arm();
+
+        let runtime_for_host = fixture.runtime.clone();
+        let host_task = tokio::task::spawn_blocking(move || {
+            RuntimeClientHost::new(RuntimeClientHostConfig {
+                runtime: runtime_for_host,
+                replay_limit: None,
+            })
+        });
+        // The construction reached the cut and parked. Exact: the gate
+        // parks the construction thread itself, so this wait observes the
+        // linearization point, never a bound on some other activity.
+        gate.wait_entered();
+
+        // The transition linearizes after the cut: while the construction
+        // is parked the coordinator is free and the queue is already
+        // installed, so the update must flow into the bridge queue.
+        fixture
+            .runtime
+            .model_set(marked_model_config(&fixture.runtime, "after-cut"))
+            .expect("model transition after the cut");
+
+        gate.release();
+        let host = host_task.await.expect("join").expect("host construction");
+
+        // Subscribe from the seed cursor (0: nothing was published for
+        // the seed) before the first projection read, so the post-cut
+        // transition — which sits in the bridge queue — is observed as a
+        // live event by this subscription while the snapshot read folds
+        // it into the read model.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe from the seed cursor");
+
+        // The final snapshot is the authoritative state: the transition
+        // was applied, through the live stream, exactly once.
+        let (snapshot, _cursor) = host.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.model.configured.request_params.get("after-cut"),
+            Some(&serde_json::json!("changed")),
+            "the post-cut transition must be visible in the projection"
+        );
+        // The event stream is coherent: the same subscription observes
+        // the transition as exactly one published event.
+        let mut session_model_events = 0;
+        receive_until(&subscription, |event| {
+            if matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. }) {
+                session_model_events += 1;
+            }
+            matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+        })
+        .await;
+        assert_eq!(
+            session_model_events, 1,
+            "the post-cut transition is delivered exactly once"
+        );
+    }
+
+    /// Bootstrap race, transition before the cut (Test B): a session model
+    /// update that linearizes **before** the bootstrap cut is part of the
+    /// seed and must not be re-applied as a live observation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bootstrap_model_transition_before_the_cut_is_seeded_not_duplicated() {
+        let (_adapter, fixture) =
+            runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
+
+        // The transition linearizes before any host exists: it is folded
+        // into the runtime's authoritative state with no consumer.
+        fixture
+            .runtime
+            .model_set(marked_model_config(&fixture.runtime, "before-cut"))
+            .expect("model transition before the cut");
+
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("host construction");
+
+        // The seed contains the transition...
+        let (snapshot, cursor) = host.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.model.configured.request_params.get("before-cut"),
+            Some(&serde_json::json!("changed")),
+            "the pre-cut transition must be part of the seed"
+        );
+        // ...and it is not re-applied as an extra live event: drive one
+        // real turn and assert no SessionModelChanged publication exists.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment.subscribe_events(cursor).expect("subscribe");
+        attachment
+            .handle_request(RuntimeClientRequest::SubmitInbound {
+                id: crate::runtime_client::RequestId::new(1),
+                content: submit_content("drive a turn"),
+            })
+            .result
+            .expect("accepted");
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        assert!(
+            !events.iter().any(|event| {
+                matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
+            }),
+            "the pre-cut transition must never be re-published"
+        );
+    }
+
+    /// Bootstrap race, capability transition (Test C): a capability
+    /// activation that linearizes after the coordinator cut but before
+    /// the capability seam installation must be captured by the
+    /// capability seed — never lost — and must not be re-published.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn bootstrap_capability_transition_is_seeded_not_lost_or_duplicated() {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let (_adapter, fixture) = runtime_only_fixture(
+            vec![one_turn_stop()],
+            ToolRegistry::new(),
+            Some(CoordinatorProbe {
+                admission_gate: None,
+                settlement_gate: None,
+                bootstrap_gate: Some(gate.clone()),
+            }),
+        )
+        .await;
+        gate.arm();
+
+        let runtime_for_host = fixture.runtime.clone();
+        let host_task = tokio::task::spawn_blocking(move || {
+            RuntimeClientHost::new(RuntimeClientHostConfig {
+                runtime: runtime_for_host,
+                replay_limit: None,
+            })
+        });
+        gate.wait_entered();
+
+        // A real capability activation while the construction is parked
+        // after the cut (and therefore before the capability seam
+        // installation): the authoritative coordinator has no observer
+        // yet, so the activation can only reach the client through the
+        // phase-4 capability seed.
+        write_probe_skill(&fixture.workspace, "pdf");
+        let candidate = fixture
+            .coordinator
+            .prepare_candidate()
+            .await
+            .expect("prepare with the probe skill");
+        let activated = fixture.coordinator.commit(candidate).expect("commit");
+        assert_eq!(activated.revision().get(), 1, "a real semantic activation");
+
+        gate.release();
+        let host = host_task.await.expect("join").expect("host construction");
+
+        let (snapshot, cursor) = host.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.capabilities.revision.get(),
+            1,
+            "the activation must be visible in the projection"
+        );
+        // No duplication: the seeded activation never re-appears as a
+        // live CapabilityPublished event.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment.subscribe_events(cursor).expect("subscribe");
+        attachment
+            .handle_request(RuntimeClientRequest::SubmitInbound {
+                id: crate::runtime_client::RequestId::new(1),
+                content: submit_content("drive a turn"),
+            })
+            .result
+            .expect("accepted");
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        assert!(
+            !events.iter().any(|event| {
+                matches!(event.event, RuntimeClientEvent::CapabilityPublished { .. })
+            }),
+            "the seeded activation must never be re-published"
+        );
+    }
+
+    /// Failed host construction never leaves a claimed-but-invalid
+    /// binding: when the observation bridge handshake fails (a previous
+    /// headless bridge exists), the one-time client binding claim is
+    /// released again and the failure is typed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_host_construction_releases_the_client_binding() {
+        let (_adapter, fixture) = runtime_only_fixture(Vec::new(), ToolRegistry::new(), None).await;
+        // A headless observation bridge already exists over the runtime.
+        let queue = Arc::new(crate::runtime::observation::PendingObservations::new());
+        fixture
+            .runtime
+            .install_observation_bridge(queue)
+            .expect("headless bridge");
+
+        let rejected = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        });
+        match rejected {
+            Err(HostConstructionError::ObservationBridgeAlreadyInstalled { conversation_id }) => {
+                assert_eq!(conversation_id.as_str(), "conv-host");
+            }
+            _ => panic!("the bridge conflict must fail typed"),
+        }
+        // The failed construction released the binding claim: no
+        // claimed-but-invalid binding remains.
+        assert!(
+            !fixture.runtime.tool_runtime().is_runtime_client_bound(),
+            "the tool runtime binding was released"
+        );
+        assert!(
+            !fixture.runtime.capability().is_runtime_client_bound(),
+            "the capability binding was released"
+        );
+    }
+
+    /// Attach while an attempt is active (Test D): a headless runtime
+    /// admits a real attempt and parks it mid-stream; the Runtime Client
+    /// adapter is constructed over the active attempt without panicking,
+    /// without a second `ConversationState` authority, with a coherent
+    /// initial snapshot, and with a contiguous event stream afterwards.
+    /// Detaching mid-attempt never affects the attempt.
+    #[allow(clippy::too_many_lines, clippy::match_same_arms)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn host_construction_while_an_attempt_is_active() {
+        let (release_1_tx, release_1_rx) = model_release();
+        let (release_2_tx, release_2_rx) = model_release();
+        let (adapter, fixture) = runtime_only_fixture(
+            vec![
+                // Attempt 1: streams a text delta, then parks.
+                vec![
+                    GatedStep::Emit(ModelEvent::Started),
+                    GatedStep::Emit(ModelEvent::TextDelta {
+                        block_index: ContentBlockIndex::new(0),
+                        text: "working".to_owned(),
+                    }),
+                    GatedStep::ParkUntilReleased(release_1_rx),
+                    GatedStep::Emit(ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    }),
+                ],
+                // Attempt 2: streams a second text delta, then parks.
+                vec![
+                    GatedStep::Emit(ModelEvent::Started),
+                    GatedStep::Emit(ModelEvent::TextDelta {
+                        block_index: ContentBlockIndex::new(0),
+                        text: "again".to_owned(),
+                    }),
+                    GatedStep::ParkUntilReleased(release_2_rx),
+                    GatedStep::Emit(ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    }),
+                ],
+            ],
+            ToolRegistry::new(),
+            None,
+        )
+        .await;
+
+        // A headless runtime: admit the first attempt and park it.
+        let first_admission = fixture
+            .runtime
+            .submit_inbound(submit_content("first"))
+            .expect("accepted");
+        await_in_flight_text(&fixture.runtime, "working").await;
+        assert_eq!(
+            adapter.requests().len(),
+            1,
+            "the first request is in flight"
+        );
+
+        // While the attempt is active, the coordinator structurally owns
+        // no ConversationState: the single authority is inside the
+        // attempt.
+        assert!(
+            fixture.runtime.coordinator_ledger().is_none(),
+            "the attempt owns the one ConversationState"
+        );
+
+        // Construct the adapter over the active attempt: no panic, no
+        // idle requirement.
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("host construction while an attempt is active");
+
+        // The initial snapshot is coherent with the running attempt: the
+        // attempt view carries the real attempt identity, the running
+        // phase, the frozen model, the accumulated in-flight text, and
+        // the canonical messages committed so far (the admitted inbound
+        // and Agent Status).
+        let (snapshot, cursor) = host.snapshot().expect("snapshot");
+        let attempt = snapshot.attempt.as_ref().expect("attempt view");
+        assert_eq!(
+            attempt.attempt_id.as_str(),
+            "conv-host-attempt-0",
+            "the real attempt identity"
+        );
+        assert!(matches!(attempt.phase, RuntimeClientAttemptPhase::Running));
+        assert_eq!(attempt.turn, 1, "the first model turn is in flight");
+        let in_flight = attempt.in_flight.as_ref().expect("in-flight output");
+        assert!(
+            in_flight.blocks.iter().any(|block| {
+                matches!(
+                    block,
+                    crate::runtime_client::snapshot::InFlightBlock::Text { text, .. }
+                        if text == "working"
+                )
+            }),
+            "the mid-stream repair state is seeded"
+        );
+        assert!(
+            snapshot.messages.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id == first_admission.message_id)
+            }),
+            "the committed inbound is part of the seed"
+        );
+
+        // Subsequent events continue contiguously: a subscription from the
+        // snapshot cursor observes the rest of the attempt with no
+        // resync and no gap.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment.subscribe_events(cursor).expect("subscribe");
+        release_1_tx.send(true).expect("release attempt 1");
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| {
+                    matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+                })
+                .count(),
+            1,
+            "exactly one terminal settlement"
+        );
+        assert_eq!(adapter.requests().len(), 1, "the first attempt settled");
+        // Consume the first settlement's test signal so the second
+        // attempt's wait below observes its own settlement exactly.
+        fixture.runtime.settlement_signal().notified().await;
+
+        // Detach does not affect the attempt: admit a second attempt,
+        // park it, detach while it is active, release it, and the attempt
+        // still settles canonically — terminal settlement is the Agent
+        // Loop's, never the attachment's.
+        attachment.detach();
+        fixture
+            .runtime
+            .submit_inbound(submit_content("second"))
+            .expect("accepted");
+        await_in_flight_text(&fixture.runtime, "again").await;
+        release_2_tx.send(true).expect("release attempt 2");
+        fixture.runtime.settlement_signal().notified().await;
+        assert_eq!(adapter.requests().len(), 2, "the second attempt ran");
+        let ledger = fixture.runtime.coordinator_ledger().expect("settled");
+        assert!(
+            ledger.iter().any(|message| {
+                matches!(message, MessageBlock::User(user) if user.id.as_str() == "conv-host-inbound-2")
+            }),
+            "the second attempt committed its inbound after the detach"
+        );
+        assert!(!fixture.runtime.has_current_attempt());
     }
 }

@@ -1313,6 +1313,18 @@ The frozen invariants:
   `CapabilityCoordinator`, and provider/model path as an interactive
   runtime. Headless composition is the same coordinator — never a fake
   client host and never a second execution implementation.
+- **The semantic runtime does not depend on Runtime Client vocabulary.**
+  The conversation runtime publishes a runtime-owned semantic
+  observation contract (`ConversationObservation` in
+  `src/runtime/observation.rs`) whose variants carry runtime-owned source
+  types only: `RuntimeEvent`, `InboundItem`, `InboundBatch`,
+  `BackgroundExecutionSnapshot`, the authoritative `CapabilitySnapshot`,
+  the frozen `AttemptModelView`, and so on. The Runtime Client projection
+  owns the translation into `RuntimeClientEvent` /
+  `RuntimeClientSnapshot` / capability views; the runtime never imports,
+  stores, or returns a Runtime Client projection or snapshot type, and
+  `RequestHistory` lives in `src/runtime/request_history.rs` as
+  runtime-owned semantic state.
 - **There is exactly one production owner of next-attempt admission.** Any
   producer may publish ordinary inbound work through the conversation
   inbound boundary, but only the coordinator admits the next
@@ -1325,7 +1337,12 @@ The frozen invariants:
 - **Idle asynchronous inbound wakes the runtime itself.** An enqueue while
   the runtime is idle notifies the admission worker through the mailbox's
   own wake handle; no client request, submit, or later host-lock drain is
-  required for the next attempt to be admitted exactly once.
+  required for the next attempt to be admitted exactly once. The
+  admission worker is guaranteed to exist: `ConversationRuntime::new`
+  rejects construction outside a Tokio execution runtime with the typed
+  `ConversationRuntimeError::NoExecutionRuntime` error, so a partially
+  active coordinator is not representable and native/headless producers
+  never depend on a later client call for activation.
 - **Admission linearization is one coordinator-owned point.** The idle
   observation, the shutdown/admission-gate observation, the finite
   watermark-bounded mailbox drain, the canonical-history commits, the
@@ -1361,6 +1378,33 @@ The frozen invariants:
   identity is rejected with a typed already-bound error and has no
   semantic side effect. The Runtime Client binding (one host per
   coordinator) is a second, independent claim taken by host construction.
+- **The Runtime Client adapter bootstrap is one linearizable handshake.**
+  `RuntimeClientHost::new` claims the one-time client binding, then
+  performs exactly one fallible step —
+  `ConversationRuntime::install_observation_bridge` — which installs the
+  observation queue and every subsystem observation seam and captures the
+  semantic bootstrap snapshot at one per-authority cut (the
+  coordinator/record section installs the queue and captures the cut `R`;
+  the mailbox, background, and capability sections each install their
+  seam and capture their seed under their own lock). A transition before
+  its authority's cut is in the seed and was never queued; one after the
+  cut is queued and not in the seed; no transition can fall between the
+  two and none can be applied twice. If the bridge step fails (a previous
+  headless bridge exists), the claim is released and the failure is a
+  typed error: a failed host construction never leaves a
+  claimed-but-invalid binding.
+- **Adapter construction works while an attempt is active.** The runtime
+  semantic record (in `src/runtime/observation.rs`) folds the
+  attempt-derived facts — committed canonical messages, attempt
+  semantics (phase, turn, usage, in-flight output, foreground tools,
+  frozen model), the latest Agent Status, and compaction statistics —
+  from the same observation stream a client folds, under its own leaf
+  lock, and clears them at settlement when the authoritative
+  `ConversationState` becomes directly readable again. A bootstrap while
+  `AgentExecution` owns the one mutable `ConversationState` therefore
+  seeds a coherent client read model without copying that state into a
+  second authority, and never panics or requires the conversation to be
+  idle.
 
 ## Runtime Client projection (Issue #37)
 
@@ -1387,16 +1431,20 @@ semantic normalization boundary. The frozen invariants:
   overflow fails explicitly and never wraps.
 - **A snapshot returned at cursor C contains all Runtime Client state
   through C.** The conversation runtime publishes every semantic
-  transition as an observation into the shared leaf queue, and every
-  projection lock acquisition drains that queue first, so the fold, cursor
-  allocation, event publication, replay retention, subscriber delivery,
-  snapshot reads, and attachment admission/detach serialize through the
-  one projection synchronization boundary. The coordinator's admission
-  boundary and the projection boundary are distinct by design (Issue #61),
-  and the drain-before-serve rule is the explicit bridge between them: a
-  snapshot never reads several subsystem locks and hopes nothing changed
-  between them, and an observation enqueued before the drain is either
-  reflected in the snapshot or published at a cursor strictly after it.
+  transition as a runtime-owned `ConversationObservation` into the shared
+  leaf queue, and every projection lock acquisition drains that queue
+  first, so the fold, cursor allocation, event publication, replay
+  retention, subscriber delivery, snapshot reads, and attachment
+  admission/detach serialize through the one projection synchronization
+  boundary. The coordinator's admission boundary and the projection
+  boundary are distinct by design (Issue #61), and the drain-before-serve
+  rule is the explicit bridge between them: a snapshot never reads
+  several subsystem locks and hopes nothing changed between them, and an
+  observation enqueued before the drain is either reflected in the
+  snapshot or published at a cursor strictly after it. The initial
+  bootstrap seed and the live observation stream form one complete
+  projection by the adapter bootstrap linearization (see the Issue #61
+  invariants).
 - **A successful resume after C observes every subsequent Runtime Client
   event, otherwise the runtime reports `resync_required`.** Serviceability
   is decided under the same boundary that registers the subscriber, so no
@@ -1438,12 +1486,13 @@ semantic normalization boundary. The frozen invariants:
   shares that one binding, so cloning a runtime bundle never yields a
   second bindable identity. A second construction fails with a typed
   already-bound error and has no semantic side effect: the claim is taken
-  after every fallible validation and before only infallible wiring, so no
-  observer is replaced and no mailbox, background, or capability state
-  moves. The host installs the observation seams after its claim, so a
-  rejected host never touches them and a second host can never unhook the
-  first. Observer installation is crate-private, so no external caller can
-  replace the Runtime Client observer by another route.
+  after every fallible validation and before the single fallible bridge
+  step, so no observer is replaced and no mailbox, background, or
+  capability state moves. The runtime's bridge handshake installs the
+  observation seams (one per authority, under that authority's own lock),
+  so a rejected host never touches them and a second host can never unhook
+  the first. Observer installation is crate-private, so no external caller
+  can replace the Runtime Client observer by another route.
 - **The `ConversationToolRuntime` is the one conversation authority at the
   conversation runtime and Runtime Client host boundary.**
   `RuntimeConversationConfig` and `RuntimeClientHostConfig` carry no
@@ -1486,22 +1535,24 @@ semantic normalization boundary. The frozen invariants:
 - **No authoritative subsystem acquires the coordinator or projection
   lock.** The mailbox, the background registry, and the capability
   coordinator fire their observation seams while holding their own lock;
-  each seam only appends an immutable observation to the shared leaf
-  synchronization boundary. The admission worker waits on the mailbox's
-  own shared wake handle — a leaf signal, never a lock. The lock graph is
-  therefore acyclic by construction rather than by a call-order
-  convention, an authoritative commit never waits on the coordinator or
-  projection lock, and subscriber notification never blocks authoritative
-  runtime state.
+  each seam only folds the runtime semantic record and appends an
+  immutable observation to the shared leaf synchronization boundary.
+  The admission worker waits on the mailbox's own shared wake handle — a
+  leaf signal, never a lock. The lock graph is therefore acyclic by
+  construction rather than by a call-order convention, an authoritative
+  commit never waits on the coordinator or projection lock, and
+  subscriber notification never blocks authoritative runtime state.
 - **Exactly one authoritative mutable `ConversationState` owner at a
   time.** The conversation runtime owns it while idle; admission moves it
   into `AgentExecution`, which is the sole authority for the duration of
   the attempt; settlement moves it back in `AgentExecutionResult`.
   `ConversationState` is not Clone, so no second mutable canonical
   authority can be derived from one revision.
-  `RuntimeClientSnapshot.messages` is projection only, and deterministic
-  regressions verify the projection mirror against the authoritative
-  ledger rather than coordinating two histories.
+  `RuntimeClientSnapshot.messages` is projection only, the runtime
+  semantic record is append-only derived read state folded from the
+  attempt's own observation stream and cleared at settlement, and
+  deterministic regressions verify the projection mirror against the
+  authoritative ledger rather than coordinating two histories.
 - **One active attachment.** Protocol v1 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;

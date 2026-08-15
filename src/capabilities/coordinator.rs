@@ -272,6 +272,19 @@ impl CapabilityCoordinator {
             .is_ok()
     }
 
+    /// Releases a Runtime Client binding claimed by a host construction
+    /// that then failed.
+    ///
+    /// This exists only so a rejected `RuntimeClientHost::new` (whose
+    /// observation bridge install failed after the claim) leaves no trace;
+    /// it is never called on host drop, and a successfully constructed
+    /// host never releases its binding.
+    pub(crate) fn release_runtime_client_claim(&self) {
+        self.inner
+            .runtime_client_bound
+            .store(false, Ordering::Release);
+    }
+
     /// Whether this coordinator identity is already bound to a Runtime
     /// Client host.
     #[must_use]
@@ -625,26 +638,36 @@ impl CapabilityCoordinator {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 
-    /// Installs the read-only state observer of the coordinator.
+    /// Installs the observer and captures the active snapshot as one
+    /// atomic coordinator section.
     ///
-    /// The observer fires at every actual capability activation while the
-    /// coordinator synchronization boundary is held. Installation is owned
-    /// by the Runtime Client boundary (Issue #37); exactly one observer is
-    /// expected, and a later installation replaces an earlier one.
-    ///
-    /// Installation is crate-private: it is a runtime coordination seam,
-    /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` (over the conversation
-    /// runtime coordinator, Issue #61) is what guarantees a single
-    /// installation, so no external caller can replace the Runtime Client
-    /// observer.
+    /// This is the capability half of the Issue #61 adapter bootstrap
+    /// handshake: installation and the snapshot capture share the one
+    /// capability state synchronization boundary (the same section a
+    /// commit holds while firing the observer), so an activation either
+    /// linearizes before the section (its snapshot is the returned seed
+    /// and no observation was fired — the observer did not exist yet) or
+    /// after it (the installed observer fires it into the bridge queue).
+    /// No activation can be lost between the seed and the live
+    /// observation stream and none can be applied twice.
     ///
     /// # Panics
     ///
-    /// Panics only if the observer lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
-    pub(crate) fn install_observer(&self, observer: Arc<dyn CapabilityObserver>) {
+    /// Panics only if the capability state lock or the observer lock is
+    /// poisoned.
+    pub(crate) fn install_observer_and_snapshot(
+        &self,
+        observer: Arc<dyn CapabilityObserver>,
+    ) -> Arc<CapabilitySnapshot> {
+        // Lock order: capability state lock -> observer lock, the same
+        // order `commit` uses when it fires the observer.
+        let state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
         *self.inner.observer.lock().expect("observer lock") = Some(observer);
+        state.snapshot.clone()
     }
 
     /// The shared MCP invalidation state (test observability). Only
