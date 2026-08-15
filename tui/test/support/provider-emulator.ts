@@ -148,19 +148,32 @@ export class ProviderEmulator {
 
   /**
    * Shuts the provider down and asserts the scenario was satisfied: every
-   * declared step consumed, in order, with no unexpected request.
+   * declared step's request matched, in order, with no unexpected request,
+   * and every scripted response reached its terminal state.
+   *
+   * The child's exit status is asserted too, matching the Rust launcher's
+   * process contract: the emulator exits non-zero on an unsatisfied
+   * scenario, so a green report and a red exit code must never disagree
+   * silently.
    */
   async finish(): Promise<void> {
     let report: { ok?: boolean } = {};
+    let exit: { code: number | null; signal: NodeJS.Signals | null };
     try {
       report = (await this.#control("POST", "/shutdown")) as { ok?: boolean };
     } finally {
-      await this.#exit();
+      exit = await this.#exit();
     }
     if (report.ok !== true) {
       throw new Error(
         `the ${this.#ready.scenario} scenario was not satisfied: ` +
           `${JSON.stringify(report, null, 2)}\n${this.#diagnostics.text}`,
+      );
+    }
+    if (exit.code !== 0) {
+      throw new Error(
+        `the provider emulator exited with code ${exit.code} / signal ` +
+          `${exit.signal}\n${this.#diagnostics.text}`,
       );
     }
   }
@@ -171,19 +184,22 @@ export class ProviderEmulator {
     await this.#exit();
   }
 
-  async #exit(): Promise<void> {
+  /** Waits for the child to exit and reports how it did. */
+  async #exit(): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
     if (this.#child.exitCode !== null || this.#child.signalCode !== null) {
-      return;
+      return { code: this.#child.exitCode, signal: this.#child.signalCode };
     }
+    // Closing stdin is the emulator's documented shutdown signal; the kill
+    // is only a deadlock backstop.
     this.#child.stdin.end();
-    await new Promise<void>((resolve) => {
+    return await new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.#child.kill("SIGKILL");
-        resolve();
+        resolve({ code: null, signal: "SIGKILL" });
       }, 10_000);
-      this.#child.once("exit", () => {
+      this.#child.once("exit", (code, signal) => {
         clearTimeout(timer);
-        resolve();
+        resolve({ code, signal });
       });
     });
   }

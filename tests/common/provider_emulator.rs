@@ -243,12 +243,17 @@ impl ProviderEmulator {
     }
 
     /// Shuts the provider down and asserts the scenario was satisfied:
-    /// every declared step consumed, in order, with no unexpected request.
+    /// every declared step's request matched, in order, with no unexpected
+    /// request, **and** every scripted response reached its terminal state.
+    /// A response still suspended at an unreleased gate is not success.
+    ///
+    /// The child's exit status is asserted too, so a green report and a red
+    /// exit code can never disagree silently.
     ///
     /// # Panics
     ///
     /// Panics when the scenario report is not `ok`, quoting the exact
-    /// provider-side failures.
+    /// provider-side failures, or when the process exits unsuccessfully.
     pub async fn finish(mut self) {
         let report: serde_json::Value = self
             .client

@@ -88,9 +88,32 @@ stderr   human diagnostics only
 exit     0 when the scenario is satisfied, 1 otherwise
 ```
 
-"Satisfied" means every declared step was consumed, in order, and no
-assertion failed. An unexpected extra request, a request that does not match
-its step, or an unconsumed required step each fail the process.
+"Satisfied" has two halves, and both are required:
+
+> every required request has **matched**, in order, **and** every
+> corresponding scripted response has reached its intended **terminal
+> state**.
+
+A step therefore moves `pending -> matched -> settled` (or `-> failed`), and
+matching a request is progression, never completion. An unexpected extra
+request, a request that does not match its step, a step that never received
+its request, and a response still in flight — suspended at an unreleased
+gate, for instance — each keep the report unsuccessful and the exit code
+non-zero.
+
+Terminal semantics per response kind:
+
+| Response | Terminal when |
+| --- | --- |
+| `Stream` / `RawResponse` | every encoded emission has been written and flushed |
+| `HttpError` | the status line, headers, and JSON body have been written and flushed |
+| scripted `Disconnect` | the disconnect happens — it *is* the intended end, and the rest of the script is unreachable by construction |
+| client disconnect, `allow_disconnect=True` | the client goes away — abandoning the stream is the point of that step (cancellation) |
+| client disconnect, otherwise | never: it is a scenario failure |
+
+`allow_disconnect` makes a *client* disconnect terminal. It does not excuse
+a response still parked at a gate with the client connected: that is neither
+settled nor disconnected, so the scenario stays unfinished.
 
 Shutdown is deterministic and happens on any of: `POST /__control/shutdown`,
 `SIGTERM`/`SIGINT`, or **EOF on stdin**. The stdin rule is what guarantees a
@@ -116,6 +139,11 @@ test infrastructure, never a rustX runtime API.
 Observation kinds: `request_accepted`, `headers_sent`, `chunk_flushed`,
 `gate_reached`, `client_disconnected`, `response_completed`,
 `scenario_completed`, `assertion_failed`.
+
+`response_completed` carries the terminal reason in its detail
+(`script_complete`, `http_error`, `scripted_disconnect`, or
+`client_disconnect`), and it is published only when a step actually settles.
+`scenario_completed` is published only once **every** step has settled.
 
 `observations/await` is a real barrier — an `asyncio.Condition` inside the
 provider process — not a polling loop. `timeoutMs` is deadlock protection
@@ -143,13 +171,15 @@ here never sleep.
 **Rust** — `tests/common/provider_emulator.rs` (`ProviderEmulator`) spawns
 `uv run --project test-support/fake-provider --frozen fake-provider
 --scenario <name> --port 0`, parses the readiness record, exposes the base
-URL and the control API, and asserts the scenario report on `finish()`.
+URL and the control API, and asserts both the scenario report and the child
+exit status on `finish()`.
 `tests/issue47_conformance.rs` composes the real `LocalConversationRuntime`
 with a catalog pointing at that URL.
 
 **TypeScript** — `tui/test/support/provider-emulator.ts` is the same
-launcher for the TUI real-child integration suite. It owns process mechanics
-only; the TUI has no provider protocol of its own.
+launcher for the TUI real-child integration suite, with the same `finish()`
+contract (report **and** exit status). It owns process mechanics only; the
+TUI has no provider protocol of its own.
 
 Both launchers skip with an explicit reason when `uv` is unavailable. In CI,
 `RUSTX_REQUIRE_PROVIDER_EMULATOR=1` turns that skip into a hard failure, so a
@@ -210,11 +240,15 @@ brand. A brand that reuses a protocol reuses its codec.
 | Anthropic Messages | `/v1/messages` | `protocols/anthropic_messages.py` |
 
 Scenario semantics stay protocol-neutral (`Text`, `ToolCall`, `Finish`,
-`Usage`); the codec owns the wire representation. `Raw` is the escape hatch
-for malformed-framing and compatibility scenarios, and it passes through
-every codec untouched. `tests/test_protocols.py` asserts the emitted bytes of
-each codec, so protocol coverage is a fact about the wire rather than about
-an enum.
+`Usage`); the codec owns the wire representation. Each codec emits the
+**normal documented lifecycle** of its protocol, not the subset any
+particular parser happens to accept — a codec trimmed to what rustX
+currently consumes would model the parser rather than the provider, and a
+gap in the parser would then be invisible. `Raw` (inside a `Stream`) and
+`RawResponse` are the escape hatch for deliberately malformed, truncated, or
+compatibility-shaped sequences, and they bypass the codec entirely.
+`tests/test_protocols.py` asserts each codec's exact event ordering, so
+protocol coverage is a fact about the wire rather than about an enum.
 
 ## Relationship to the other test fixtures
 

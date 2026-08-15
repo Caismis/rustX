@@ -111,49 +111,131 @@ def test_chat_reports_the_requested_tool_names():
 # -- OpenAI Responses -------------------------------------------------------
 
 
-def test_responses_text_stream_uses_the_responses_event_vocabulary():
+def test_responses_text_stream_follows_the_documented_lifecycle_exactly():
+    """The canonical normal ordering, asserted as a sequence.
+
+    Presence checks would pass on a codec that skipped
+    `response.content_part.done`; the whole point of this codec is that it
+    emits the protocol, not the subset one parser tolerates.
+    """
     codec = codec_for(OPENAI_RESPONSES)
-    decoded = events(codec.encode([Text("Hello world", pieces=2), Finish("stop"), Usage(10, 5)], "m"))
-    kinds = [event["type"] for event in decoded]
-    assert kinds[0] == "response.created"
-    assert "response.output_item.added" in kinds
-    assert "response.content_part.added" in kinds
-    assert kinds.count("response.output_text.delta") == 2
-    assert kinds[-1] == "response.completed"
-    assert "".join(
-        event["delta"] for event in decoded if event["type"] == "response.output_text.delta"
-    ) == "Hello world"
+    decoded = events(
+        codec.encode([Text("Hello world", pieces=2), Finish("stop"), Usage(10, 5)], "m")
+    )
+    assert [event["type"] for event in decoded] == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert [event["sequence_number"] for event in decoded] == list(range(len(decoded)))
+
+    added = decoded[2]
+    assert added["part"] == {"type": "output_text", "text": "", "annotations": []}
+    assert (
+        "".join(
+            event["delta"]
+            for event in decoded
+            if event["type"] == "response.output_text.delta"
+        )
+        == "Hello world"
+    )
+    assert decoded[5]["text"] == "Hello world"
+    done_part = decoded[6]
+    assert done_part["item_id"] == added["item_id"]
+    assert done_part["content_index"] == added["content_index"]
+    assert done_part["part"] == {
+        "type": "output_text",
+        "text": "Hello world",
+        "annotations": [],
+    }
+    item = decoded[7]["item"]
+    assert item["status"] == "completed"
+    assert item["content"] == [done_part["part"]]
+
     terminal = decoded[-1]["response"]
     assert terminal["status"] == "completed"
     assert terminal["usage"]["input_tokens"] == 10
     assert terminal["output"][0]["content"][0]["text"] == "Hello world"
+
+
+def test_responses_reasoning_summary_follows_the_documented_lifecycle_exactly():
+    codec = codec_for(OPENAI_RESPONSES)
+    decoded = events(codec.encode([Reasoning("plan"), Text("go"), Finish("stop")], "m"))
+    assert [event["type"] for event in decoded] == [
+        "response.created",
+        "response.output_item.added",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.reasoning_summary_part.done",
+        "response.output_item.done",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
     assert [event["sequence_number"] for event in decoded] == list(range(len(decoded)))
 
+    reasoning_added = decoded[1]
+    assert reasoning_added["item"]["type"] == "reasoning"
+    assert reasoning_added["item"]["summary"] == []
+    assert decoded[2]["part"] == {"type": "summary_text", "text": ""}
+    assert decoded[2]["summary_index"] == 0
+    assert decoded[3]["delta"] == "plan"
+    assert decoded[4]["text"] == "plan"
+    assert decoded[5]["part"] == {"type": "summary_text", "text": "plan"}
+    reasoning_done = decoded[6]["item"]
+    assert reasoning_done["status"] == "completed"
+    assert reasoning_done["summary"] == [{"type": "summary_text", "text": "plan"}]
+    # Every reasoning event names the same item, and the message that follows
+    # is a distinct output item at the next index.
+    for index in range(2, 6):
+        assert decoded[index]["item_id"] == reasoning_added["item"]["id"]
+        assert decoded[index]["output_index"] == 0
+    assert decoded[7]["output_index"] == 1
 
-def test_responses_function_call_streams_arguments_and_a_done_item():
+
+def test_responses_function_call_follows_the_documented_lifecycle_exactly():
     codec = codec_for(OPENAI_RESPONSES)
     decoded = events(
         codec.encode(
-            [ToolCall("call-9", "read", '{"path":"a"}', pieces=2), Finish("tool_calls")], "m"
+            [ToolCall("call-9", "read", '{"path":"a"}', pieces=2), Finish("tool_calls")],
+            "m",
         )
     )
-    added = next(
-        event for event in decoded if event["type"] == "response.output_item.added"
-    )
+    assert [event["type"] for event in decoded] == [
+        "response.created",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    added = decoded[1]
     assert added["item"]["type"] == "function_call"
     assert added["item"]["call_id"] == "call-9"
-    assert "".join(
-        event["delta"]
-        for event in decoded
-        if event["type"] == "response.function_call_arguments.delta"
-    ) == '{"path":"a"}'
-    done = next(
-        event
-        for event in decoded
-        if event["type"] == "response.output_item.done"
-        and event["item"]["type"] == "function_call"
+    assert added["item"]["arguments"] == ""
+    assert (
+        "".join(
+            event["delta"]
+            for event in decoded
+            if event["type"] == "response.function_call_arguments.delta"
+        )
+        == '{"path":"a"}'
     )
-    assert done["item"]["arguments"] == '{"path":"a"}'
+    assert decoded[4]["arguments"] == '{"path":"a"}'
+    assert decoded[5]["item"]["arguments"] == '{"path":"a"}'
+    assert decoded[5]["item"]["status"] == "completed"
 
 
 def test_responses_maps_a_length_finish_to_an_incomplete_response():

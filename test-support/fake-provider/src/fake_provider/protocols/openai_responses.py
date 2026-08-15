@@ -26,7 +26,17 @@ _INCOMPLETE_REASONS = {"length": "max_output_tokens", "content_filter": "content
 
 
 class OpenAiResponsesCodec:
-    """Encodes a response script as Responses streaming events."""
+    """Encodes a response script as Responses streaming events.
+
+    The emitted sequence is the **normal documented lifecycle**, not the
+    subset any particular parser happens to accept. A codec that emitted only
+    what rustX currently consumes would model the parser rather than the
+    provider, and a gap in the parser would then be invisible here.
+
+    A deliberately malformed or truncated sequence is expressed with `Raw`
+    inside a `Stream`, or with a whole `RawResponse`; those bytes bypass this
+    codec entirely.
+    """
 
     name = "openai_responses"
     default_path = "/v1/responses"
@@ -77,11 +87,20 @@ class OpenAiResponsesCodec:
             return sse(payload)
 
         def close_text() -> None:
+            """Closes an open assistant message with the documented lifecycle.
+
+            `output_text.done` -> `content_part.done` -> `output_item.done`,
+            in that order. The middle event is part of the normal protocol,
+            not an optional extra: emitting only the subset a particular
+            parser happens to tolerate would make this codec a model of the
+            parser rather than of the provider.
+            """
             nonlocal open_text, output_index
             if open_text is None:
                 return
             item_id = open_text["id"]
             text = open_text["text"]
+            part = {"type": "output_text", "text": text, "annotations": []}
             emits.append(
                 event(
                     {
@@ -94,12 +113,23 @@ class OpenAiResponsesCodec:
                     }
                 )
             )
+            emits.append(
+                event(
+                    {
+                        "type": "response.content_part.done",
+                        "item_id": item_id,
+                        "output_index": open_text["index"],
+                        "content_index": 0,
+                        "part": part,
+                    }
+                )
+            )
             item = {
                 "id": item_id,
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
-                "content": [{"type": "output_text", "text": text, "annotations": []}],
+                "content": [part],
             }
             emits.append(
                 event(
@@ -191,6 +221,21 @@ class OpenAiResponsesCodec:
                         }
                     )
                 )
+                # The documented reasoning-summary lifecycle, in full:
+                # part.added -> text.delta -> text.done -> part.done, then
+                # the item's own done event.
+                summary_part = {"type": "summary_text", "text": item.text}
+                emits.append(
+                    event(
+                        {
+                            "type": "response.reasoning_summary_part.added",
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "part": {"type": "summary_text", "text": ""},
+                        }
+                    )
+                )
                 emits.append(
                     event(
                         {
@@ -202,11 +247,33 @@ class OpenAiResponsesCodec:
                         }
                     )
                 )
+                emits.append(
+                    event(
+                        {
+                            "type": "response.reasoning_summary_text.done",
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "text": item.text,
+                        }
+                    )
+                )
+                emits.append(
+                    event(
+                        {
+                            "type": "response.reasoning_summary_part.done",
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "summary_index": 0,
+                            "part": summary_part,
+                        }
+                    )
+                )
                 done = {
                     "id": item_id,
                     "type": "reasoning",
                     "status": "completed",
-                    "summary": [{"type": "summary_text", "text": item.text}],
+                    "summary": [summary_part],
                     "encrypted_content": None,
                 }
                 emits.append(

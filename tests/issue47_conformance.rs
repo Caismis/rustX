@@ -313,7 +313,7 @@ fn text_capabilities() -> serde_json::Value {
         "inputModalities": ["text"],
         "outputModalities": ["text"],
         "toolCalls": true,
-        "reasoning": false,
+        "reasoning": true,
     })
 }
 
@@ -378,6 +378,21 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             driver.committed_agent_text(),
             "Hello world",
             "{scenario}: the streamed deltas commit as one canonical message"
+        );
+        // The scripted response leads with the protocol's full normal
+        // reasoning lifecycle, so this also proves the real stream parser
+        // accepts it rather than only the text subset.
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    RuntimeClientEvent::AssistantReasoningDelta { delta, .. } =>
+                        Some(delta.as_str()),
+                    _ => None,
+                })
+                .collect::<String>(),
+            "the conformance plan",
+            "{scenario}: the reasoning block reached the runtime"
         );
         assert_eq!(
             events

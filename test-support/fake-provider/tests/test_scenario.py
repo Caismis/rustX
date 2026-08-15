@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from fake_provider.control import ScenarioRun, declared_gates
@@ -127,17 +129,43 @@ def test_duplicate_gate_names_are_rejected_at_load():
         declared_gates(scenario)
 
 
-def test_a_fresh_run_is_not_ok_until_every_step_is_consumed():
+async def _run_states() -> None:
+    """A matched request is progression; only a settled response is success."""
     scenario = Scenario(
         "one-step",
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("x"), Finish())),
     )
     run = ScenarioRun(scenario)
     assert not run.ok
-    assert run.report()["unconsumedSteps"] == [0]
-    run.steps_consumed = 1
+    assert run.step_states == ["pending"]
+    assert run.report()["unsettledSteps"] == [{"index": 0, "state": "pending"}]
+
+    run.match_step(0)
+    assert run.steps_matched == 1
+    assert run.steps_settled == 0
+    assert not run.ok, "a matched request is not a completed scenario"
+    assert run.report()["unsettledSteps"] == [{"index": 0, "state": "matched"}]
+
+    await run.settle_step(0, "script_complete")
+    assert run.steps_settled == 1
+    assert run.all_settled
     assert run.ok
-    assert run.report()["unconsumedSteps"] == []
+    assert run.report()["unsettledSteps"] == []
+
+
+def test_a_matched_step_is_not_a_settled_step():
+    asyncio.run(_run_states())
+
+
+def test_a_failed_step_can_never_settle():
+    scenario = Scenario(
+        "one-step",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("x"), Finish())),
+    )
+    run = ScenarioRun(scenario)
+    run.fail_step(0)
+    assert not run.ok
+    assert run.report()["unsettledSteps"] == [{"index": 0, "state": "failed"}]
 
 
 def test_every_registered_scenario_builds():

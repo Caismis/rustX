@@ -46,6 +46,7 @@ class ProviderServer:
     def __init__(self, run: ScenarioRun) -> None:
         self.run = run
         self._server: asyncio.Server | None = None
+        self._connections: set[asyncio.Task[None]] = set()
 
     async def start(self, host: str, port: int) -> tuple[str, int]:
         self._server = await asyncio.start_server(self._handle, host, port)
@@ -54,13 +55,23 @@ class ProviderServer:
 
     async def serve_until_shutdown(self) -> None:
         await self.run.shutdown_requested.wait()
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
+        if self._server is None:
+            return
+        self._server.close()
+        # An in-flight response — one suspended at an unreleased gate, for
+        # instance — must not hold shutdown hostage: `wait_closed()` waits for
+        # every handler. Cancelling them leaves their steps unsettled, which
+        # is precisely what the report should then say.
+        for task in list(self._connections):
+            task.cancel()
+        await self._server.wait_closed()
 
     # -- connection handling ---------------------------------------------
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._connections.add(task)
         try:
             head = await _read_head(reader)
             if head is None:
@@ -75,10 +86,12 @@ class ProviderServer:
         except (ConnectionResetError, BrokenPipeError):
             return
         finally:
+            if task is not None:
+                self._connections.discard(task)
             writer.close()
             try:
                 await writer.wait_closed()
-            except (ConnectionResetError, BrokenPipeError):
+            except (ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
                 pass
 
     # -- the provider surface --------------------------------------------
@@ -134,6 +147,7 @@ class ProviderServer:
         expected_codec = codec_for(step.expect.protocol)
         failures = step.expect.failures(request, expected_codec)
         if failures:
+            self.run.fail_step(index)
             for failure in failures:
                 await self.run.fail(f"request #{index + 1}: {failure}", request_index=index)
             await _write_json(
@@ -149,9 +163,11 @@ class ProviderServer:
             )
             return
 
-        self.run.steps_consumed = index + 1
+        # Matching is progression, not completion. The step settles only if
+        # the scripted response below reaches its terminal state.
+        self.run.match_step(index)
         await self._respond(step, expected_codec, request, index, reader, writer)
-        if self.run.steps_consumed == len(self.run.scenario.steps):
+        if self.run.all_settled:
             await self.run.observe(control.SCENARIO_COMPLETED)
 
     async def _respond(
@@ -163,11 +179,29 @@ class ProviderServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        """Serves one step's scripted response and settles the step.
+
+        Terminal semantics, by response kind:
+
+        - `HttpError` — terminal once the status line, headers, and JSON body
+          are written and flushed. It has no script and no gate.
+        - `Stream` / `RawResponse` — terminal once **every** encoded emission
+          has been written and flushed. A gate is part of the script, so a
+          response parked at an unreleased gate has not reached its terminal
+          state and its step stays `matched`.
+        - a scripted `Disconnect` — the disconnect *is* the intended terminal
+          state; anything after it in the script is unreachable by
+          construction, which is what the author asked for.
+        - a **client** disconnect — terminal only when the step declares
+          `allow_disconnect=True` (the cancellation case, where abandoning
+          the stream is the point). Otherwise it is a scenario failure and
+          the step can no longer settle.
+        """
         response = step.respond
         if isinstance(response, HttpError):
             await _write_json(writer, response.status, dict(response.body))
             await self.run.observe(control.HEADERS_SENT, request_index=index)
-            await self.run.observe(control.RESPONSE_COMPLETED, request_index=index)
+            await self.run.settle_step(index, control.TERMINAL_HTTP_ERROR)
             return
 
         model = request.model or "fake-model"
@@ -193,39 +227,69 @@ class ProviderServer:
 
         disconnected = asyncio.Event()
         watcher = asyncio.create_task(self._watch_disconnect(reader, disconnected, index))
-        completed = False
         try:
-            await _write_head(writer, status, extra_headers)
-            await self.run.observe(control.HEADERS_SENT, request_index=index)
-            for emit in emits:
-                if isinstance(emit, Gate):
-                    await self.run.reach_gate(emit.name, index)
-                    continue
-                if isinstance(emit, Disconnect):
-                    writer.transport.abort()
-                    return
-                if isinstance(emit, bytes):
-                    writer.write(emit)
-                    try:
-                        await writer.drain()
-                    except (ConnectionResetError, BrokenPipeError):
-                        disconnected.set()
-                        return
-                    await self.run.observe(
-                        control.CHUNK_FLUSHED, request_index=index, bytes=len(emit)
-                    )
-                else:  # pragma: no cover - the union is closed
-                    raise TypeError(f"unsupported emission {emit!r}")
-            completed = True
-            await self.run.observe(control.RESPONSE_COMPLETED, request_index=index)
+            terminal = await self._write_script(
+                emits, status, extra_headers, index, writer, disconnected
+            )
         finally:
+            # Only a synchronous release belongs here: an `await` in a
+            # `finally` would re-raise if this task were cancelled mid-script,
+            # and a cancelled response must simply leave its step unsettled.
             watcher.cancel()
-            if disconnected.is_set() and not completed and not step.allow_disconnect:
+
+        if terminal is None and disconnected.is_set() and step.allow_disconnect:
+            # The driver abandoned the stream on purpose. That is this step's
+            # intended terminal state, so it settles rather than failing.
+            terminal = control.TERMINAL_CLIENT_DISCONNECT
+        if terminal is None:
+            if disconnected.is_set():
                 await self.run.fail(
                     f"request #{index + 1}: the client disconnected before the scripted "
                     "response finished, and the step does not allow it",
                     request_index=index,
                 )
+                self.run.fail_step(index)
+            # Otherwise the step simply never reached its terminal state; it
+            # stays `matched`, and the report says so.
+            return
+        await self.run.settle_step(index, terminal)
+
+    async def _write_script(
+        self,
+        emits: list[Any],
+        status: int,
+        extra_headers: dict[str, str],
+        index: int,
+        writer: asyncio.StreamWriter,
+        disconnected: asyncio.Event,
+    ) -> str | None:
+        """Writes one encoded response script.
+
+        Returns the terminal reason, or `None` when the script did not reach
+        a terminal state (the client vanished, or a gate is still holding).
+        """
+        await _write_head(writer, status, extra_headers)
+        await self.run.observe(control.HEADERS_SENT, request_index=index)
+        for emit in emits:
+            if isinstance(emit, Gate):
+                await self.run.reach_gate(emit.name, index)
+                continue
+            if isinstance(emit, Disconnect):
+                writer.transport.abort()
+                return control.TERMINAL_SCRIPTED_DISCONNECT
+            if isinstance(emit, bytes):
+                writer.write(emit)
+                try:
+                    await writer.drain()
+                except (ConnectionResetError, BrokenPipeError):
+                    disconnected.set()
+                    return None
+                await self.run.observe(
+                    control.CHUNK_FLUSHED, request_index=index, bytes=len(emit)
+                )
+            else:  # pragma: no cover - the union is closed
+                raise TypeError(f"unsupported emission {emit!r}")
+        return control.TERMINAL_SCRIPT_COMPLETE
 
     async def _watch_disconnect(
         self, reader: asyncio.StreamReader, disconnected: asyncio.Event, index: int
@@ -287,6 +351,12 @@ class ProviderServer:
             return
         if method == "POST" and path == "/shutdown":
             await _write_json(writer, 200, self.run.report())
+            # The report is already flushed. Drop this connection from the
+            # cancellation set so shutdown does not tear down the very
+            # response that requested it.
+            task = asyncio.current_task()
+            if task is not None:
+                self._connections.discard(task)
             self.run.shutdown_requested.set()
             return
         await _write_json(writer, 404, {"error": f"no control route {method} {path}"})

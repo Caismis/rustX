@@ -41,6 +41,31 @@ GATE_PENDING = "pending"
 GATE_REACHED_STATE = "reached"
 GATE_RELEASED = "released"
 
+# Step states. Request matching and response completion are deliberately two
+# separate facts:
+#
+#   pending -> matched -> settled
+#                 |
+#                 +----> failed
+#
+# A step becomes `matched` when its request arrived and satisfied the
+# expectation. It becomes `settled` only when the scripted response reached
+# its intended terminal state. A response parked at an unreleased gate is
+# `matched` and nothing more, so a scenario shut down mid-response is
+# reported as unfinished rather than successful.
+STEP_PENDING = "pending"
+STEP_MATCHED = "matched"
+STEP_SETTLED = "settled"
+STEP_FAILED = "failed"
+
+# Why a response reached its terminal state. Recorded on the settlement
+# observation so a driver can tell "the script ran out" from "the client
+# went away" without inferring it.
+TERMINAL_SCRIPT_COMPLETE = "script_complete"
+TERMINAL_HTTP_ERROR = "http_error"
+TERMINAL_SCRIPTED_DISCONNECT = "scripted_disconnect"
+TERMINAL_CLIENT_DISCONNECT = "client_disconnect"
+
 
 @dataclass(frozen=True)
 class Observation:
@@ -88,7 +113,7 @@ class ScenarioRun:
         self.requests: list[RecordedRequest] = []
         self.observations: list[Observation] = []
         self.failures: list[dict[str, Any]] = []
-        self.steps_consumed = 0
+        self.step_states: list[str] = [STEP_PENDING] * len(scenario.steps)
         self.gates: dict[str, str] = {name: GATE_PENDING for name in declared_gates(scenario)}
         self._releases: dict[str, asyncio.Event] = {
             name: asyncio.Event() for name in self.gates
@@ -175,6 +200,39 @@ class ScenarioRun:
             self._condition.notify_all()
         return True
 
+    # -- step progression -------------------------------------------------
+
+    def match_step(self, index: int) -> None:
+        """Records that step `index`'s request arrived and matched.
+
+        Matching is progression, never completion: the scripted response has
+        not run yet.
+        """
+        self.step_states[index] = STEP_MATCHED
+
+    async def settle_step(self, index: int, terminal: str) -> None:
+        """Records that step `index`'s scripted response reached `terminal`."""
+        self.step_states[index] = STEP_SETTLED
+        await self.observe(RESPONSE_COMPLETED, request_index=index, terminal=terminal)
+
+    def fail_step(self, index: int) -> None:
+        """Records that step `index` can no longer settle."""
+        self.step_states[index] = STEP_FAILED
+
+    @property
+    def steps_matched(self) -> int:
+        return sum(
+            1 for state in self.step_states if state in (STEP_MATCHED, STEP_SETTLED)
+        )
+
+    @property
+    def steps_settled(self) -> int:
+        return sum(1 for state in self.step_states if state == STEP_SETTLED)
+
+    @property
+    def all_settled(self) -> bool:
+        return all(state == STEP_SETTLED for state in self.step_states)
+
     # -- failures ---------------------------------------------------------
 
     async def fail(self, detail: str, *, request_index: int | None = None) -> None:
@@ -191,28 +249,39 @@ class ScenarioRun:
 
     @property
     def ok(self) -> bool:
-        return not self.failures and self.steps_consumed == len(self.scenario.steps)
+        """Whether the scenario succeeded.
+
+        Every required request must have matched **and** every corresponding
+        scripted response must have reached its intended terminal state. A
+        matched request whose response is still in flight — parked at an
+        unreleased gate, for instance — is not success.
+        """
+        return not self.failures and self.all_settled
 
     def state(self) -> dict[str, Any]:
         return {
             "scenario": self.scenario.name,
             "stepsTotal": len(self.scenario.steps),
-            "stepsConsumed": self.steps_consumed,
+            "stepsMatched": self.steps_matched,
+            "stepsSettled": self.steps_settled,
+            "stepStates": list(self.step_states),
             "requestCount": len(self.requests),
             "gates": dict(self.gates),
             "failures": list(self.failures),
             "observationCount": len(self.observations),
-            "complete": self.steps_consumed == len(self.scenario.steps),
+            "complete": self.all_settled,
             "ok": self.ok,
         }
 
     def report(self) -> dict[str, Any]:
-        unconsumed = [
-            index for index in range(self.steps_consumed, len(self.scenario.steps))
+        unsettled = [
+            {"index": index, "state": state}
+            for index, state in enumerate(self.step_states)
+            if state != STEP_SETTLED
         ]
         return {
             **self.state(),
-            "unconsumedSteps": unconsumed,
+            "unsettledSteps": unsettled,
             "requests": [request.to_json() for request in self.requests],
             "observations": [observation.to_json() for observation in self.observations],
         }

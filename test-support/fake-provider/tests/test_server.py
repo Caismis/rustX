@@ -10,6 +10,7 @@ from fake_provider import control
 from fake_provider.control import ScenarioRun
 from fake_provider.scenario import (
     OPENAI_CHAT_COMPLETIONS,
+    Disconnect,
     Expect,
     Finish,
     Gate,
@@ -29,8 +30,11 @@ CHAT = "/v1/chat/completions"
 class Harness:
     """A running scenario on an ephemeral loopback port."""
 
-    def __init__(self, run: ScenarioRun, host: str, port: int) -> None:
+    def __init__(
+        self, run: ScenarioRun, server: ProviderServer, host: str, port: int
+    ) -> None:
         self.run = run
+        self.server = server
         self.host = host
         self.port = port
 
@@ -52,7 +56,7 @@ async def serve(scenario: Scenario) -> Harness:
     run = ScenarioRun(scenario)
     server = ProviderServer(run)
     host, port = await server.start("127.0.0.1", 0)
-    return Harness(run, host, port)
+    return Harness(run, server, host, port)
 
 
 def chat_step(**expect) -> Step:
@@ -80,10 +84,17 @@ def test_steps_are_consumed_in_order_and_the_scenario_completes():
         second = await harness.post(CHAT, {"model": "m", "messages": ["second"]})
         assert second.status == 200
         state = (await harness.control("GET", "/state")).json
-        assert state["stepsConsumed"] == 2
+        assert state["stepsMatched"] == 2
+        assert state["stepsSettled"] == 2
+        assert state["stepStates"] == ["settled", "settled"]
         assert state["requestCount"] == 2
         assert state["ok"] is True
-        assert harness.run.report()["unconsumedSteps"] == []
+        assert harness.run.report()["unsettledSteps"] == []
+        # The completion observation is published only once every scripted
+        # response has actually finished.
+        assert [
+            observation.kind for observation in harness.run.observations
+        ].count(control.SCENARIO_COMPLETED) == 1
 
     asyncio.run(scenario())
 
@@ -118,13 +129,97 @@ def test_an_extra_request_fails_by_default():
     asyncio.run(scenario())
 
 
-def test_an_unconsumed_step_fails_the_report():
+def test_an_unrequested_step_fails_the_report():
     async def scenario() -> None:
         harness = await serve(Scenario("two", chat_step(), chat_step()))
         await harness.post(CHAT, {"model": "m"})
         report = harness.run.report()
         assert report["ok"] is False
-        assert report["unconsumedSteps"] == [1]
+        assert report["unsettledSteps"] == [{"index": 1, "state": "pending"}]
+        assert control.SCENARIO_COMPLETED not in [
+            observation.kind for observation in harness.run.observations
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_a_step_still_holding_at_a_gate_is_matched_but_not_settled():
+    """The regression for the completion-accounting defect.
+
+    The final expected request arrives and matches, its response stops at an
+    unreleased gate, and shutdown is called while it is still held. Matching
+    the request is not finishing the response, so the report must not claim
+    success.
+    """
+
+    async def scenario() -> None:
+        harness = await serve(
+            Scenario(
+                "gated-shutdown",
+                Step(
+                    Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                    Stream(Text("before"), Gate("g"), Text("after"), Finish("stop")),
+                ),
+            )
+        )
+        reader, writer = await conftest.open_stream(
+            harness.host, harness.port, CHAT, b'{"model":"m"}'
+        )
+        try:
+            reached = await harness.control(
+                "GET", "/observations/await?kind=gate_reached&name=g&timeoutMs=5000"
+            )
+            assert reached.status == 200
+
+            # The request matched — progression — but the response is still
+            # suspended, so the step has not settled.
+            state = (await harness.control("GET", "/state")).json
+            assert state["requestCount"] == 1
+            assert state["stepsMatched"] == 1
+            assert state["stepsSettled"] == 0
+            assert state["stepStates"] == ["matched"]
+            assert state["complete"] is False
+            assert state["ok"] is False
+
+            report = (await harness.control("POST", "/shutdown")).json
+            assert report["ok"] is False, report
+            assert report["unsettledSteps"] == [{"index": 0, "state": "matched"}]
+            assert control.SCENARIO_COMPLETED not in [
+                observation["kind"] for observation in report["observations"]
+            ]
+            assert control.RESPONSE_COMPLETED not in [
+                observation["kind"] for observation in report["observations"]
+            ]
+        finally:
+            writer.close()
+            del reader
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_completes_even_while_a_response_is_gated():
+    """A suspended response must never hold the process open."""
+
+    async def scenario() -> None:
+        harness = await serve(
+            Scenario(
+                "gated-shutdown",
+                Step(
+                    Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                    Stream(Text("before"), Gate("g"), Finish("stop")),
+                ),
+            )
+        )
+        _, writer = await conftest.open_stream(
+            harness.host, harness.port, CHAT, b'{"model":"m"}'
+        )
+        try:
+            await harness.control("GET", "/observations/await?kind=gate_reached&name=g")
+            await harness.control("POST", "/shutdown")
+            await asyncio.wait_for(harness.server.serve_until_shutdown(), 5)
+            assert harness.run.ok is False
+        finally:
+            writer.close()
 
     asyncio.run(scenario())
 
@@ -260,9 +355,19 @@ def test_an_allowed_disconnect_keeps_the_scenario_green():
         writer.close()
         await harness.control("GET", "/observations/await?kind=client_disconnected")
         await harness.control("POST", "/gates/g/release")
-        # The release lets the response task finish; the report stays green.
-        await harness.control("GET", "/state")
+        # The release lets the response task finish. An abandoned stream is
+        # this step's intended terminal state, so it settles rather than
+        # failing, and the scenario is genuinely complete.
+        settled = await harness.control(
+            "GET", "/observations/await?kind=response_completed&timeoutMs=5000"
+        )
+        assert settled.status == 200
+        assert settled.json["detail"]["terminal"] in (
+            control.TERMINAL_CLIENT_DISCONNECT,
+            control.TERMINAL_SCRIPT_COMPLETE,
+        )
         assert harness.run.failures == []
+        assert harness.run.ok is True
 
     asyncio.run(scenario())
 
@@ -280,6 +385,52 @@ def test_awaiting_an_observation_that_never_happens_times_out_explicitly():
 
 
 # -- response shapes -------------------------------------------------------
+
+
+def test_terminal_reasons_are_recorded_per_response_kind():
+    """Each response kind settles for its own documented reason."""
+
+    async def scenario() -> None:
+        harness = await serve(
+            Scenario(
+                "terminals",
+                chat_step(),
+                Step(
+                    Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                    HttpError(500, {"error": {"message": "boom"}}),
+                ),
+                Step(
+                    Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                    Stream(Text("cut"), Disconnect(), Text("never"), Finish("stop")),
+                ),
+                Step(
+                    Expect(protocol=OPENAI_CHAT_COMPLETIONS),
+                    RawResponse(
+                        headers={"Content-Type": "text/event-stream"},
+                        script=(Raw(b"data: raw\n\n"),),
+                    ),
+                ),
+            )
+        )
+        for _ in range(4):
+            try:
+                await harness.post(CHAT, {"model": "m"})
+            except (ConnectionResetError, asyncio.IncompleteReadError):
+                pass  # the scripted disconnect tears its own connection down
+        terminals = [
+            observation.detail["terminal"]
+            for observation in harness.run.observations
+            if observation.kind == control.RESPONSE_COMPLETED
+        ]
+        assert terminals == [
+            control.TERMINAL_SCRIPT_COMPLETE,
+            control.TERMINAL_HTTP_ERROR,
+            control.TERMINAL_SCRIPTED_DISCONNECT,
+            control.TERMINAL_SCRIPT_COMPLETE,
+        ]
+        assert harness.run.ok is True
+
+    asyncio.run(scenario())
 
 
 def test_an_http_error_step_serves_the_scripted_provider_error():
@@ -332,7 +483,7 @@ def test_shutdown_returns_the_report_and_stops_the_server():
         await harness.post(CHAT, {"model": "m"})
         reply = await harness.control("POST", "/shutdown")
         assert reply.json["ok"] is True
-        assert reply.json["stepsConsumed"] == 1
+        assert reply.json["stepsSettled"] == 1
         assert harness.run.shutdown_requested.is_set()
 
     asyncio.run(scenario())

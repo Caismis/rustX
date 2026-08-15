@@ -11,9 +11,11 @@ stderr   human diagnostics only
 exit     0 when the scenario is satisfied, 1 otherwise
 ```
 
-"Satisfied" means every declared step was consumed and no assertion failed:
-an unexpected request, an unmatched request, or an unconsumed required step
-each fail the process.
+"Satisfied" means every declared step's request matched **and** every
+corresponding scripted response reached its intended terminal state, with no
+assertion failure. An unexpected request, an unmatched request, a step that
+never received its request, and a response still in flight — suspended at an
+unreleased gate, for instance — each fail the process.
 """
 
 from __future__ import annotations
@@ -100,7 +102,7 @@ async def run(scenario_name: str, host: str, port: int) -> int:
             + json.dumps(
                 {
                     "failures": report["failures"],
-                    "unconsumedSteps": report["unconsumedSteps"],
+                    "unsettledSteps": report["unsettledSteps"],
                 },
                 indent=2,
             ),

@@ -20,6 +20,7 @@ from fake_provider.scenario import (
     Finish,
     Gate,
     HttpError,
+    Reasoning,
     Scenario,
     Step,
     Stream,
@@ -72,7 +73,12 @@ SUMMARY_INSTRUCTION = "Summarize the following conversation history for continua
 
 
 def _text_turn(name: str, protocol: str, model: str, prompt: str) -> Scenario:
-    """One streamed assistant turn over the given protocol."""
+    """One streamed assistant turn over the given protocol.
+
+    The script leads with a reasoning block so the protocol's full normal
+    lifecycle — not just its text subset — is exercised against the real
+    rustX stream parser.
+    """
     return Scenario(
         name,
         Step(
@@ -83,7 +89,12 @@ def _text_turn(name: str, protocol: str, model: str, prompt: str) -> Scenario:
                 body_contains=(prompt,),
                 tools_include=("read", "bash"),
             ),
-            Stream(Text("Hello world", pieces=2), Finish("stop"), Usage(41, 3)),
+            Stream(
+                Reasoning("the conformance plan"),
+                Text("Hello world", pieces=2),
+                Finish("stop"),
+                Usage(41, 3),
+            ),
         ),
     )
 
