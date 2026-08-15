@@ -351,6 +351,55 @@ remaining `tests/*.rs` binaries use published API exclusively; fixtures
 shared by both live in `tests/common/`, and fixtures that need a seam live
 in `tests/scripted/support/`.
 
+### Three provider fixtures, three bounded purposes
+
+```text
+tests/scripted/support/model.rs    a scripted injected `ModelAdapter` behind
+                                   a validated catalog binding. Internal
+                                   state machines and units that need no
+                                   network and no provider boundary.
+
+tests/common/mod.rs FixtureServer  a raw Rust HTTP/1.1 fixture. One adapter
+                                   in isolation: request serialization,
+                                   stream parsing, error normalization,
+                                   one-attempt/no-retry. No Agent Loop.
+
+test-support/fake-provider         the canonical external provider-emulation
+                                   boundary. Composed Agent Loop conformance
+                                   across the real runtime and a real
+                                   external provider process.
+```
+
+The third is the one that decides what "conformance" means. It is an
+external Python 3.12 process (managed by uv, never a production runtime
+dependency) that speaks the real HTTP/SSE provider protocols, and
+`tests/issue47_conformance.rs` composes the real `LocalConversationRuntime`
+against it:
+
+```text
+test driver -> real catalog, binding, adapter, HTTP client, stream parser,
+               Agent Loop, context engine, tool runtime, capability plane,
+               Runtime Client projection
+            -> real HTTP + SSE
+            -> the scripted external provider
+```
+
+Nothing in rustX is substituted there — no fake adapter, no fake tool, no
+fake Skill runtime, no second Agent Loop. Scenarios are strict ordered
+scripts: request *N* meets step *N*, an unexpected or extra request fails by
+default, and an unconsumed step fails the process. Race-sensitive tests are
+ordered by named provider-side gates and an observation barrier rather than
+by sleeps: a driver waits until the provider provably reached a point,
+performs its runtime action, and releases. `test-support/fake-provider/README.md`
+documents the process, control, and scenario contracts.
+
+The lower two fixtures are retained deliberately. Routing an adapter
+translation test through an external process, a Python toolchain, and a
+scenario definition to assert one JSON field would add cost without adding
+truth. They are not, however, an implementation of composed conformance: a
+test that exercises the Agent Loop, the context engine, the tool runtime, or
+the capability plane belongs on the external boundary.
+
 The Issue #22 inbound batching integration is canonical:
 `ConversationToolRuntime` owns the one conversation inbound mailbox, and at
 every safe turn boundary the loop performs exactly one finite
@@ -2237,9 +2286,12 @@ credentials, and without sleep-based races: scripted byte and record
 sequences drive framing, RPC correlation and terminal settlement, projection
 folding, the A -> B model invariant, and resync repair. A bounded integration
 suite then drives the **real** `rustx` binary over the real stdio/JSONL
-transport against a local SSE provider fixture, exercising spawn, initialize,
-subscribe, model and capability inspection, inbound submission, streaming and
-commit, attempt settlement, resync, shutdown, stdin EOF, and clean exit.
+transport against the shared external provider emulator, exercising spawn,
+initialize, subscribe, model and capability inspection, inbound submission,
+streaming and commit, attempt settlement, resync, shutdown, stdin EOF, and
+clean exit. The TUI owns no provider protocol: it launches the same
+`test-support/fake-provider` process the Rust conformance suite uses, through
+a launcher that knows only about process mechanics and the control API.
 
 The layering is checkable rather than asserted: `@earendil-works/pi-tui` is
 imported by exactly two files, and eight of the nine client suites — framing,
@@ -2247,6 +2299,10 @@ RPC, presentation projection, session lifecycle, the model invariant,
 rendering, the process owner, and the real-binary integration — never reach it
 directly or transitively. Replacing the terminal library would leave every one
 of them valid.
+
+Both jobs install Python 3.12 and uv for the provider emulator; the Rust job
+additionally sets `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`, so a missing toolchain
+fails the pipeline instead of silently skipping the conformance suite.
 
 CI runs the TUI as a separate job on the nvm LTS line, so the Rust suites
 never depend on Node being present.

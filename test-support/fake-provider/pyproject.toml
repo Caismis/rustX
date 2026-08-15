@@ -1,0 +1,27 @@
+[project]
+name = "fake-provider"
+version = "0.1.0"
+description = "The deterministic external scripted provider emulator used by rustX Agent Loop conformance tests."
+requires-python = "==3.12.*"
+# Deliberately no runtime dependencies. The emulator owns raw HTTP/1.1
+# framing on purpose (raw-wire scenarios, disconnects at exact byte
+# positions, per-chunk flush gates); an ASGI framework would hide exactly
+# the boundaries these tests exist to control.
+dependencies = []
+
+[project.scripts]
+fake-provider = "fake_provider.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3,<9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fake_provider"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
