@@ -497,19 +497,35 @@ Implemented in the current architecture:
   registry-resolved `ToolId` and `ToolOrigin` from the same resolved
   `ToolDefinition`, so no second stored identity can disagree with the
   registry.
-- Timing/ownership separation: observers are registered under the
-  rustX-owned `ContextContributorIdentity` vocabulary (at most one per
-  semantic owner). "Post-tool" is a lifecycle *timing* fact owned by the
-  Agent Loop; the lane, `UserSource`, and `ContextKind` come from the
-  producer identity through the same table Context Assembly applies to that
-  owner's request-time proposals. A certified extension keeps its identity
-  and provenance when it defers.
+- Timing/ownership separation: observers are *bound* to a
+  `DeferredContextProducer` (at most one per semantic owner). "Post-tool" is a
+  lifecycle *timing* fact owned by the Agent Loop; the lane, `UserSource`, and
+  `ContextKind` come from the resolved producer through the same table Context
+  Assembly applies to that owner's request-time proposals. A certified
+  extension keeps its identity and provenance when it defers.
+- Binding is not admission: `ContextAssembly::register_extension` is the one
+  semantic identity/provenance/attestation authority. A deferred extension
+  producer is resolved against it and uses **that registration's** generation
+  and attestation; an unregistered key fails the assembly with
+  `UnregisteredContributor` before admission, with no lane, no extension
+  provenance, and no synthesized generation. Registration — not request-time
+  output — is what makes an extension, so a post-tool-only certified extension
+  works.
+- Deferred output is User context only: `ToolResultObserver` returns
+  `UserMessageProposal`, so a deferred Effective System Prompt section is
+  unrepresentable. System sections stay on the request-time contributor path.
+- Cancellation precedence: observable cancellation is checked before each
+  observer starts and again once it settles, before its return value is
+  consumed. An in-flight bounded observation settles rather than being
+  dropped, but cancellation then wins over its success *and* its failure, and
+  no later observer starts.
 - Deferred context: an Agent-Loop-owned transient buffer ordered by
   `(canonical ToolCall batch position, producer identity, proposal FIFO)`,
   admitted through the ordinary Context Assembly path. The buffer is never
   canonical history. It is bounded at the observer transaction boundary —
-  per-observation count, running attempt total, and per-proposal content —
-  before anything is staged, and again in assembly.
+  per-observation count against the established `MAX_PROPOSALS_PER_CONTRIBUTOR`
+  limit, running attempt total, and per-proposal content — before anything is
+  staged, and again in assembly.
 - Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`,
   `ToolResultObservationFailed`, and `DeferredContextRejected`, each
   preserving exactly one terminal event.
@@ -532,9 +548,16 @@ Exit criteria:
   deferred context — including proposals earlier observations of the same
   pass produced — and settles the attempt exactly once.
 - A native producer's deferred proposal gets native provenance and a
-  certified extension's keeps extension identity/provenance; post-tool timing
-  rewrites no contributor identity; producers with different identities keep
-  a deterministic order that does not depend on registration order.
+  *registered* certified extension's keeps extension identity/provenance and
+  its registered attestation; post-tool timing rewrites no contributor
+  identity; producers with different identities keep a deterministic order
+  that does not depend on registration order.
+- An observer bound to an extension the attempt's Context Assembly never
+  registered admits nothing and gets no extension provenance.
+- Deferred context never changes the Effective System Prompt.
+- Cancellation observed around an observation prevents any later observer from
+  starting, discards the pass, and outranks the observer's own success or
+  failure.
 - An observer can identify the native Read target path from the validated
   invocation arguments, without any model-facing name, and a
   preflight-rejected call exposes no invocation arguments.

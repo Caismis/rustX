@@ -140,9 +140,9 @@ registration order, discovery timing, an address, a handle, or an index.
 The finite user lanes are ordered as:
 
 1. ClaimedInbound — already claimed canonical input, never extension-owned;
-2. PostToolObservation — the lane of the **native runtime observation owner**
-   (`NativeContextContributor::ToolResultObservation`); native-reserved,
-   never extension-owned;
+2. RuntimeToolObservation — the lane of the **native runtime observation
+   owner** (`NativeContextContributor::RuntimeToolObservation`);
+   native-reserved, never extension-owned;
 3. WorkspaceInstructions — one native semantic owner;
 4. ExtensionEnvironment — multiple certified extensions;
 5. SkillGuidance — one native-reserved owner;
@@ -160,14 +160,15 @@ returns is *deferred*, admitted at the next primary step rather than this one �
 and eligibility is a lifecycle-timing property owned by the Agent Loop.
 
 Semantic ownership stays here. Every deferred proposal reaches assembly
-carrying the trusted `ContextContributorIdentity` the Agent Loop stamped from
-its observer's *registration*, and assembly derives the lane, the `UserSource`,
-and the `ContextKind` from that identity through the same table it applies to
-that owner's request-time proposals:
+carrying the producer reference the Agent Loop stamped from its observer's
+*binding*. Assembly resolves that reference to an authoritative registration
+(next section) and only then derives the lane, the `UserSource`, and the
+`ContextKind` — through the same table it applies to that owner's request-time
+proposals:
 
 | producer identity | lane | `UserSource` | `ContextKind` |
 | --- | --- | --- | --- |
-| `Native(ToolResultObservation)` | `PostToolObservation` | `Runtime` | `PostToolObservation` |
+| `Native(RuntimeToolObservation)` | `RuntimeToolObservation` | `Runtime` | `RuntimeToolObservation` |
 | `Native(WorkspaceInstructions)` | `WorkspaceInstructions` | `Runtime` | `WorkspaceInstructions` |
 | `Native(SkillGuidance)` | `SkillGuidance` | `Runtime` | `SkillGuidance` |
 | `Native(AgentStatus)` | `AgentStatus` | `Runtime` | `AgentStatus` |
@@ -176,6 +177,37 @@ that owner's request-time proposals:
 So a certified extension that produces deferred post-tool context keeps its
 extension identity, its extension provenance, and its own lane. There is no
 rule converting post-tool proposals into native runtime context.
+
+### Registration is the only semantic admission authority
+
+A deferred proposal does not arrive with a trusted identity. It arrives with a
+`DeferredContextProducer`, which is a **reference**:
+
+- `NativeRuntimeObservation` — rustX owns this semantic owner, so it needs no
+  registration and carries no attestation;
+- `CertifiedExtension { identity }` — a logical key and nothing more. Any
+  caller can construct a `CertifiedExtensionIdentity`; the string proves
+  nothing.
+
+`ContextAssembly::assemble` resolves the reference against the extensions
+registered through `ContextAssembly::register_extension` — the one place an
+extension becomes trusted — and uses that registration's own
+`ContributorGeneration`, attestation included. An unknown key is rejected with
+`ContextAssemblyError::UnregisteredContributor`: no lane, no
+`UserSource::Extension`, no synthesized generation, and no partially admitted
+batch. A lifecycle observer therefore cannot become a second extension
+registry by naming an extension, and a certified extension that only produces
+deferred context still gets its authoritative generation without contributing
+anything at request time.
+
+### Deferred proposals are User context
+
+A deferred proposal is a `UserMessageProposal`, never the full
+`ContextProposal` vocabulary. The post-tool seam publishes conversational
+context about a settled tool batch; the Effective System Prompt stays owned by
+the request-time contributor path. The restriction is carried by the
+`ToolResultObserver` return type, so a deferred system section is
+unrepresentable rather than rejected at runtime.
 
 Inside one `(lane, contributor)` bucket, a deferred fact precedes the same
 owner's request-time fact, because it describes the batch that precedes the
@@ -187,7 +219,9 @@ it. Owners with no lane for a proposed kind (`CoreSystemIdentity` and
 
 The deferred batch is bounded by `MAX_DEFERRED_CONTEXT_PROPOSALS` over all
 producers together; the Agent Loop enforces the same bound earlier, at its
-observer transaction boundary.
+observer transaction boundary, together with the established
+`MAX_PROPOSALS_PER_CONTRIBUTOR` bound on each single observation. There is no
+separate deferred-only proposal constant.
 
 The finite system-section lanes are ordered as:
 

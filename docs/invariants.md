@@ -1086,13 +1086,19 @@ Core invariant:
   whether a seam is attached, so attaching one cannot change ordering,
   cancellation, or settlement semantics.
 - The pre-step phase has exactly one owner per attempt: one `PreStepPolicy`.
-- The tool-result phase registers observers under the rustX-owned
-  `ContextContributorIdentity` vocabulary, at most one per semantic owner; a
-  duplicate registration is rejected. There is no hook registry, policy chain,
-  middleware chain, around-dispatch wrapper, or priority number, and therefore
-  no registration-order, address-order, or map-iteration-order semantics
-  anywhere in the seam: observers are invoked and ordered by logical identity
-  only.
+- The tool-result phase **binds** observers to a `DeferredContextProducer`, at
+  most one per semantic owner; a duplicate binding is rejected. There is no
+  hook registry, policy chain, middleware chain, around-dispatch wrapper, or
+  priority number, and therefore no registration-order, address-order, or
+  map-iteration-order semantics anywhere in the seam: observers are invoked and
+  ordered by logical producer only.
+- **Binding is not admission.** `ContextAssembly::register_extension` is the
+  single semantic identity/provenance/attestation authority. The lifecycle
+  seam exposes exactly two binders — `with_native_tool_result_observer` and
+  `with_extension_tool_result_observer` — and no public generic binder over an
+  arbitrary contributor identity, so it cannot read or act as a second
+  extension registry. A `CertifiedExtensionIdentity` passed to the extension
+  binder is a reference, not a credential.
 - The existing `AgentExecutionObserver` remains a read-only projection
   observer of committed facts. It is never a policy owner, a tool-result
   decision owner, a deferred-context producer, or a cancellation owner.
@@ -1163,22 +1169,37 @@ Core invariant:
   registry.
 - `ToolInvocationMode::Background` reports an accepted background dispatch,
   never completion of the detached work.
-- An observer may return zero or more bounded `ContextProposal` values and
+- An observer may return zero or more bounded `UserMessageProposal` values and
   nothing else. It returns *content*, never *semantics*: it cannot choose a
   `UserSource`, a `ContextKind`, a semantic lane, or a contributor identity.
   It cannot mutate a finalized result, reject or undo it, create a second
   `ToolMessage`, mutate `ToolCall` id/arguments, dispatch another tool, start
   a hidden model request, own cancellation, change the terminal outcome, or
   touch the Ledger/Surface.
+- The observer seam produces **User context only**. It cannot contribute an
+  Effective System Prompt section on the following turn; system sections stay
+  owned by the request-time `ContextContributor` path. The restriction is the
+  return type, so a deferred system section is unrepresentable rather than
+  rejected at runtime.
 - Every observer return value is validated at the **observer transaction
-  boundary**, before any proposal is staged: the proposal count against
-  `MAX_DEFERRED_PROPOSALS_PER_OBSERVATION`, the running total against
-  `MAX_DEFERRED_CONTEXT_PROPOSALS` (counting what the attempt already
-  staged), and every proposal body against the same bounded content contract
-  Context Assembly applies. An observer can therefore never append an
-  unbounded proposal set to the attempt buffer for a later step to reject.
-  A violation settles as
+  boundary**, before any proposal is staged: the proposal count against the
+  established `MAX_PROPOSALS_PER_CONTRIBUTOR` bound, the running total against
+  `MAX_DEFERRED_CONTEXT_PROPOSALS` (counting what the attempt already staged),
+  and every proposal body against the same bounded content contract Context
+  Assembly applies. The deferred path reuses the established context proposal
+  limit; there is no separate deferred-only per-observation constant. An
+  observer can therefore never append an unbounded proposal set to the attempt
+  buffer for a later step to reject. A violation settles as
   `AttemptFailed(Runtime(DeferredContextRejected { message }))`.
+- **Cancellation precedence.** Cancellation ownership stays with the Agent
+  Loop. Observable cancellation is checked before each observer starts and
+  again once it settles, before its return value is consumed. An in-flight
+  bounded observation is allowed to settle rather than being dropped, but once
+  cancellation is observable: no later observer starts, every pass-local
+  proposal (including an earlier observer's) is discarded, and neither the
+  observer's success nor its failure can decide the terminal outcome — an
+  observer that errors during an already-cancelled attempt settles
+  `AttemptCancelled`, never `ToolResultObservationFailed`.
 - Observer failure settles as
   `AttemptFailed(Runtime(ToolResultObservationFailed { message }))`. The
   finalized results stay canonical and unchanged, no second result appears,
@@ -1203,26 +1224,35 @@ The load-bearing split of this seam:
   `UserSource`, a `ContextKind`, a semantic lane, or a contributor identity.
   There is no rule converting post-tool proposals into native runtime
   context.
-- Each staged proposal carries the trusted `ContextContributorIdentity` the
-  Agent Loop stamped from its observer's **registration** — never from
-  anything the observer returned. Context Assembly derives lane, provenance,
-  and semantic family from that identity alone, through the same table it
-  applies to that owner's request-time proposals:
-  - `Native(ToolResultObservation)` → the native-reserved
-    `UserContextLane::PostToolObservation` (immediately after
+- Each staged proposal carries the `DeferredContextProducer` the Agent Loop
+  stamped from its observer's **binding** — never from anything the observer
+  returned. Context Assembly first resolves that reference to an authoritative
+  registration, then derives lane, provenance, and semantic family from the
+  resolved identity alone, through the same table it applies to that owner's
+  request-time proposals:
+  - `NativeRuntimeObservation` → the native-reserved
+    `UserContextLane::RuntimeToolObservation` (immediately after
     `ClaimedInbound` and before `WorkspaceInstructions`,
     `ExtensionEnvironment`, `SkillGuidance`, and `AgentStatus`),
     `UserSource::Runtime`,
-    `InboundKind::Context(ContextKind::PostToolObservation)`;
-  - `CertifiedExtension(key)` → `UserContextLane::ExtensionEnvironment`,
+    `InboundKind::Context(ContextKind::RuntimeToolObservation)`. rustX owns
+    this owner, so it needs no registration and carries no attestation;
+  - `CertifiedExtension { identity }` → the matching **registered** extension:
+    `UserContextLane::ExtensionEnvironment`,
     `UserSource::Extension { contributor: key }`,
-    `InboundKind::Context(ContextKind::ExtensionEnvironment)`.
+    `InboundKind::Context(ContextKind::ExtensionEnvironment)`, and **that
+    registration's own** `ContributorGeneration` including its attestation.
   An extension cannot claim the native-reserved logical key or lane, and an
   extension's deferred fact is never attributed to the native observation
   owner in the accepted `ContextGeneration`.
-- A semantic owner that publishes no lane for a proposed kind
-  (`CoreSystemIdentity` and `AgentProfile` publish no User context) is
-  rejected rather than relaned.
+- A deferred producer naming an extension the attempt's Context Assembly never
+  registered fails the assembly with
+  `ContextAssemblyError::UnregisteredContributor` before admission: no lane,
+  no `UserSource::Extension`, no synthesized generation, and no partially
+  admitted batch. Naming an extension never makes an observer one.
+- Registration, not request-time output, is what makes an extension. A
+  certified extension that produces deferred context and nothing else still
+  resolves to its authoritative registered generation.
 - The deferred buffer is Agent-Loop-owned and transient. It is not canonical
   history, not a second transcript, not a second context ledger, and not a
   second Surface. A proposal becomes a conversation fact only after the
@@ -1246,10 +1276,10 @@ The load-bearing split of this seam:
   `Assistant(A, B)`, `ToolResult A`, `ToolResult B`, and only afterwards any
   admitted deferred context — even when B physically completes first.
   Deferred context never interleaves between sibling results.
-- A deferred proposal uses the same `ContextProposal` vocabulary as a
-  contributor proposal and is laned by the same owner table. An observer
-  still cannot replace the system prompt or create Tool or Assistant
-  messages.
+- A deferred proposal is a `UserMessageProposal`, laned by the same owner
+  table as a contributor's User proposal. An observer cannot contribute to the
+  Effective System Prompt, replace the system prompt, or create Tool or
+  Assistant messages.
 - Because accepted deferred context is an ordinary canonical fact before the
   corresponding snapshot is frozen, the Issue #55 reconstruction invariant is
   unchanged: no historical request reruns a policy or an observer, and none

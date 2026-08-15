@@ -207,11 +207,16 @@ pub enum NativeContextContributor {
     CoreSystemIdentity,
     /// The native agent profile/persona owner.
     AgentProfile,
-    /// The native owner of deferred post-tool observation context (Issue
-    /// #56). The Agent Loop stages the observer's bounded proposals and this
-    /// owner explains them inside the accepted context generation; the
-    /// observer never supplies its own provenance or identity.
-    ToolResultObservation,
+    /// The native owner of runtime observations of finalized tool outcomes
+    /// (Issue #56).
+    ///
+    /// The name states *ownership*, not timing: this is the rustX runtime
+    /// speaking about what a settled tool batch did. A certified extension
+    /// that observes the same batch is a different owner and keeps its own
+    /// identity. The Agent Loop stages an observer's bounded proposals and
+    /// this owner explains the native ones inside the accepted context
+    /// generation; no observer supplies its own provenance or identity.
+    RuntimeToolObservation,
 }
 
 impl NativeContextContributor {
@@ -224,7 +229,7 @@ impl NativeContextContributor {
         Self::AgentStatus,
         Self::CoreSystemIdentity,
         Self::AgentProfile,
-        Self::ToolResultObservation,
+        Self::RuntimeToolObservation,
     ];
 
     /// The canonical extension-key spelling reserved for this native owner.
@@ -236,7 +241,7 @@ impl NativeContextContributor {
             Self::AgentStatus => "agent-status",
             Self::CoreSystemIdentity => "core-runtime-identity",
             Self::AgentProfile => "agent-profile",
-            Self::ToolResultObservation => "tool-result-observation",
+            Self::RuntimeToolObservation => "runtime-tool-observation",
         }
     }
 
@@ -249,7 +254,7 @@ impl NativeContextContributor {
             Self::AgentStatus => "agent_status",
             Self::CoreSystemIdentity => "core_runtime_identity",
             Self::AgentProfile => "agent_profile",
-            Self::ToolResultObservation => "tool_result_observation",
+            Self::RuntimeToolObservation => "runtime_tool_observation",
         }
     }
 }

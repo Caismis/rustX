@@ -17,11 +17,13 @@
 //!     ↓ execute, settle every CallSlot, commit ToolResult A then ToolResult B
 //! tool batch is structurally settled
 //!     ↓
-//! ToolResultObserver (canonical ToolCall order, then identity order)
+//! cancellation checkpoint  ← before each observer, and again once it settles
+//!     ↓
+//! ToolResultObserver (canonical ToolCall order, then producer order)
 //!     ↓ validate count + content at the transaction boundary
-//!     ↓ stamp the observer's registered producer identity
+//!     ↓ stamp the observer's bound producer reference
 //! Agent-Loop-owned deferred buffer
-//!     ↓ next Context Assembly → lane + provenance from the producer identity
+//!     ↓ next Context Assembly → resolve producer → lane + provenance
 //!     ↓ PreStepPolicy → admission
 //! canonical User context, owned by whoever produced it
 //! ```
@@ -30,15 +32,29 @@
 //!
 //! The left column above is **timing**, owned by the Agent Loop: when a
 //! proposal becomes eligible. It is deliberately silent about **who owns the
-//! fact**. A deferred proposal is stamped with the trusted contributor
-//! identity its observer was *registered* under, and Context Assembly derives
-//! the lane, the `UserSource`, and the `ContextKind` from that identity using
-//! the same table it applies to that owner's request-time proposals.
+//! fact**. A deferred proposal is stamped with the producer its observer was
+//! *bound* to, and Context Assembly resolves that reference against its own
+//! registrations before deriving the lane, the `UserSource`, and the
+//! `ContextKind` — using the same table it applies to that owner's
+//! request-time proposals.
 //!
 //! A certified extension (Issue #58) therefore produces deferred post-tool
 //! context while keeping its extension identity, its extension provenance, and
 //! its own lane. Nothing is rewritten into native runtime context merely
 //! because a tool batch happened to precede it.
+//!
+//! # Binding is not admission
+//!
+//! This module can *bind behavior* to a semantic owner. It can never
+//! *establish* one. `ContextAssembly::register_extension` is the single
+//! semantic admission authority: it validates the logical key, rejects
+//! native-reserved keys, and records the attestation. Binding an observer with
+//! [`AttemptLifecycle::with_extension_tool_result_observer`] only says "run
+//! this code for that owner"; if the attempt's Context Assembly does not know
+//! the key, the deferred proposals are rejected, no
+//! [`UserSource::Extension`](crate::message::types::UserSource) is assigned,
+//! and no generation is synthesized. There is exactly one place where an
+//! extension becomes trusted.
 //!
 //! # Authority
 //!
@@ -52,7 +68,8 @@
 //!   observer reads the validated invocation arguments, and holds them only
 //!   after the result is already canonical);
 //! - choose its own `UserSource`, `ContextKind`, semantic lane, or contributor
-//!   identity;
+//!   identity, or make itself a trusted extension by naming one;
+//! - contribute to the Effective System Prompt from the post-tool phase;
 //! - mutate a finalized `ToolExecutionResult` or produce a second one;
 //! - own, replace, or observe-and-convert the attempt cancellation signal;
 //! - issue, retry, or suppress a provider request;
@@ -76,12 +93,22 @@
 //! context already has a rustX-owned identity ordering (Issue #55). A native
 //! runtime owner and one or more certified extensions can each own deferred
 //! context about the same settled call without any of them being able to
-//! speak for another. Observers are therefore registered under the same
-//! [`ContextContributorIdentity`] vocabulary Context Assembly already uses,
-//! and the deferred ordering key is
+//! speak for another, short-circuit another, or replace another's result.
+//! Observers are bound to a [`DeferredContextProducer`], at most one per
+//! semantic owner, and the deferred ordering key is
 //! `(canonical ToolCall batch position, producer identity, proposal FIFO)`.
 //! There is no priority number, no registration-order term, and no new
 //! ordering model — only the identity order that already existed.
+//!
+//! # Cancellation precedence
+//!
+//! Cancellation ownership stays entirely with the Agent Loop. An observer
+//! already in flight is allowed to settle — it is never dropped mid-flight
+//! just to implement this rule — but observable cancellation is checked
+//! *before* each observer starts and *again* once it settles, before its
+//! return value is consumed. So once cancellation is observable, no later
+//! observer starts, and neither an observer's success nor its failure can
+//! decide the terminal outcome.
 //!
 //! # Seams that are intentionally absent
 //!
@@ -106,11 +133,10 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::context::{AcceptedContext, ContextProposal};
+use crate::context::{AcceptedContext, DeferredContextProducer, UserMessageProposal};
 use crate::conversation::SurfaceRevision;
 use crate::runtime::identity::{
-    AttemptId, CertifiedExtensionIdentity, ContextContributorIdentity, ConversationId,
-    NativeContextContributor, ToolCallId, ToolId,
+    AttemptId, CertifiedExtensionIdentity, ConversationId, ToolCallId, ToolId,
 };
 use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
 
@@ -330,37 +356,40 @@ pub struct ToolResultObservation<'a> {
     pub result: &'a ToolExecutionResult,
 }
 
-/// The bounded number of deferred proposals one observer may return for one
-/// settled call.
-///
-/// The Agent Loop checks this at the observer transaction boundary, before a
-/// single proposal is staged, so an observer can never allocate an unbounded
-/// proposal set into the deferred buffer and have it rejected one step later.
-pub const MAX_DEFERRED_PROPOSALS_PER_OBSERVATION: usize = 16;
-
 /// The typed immutable tool-result observation seam of one attempt.
 ///
 /// The observer runs once per settled call, in canonical `ToolCall` batch
 /// order, **after** the complete owning batch has reached structural
 /// settlement. It may return zero or more bounded transient
-/// [`ContextProposal`]s; the Agent Loop validates them at the transaction
-/// boundary, stamps its registered producer identity onto each, and stages
+/// [`UserMessageProposal`]s; the Agent Loop validates them at the transaction
+/// boundary, stamps its registered producer reference onto each, and stages
 /// them. They become canonical only if the next Context Assembly, the pre-step
 /// policy, and the admission boundary all accept them.
+///
+/// # User context only
+///
+/// The return type is deliberately not the full
+/// [`ContextProposal`](crate::context::ContextProposal) vocabulary. A settled
+/// tool batch is a conversational fact, and the only concrete requirement is
+/// deferred conversational context, so this seam cannot mutate the Effective
+/// System Prompt on the following turn. System sections stay owned by the
+/// request-time [`ContextContributor`](crate::context::ContextContributor)
+/// path. The restriction is a type, not a runtime check: a deferred system
+/// section is unrepresentable.
 ///
 /// # What an observer does not decide
 ///
 /// An observer returns *content*, never *semantics*. It cannot select a
 /// [`UserSource`](crate::message::types::UserSource), a
 /// [`ContextKind`](crate::message::types::ContextKind), a semantic lane, or a
-/// contributor identity: those are derived by Context Assembly from the
-/// trusted identity this observer was registered under. It also may not mutate
-/// the result, reject or undo it, create a second `ToolMessage`, dispatch
-/// another tool, start a model request, own cancellation, change the terminal
-/// outcome, or touch the Ledger/Surface.
+/// contributor identity: Context Assembly derives those after resolving the
+/// producer this observer was registered under against its own registrations.
+/// It also may not mutate the result, reject or undo it, create a second
+/// `ToolMessage`, dispatch another tool, start a model request, own
+/// cancellation, change the terminal outcome, or touch the Ledger/Surface.
 pub trait ToolResultObserver: Send + Sync {
     /// Observes one finalized tool outcome and proposes bounded deferred
-    /// context.
+    /// User context.
     ///
     /// # Errors
     ///
@@ -372,7 +401,7 @@ pub trait ToolResultObserver: Send + Sync {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, LifecycleError>>;
+    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>>;
 }
 
 /// The identity tool-result observer: no deferred context is ever produced.
@@ -383,35 +412,37 @@ impl ToolResultObserver for NoDeferredContext {
     fn observe_tool_result<'a>(
         &'a self,
         _observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
         Box::pin(async { Ok(Vec::new()) })
     }
 }
 
-/// One tool-result observer bound to the trusted identity it speaks for.
+/// One tool-result observer bound to the semantic owner it speaks for.
 ///
-/// The identity comes from registration, never from the observer's return
-/// value, and it is the only ordering key between observers. Registration
-/// order is therefore not observable.
+/// The producer reference comes from registration, never from the observer's
+/// return value, and it is the only ordering key between observers, so
+/// registration order is not observable. Binding is not admission: Context
+/// Assembly still resolves the reference against its own registrations before
+/// any provenance is assigned.
 #[derive(Clone)]
 pub struct RegisteredToolResultObserver {
-    identity: ContextContributorIdentity,
+    producer: DeferredContextProducer,
     observer: Arc<dyn ToolResultObserver>,
 }
 
 impl core::fmt::Debug for RegisteredToolResultObserver {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("RegisteredToolResultObserver")
-            .field("identity", &self.identity)
+            .field("producer", &self.producer)
             .finish_non_exhaustive()
     }
 }
 
 impl RegisteredToolResultObserver {
-    /// The trusted semantic owner this observer produces deferred context for.
+    /// The semantic owner this observer produces deferred context for.
     #[must_use]
-    pub const fn identity(&self) -> &ContextContributorIdentity {
-        &self.identity
+    pub const fn producer(&self) -> &DeferredContextProducer {
+        &self.producer
     }
 
     /// The observer implementation.
@@ -443,7 +474,7 @@ impl core::fmt::Debug for AttemptLifecycle {
                 &self
                     .tool_results
                     .iter()
-                    .map(RegisteredToolResultObserver::identity)
+                    .map(RegisteredToolResultObserver::producer)
                     .collect::<Vec<_>>(),
             )
             .finish_non_exhaustive()
@@ -473,11 +504,13 @@ impl AttemptLifecycle {
         self
     }
 
-    /// Registers the observer that speaks for the **native** runtime
-    /// observation owner.
+    /// Binds the observer that speaks for the **native** runtime observation
+    /// owner.
     ///
-    /// Its deferred proposals receive native runtime provenance because of
-    /// *this registration*, not because they were produced after a tool batch.
+    /// rustX owns this semantic owner, so no registration elsewhere is needed
+    /// and its deferred proposals receive native runtime provenance. That
+    /// follows from *whose observer this is*, not from the fact that the
+    /// proposals were produced after a tool batch.
     ///
     /// # Errors
     ///
@@ -488,16 +521,21 @@ impl AttemptLifecycle {
         self,
         observer: Arc<dyn ToolResultObserver>,
     ) -> Result<Self, LifecycleError> {
-        self.with_tool_result_observer(
-            ContextContributorIdentity::Native(NativeContextContributor::ToolResultObservation),
-            observer,
-        )
+        self.bind_tool_result_observer(DeferredContextProducer::NativeRuntimeObservation, observer)
     }
 
-    /// Registers an observer that speaks for one **certified extension**.
+    /// Binds an observer that speaks for one **certified extension**.
     ///
-    /// Its deferred proposals keep that extension's identity and provenance
-    /// through Context Assembly, exactly like the same extension's
+    /// This is a *behavior binding*, not an admission. The extension must be
+    /// registered with the attempt's
+    /// [`ContextAssembly`](crate::context::ContextAssembly), which is the one
+    /// semantic admission authority; binding an observer here proves nothing
+    /// about the extension. If Context Assembly does not know the key when the
+    /// deferred proposals are assembled, they are rejected and no extension
+    /// provenance is ever assigned.
+    ///
+    /// For a registered extension the deferred proposals keep that extension's
+    /// identity, provenance, and registered attestation, exactly like its
     /// request-time proposals. Post-tool timing never converts them into
     /// native runtime context.
     ///
@@ -510,38 +548,39 @@ impl AttemptLifecycle {
         identity: CertifiedExtensionIdentity,
         observer: Arc<dyn ToolResultObserver>,
     ) -> Result<Self, LifecycleError> {
-        self.with_tool_result_observer(
-            ContextContributorIdentity::CertifiedExtension(identity),
+        self.bind_tool_result_observer(
+            DeferredContextProducer::CertifiedExtension { identity },
             observer,
         )
     }
 
-    /// Registers one deferred-context producer under a trusted identity.
+    /// Binds one observer to one semantic owner.
     ///
-    /// # Errors
-    ///
-    /// Returns a [`LifecycleError`] when the identity is already registered,
-    /// or when it names a semantic owner that publishes no context at all.
-    pub fn with_tool_result_observer(
+    /// Deliberately private: a public generic binder taking an arbitrary
+    /// contributor identity would let a caller name any semantic owner, which
+    /// would read like a second registry even though Context Assembly still
+    /// has the final say. The two narrow constructors above are the whole
+    /// surface.
+    fn bind_tool_result_observer(
         mut self,
-        identity: ContextContributorIdentity,
+        producer: DeferredContextProducer,
         observer: Arc<dyn ToolResultObserver>,
     ) -> Result<Self, LifecycleError> {
         if self
             .tool_results
             .iter()
-            .any(|registered| registered.identity == identity)
+            .any(|registered| registered.producer == producer)
         {
             return Err(LifecycleError::new(format!(
-                "deferred-context producer {identity:?} already has a tool-result observer"
+                "deferred-context producer {producer:?} already has a tool-result observer"
             )));
         }
         self.tool_results
-            .push(RegisteredToolResultObserver { identity, observer });
-        // The registered set is kept in logical identity order, so the
-        // deferred ordering key never contains a registration-order term.
+            .push(RegisteredToolResultObserver { producer, observer });
+        // The bound set is kept in logical producer order, so the deferred
+        // ordering key never contains a registration-order term.
         self.tool_results
-            .sort_by(|left, right| left.identity.cmp(&right.identity));
+            .sort_by(|left, right| left.producer.cmp(&right.producer));
         Ok(self)
     }
 
@@ -551,8 +590,8 @@ impl AttemptLifecycle {
         Arc::clone(&self.pre_step)
     }
 
-    /// The attempt's registered deferred-context producers, in logical
-    /// identity order.
+    /// The attempt's bound deferred-context observers, in logical producer
+    /// order.
     #[must_use]
     pub fn tool_result_observers(&self) -> &[RegisteredToolResultObserver] {
         &self.tool_results

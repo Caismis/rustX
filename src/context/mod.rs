@@ -46,10 +46,10 @@ pub use assembly::{
     AcceptedContext, AcceptedSystemSection, AcceptedUserContext, CONTEXT_COMPATIBILITY_ABI_VERSION,
     ContextAssembly, ContextAssemblyError, ContextCompatibilityManifest, ContextContributor,
     ContextGeneration, ContextProposal, ContextProposalKind, ContributorGeneration,
-    ContributorInputSnapshot, DeferredContextProposal, MAX_DEFERRED_CONTEXT_PROPOSALS,
-    MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput, SystemPromptSectionProposal,
-    SystemSectionLane, UserContextLane, UserMessageProposal, render_effective_system_prompt,
-    validate_context_proposal,
+    ContributorInputSnapshot, DeferredContextProducer, DeferredContextProposal,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
+    SystemPromptSectionProposal, SystemSectionLane, UserContextLane, UserMessageProposal,
+    render_effective_system_prompt, validate_user_message_proposal,
 };
 pub use engine::{
     CompactionBudgets, CompactionConstraints, CompactionPlan, ContextConfig, ContextEngine,

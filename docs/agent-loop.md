@@ -231,13 +231,14 @@ when a consumer eventually needs it, belongs inside that consumer's own
 implementation.
 
 The tool-result phase differs, because its output is *context*, and context
-already has a rustX-owned identity ordering. Observers are registered under
-the same `ContextContributorIdentity` vocabulary Context Assembly uses — one
-per semantic owner, a duplicate registration is rejected — so a native runtime
-owner and one or more certified extensions can each own deferred context about
-the same settled call without speaking for one another. The deferred ordering
-key is `(canonical ToolCall batch position, producer identity, proposal FIFO)`:
-no priority number, no registration-order term, and no new ordering model.
+already has a rustX-owned identity ordering. Observers are **bound** to a
+`DeferredContextProducer` — one per semantic owner, a duplicate binding is
+rejected — so a native runtime owner and one or more certified extensions can
+each own deferred context about the same settled call without speaking for
+one another, short-circuiting one another, or replacing one another's result.
+The deferred ordering key is
+`(canonical ToolCall batch position, producer identity, proposal FIFO)`: no
+priority number, no registration-order term, and no new ordering model.
 
 ### Lifecycle timing is not semantic ownership
 
@@ -248,14 +249,51 @@ This split is the load-bearing rule of the phase:
 | *When* does a proposal become eligible? | after the owning tool batch settles, at the next primary step | Agent Loop |
 | *Who* owns the fact it states? | the identity the producing observer was registered under | Context Assembly |
 
-The Agent Loop stamps each staged proposal with its observer's **registered**
-identity — never with anything the observer returned — and Context Assembly
-derives the lane, the `UserSource`, and the `ContextKind` from that identity
-alone, through the same table it applies to that owner's request-time
-proposals. There is no rule turning post-tool proposals into native runtime
-context. A certified extension (Issue #58) producing deferred post-tool
-context keeps its extension identity, its extension provenance, and its own
-lane, and remains ordered deterministically against every other producer.
+The Agent Loop stamps each staged proposal with its observer's **bound**
+producer — never with anything the observer returned — and Context Assembly
+resolves that reference to an authoritative registration before deriving the
+lane, the `UserSource`, and the `ContextKind`, through the same table it
+applies to that owner's request-time proposals. There is no rule turning
+post-tool proposals into native runtime context. A certified extension (Issue
+#58) producing deferred post-tool context keeps its extension identity, its
+extension provenance, and its own lane, and remains ordered deterministically
+against every other producer.
+
+### Binding is not admission
+
+The lifecycle seam can *bind behavior* to a semantic owner. It can never
+*establish* one:
+
+```text
+ContextAssembly::register_extension   = semantic identity, provenance,
+                                        and attestation authority
+
+AttemptLifecycle::with_extension_     = behavior binding for an
+  tool_result_observer                  already-authorized owner
+```
+
+`AttemptLifecycle` exposes exactly two binders —
+`with_native_tool_result_observer` and `with_extension_tool_result_observer`.
+There is deliberately no public generic binder over an arbitrary contributor
+identity, because that would read like a second registry. The extension binder
+takes only a logical key, which any caller can construct and which proves
+nothing on its own.
+
+At assembly time each deferred producer is resolved:
+
+- `NativeRuntimeObservation` → the rustX-owned native runtime observation
+  owner; no registration is required because rustX owns it, and it carries no
+  attestation;
+- `CertifiedExtension { identity }` → the matching extension registered with
+  the attempt's `ContextAssembly`, using **that registration's own**
+  `ContributorGeneration` and attestation.
+
+An unregistered key fails the whole assembly with
+`ContextAssemblyError::UnregisteredContributor` before admission: no lane, no
+`UserSource::Extension`, no synthesized generation, and no partially admitted
+batch. A certified extension that only ever produces deferred context still
+resolves to its authoritative generation without contributing anything at
+request time.
 
 ### PreStepPolicy
 
@@ -311,13 +349,17 @@ every CallSlot settled (including cancellation fill)
     ↓
 commit ToolResult A, then ToolResult B          ← structural settlement point
     ↓
-ToolResultObserver pass, in (canonical ToolCall order, identity order)
-    ↓ bounded ContextProposal values
+cancellation checkpoint  ← before each observer, and again once it settles
+    ↓
+ToolResultObserver pass, in (canonical ToolCall order, producer order)
+    ↓ bounded UserMessageProposal values
     ↓ validate count + content — the transaction boundary
-    ↓ stamp the observer's registered producer identity
+    ↓ stamp the observer's bound producer reference
 Agent-Loop-owned deferred buffer
     ↓ next primary step
-Context Assembly → PreStepPolicy → admission → canonical User context
+Context Assembly → resolve producer → PreStepPolicy → admission
+    ↓
+canonical User context
 ```
 
 The observer receives `ToolResultObservation`, a borrow of already-canonical
@@ -365,18 +407,28 @@ infer an external side effect from it.
 
 #### What an observer returns
 
-Zero or more bounded `ContextProposal` values and nothing else — *content*,
-never *semantics*. It cannot choose a `UserSource`, a `ContextKind`, a lane,
-or a contributor identity; those come from its registration. It cannot mutate
-the finalized result, reject or undo it, create a second `ToolMessage`,
-dispatch another tool, start a model request, own cancellation, change the
-terminal outcome, or touch the Ledger/Surface.
+Zero or more bounded `UserMessageProposal` values and nothing else —
+*content*, never *semantics*. It cannot choose a `UserSource`, a
+`ContextKind`, a lane, or a contributor identity; those follow from resolving
+its bound producer. It cannot mutate the finalized result, reject or undo it,
+create a second `ToolMessage`, dispatch another tool, start a model request,
+own cancellation, change the terminal outcome, or touch the Ledger/Surface.
+
+The return type is deliberately **not** the full `ContextProposal` vocabulary.
+A settled tool batch is a conversational fact, and the only concrete
+requirement — including Issue #58's `PostToolUse additionalContext` — is
+deferred conversational context. So this seam cannot contribute to the
+Effective System Prompt of the following turn; system sections stay owned by
+the request-time `ContextContributor` path. The restriction is a type, not a
+runtime check: a deferred system section is unrepresentable.
 
 #### The transaction boundary
 
 Every observer return value is validated **before** anything is staged:
 
-1. the proposal count against `MAX_DEFERRED_PROPOSALS_PER_OBSERVATION`;
+1. the proposal count against the established `MAX_PROPOSALS_PER_CONTRIBUTOR`
+   bound — the deferred path reuses the context proposal limit rather than
+   inventing a second constant;
 2. the running total against `MAX_DEFERRED_CONTEXT_PROPOSALS`, counting what
    the attempt already staged;
 3. every proposal body against the same bounded content contract Context
@@ -387,8 +439,30 @@ buffer and have it rejected one step later in assembly. A violation settles
 the attempt as `AttemptFailed(Runtime(DeferredContextRejected { message }))`.
 
 The pass is one transaction. Any failure — a failing observer, a bound
-violation, or invalid content — discards every proposal of the pass *and*
-clears the attempt's deferred buffer, so no partial deferred state survives.
+violation, invalid content, or observable cancellation — discards every
+proposal of the pass *and* clears the attempt's deferred buffer, so no partial
+deferred state survives.
+
+#### Cancellation precedence
+
+Cancellation ownership stays entirely with the Agent Loop; an observer gets no
+cancellation handle. The rule around every observation is:
+
+```text
+cancellation check          ← an observer never starts after this
+await observer
+cancellation check          ← wins over the observer's Ok *and* its Err
+consume result, validate, stage
+```
+
+An observation already in flight is allowed to settle — it is never dropped
+mid-flight just to implement this rule — but once cancellation is observable
+it decides the terminal outcome:
+
+- a later observer never starts;
+- an earlier observer's proposals, still only pass-local, are discarded;
+- an observer's failure can no longer become
+  `ToolResultObservationFailed`; the attempt settles `AttemptCancelled`.
 
 ### Exact settlement and eligibility points
 
@@ -436,14 +510,16 @@ never appear in the key.
 Where those facts land in the next primary step is a **semantic ownership**
 question, answered by the producer identity and nothing else:
 
-- `Native(ToolResultObservation)` → the native-reserved
-  `UserContextLane::PostToolObservation`, immediately after `ClaimedInbound`
+- `NativeRuntimeObservation` → the native-reserved
+  `UserContextLane::RuntimeToolObservation`, immediately after `ClaimedInbound`
   and before every request-time lane, committed with `UserSource::Runtime` and
-  `InboundKind::Context(ContextKind::PostToolObservation)`;
-- `CertifiedExtension(key)` → `UserContextLane::ExtensionEnvironment`,
+  `InboundKind::Context(ContextKind::RuntimeToolObservation)`;
+- `CertifiedExtension { identity }`, **once resolved against the attempt's
+  Context Assembly registration** → `UserContextLane::ExtensionEnvironment`,
   committed with `UserSource::Extension { contributor: key }` and
   `InboundKind::Context(ContextKind::ExtensionEnvironment)` — exactly as if the
-  same extension had contributed at request time.
+  same extension had contributed at request time. An unresolved key rejects
+  the batch instead.
 
 Inside one `(lane, contributor)` bucket a deferred fact precedes the same
 owner's request-time fact, because it describes the batch that precedes the
@@ -465,6 +541,9 @@ drained by the very next primary step's assembly.
 | cancellation while policy pending | evaluation settles; the generic checkpoint wins; `AttemptCancelled`; nothing admitted |
 | observer returns `Err` | `AttemptFailed(Runtime(ToolResultObservationFailed))`; the committed Assistant batch keeps its complete canonical result batch; every proposal of the failed pass is discarded and the deferred buffer is cleared; no further provider request |
 | observation violates a deferred bound or proposes invalid content | `AttemptFailed(Runtime(DeferredContextRejected))`; rejected at the transaction boundary, so nothing of the pass was ever staged; same batch guarantees |
+| deferred proposal names an unregistered extension | the next assembly fails before admission; no lane, no extension provenance, no synthesized generation, no snapshot, no request |
+| cancellation observable before a later observer would start | that observer never runs; the whole pass is discarded; `AttemptCancelled` |
+| cancellation observable when an observer settles with `Err` | cancellation wins; `AttemptCancelled`, never `ToolResultObservationFailed` |
 | cancellation already observable when the batch settles | the observation phase is skipped entirely; `AttemptCancelled` |
 | cancellation while an observation is pending | the bounded observation settles; the staged proposals are never admitted; `AttemptCancelled` |
 
@@ -495,8 +574,8 @@ assembly, never a re-execution handle.
 |-------|-------------|--------------------|---------------|-------|
 | `ContextContributor` (#55) | finite immutable `ContributorInputSnapshot` | bounded typed proposals | canonical state, identity, provenance, lanes, ordering | Context Assembly |
 | `PreStepPolicy` (#56) | final immutable `AcceptedContext` + attempt/turn/revision identity | `Enter` / `Reject { reason }` | history, Surface, `MessageId`s, tool identity/arguments, cancellation, provider dispatch, terminal state | Agent Loop |
-| `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, and the read-only `ObservedToolInvocation` (mode + validated arguments) | bounded deferred `ContextProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state, **and its own provenance/lane/identity** | Agent Loop / tool batch |
-| Deferred context staging | ordered transient proposals + their registered producer identity | candidate input of the next Context Assembly | Ledger and Surface directly; the semantics of what it stages | Agent Loop |
+| `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, and the read-only `ObservedToolInvocation` (mode + validated arguments) | bounded deferred `UserMessageProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state, the Effective System Prompt, **and its own provenance/lane/identity** | Agent Loop / tool batch |
+| Deferred context staging | ordered transient proposals + their bound producer reference | candidate input of the next Context Assembly | Ledger and Surface directly; the semantics of what it stages; whether a named extension is trusted | Agent Loop |
 | Context admission | final accepted context | canonical `User` facts + Surface advancement | arbitrary history | Agent Loop + `ConversationState` |
 | `AgentExecutionObserver` (#37) | emitted `RuntimeEvent`s, committed `MessageBlock`s, composed Agent Status | nothing | everything | Agent Loop (projection seam only) |
 

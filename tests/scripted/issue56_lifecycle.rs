@@ -27,14 +27,13 @@ use tokio::sync::{Notify, watch};
 
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
-    AttemptLifecycle, LifecycleError, MAX_DEFERRED_PROPOSALS_PER_OBSERVATION,
-    ObservedToolInvocation, PreStepBatch, PreStepDecision, PreStepPolicy, ToolResultObservation,
-    ToolResultObserver,
+    AttemptLifecycle, LifecycleError, ObservedToolInvocation, PreStepBatch, PreStepDecision,
+    PreStepPolicy, ToolResultObservation, ToolResultObserver,
 };
 use rustx::context::{
     ContextAssembly, ContextProposal, ContextRuntime, ContributorInputSnapshot,
-    DefaultTokenEstimator, MAX_DEFERRED_CONTEXT_PROPOSALS, SessionContextPolicy,
-    UserMessageProposal,
+    DefaultTokenEstimator, MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR,
+    SessionContextPolicy, UserMessageProposal,
 };
 use rustx::conversation::ConversationState;
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -197,6 +196,21 @@ impl RecordingObserver {
         }
     }
 
+    /// Parks on the gate and then fails, so a test can make cancellation
+    /// observable strictly before the failure is produced.
+    fn gated_failing(
+        fail_on: &'static str,
+        entered: watch::Sender<bool>,
+        release: watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            proposals: Vec::new(),
+            fail_on: Some(fail_on),
+            recorded: Arc::new(Mutex::new(Vec::new())),
+            gate: Some((entered, release)),
+        }
+    }
+
     fn recorded(&self) -> Arc<Mutex<Vec<RecordedObservation>>> {
         Arc::clone(&self.recorded)
     }
@@ -206,7 +220,7 @@ impl ToolResultObserver for RecordingObserver {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
         self.recorded
             .lock()
             .expect("recorded observations lock")
@@ -270,7 +284,7 @@ impl ToolResultObserver for BulkObserver {
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,
-    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, LifecycleError>> {
+    ) -> BoxFuture<'a, Result<Vec<UserMessageProposal>, LifecycleError>> {
         self.observations.fetch_add(1, Ordering::SeqCst);
         let call_id = observation.call_id.as_str().to_owned();
         let per_call = self.per_call;
@@ -416,12 +430,13 @@ impl ToolExecutor for GatedTool {
 // Shared fixtures
 // ---------------------------------------------------------------------------
 
-fn proposal(text: &str) -> ContextProposal {
-    ContextProposal::UserMessage(UserMessageProposal {
+/// One bounded deferred User context proposal.
+fn proposal(text: &str) -> UserMessageProposal {
+    UserMessageProposal {
         content: vec![UserContentBlock::Text(TextBlock {
             text: text.to_owned(),
         })],
-    })
+    }
 }
 
 /// A lifecycle whose only deferred-context producer is the native runtime
@@ -447,6 +462,44 @@ fn extension_source(key: &str) -> UserSource {
     UserSource::Extension {
         contributor: CertifiedExtensionIdentity::new(key).expect("identity"),
     }
+}
+
+/// A lifecycle binding a native observer and one extension observer.
+fn native_and_extension_lifecycle(
+    native: Arc<dyn ToolResultObserver>,
+    key: &str,
+    extension: Arc<dyn ToolResultObserver>,
+    native_first: bool,
+) -> AttemptLifecycle {
+    let identity = CertifiedExtensionIdentity::new(key).expect("identity");
+    if native_first {
+        AttemptLifecycle::inert()
+            .with_native_tool_result_observer(native)
+            .expect("native owner")
+            .with_extension_tool_result_observer(identity, extension)
+            .expect("extension owner")
+    } else {
+        AttemptLifecycle::inert()
+            .with_extension_tool_result_observer(identity, extension)
+            .expect("extension owner")
+            .with_native_tool_result_observer(native)
+            .expect("native owner")
+    }
+}
+
+/// A Context Assembly that has **certified** the given extension. This is the
+/// one semantic admission authority; binding a lifecycle observer to the same
+/// logical key proves nothing without it.
+fn assembly_certifying(key: &'static str, attestation: Option<&'static str>) -> ContextAssembly {
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            key,
+            attestation.map(str::to_owned),
+            Arc::new(|_: &ContributorInputSnapshot| Ok(Vec::new())),
+        )
+        .expect("register certified extension");
+    assembly
 }
 
 fn text_of(content: &[UserContentBlock]) -> String {
@@ -582,7 +635,7 @@ fn contributor(
 ) -> Arc<dyn rustx::context::ContextContributor> {
     Arc::new(move |_: &ContributorInputSnapshot| {
         invocations.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![proposal(text)])
+        Ok(vec![ContextProposal::UserMessage(proposal(text))])
     })
 }
 
@@ -986,8 +1039,8 @@ async fn deferred_post_tool_context_never_interleaves_between_sibling_results() 
             "assistant(call-a,call-b)".to_owned(),
             "tool_result(call-a)".to_owned(),
             "tool_result(call-b)".to_owned(),
-            "context(PostToolObservation):context A1".to_owned(),
-            "context(PostToolObservation):context B1".to_owned(),
+            "context(RuntimeToolObservation):context A1".to_owned(),
+            "context(RuntimeToolObservation):context B1".to_owned(),
             "assistant".to_owned(),
         ],
         "the structural prefix is the complete result batch; context follows"
@@ -1009,7 +1062,7 @@ async fn deferred_post_tool_context_never_interleaves_between_sibling_results() 
         second.context_generation.contributors.iter().any(|entry| {
             entry.identity
                 == ContextContributorIdentity::Native(
-                    NativeContextContributor::ToolResultObservation,
+                    NativeContextContributor::RuntimeToolObservation,
                 )
         }),
         "the frozen generation records the deferred-context owner"
@@ -1040,10 +1093,10 @@ async fn deferred_post_tool_context_preserves_fifo_within_and_across_calls() {
             .filter(|entry| entry.starts_with("context("))
             .collect::<Vec<_>>(),
         vec![
-            "context(PostToolObservation):A1".to_owned(),
-            "context(PostToolObservation):A2".to_owned(),
-            "context(PostToolObservation):B1".to_owned(),
-            "context(PostToolObservation):B2".to_owned(),
+            "context(RuntimeToolObservation):A1".to_owned(),
+            "context(RuntimeToolObservation):A2".to_owned(),
+            "context(RuntimeToolObservation):B1".to_owned(),
+            "context(RuntimeToolObservation):B2".to_owned(),
         ],
         "order is (canonical call position, proposal FIFO)"
     );
@@ -1081,7 +1134,7 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
         batches[1],
         vec![(
             UserSource::Runtime,
-            ContextKind::PostToolObservation,
+            ContextKind::RuntimeToolObservation,
             "deferred context".to_owned(),
         )],
         "the deferred proposal is evaluated by the same policy authority"
@@ -1502,14 +1555,14 @@ async fn native_observer_deferred_context_receives_native_provenance() {
         committed_context(&result),
         vec![(
             UserSource::Runtime,
-            ContextKind::PostToolObservation,
+            ContextKind::RuntimeToolObservation,
             "native fact".to_owned(),
         )],
     );
     assert_eq!(
         deferred_step_contributors(&result),
         vec![ContextContributorIdentity::Native(
-            NativeContextContributor::ToolResultObservation,
+            NativeContextContributor::RuntimeToolObservation,
         )],
     );
     assert_single_terminal(&result.events);
@@ -1525,8 +1578,9 @@ async fn extension_observer_deferred_context_preserves_extension_provenance() {
         "call-a",
         vec!["extension fact"],
     )]));
-    let (result, _physical) = run_inverted_parallel_batch(
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
         extension_lifecycle("example.extension", observer),
+        assembly_certifying("example.extension", Some("package-7")),
         CancellationReason::UserRequested,
         None,
     )
@@ -1548,11 +1602,117 @@ async fn extension_observer_deferred_context_preserves_extension_provenance() {
         )],
         "post-tool timing does not rewrite the contributor identity"
     );
+    assert_eq!(
+        result.request_snapshots()[1]
+            .context_generation
+            .contributors[0]
+            .attestation,
+        Some("package-7".to_owned()),
+        "the authoritative registered attestation is frozen, not a synthesized one"
+    );
     assert!(
         !deferred_step_contributors(&result).contains(&ContextContributorIdentity::Native(
-            NativeContextContributor::ToolResultObservation,
+            NativeContextContributor::RuntimeToolObservation,
         )),
         "the native observation owner never appears for an extension's fact"
+    );
+    assert_single_terminal(&result.events);
+}
+
+/// Context Assembly registration is the **only** semantic admission authority.
+/// Binding a lifecycle observer under an extension key that the attempt's
+/// Context Assembly never certified cannot mint extension provenance: the
+/// deferred batch is rejected before any context is admitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unregistered_extension_observer_cannot_get_extension_provenance() {
+    let observer = Arc::new(RecordingObserver::new(vec![(
+        "call-a",
+        vec!["unauthorized fact"],
+    )]));
+    let recorded = observer.recorded();
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+        extension_lifecycle("impostor.extension", observer),
+        // A different extension is certified, so the registry is non-empty and
+        // the rejection is about identity, not about having no extensions.
+        assembly_certifying("known.extension", Some("package-1")),
+        CancellationReason::UserRequested,
+        None,
+    )
+    .await;
+
+    assert!(
+        !recorded.lock().expect("recorded lock").is_empty(),
+        "the observer really ran; the rejection is at admission, not at binding"
+    );
+    assert!(
+        matches!(
+            &result.outcome,
+            AttemptOutcome::Failed {
+                error: AttemptFailure::Runtime { error },
+            } if format!("{error:?}").contains("impostor.extension")
+        ),
+        "unexpected outcome: {:?}",
+        result.outcome
+    );
+    assert!(
+        committed_context(&result).is_empty(),
+        "no context was admitted, so no extension provenance was ever assigned"
+    );
+    assert_eq!(
+        ledger_shape(&result),
+        vec![
+            "user(Message):go".to_owned(),
+            "assistant(call-a,call-b)".to_owned(),
+            "tool_result(call-a)".to_owned(),
+            "tool_result(call-b)".to_owned(),
+        ],
+        "the complete canonical result batch survives the rejection"
+    );
+    assert_eq!(
+        result.request_snapshots().len(),
+        1,
+        "the rejected step froze no snapshot"
+    );
+    assert_single_terminal(&result.events);
+}
+
+/// A **post-tool-only** certified extension — one with no request-time
+/// proposals at all — still produces deferred context through its
+/// authoritative registration. Certification is what makes it an extension.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_post_tool_only_certified_extension_produces_deferred_context() {
+    let observer = Arc::new(RecordingObserver::new(vec![(
+        "call-a",
+        vec!["post-tool only"],
+    )]));
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+        extension_lifecycle("observer.only", observer),
+        // The registered contributor returns nothing at request time.
+        assembly_certifying("observer.only", Some("package-3")),
+        CancellationReason::UserRequested,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        committed_context(&result),
+        vec![(
+            extension_source("observer.only"),
+            ContextKind::ExtensionEnvironment,
+            "post-tool only".to_owned(),
+        )],
+    );
+    assert_eq!(
+        result.request_snapshots()[1]
+            .context_generation
+            .contributors,
+        vec![rustx::context::ContributorGeneration {
+            identity: ContextContributorIdentity::CertifiedExtension(
+                CertifiedExtensionIdentity::new("observer.only").expect("identity"),
+            ),
+            attestation: Some("package-3".to_owned()),
+        }],
+        "a producer that only defers is still explained by its registration"
     );
     assert_single_terminal(&result.events);
 }
@@ -1636,27 +1796,15 @@ async fn two_producers_keep_deterministic_identity_order() {
             ("call-a", vec!["extension-a"]),
             ("call-b", vec!["extension-b"]),
         ]));
-        let lifecycle = if native_first {
-            AttemptLifecycle::inert()
-                .with_native_tool_result_observer(native)
-                .expect("native owner")
-                .with_extension_tool_result_observer(
-                    CertifiedExtensionIdentity::new("example.extension").expect("identity"),
-                    extension,
-                )
-                .expect("extension owner")
-        } else {
-            AttemptLifecycle::inert()
-                .with_extension_tool_result_observer(
-                    CertifiedExtensionIdentity::new("example.extension").expect("identity"),
-                    extension,
-                )
-                .expect("extension owner")
-                .with_native_tool_result_observer(native)
-                .expect("native owner")
-        };
-        let (result, _physical) =
-            run_inverted_parallel_batch(lifecycle, CancellationReason::UserRequested, None).await;
+        let lifecycle =
+            native_and_extension_lifecycle(native, "example.extension", extension, native_first);
+        let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+            lifecycle,
+            assembly_certifying("example.extension", None),
+            CancellationReason::UserRequested,
+            None,
+        )
+        .await;
         assert_single_terminal(&result.events);
         committed_context(&result)
     }
@@ -1664,12 +1812,12 @@ async fn two_producers_keep_deterministic_identity_order() {
     let expected = vec![
         (
             UserSource::Runtime,
-            ContextKind::PostToolObservation,
+            ContextKind::RuntimeToolObservation,
             "native-a".to_owned(),
         ),
         (
             UserSource::Runtime,
-            ContextKind::PostToolObservation,
+            ContextKind::RuntimeToolObservation,
             "native-b".to_owned(),
         ),
         (
@@ -1844,6 +1992,247 @@ async fn a_preflight_rejected_call_exposes_no_invocation_arguments() {
 }
 
 // ---------------------------------------------------------------------------
+// Cancellation precedence across observers
+// ---------------------------------------------------------------------------
+
+/// The linearization this section pins down, with two bound producers over one
+/// settled batch:
+///
+/// ```text
+/// cancellation check      ← an observer never starts after this
+/// await observer
+/// cancellation check      ← wins over the observer's Ok *and* its Err
+/// consume result, validate, stage
+/// ```
+///
+/// Observable cancellation must win **before** a later observer starts. The
+/// in-flight observation is allowed to settle — it is never dropped just to
+/// implement the rule — but the next producer never runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_prevents_a_later_observer_from_starting() {
+    let (entered, entered_rx) = watch::channel(false);
+    let (release, release_rx) = watch::channel(false);
+    // The native producer sorts first, so it observes `call-a` before the
+    // extension producer gets its turn.
+    let native = Arc::new(RecordingObserver::gated(
+        vec![("call-a", vec!["staged before cancellation"])],
+        entered,
+        release_rx,
+    ));
+    let native_recorded = native.recorded();
+    let extension = Arc::new(RecordingObserver::new(vec![(
+        "call-a",
+        vec!["must never run"],
+    )]));
+    let extension_recorded = extension.recorded();
+
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+        native_and_extension_lifecycle(native, "example.extension", extension, true),
+        assembly_certifying("example.extension", None),
+        CancellationReason::UserRequested,
+        Some(ObservationGate {
+            entered: entered_rx,
+            release,
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        native_recorded.lock().expect("recorded lock").len(),
+        1,
+        "the in-flight observation settled rather than being dropped"
+    );
+    assert!(
+        extension_recorded.lock().expect("recorded lock").is_empty(),
+        "no later observer starts once cancellation is observable"
+    );
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested
+        }
+    ));
+    assert!(
+        committed_context(&result).is_empty(),
+        "the settled observer's proposals never became canonical"
+    );
+    assert_eq!(
+        ledger_shape(&result),
+        vec![
+            "user(Message):go".to_owned(),
+            "assistant(call-a,call-b)".to_owned(),
+            "tool_result(call-a)".to_owned(),
+            "tool_result(call-b)".to_owned(),
+        ],
+        "the complete canonical result batch is untouched"
+    );
+    assert_eq!(result.request_snapshots().len(), 1);
+    assert_single_terminal(&result.events);
+}
+
+/// Already-observable cancellation outranks an observer **failure**. An
+/// observer that errors while the attempt is already cancelled cannot convert
+/// cancellation into `ToolResultObservationFailed`, and the next producer
+/// still never starts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_outranks_an_observer_error() {
+    let (entered, entered_rx) = watch::channel(false);
+    let (release, release_rx) = watch::channel(false);
+    let native = Arc::new(RecordingObserver::gated_failing(
+        "call-a", entered, release_rx,
+    ));
+    let native_recorded = native.recorded();
+    let extension = Arc::new(RecordingObserver::new(Vec::new()));
+    let extension_recorded = extension.recorded();
+
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+        native_and_extension_lifecycle(native, "example.extension", extension, true),
+        assembly_certifying("example.extension", None),
+        CancellationReason::UserRequested,
+        Some(ObservationGate {
+            entered: entered_rx,
+            release,
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        native_recorded.lock().expect("recorded lock").len(),
+        1,
+        "the failing observation ran to completion"
+    );
+    assert!(
+        extension_recorded.lock().expect("recorded lock").is_empty(),
+        "no later observer starts once cancellation is observable"
+    );
+    assert!(
+        matches!(
+            result.outcome,
+            AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ),
+        "unexpected outcome: {:?}",
+        result.outcome
+    );
+    assert!(
+        !matches!(
+            &result.outcome,
+            AttemptOutcome::Failed {
+                error: AttemptFailure::Runtime {
+                    error: RuntimeError::ToolResultObservationFailed { .. },
+                },
+            }
+        ),
+        "an observer error never overrides already-observable cancellation"
+    );
+    assert_single_terminal(&result.events);
+}
+
+/// Cancellation observed while a *later* producer is pending discards what the
+/// *earlier* producer already proposed. Pass-local proposals are never visible
+/// to the attempt, so a cancelled pass leaves no deferred state at all.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_discards_the_earlier_observers_proposals() {
+    let (entered, entered_rx) = watch::channel(false);
+    let (release, release_rx) = watch::channel(false);
+    // The native producer completes normally and proposes; the extension
+    // producer then parks, and cancellation happens while it is pending.
+    let native = Arc::new(RecordingObserver::new(vec![(
+        "call-a",
+        vec!["proposed before the cancellation"],
+    )]));
+    let native_recorded = native.recorded();
+    let extension = Arc::new(RecordingObserver::gated(
+        vec![("call-a", vec!["also discarded"])],
+        entered,
+        release_rx,
+    ));
+    let extension_recorded = extension.recorded();
+
+    let (result, _physical) = run_inverted_parallel_batch_with_assembly(
+        native_and_extension_lifecycle(native, "example.extension", extension, true),
+        assembly_certifying("example.extension", None),
+        CancellationReason::UserRequested,
+        Some(ObservationGate {
+            entered: entered_rx,
+            release,
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        native_recorded.lock().expect("recorded lock").len(),
+        1,
+        "the earlier producer observed and proposed"
+    );
+    assert_eq!(
+        extension_recorded.lock().expect("recorded lock").len(),
+        1,
+        "the later producer was in flight when cancellation became observable"
+    );
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::UserRequested
+        }
+    ));
+    assert!(
+        committed_context(&result).is_empty(),
+        "the earlier producer's proposals are discarded with the rest of the pass"
+    );
+    assert_eq!(
+        result.request_snapshots().len(),
+        1,
+        "no later step could observe a partially staged buffer"
+    );
+    assert_single_terminal(&result.events);
+}
+
+/// The deferred seam carries User context only, so an admitted deferred batch
+/// can never change the Effective System Prompt of the following request. The
+/// restriction is a type — `ToolResultObserver` returns `UserMessageProposal`,
+/// so a deferred system section is unrepresentable — and this regression pins
+/// the observable consequence end to end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deferred_context_never_changes_the_effective_system_prompt() {
+    let observer = Arc::new(RecordingObserver::new(vec![(
+        "call-a",
+        vec!["deferred user fact"],
+    )]));
+    let (result, _physical) = run_inverted_parallel_batch(
+        native_lifecycle(observer),
+        CancellationReason::UserRequested,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        committed_context(&result),
+        vec![(
+            UserSource::Runtime,
+            ContextKind::RuntimeToolObservation,
+            "deferred user fact".to_owned(),
+        )],
+        "the deferred fact is admitted as conversational User context"
+    );
+    let prompts = result
+        .request_snapshots()
+        .iter()
+        .map(|snapshot| snapshot.effective_system_prompt.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 2, "two admitted model steps");
+    assert_eq!(
+        prompts[0], prompts[1],
+        "the step that admitted deferred context has the same Effective System Prompt"
+    );
+    assert!(
+        !prompts[1].contains("deferred user fact"),
+        "no deferred text reaches the Effective System Prompt"
+    );
+    assert_single_terminal(&result.events);
+}
+// ---------------------------------------------------------------------------
 // The bounded observer transaction boundary
 // ---------------------------------------------------------------------------
 
@@ -1852,9 +2241,7 @@ async fn a_preflight_rejected_call_exposes_no_invocation_arguments() {
 /// result batch survives, and the attempt settles once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_single_observation_above_the_bound_stages_nothing() {
-    let observer = Arc::new(BulkObserver::new(
-        MAX_DEFERRED_PROPOSALS_PER_OBSERVATION + 1,
-    ));
+    let observer = Arc::new(BulkObserver::new(MAX_PROPOSALS_PER_CONTRIBUTOR + 1));
     let observations = observer.observations();
     let (result, _physical) = run_inverted_parallel_batch(
         native_lifecycle(observer),
@@ -1875,7 +2262,7 @@ async fn a_single_observation_above_the_bound_stages_nothing() {
                 error: AttemptFailure::Runtime {
                     error: RuntimeError::DeferredContextRejected { message },
                 },
-            } if message.contains("per-observation bound")
+            } if message.contains("above the bounded proposal limit")
         ),
         "unexpected outcome: {:?}",
         result.outcome
@@ -1903,7 +2290,7 @@ async fn a_single_observation_above_the_bound_stages_nothing() {
 /// observation that would cross it, before the attempt buffer is touched.
 #[tokio::test]
 async fn observations_that_together_exceed_the_aggregate_bound_stage_nothing() {
-    let per_call = MAX_DEFERRED_PROPOSALS_PER_OBSERVATION;
+    let per_call = MAX_PROPOSALS_PER_CONTRIBUTOR;
     // The first call whose staging would cross the aggregate bound.
     let crossing_call = MAX_DEFERRED_CONTEXT_PROPOSALS / per_call;
     let calls = crossing_call + 1;
@@ -2031,6 +2418,23 @@ async fn run_inverted_parallel_batch(
     reason: CancellationReason,
     observation_gate: Option<ObservationGate>,
 ) -> (AgentExecutionResult, Vec<String>) {
+    run_inverted_parallel_batch_with_assembly(
+        lifecycle,
+        ContextAssembly::new(),
+        reason,
+        observation_gate,
+    )
+    .await
+}
+
+/// [`run_inverted_parallel_batch`] over an explicit Context Assembly, so a test
+/// can control which extensions are certified for the attempt.
+async fn run_inverted_parallel_batch_with_assembly(
+    lifecycle: AttemptLifecycle,
+    assembly: ContextAssembly,
+    reason: CancellationReason,
+    observation_gate: Option<ObservationGate>,
+) -> (AgentExecutionResult, Vec<String>) {
     let mut tools = ToolRegistry::new();
     let order = Arc::new(Mutex::new(Vec::new()));
     let (alpha, mut alpha_handle) =
@@ -2074,14 +2478,7 @@ async fn run_inverted_parallel_batch(
             release.send_replace(true);
         })
     });
-    let result = run(
-        &model,
-        tools,
-        ContextAssembly::new(),
-        lifecycle,
-        &cancellation,
-    )
-    .await;
+    let result = run(&model, tools, assembly, lifecycle, &cancellation).await;
     controller.await.expect("batch controller");
     if let Some(handle) = observation_controller {
         handle.await.expect("observation controller");

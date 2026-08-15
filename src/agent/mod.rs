@@ -33,9 +33,9 @@ pub use crate::runtime::inbound::InitialTurnTrigger;
 pub use cancellation::AgentCancellation;
 pub use execution::{AgentExecution, AgentExecutionRequest, AgentExecutionResult};
 pub use lifecycle::{
-    AlwaysEnter, AttemptLifecycle, LifecycleError, MAX_DEFERRED_PROPOSALS_PER_OBSERVATION,
-    NoDeferredContext, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreStepPolicy,
-    RegisteredToolResultObserver, ToolResultObservation, ToolResultObserver,
+    AlwaysEnter, AttemptLifecycle, LifecycleError, NoDeferredContext, ObservedToolInvocation,
+    PreStepBatch, PreStepDecision, PreStepPolicy, RegisteredToolResultObserver,
+    ToolResultObservation, ToolResultObserver,
 };
 pub use observer::{AgentExecutionObserver, AgentStatusObservation};
 pub use state::{ExecutionState, ExecutionStateMachine};

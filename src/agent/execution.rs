@@ -76,8 +76,8 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{
     AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
-    MAX_DEFERRED_CONTEXT_PROPOSALS, NativeContextInput, render_effective_system_prompt,
-    validate_context_proposal,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
+    render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{CompactionRecord, ConversationError, ConversationState};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -108,8 +108,7 @@ use crate::tools::types::{
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
 use super::lifecycle::{
-    AttemptLifecycle, MAX_DEFERRED_PROPOSALS_PER_OBSERVATION, ObservedToolInvocation, PreStepBatch,
-    PreStepDecision, ToolResultObservation,
+    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, ToolResultObservation,
 };
 use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
@@ -1955,26 +1954,30 @@ impl<'a> AgentExecution<'a> {
     /// # The transaction boundary
     ///
     /// Every observer return value is validated **before** anything is staged:
-    /// its proposal count against
-    /// [`MAX_DEFERRED_PROPOSALS_PER_OBSERVATION`], the running total against
+    /// its proposal count against the established
+    /// [`MAX_PROPOSALS_PER_CONTRIBUTOR`] bound, the running total against
     /// [`MAX_DEFERRED_CONTEXT_PROPOSALS`], and every proposal body against the
     /// same bounded content contract Context Assembly applies. An oversized
     /// observation can therefore never be appended to the attempt buffer and
     /// discovered one step later.
     ///
     /// The pass is transactional: any failure — a failing observer, a bound
-    /// violation, or invalid content — discards every proposal of this pass
-    /// *and* clears the attempt's deferred buffer, so no partial deferred
-    /// state survives a failed observation. The already-committed Assistant
+    /// violation, invalid content, or observable cancellation — discards every
+    /// proposal of this pass *and* clears the attempt's deferred buffer, so no
+    /// partial deferred state survives. The already-committed Assistant
     /// tool-call message and its complete canonical `ToolMessage` batch are
     /// untouched either way; they were committed before this function is
     /// called.
     ///
-    /// The observer receives no cancellation handle. A bounded observation
-    /// that is already running settles, and the loop's own generic
-    /// cancellation checkpoints (before the next model turn and before
-    /// admission) then decide whether the staged proposals ever reach
-    /// Context Assembly.
+    /// # Cancellation precedence
+    ///
+    /// The observer receives no cancellation handle; the loop keeps
+    /// cancellation ownership. A bounded observation that is already running
+    /// settles rather than being dropped, but observable cancellation is
+    /// checked before each observer starts and again once it settles, before
+    /// its return value is consumed. Once cancellation is observable, no later
+    /// observer starts and neither an observer's success nor its failure can
+    /// decide the terminal outcome.
     async fn run_tool_result_observations(
         &mut self,
         settled: &[SettledCall],
@@ -1983,36 +1986,51 @@ impl<'a> AgentExecution<'a> {
         if observers.is_empty() {
             return Ok(());
         }
-        let staged = self.observe_settled_batch(&observers, settled).await;
-        match staged {
+        match self.observe_settled_batch(&observers, settled).await {
             Ok(staged) => {
                 self.deferred_context.extend(staged);
                 Ok(())
             }
-            Err(error) => {
+            Err(terminal) => {
                 // Nothing of this pass was staged, and no earlier pass may
-                // survive a failed one: the attempt settles terminally, and it
-                // settles with an empty deferred buffer.
+                // survive a failed or cancelled one: the attempt settles
+                // terminally, and it settles with an empty deferred buffer.
                 self.deferred_context.clear();
-                Err(Terminal::Failed {
-                    failure: AttemptFailure::Runtime { error },
-                })
+                Err(terminal)
             }
         }
     }
 
-    /// The pass body: one observation per (settled call, registered observer),
+    /// The pass body: one observation per (settled call, bound observer),
     /// validated at its transaction boundary and accumulated into a
     /// pass-local buffer that is never visible to the attempt on failure.
+    ///
+    /// Cancellation is checked at two points around every observation, and
+    /// both belong to the Agent Loop alone:
+    ///
+    /// ```text
+    /// cancellation check          ← an observer never starts after this
+    /// await observer
+    /// cancellation check          ← wins over the observer's Ok *or* Err
+    /// consume result, validate, stage
+    /// ```
+    ///
+    /// An in-flight bounded observation is allowed to settle rather than being
+    /// dropped, but once cancellation is observable it decides the terminal
+    /// outcome: a later observer never starts, and an observer's failure can
+    /// no longer become `ToolResultObservationFailed`.
     async fn observe_settled_batch(
         &self,
         observers: &[super::lifecycle::RegisteredToolResultObserver],
         settled: &[SettledCall],
-    ) -> Result<Vec<DeferredContextProposal>, RuntimeError> {
+    ) -> Result<Vec<DeferredContextProposal>, Terminal> {
         let already_staged = self.deferred_context.len();
         let mut staged: Vec<DeferredContextProposal> = Vec::new();
         for call in settled {
             for registered in observers {
+                if self.cancellation.is_cancelled() {
+                    return Err(self.cancelled_terminal());
+                }
                 let observation = ToolResultObservation {
                     attempt_id: &self.request.attempt_id,
                     conversation_id: &self.request.conversation_id,
@@ -2024,58 +2042,82 @@ impl<'a> AgentExecution<'a> {
                     invocation: call.invocation.as_ref(),
                     result: &call.result,
                 };
-                let proposals = registered
+                let observed = registered
                     .observer()
                     .observe_tool_result(&observation)
-                    .await
-                    .map_err(|error| RuntimeError::ToolResultObservationFailed {
-                        message: error.message,
-                    })?;
+                    .await;
+                // Cancellation that became observable while this bounded
+                // observation was in flight wins here, before the return value
+                // is consumed. This is why an observer that fails during an
+                // already-cancelled attempt cannot convert cancellation into
+                // `ToolResultObservationFailed`.
+                if self.cancellation.is_cancelled() {
+                    return Err(self.cancelled_terminal());
+                }
+                let proposals = observed.map_err(|error| Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ToolResultObservationFailed {
+                            message: error.message,
+                        },
+                    },
+                })?;
                 // The transaction boundary. Nothing below has touched the
                 // attempt's deferred buffer yet, and nothing will until the
                 // whole pass validates.
-                if proposals.len() > MAX_DEFERRED_PROPOSALS_PER_OBSERVATION {
-                    return Err(RuntimeError::DeferredContextRejected {
-                        message: format!(
-                            "deferred-context producer {:?} returned {} proposals for call {}, \
-                             above the per-observation bound {MAX_DEFERRED_PROPOSALS_PER_OBSERVATION}",
-                            registered.identity(),
-                            proposals.len(),
-                            call.call_id
-                        ),
-                    });
+                if proposals.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
+                    return Err(Self::deferred_rejected(format!(
+                        "deferred-context producer {:?} returned {} proposals for call {}, \
+                         above the bounded proposal limit {MAX_PROPOSALS_PER_CONTRIBUTOR}",
+                        registered.producer(),
+                        proposals.len(),
+                        call.call_id
+                    )));
                 }
                 if already_staged + staged.len() + proposals.len() > MAX_DEFERRED_CONTEXT_PROPOSALS
                 {
-                    return Err(RuntimeError::DeferredContextRejected {
-                        message: format!(
-                            "the observation pass of turn {} would stage more than \
-                             {MAX_DEFERRED_CONTEXT_PROPOSALS} deferred proposals",
-                            self.turn
-                        ),
-                    });
+                    return Err(Self::deferred_rejected(format!(
+                        "the observation pass of turn {} would stage more than \
+                         {MAX_DEFERRED_CONTEXT_PROPOSALS} deferred proposals",
+                        self.turn
+                    )));
                 }
                 for proposal in proposals {
-                    validate_context_proposal(&proposal).map_err(|error| {
-                        RuntimeError::DeferredContextRejected {
-                            message: format!(
-                                "deferred-context producer {:?} proposed invalid context for \
-                                 call {}: {error}",
-                                registered.identity(),
-                                call.call_id
-                            ),
-                        }
+                    validate_user_message_proposal(&proposal).map_err(|error| {
+                        Self::deferred_rejected(format!(
+                            "deferred-context producer {:?} proposed invalid context for \
+                             call {}: {error}",
+                            registered.producer(),
+                            call.call_id
+                        ))
                     })?;
                     staged.push(DeferredContextProposal {
-                        // Provenance comes from the registration, never from
-                        // the observer's return value.
-                        producer: registered.identity().clone(),
+                        // The producer comes from the binding, never from the
+                        // observer's return value — and it is still only a
+                        // reference until Context Assembly resolves it.
+                        producer: registered.producer().clone(),
                         proposal,
                     });
                 }
             }
         }
         Ok(staged)
+    }
+
+    /// The attempt's cancellation terminal, sampled at an observation
+    /// checkpoint.
+    fn cancelled_terminal(&self) -> Terminal {
+        Terminal::Cancelled {
+            reason: self.cancellation.reason(),
+        }
+    }
+
+    /// The terminal of a deferred batch rejected at the transaction boundary.
+    fn deferred_rejected(message: String) -> Terminal {
+        Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::DeferredContextRejected { message },
+            },
+        }
     }
 
     /// Runs one logical tool call of the batch.
