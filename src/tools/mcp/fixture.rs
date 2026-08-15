@@ -14,6 +14,12 @@
 //!   server), records the observation, and returns;
 //! - when pagination is enabled, a multi-page `tools/list` catalog of
 //!   `[alpha, beta, gamma, delta, echo]` served two tools per page.
+//!
+//! [`legacy`] is the one deliberate exception to the official-rmcp rule: a
+//! hand-written pre-2026 wire fixture for the one peer shape an rmcp server
+//! cannot represent.
+
+pub mod legacy;
 
 use std::borrow::Cow;
 use std::path::PathBuf;

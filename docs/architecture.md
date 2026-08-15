@@ -1186,7 +1186,9 @@ echo any revision — and a peer with no shared revision fails with a bounded
 `McpError::ProtocolCompatibility` naming both sides. The negotiated revision
 also selects the invalidation mechanism: `subscriptions/listen` from
 2026-07-28 onwards, the plain `notifications/tools/list_changed` client
-callback before it. Exactly one of the two is installed per connection.
+callback before it. At most one invalidation mechanism is installed per
+connection; when the server advertises `tools.listChanged`, exactly one
+revision-appropriate mechanism is installed.
 Executors capture an `Arc` to that runtime. The observed remote tool surface
 and binding are immutable for a capability revision, but rustX does not claim
 to snapshot the implementation behavior of the independent remote server.

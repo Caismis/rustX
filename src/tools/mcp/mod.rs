@@ -25,8 +25,10 @@
 //! set (the legacy handshake lets a server echo any revision it likes) and
 //! selects the invalidation mechanism that revision actually defines:
 //! `subscriptions/listen` from 2026-07-28 onwards, the plain
-//! `notifications/tools/list_changed` client callback before it. Exactly one
-//! of the two is installed per connection.
+//! `notifications/tools/list_changed` client callback before it. At most one
+//! invalidation mechanism is installed per connection; when the server
+//! advertises `tools.listChanged`, exactly one revision-appropriate
+//! mechanism is installed.
 
 #[cfg(feature = "mcp-fixture")]
 #[doc(hidden)]
@@ -476,10 +478,12 @@ impl McpServerRuntime {
             .as_ref()
             .is_some_and(|tools| tools.list_changed == Some(true))
         {
-            // Exactly one invalidation mechanism is installed per connection,
-            // selected by the revision that actually defines it. Both feed
-            // the same epoch and the same notify, so neither duplicates the
-            // other's subscription, discovery, or published tools.
+            // Reached only when the server advertises `tools.listChanged`,
+            // so at most one invalidation mechanism exists per connection and
+            // exactly one revision-appropriate mechanism is installed here.
+            // Both feed the same epoch and the same notify, so neither
+            // duplicates the other's subscription, discovery, or published
+            // tools.
             if uses_inline_lifecycle(&info.protocol_version) {
                 runtime.subscribe_tool_list_changed().await?;
             } else {

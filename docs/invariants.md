@@ -244,11 +244,13 @@ observed only at the next quiescent re-discovery.
   echo any revision; a peer sharing no revision fails with a bounded
   `McpError::ProtocolCompatibility`. The negotiated revision also selects the
   invalidation mechanism — `subscriptions/listen` from 2026-07-28 onwards,
-  the plain `notifications/tools/list_changed` callback before it — and
-  exactly one mechanism is installed per connection, so negotiation never
-  duplicates a discovery session, a subscription, or a published tool. There
-  is no user-facing knob for selecting a revision: protocol compatibility is
-  not session product configuration.
+  the plain `notifications/tools/list_changed` callback before it. At most
+  one invalidation mechanism is installed per connection; when the server
+  advertises `tools.listChanged`, exactly one revision-appropriate mechanism
+  is installed. Negotiation therefore never duplicates a discovery session,
+  a subscription, or a published tool. There is no user-facing knob for
+  selecting a revision: protocol compatibility is not session product
+  configuration.
 - A capability revision freezes rustX's observed name, description, schema,
   policy, id, server identity, and executor binding; it cannot byte-snapshot
   or make deterministic the external server behavior behind that binding.
