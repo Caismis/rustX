@@ -880,6 +880,7 @@ impl<'a> AgentExecution<'a> {
                 .context_runtime
                 .assembly
                 .assemble(&input, &native)
+                .await
                 .map_err(|error| {
                     Self::context_failure_terminal(&ContextError::new(
                         ContextErrorKind::Internal,
@@ -1484,11 +1485,12 @@ impl<'a> AgentExecution<'a> {
         }
         let effective_system_prompt = self.effective_system_prompt()?;
         let must_cover = self.continuation_owner.clone();
-        // The failed provider request already observed the fresh inbound
-        // batch. Compaction for this retry may therefore retire the complete
-        // admitted context generation and the now-observed inbound facts;
-        // it must not rerun or duplicate any contributor.
-        let fresh = None;
+        // ContextWindowExceeded is a rejected provider request, not evidence
+        // that a successful model invocation observed the fresh inbound
+        // batch. Keep the pending constraint through overflow compaction;
+        // the retry reuses the already-admitted context generation without
+        // rerunning assembly.
+        let fresh = self.pending_fresh_inbound.clone();
         match self
             .perform_compaction(
                 must_cover.as_ref(),
@@ -2231,6 +2233,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;
+    use tokio::sync::watch;
 
     use crate::message::types::{
         ContentBlockIndex, ContextKind, InboundKind, MessageBlock, UserContentBlock,
@@ -2313,6 +2316,44 @@ mod tests {
                 .pop_front()
                 .unwrap_or_default();
             Box::pin(futures_util::stream::iter(script))
+        }
+    }
+
+    /// A contributor whose bounded work is explicitly held at an awaited
+    /// boundary. The test releases it only after cancellation is observable,
+    /// proving that the final admission check—not the contributor's private
+    /// synchronization—decides whether transient proposals become facts.
+    struct AwaitingContributor {
+        entered: watch::Sender<bool>,
+        release: watch::Receiver<bool>,
+        invocations: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::context::ContextContributor for AwaitingContributor {
+        fn contribute<'a>(
+            &'a self,
+            _input: &'a crate::context::ContributorInputSnapshot,
+        ) -> BoxFuture<
+            'a,
+            Result<Vec<crate::context::ContextProposal>, crate::context::ContextAssemblyError>,
+        > {
+            self.invocations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.entered.send_replace(true);
+            let mut release = self.release.clone();
+            Box::pin(async move {
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("contributor release channel stays open");
+                Ok(vec![crate::context::ContextProposal::UserMessage(
+                    crate::context::UserMessageProposal {
+                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                            text: "awaited proposal".to_owned(),
+                        })],
+                    },
+                )])
+            })
         }
     }
 
@@ -2765,6 +2806,84 @@ mod tests {
             0,
             "the provider request never started"
         );
+    }
+
+    /// Cancellation may become observable while a contributor is awaiting
+    /// bounded work. The contributor still settles its transient proposal,
+    /// then the one generic pre-admission checkpoint linearizes cancellation
+    /// before any canonical context, Surface revision, snapshot, or provider
+    /// request exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_during_awaited_context_assembly_commits_nothing() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }]]));
+        let invocations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (entered, mut entered_rx) = watch::channel(false);
+        let (release, release_rx) = watch::channel(false);
+        let mut assembly = crate::context::ContextAssembly::new();
+        assembly
+            .register_extension(
+                "awaited.test",
+                Some("package-v1".to_owned()),
+                Arc::new(AwaitingContributor {
+                    entered,
+                    release: release_rx,
+                    invocations: Arc::clone(&invocations),
+                }),
+            )
+            .expect("register awaited contributor");
+        let request = request(&adapter);
+        let runtime = ContextRuntime::for_attempt_with_assembly(
+            crate::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            Arc::new(crate::context::DefaultTokenEstimator),
+            crate::context::AgentStatusComposer::default(),
+            assembly,
+            &request.model,
+        )
+        .expect("valid context runtime");
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let controller_cancellation = cancellation.clone();
+        let controller = tokio::spawn(async move {
+            entered_rx
+                .wait_for(|entered| *entered)
+                .await
+                .expect("awaited contributor entered");
+            controller_cancellation.cancel();
+            release.send_replace(true);
+        });
+        let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let result = AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
+            .expect("conversation identity matches the tool runtime")
+            .run()
+            .await;
+        controller.await.expect("cancellation controller");
+
+        assert_eq!(
+            invocations.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the awaited contributor is invoked once"
+        );
+        assert!(matches!(
+            result.outcome,
+            crate::events::types::AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ));
+        assert!(result.request_snapshots().is_empty());
+        assert_eq!(
+            result.conversation.revision(),
+            crate::conversation::SurfaceRevision::INITIAL
+        );
+        assert!(result.messages().is_empty());
+        assert_eq!(adapter.request_count(), 0);
     }
 
     /// Once admission has completed, a provider failure does not roll back

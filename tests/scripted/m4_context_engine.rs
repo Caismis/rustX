@@ -2956,6 +2956,193 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     }
 }
 
+/// `ContextWindowExceeded` is a rejected provider request, so it does not
+/// prove that the fresh inbound turn was observed. Overflow compaction must
+/// therefore retain the pending inbound while reusing the already-admitted
+/// dynamic context generation.
+#[tokio::test]
+async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation() {
+    let planner = engine(500, 0, 5, weighted(100, 10, 0));
+    let candidate_history = state(vec![
+        user("old", "old history"),
+        fresh_user("msg-inbound-1", "fresh inbound"),
+        user("accepted-context-1", "accepted dynamic context"),
+        user("accepted-context-2", "another accepted fact"),
+    ]);
+    let candidate_projection = planner
+        .build_projection(&candidate_history, &[], None, "")
+        .expect("candidate projection");
+    let unconstrained = planner
+        .plan_compaction(
+            &candidate_history,
+            &candidate_projection,
+            &[],
+            CompactionBudgets::new(1, 1, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("an unrestricted candidate crosses fresh inbound");
+    assert_eq!(unconstrained.span.end, MessageId::new("accepted-context-1"));
+    assert_ne!(
+        unconstrained.span.end,
+        MessageId::new("old"),
+        "the unrestricted candidate crosses the pending fresh inbound"
+    );
+    let fresh =
+        rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
+            .expect("fresh trigger");
+    let protected = planner
+        .plan_compaction(
+            &candidate_history,
+            &candidate_projection,
+            &[],
+            CompactionBudgets::new(1, 1, 1_000_000),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: None,
+                fresh_inbound: Some(&fresh),
+            },
+        )
+        .expect("fresh inbound leaves an earlier candidate");
+    assert_eq!(protected.span.end, MessageId::new("old"));
+    assert!(
+        !protected
+            .retired
+            .iter()
+            .any(|message| message_id_of(message) == "msg-inbound-1"),
+        "the pending fresh identity is not in the overflow summary span"
+    );
+
+    let model = fake_model(vec![
+        vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let invocations_for_contributor = Arc::clone(&invocations);
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            "fresh-overflow.test",
+            Some("package-generation-1".to_owned()),
+            Arc::new(move |_: &rustx::context::ContributorInputSnapshot| {
+                invocations_for_contributor.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "accepted once".to_owned(),
+                    })],
+                })])
+            }),
+        )
+        .expect("register overflow contributor");
+    let runtime = runtime_with_assembly(
+        500,
+        0,
+        5,
+        weighted(100, 10, 0),
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]),
+        assembly,
+    );
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = AgentExecution::new(
+        fresh_request(
+            "attempt-1",
+            vec![
+                user("old", "old history"),
+                fresh_user("msg-inbound-1", "fresh inbound"),
+            ],
+            &model,
+        ),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    assert_eq!(result.request_snapshots().len(), 2);
+    assert_eq!(
+        result.request_snapshots()[0].context_generation,
+        result.request_snapshots()[1].context_generation,
+        "overflow retry reuses the admitted ContextGeneration"
+    );
+    assert_ne!(
+        result.request_snapshots()[0].surface_revision,
+        result.request_snapshots()[1].surface_revision,
+        "successful overflow compaction creates a new historical Surface revision"
+    );
+    let retry = &model.requests()[1];
+    assert!(
+        retry.messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user) if user.id == MessageId::new("msg-inbound-1")
+            )
+        }),
+        "the retry still presents pending fresh inbound"
+    );
+    assert!(
+        result
+            .active_ids()
+            .contains(&MessageId::new("msg-inbound-1")),
+        "fresh inbound remains active until the successful retry observes it"
+    );
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(
+                            rustx::message::types::ContextKind::AgentStatus
+                        )
+                )
+            })
+            .count(),
+        1,
+        "Agent Status is sampled and committed once"
+    );
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(
+                            rustx::message::types::ContextKind::ExtensionEnvironment
+                        )
+                )
+            })
+            .count(),
+        1,
+        "dynamic extension context is committed once"
+    );
+    for (request, snapshot) in model.requests().iter().zip(result.request_snapshots()) {
+        assert_eq!(
+            snapshot
+                .reconstruct(&result.conversation)
+                .expect("reconstruct overflow request"),
+            *request
+        );
+    }
+}
+
 /// A second overflow after the retry settles the attempt with the second
 /// overflow; no second compaction and no third request occur.
 #[tokio::test]

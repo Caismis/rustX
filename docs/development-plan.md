@@ -445,9 +445,19 @@ Implemented in the current architecture:
 - Frozen provider-independent `RequestSnapshot` with exact SurfaceRevision,
   effective model/reasoning/request parameters, tool definitions, capability
   revision, ContextGeneration, continuation, and request identity.
+- Awaited typed `ContextContributor`/`ContextAssembly` boundary: bounded
+  futures settle against a finite immutable input before the final generic
+  admission cancellation observation.
+- Runtime-owned append-only in-memory `RequestHistory` receives every actual
+  primary snapshot at attempt settlement, retaining it beyond
+  `AgentExecutionResult` without copying a second transcript. Issue #11 will
+  later persist the same semantic object.
 - Generic pre-admission cancellation linearization, no rollback after
   admission, and bounded overflow compact-and-retry that reuses the accepted
   context generation without reinvoking contributors.
+- `ContextWindowExceeded` does not prove fresh inbound was observed; overflow
+  compaction keeps the pending `FreshInboundTurn` constraint while reusing
+  the accepted context generation.
 - Structural `ModelRequest` reconstruction from historical Surface plus the
   frozen snapshot, checked before provider adapter translation.
 - Mechanically derived `ContextCompatibilityManifest` and deterministic

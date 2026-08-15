@@ -27,6 +27,13 @@ Context Assembly is a sibling of the Context Engine and is coordinated by
 the Agent Loop. It is not a plugin host and it does not mutate conversation
 state.
 
+The assembly boundary is genuinely awaited. `ContextContributor::contribute`
+returns a boxed future over typed proposals and `ContextAssembly::assemble`
+is async, so bounded native or future certified-extension reads settle at one
+semantic boundary before the Agent Loop's final admission check. Contributors
+still receive only the finite immutable snapshot; they do not receive an
+execution, host, registry, history, ID allocator, or adapter handle.
+
 ## 1. Conversation authority
 
 ConversationState is the single move-owned mutable conversation authority.
@@ -73,6 +80,8 @@ ContributorInputSnapshot
 native observations + certified extension contributors
     ↓
 typed transient ContextProposal values
+    ↓
+await all bounded contributor work
     ↓
 rustX validation, provenance, semantic lanes, deterministic ordering
     ↓
@@ -338,6 +347,13 @@ once. The retry reuses the accepted ContextGeneration and committed
 canonical context facts. It never reinvokes contributors or appends a
 duplicate context batch.
 
+`ContextWindowExceeded` is not evidence that a model invocation observed the
+fresh inbound turn: the provider rejected that request. Therefore overflow
+compaction receives the still-pending `FreshInboundTurn` constraint and may
+not retire the fresh messages. This constraint is independent of the
+accepted dynamic-context generation, so preserving fresh inbound never causes
+assembly to run again.
+
 Compaction may change the exact SurfaceRevision, projected messages,
 continuation compatibility, and therefore the retry request identity. The
 retry gets retry_number = 1; the original request remains independently
@@ -345,12 +361,34 @@ reconstructable from its own snapshot and surface revision. If the provider
 overflows again, the bounded retry budget is exhausted.
 
 The overflow regression uses a deterministic fake adapter and a contributor
-counter. It proves one contributor invocation, one extension fact in the
-ledger, one accepted context generation, changed revisions when compaction
-occurs, and structural equality for both actual requests and their
+counter. Its compaction candidate would cross pending fresh inbound without
+the constraint; the protected retry still contains the inbound identity. It
+proves one contributor invocation, one Agent Status sample, one extension
+fact in the ledger, one accepted context generation, changed revisions when
+compaction occurs, and structural equality for both actual requests and their
 reconstructions.
 
-## 9. Provider boundary
+## 9. Settled RequestSnapshot ownership
+
+During execution, `AgentExecution` collects the immutable snapshots for the
+actual primary provider requests in order. At `RuntimeClientHost::finish_attempt`
+— after the Agent Loop has settled and before its result is dropped — the
+snapshot vector is transferred into the host's append-only
+`runtime_client::RequestHistory` while the same host lock transfers the one
+`ConversationState` back to the host. A duplicate `RequestIdentity` is
+rejected as a coordination defect; equal content is never deduplicated.
+
+`RequestHistory` owns frozen non-history facts only. It does not copy messages,
+allocate a second Surface, or replace Message Ledger authority. After
+settlement, `RuntimeClientHost::request_history` exposes an immutable read
+clone and `reconstruct_request` looks up the snapshot and hydrates its exact
+historical Surface revision from the host-owned ConversationState. While an
+attempt is running, the host explicitly reports historical reconstruction as
+unavailable because the single ConversationState is moved into that attempt.
+Issue #11 may later persist this same semantic object; this milestone does
+not add SQLite or a generic persistence layer.
+
+## 10. Provider boundary
 
 Adapters receive the final canonical projection and frozen request values.
 They may translate provider protocol details, serialize the effective system
@@ -368,7 +406,7 @@ regression inspects the actual wire body and verifies that Agent Status and
 Skill context arrived through the canonical assembled semantics, not through
 hidden adapter injection.
 
-## 10. Compatibility manifest
+## 11. Compatibility manifest
 
 ContextAssembly::compatibility_manifest() returns
 ContextCompatibilityManifest with:
@@ -386,7 +424,7 @@ native identity list, UserSource namespace list, and proposal-kind list used
 by validation. This is a machine-readable contract projection, not a plugin
 loader, middleware framework, package marketplace, or DSH/Cordis runtime.
 
-## 11. Invariants and test seams
+## 12. Invariants and test seams
 
 The implementation tests deterministic ordering under registration
 permutation, logical identity stability across attestation changes,

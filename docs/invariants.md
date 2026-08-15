@@ -1007,6 +1007,12 @@ message role, history shape, or timestamps:
   generation. An overflow compact-and-retry reuses its accepted status,
   Skill, extension output, provenance, ordering, and ContextGeneration; it
   does not rerun contributors or append duplicate context facts.
+- `ContextWindowExceeded` is a rejected provider request, not proof that the
+  model observed fresh inbound. Overflow compaction therefore receives the
+  still-pending `FreshInboundTurn` constraint while reusing the accepted
+  context generation. The retry cannot solve fresh-inbound protection by
+  rerunning assembly, and cannot solve generation reuse by dropping the
+  constraint.
 - The context path is mandatory: every normal `AgentExecution` carries a
   `ContextRuntime`; there is no no-context execution mode and no Agent
   Status disable flag.
@@ -1017,6 +1023,10 @@ message role, history shape, or timestamps:
   ContributorInputSnapshot. It cannot mutate history, allocate MessageIds,
   choose UserSource, claim a native lane, register a provider, admit a
   request, or dispatch an adapter.
+- ContextContributor is an awaited boxed-future boundary and
+  `ContextAssembly::assemble` is async. All bounded contributor work settles
+  before the final generic admission cancellation observation; the finite
+  input contract is unchanged and no mutable runtime handle is exposed.
 - UserContextLane and SystemSectionLane are finite rustX-owned contracts;
   there is no arbitrary numeric priority. Native-reserved single-owner
   slots reject a second owner. Multi-extension entries sort by stable
@@ -1043,6 +1053,14 @@ message role, history shape, or timestamps:
   provider-neutral ModelRequest structurally with the actual request before
   adapter translation. Current configuration, Skills, contributors,
   filesystem state, and runtime status are never consulted.
+- During `AgentExecution`, its ordered snapshot vector is transient. At
+  `RuntimeClientHost::finish_attempt`, ownership transfers under the host
+  coordination lock into append-only `RequestHistory` before the result is
+  dropped. The host retains immutable non-history request facts beside the
+  one historical ConversationState; it does not copy a transcript or create
+  a second history authority. After settlement, lookup by RequestIdentity
+  reconstructs from the retained snapshot and its exact SurfaceRevision;
+  #11 may later persist the same object.
 
 ## Runtime Client projection (Issue #37)
 

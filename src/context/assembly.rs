@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use crate::conversation::SurfaceRevision;
@@ -197,10 +198,10 @@ pub trait ContextContributor: Send + Sync {
     ///
     /// Returns a context assembly error when the contributor cannot produce
     /// a bounded proposal batch.
-    fn contribute(
-        &self,
-        input: &ContributorInputSnapshot,
-    ) -> Result<Vec<ContextProposal>, ContextAssemblyError>;
+    fn contribute<'a>(
+        &'a self,
+        input: &'a ContributorInputSnapshot,
+    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, ContextAssemblyError>>;
 }
 
 impl<F> ContextContributor for F
@@ -209,11 +210,11 @@ where
         + Send
         + Sync,
 {
-    fn contribute(
-        &self,
-        input: &ContributorInputSnapshot,
-    ) -> Result<Vec<ContextProposal>, ContextAssemblyError> {
-        self(input)
+    fn contribute<'a>(
+        &'a self,
+        input: &'a ContributorInputSnapshot,
+    ) -> BoxFuture<'a, Result<Vec<ContextProposal>, ContextAssemblyError>> {
+        Box::pin(async move { self(input) })
     }
 }
 
@@ -481,7 +482,7 @@ impl ContextAssembly {
     /// Returns an error when native values or contributor proposals violate
     /// the bounded assembly contract.
     #[allow(clippy::too_many_lines)]
-    pub fn assemble(
+    pub async fn assemble(
         &self,
         input: &ContributorInputSnapshot,
         native: &NativeContextInput,
@@ -569,6 +570,7 @@ impl ContextAssembly {
             let proposals = registered
                 .contributor
                 .contribute(input)
+                .await
                 .map_err(|error| ContextAssemblyError::ContributorFailed(error.to_string()))?;
             if proposals.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
                 return Err(ContextAssemblyError::ProposalLimitExceeded);
@@ -750,8 +752,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn extension_order_uses_logical_identity_not_registration_order() {
+    #[tokio::test]
+    async fn extension_order_uses_logical_identity_not_registration_order() {
         let first = Arc::new(|_: &ContributorInputSnapshot| {
             Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
                 content: vec![UserContentBlock::Text(TextBlock {
@@ -800,9 +802,11 @@ mod tests {
             .expect("zeta");
         let a = left
             .assemble(&input(), &NativeContextInput::default())
+            .await
             .expect("left");
         let b = right
             .assemble(&input(), &NativeContextInput::default())
+            .await
             .expect("right");
         assert_eq!(a.user_messages, b.user_messages);
         assert_eq!(
@@ -833,8 +837,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn extension_provenance_and_identity_are_core_assigned() {
+    #[tokio::test]
+    async fn extension_provenance_and_identity_are_core_assigned() {
         let mut assembly = ContextAssembly::new();
         assembly
             .register_extension(
@@ -851,6 +855,7 @@ mod tests {
             .expect("register extension");
         let accepted = assembly
             .assemble(&input(), &NativeContextInput::default())
+            .await
             .expect("assemble extension");
         assert_eq!(accepted.user_messages.len(), 1);
         assert_eq!(
@@ -871,8 +876,8 @@ mod tests {
         assert_eq!(&decoded, identity);
     }
 
-    #[test]
-    fn native_provenance_is_assigned_by_core() {
+    #[tokio::test]
+    async fn native_provenance_is_assigned_by_core() {
         let assembly = ContextAssembly::new();
         let accepted = assembly
             .assemble(
@@ -882,13 +887,14 @@ mod tests {
                     ..NativeContextInput::default()
                 },
             )
+            .await
             .expect("native proposal");
         assert_eq!(accepted.user_messages[0].source, UserSource::Runtime);
         assert_eq!(accepted.user_messages[0].kind, ContextKind::AgentStatus);
     }
 
-    #[test]
-    fn system_sections_use_native_slots_and_stable_extension_order() {
+    #[tokio::test]
+    async fn system_sections_use_native_slots_and_stable_extension_order() {
         let mut assembly = ContextAssembly::new();
         assembly
             .register_extension(
@@ -926,6 +932,7 @@ mod tests {
                     ..NativeContextInput::default()
                 },
             )
+            .await
             .expect("system sections assemble");
         assert_eq!(
             accepted

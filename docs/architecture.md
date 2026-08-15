@@ -602,7 +602,10 @@ See `docs/context-engine.md` for the full boundary description.
 
 The Agent Loop is the single coordination owner for Context Assembly and
 request admission. `ContextContributor` receives only a finite
-`ContributorInputSnapshot` and returns transient `ContextProposal` values.
+`ContributorInputSnapshot` and returns an awaited boxed future of transient
+`ContextProposal` values; `ContextAssembly::assemble` is the one async typed
+assembly boundary. Bounded contributor work settles before the generic final
+admission check.
 RustX owns contributor identity, trusted provenance, semantic lanes,
 canonical `MessageId` allocation, Ledger/Surface mutation, cancellation,
 and provider dispatch. Native context and certified extensions therefore
@@ -627,9 +630,21 @@ structural equality with the actual `ModelRequest` before adapter
 translation. Current contributors, Skills, configuration, filesystem, and
 runtime status are never consulted.
 
+During execution, `AgentExecution` owns the transient ordered snapshot list.
+At attempt settlement, `RuntimeClientHost::finish_attempt` transfers those
+immutable values into its append-only `RequestHistory` before dropping the
+`AgentExecutionResult`. The host retains request facts separately from the
+Message Ledger and Conversation Surface; `RequestHistory` never becomes a
+second transcript. After settlement, the host can reconstruct by request
+identity from the retained snapshot plus the exact historical Surface
+revision. Issue #11 may later persist this same object, but no persistence
+framework is part of M7.5b.
+
 An overflow retry reuses the admitted ContextGeneration and canonical
-context facts. Only compaction-dependent Surface/request fields may change;
-contributors are not reinvoked and duplicate context is never committed.
+context facts. `ContextWindowExceeded` does not prove that fresh inbound was
+observed, so compaction still protects the pending `FreshInboundTurn`. Only
+compaction-dependent Surface/request fields may change; contributors are not
+reinvoked and duplicate context is never committed.
 
 #### M5 implementation (native tool plane)
 
@@ -1584,6 +1599,10 @@ runtime_client/host.rs         RuntimeClientHost: ConversationState
                                coordinator, ownership between attempts,
                                current-attempt handle,
                                observer wiring, admission, shutdown
+runtime_client/request_history.rs
+                               append-only in-memory owner of frozen
+                               settled RequestSnapshots and reconstruction
+                               lookup; never a message transcript
 runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                RAII/explicit detach, request dispatch,
                                event subscription delivery

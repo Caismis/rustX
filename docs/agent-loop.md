@@ -155,10 +155,11 @@ failure.
 
 The Agent Loop is the coordination owner. It creates one finite immutable
 `ContributorInputSnapshot`, samples native observations, invokes the one
-`ContextAssembly` contract, and receives transient typed proposals. The
-assembly layer assigns trusted provenance, finite semantic lanes, stable
-extension ordering, and `ContextGeneration`; contributors cannot allocate
-canonical IDs or mutate the conversation.
+`ContextAssembly` contract, awaits every bounded contributor future, and
+receives transient typed proposals. The assembly layer assigns trusted
+provenance, finite semantic lanes, stable extension ordering, and
+`ContextGeneration`; contributors cannot allocate canonical IDs or mutate
+the conversation.
 
 The exact model-step linearization point is the generic cancellation check
 in `AgentExecution::prepare_model_request`, immediately after assembly and
@@ -181,6 +182,12 @@ advancement, no snapshot, and no provider request. After `admit_context`
 commits, provider failure or cancellation cannot roll back the accepted
 Ledger facts, Surface revision, ContextGeneration, or RequestSnapshot.
 
+If cancellation becomes observable while a contributor future is pending, the
+future is allowed to settle its bounded transient result; the same final
+pre-admission check then decides the race. A cancellation observed before
+that check wins. If the check observes admission before concurrent
+cancellation, admission wins and the accepted facts remain historical.
+
 `RequestSnapshot` stores the effective invocation/configuration, reasoning
 values, tool definitions, capability revision, rendered Effective System
 Prompt, continuation state, context generation, request identity, and the
@@ -189,6 +196,17 @@ historical revision plus the frozen values. The loop compares the actual
 provider-neutral `ModelRequest` with the reconstructed value before calling
 an adapter. It never reads current configuration, Skill discovery, live
 contributors, package contents, filesystem state, or current runtime status.
+
+Every actual primary request is retained after settlement:
+`RuntimeClientHost::finish_attempt` transfers `AgentExecutionResult`'s
+snapshots into the host-owned append-only `RequestHistory` before dropping
+the result. The host retains those frozen facts separately from the one
+historical ConversationState; it does not create a second transcript.
+`RuntimeClientHost::reconstruct_request` uses request identity, the retained
+snapshot, and its exact historical Surface revision after settlement. While
+an attempt runs, the host explicitly cannot reconstruct because the single
+ConversationState is moved into that attempt. No current model settings,
+contributors, Skills, clock, or status fill historical gaps.
 
 ## 5. Usage
 
