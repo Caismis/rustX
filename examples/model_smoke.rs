@@ -177,8 +177,7 @@ fn build_request(protocol: &str, model: &str, prompt: &str) -> ModelRequest {
             timestamp: None,
         })],
         tools: Vec::new(),
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         continuation: None,
     }
 }

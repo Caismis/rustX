@@ -35,7 +35,7 @@ use crate::runtime::identity::{AttemptId, MessageId};
 ///
 /// The observed status is the exact composed value of the current request
 /// preparation (one clock sample, one extension-provider invocation set):
-/// the canonical rendered attachment consumed by the model request is
+/// the canonical rendered context fact consumed by the model request is
 /// derived from this same value, so model-path and client-path status can
 /// never diverge through a second composition.
 #[derive(Debug, Clone, PartialEq)]

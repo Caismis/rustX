@@ -144,6 +144,7 @@ use chrono_tz::Tz;
 use super::projection::{
     Observation, RuntimeClientProjection, SubscriberPoll, background_view, capability_view,
 };
+use super::request_history::{RequestHistory, RequestHistoryError};
 use super::snapshot::{RuntimeClientAttemptPhase, RuntimeClientSnapshot};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
@@ -160,8 +161,8 @@ use crate::events::types::RuntimeEvent;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::model::invocation::ModelInvocationError;
 use crate::model::session::{AttemptModelSnapshot, SessionModelConfig, SessionModelState};
+use crate::model::{ModelRequest, RequestIdentity, invocation::ModelInvocationError};
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
@@ -363,6 +364,9 @@ struct HostState {
     /// can never interleave ambiguously: whichever acquires the lock first
     /// linearizes first.
     model: SessionModelState,
+    /// Settled frozen non-history request facts, retained beside the
+    /// authoritative `ConversationState` rather than copied into messages.
+    request_history: RequestHistory,
     /// The one canonical conversation state, owned by the host **only
     /// between attempts**.
     ///
@@ -694,6 +698,10 @@ impl HostInner {
                 result.conversation.ledger().audit_records(),
                 "the projection read model must mirror the authoritative message ledger"
             );
+            state
+                .request_history
+                .append(result.request_snapshots)
+                .expect("each admitted request identity is transferred exactly once");
             state.conversation = Some(result.conversation);
             if state
                 .current_attempt
@@ -937,6 +945,7 @@ impl RuntimeClientHost {
             state: Mutex::new(HostState {
                 projection,
                 model: config.model,
+                request_history: RequestHistory::default(),
                 conversation: Some(conversation),
                 current_attempt: None,
                 attachment: None,
@@ -1198,6 +1207,42 @@ impl RuntimeClientHost {
     ) -> Result<(RuntimeClientSnapshot, RuntimeClientCursor), RuntimeClientError> {
         let state = self.inner.lock_state();
         state.projection.snapshot()
+    }
+
+    /// Returns the immutable in-memory request facts retained by this host.
+    ///
+    /// The host owns these snapshots after attempt settlement. The returned
+    /// value is a read-only clone of the request-fact collection; it does not
+    /// create another conversation or transcript authority.
+    #[must_use]
+    pub fn request_history(&self) -> RequestHistory {
+        self.inner.lock_state().request_history.clone()
+    }
+
+    /// Reconstructs one retained provider-neutral request from its frozen
+    /// snapshot and the exact historical Surface revisions in the host's
+    /// authoritative `ConversationState`.
+    ///
+    /// While an attempt is running, that single `ConversationState` is moved
+    /// into the attempt and this read is explicitly unavailable. Once the
+    /// attempt settles, the same state returns to the host and reconstruction
+    /// is again available without consulting live configuration or sources.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RequestHistoryError::ConversationUnavailable`] while the
+    /// single `ConversationState` is owned by a running attempt, or a lookup
+    /// / historical reconstruction error for an unknown or invalid request.
+    pub fn reconstruct_request(
+        &self,
+        identity: &RequestIdentity,
+    ) -> Result<ModelRequest, RequestHistoryError> {
+        let state = self.inner.lock_state();
+        let conversation = state
+            .conversation
+            .as_ref()
+            .ok_or(RequestHistoryError::ConversationUnavailable)?;
+        state.request_history.reconstruct(identity, conversation)
     }
 
     /// Subscribes one attachment to the observation stream after a
@@ -2256,22 +2301,31 @@ mod tests {
         assert_eq!(settled_events.len(), 1);
         assert_eq!(settled, 1);
 
-        // The first model request observed the admitted message with Agent
-        // Status.
+        // The first model request observed the admitted Runtime Agent Status
+        // fact through canonical history.
         let requests = adapter.requests();
         assert_eq!(requests.len(), 1);
         assert!(requests[0].messages.iter().any(|message| {
             matches!(message, MessageBlock::User(user) if user.id == message_id)
         }));
-        assert!(requests[0].agent_status.is_some());
+        assert!(requests[0].messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus,
+                        )
+            )
+        }));
 
         // The snapshot carries the committed canonical history and the
         // settled attempt.
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             snapshot.messages.len(),
-            2,
-            "user message + Assistant message"
+            3,
+            "user message + admitted Agent Status + Assistant message"
         );
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
@@ -2282,6 +2336,155 @@ mod tests {
         // settlement path immediately afterwards. Observing the commit is a
         // wait on that exact condition, never a delay.
         await_canonical_history(&fixture.host, &snapshot.messages).await;
+
+        // Request facts survive the AgentExecutionResult transfer. Mutate
+        // the live session configuration after settlement and reconstruct
+        // from the retained snapshot plus the host-owned historical Surface;
+        // neither current configuration nor a live contributor is consulted.
+        let requests = adapter.requests();
+        let history = fixture.host.request_history();
+        assert_eq!(history.snapshots().len(), 1);
+        let retained = history.snapshots()[0].clone();
+        let mut live_config = fixture
+            .host
+            .inner
+            .state
+            .lock()
+            .expect("host lock")
+            .model
+            .config()
+            .clone();
+        live_config.request_params.insert(
+            "live_mutation".to_owned(),
+            serde_json::json!("changed-after-settlement"),
+        );
+        fixture
+            .host
+            .model_set(live_config)
+            .expect("live model mutation remains valid");
+        let reconstructed = fixture
+            .host
+            .reconstruct_request(&retained.identity)
+            .expect("retained request reconstructs after settlement");
+        assert_eq!(reconstructed, requests[0]);
+        assert_eq!(
+            history.get(&retained.identity),
+            Some(&retained),
+            "request history lookup is identity-based and immutable"
+        );
+    }
+
+    /// A composed host retains every actual primary request, including an
+    /// overflow retry, after the `AgentExecutionResult` has been transferred
+    /// and dropped. The retry keeps the pending fresh inbound visible while
+    /// both request facts remain reconstructable from their own Surface
+    /// revisions.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn settled_host_retains_distinct_overflow_request_snapshots() {
+        let (adapter, fixture) = host_fixture(
+            vec![
+                one_turn_stop(),
+                vec![GatedStep::Emit(ModelEvent::Failed {
+                    error: ModelError {
+                        kind: ModelErrorKind::ContextWindowExceeded,
+                        message: "context window exceeded".to_owned(),
+                        retry_after_ms: None,
+                        provider_code: None,
+                    },
+                })],
+                vec![
+                    GatedStep::Emit(ModelEvent::Started),
+                    GatedStep::Emit(ModelEvent::TextDelta {
+                        block_index: ContentBlockIndex::new(0),
+                        text: "historical summary".to_owned(),
+                    }),
+                    GatedStep::Emit(ModelEvent::Completed {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    }),
+                ],
+                one_turn_stop(),
+            ],
+            ToolRegistry::new(),
+            composer(),
+        )
+        .await;
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe");
+
+        attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(1),
+            content: submit_content("first"),
+        });
+        receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        await_request_history_len(&fixture.host, 1).await;
+
+        attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: crate::runtime_client::RequestId::new(2),
+            content: submit_content("second"),
+        });
+        receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        await_request_history_len(&fixture.host, 3).await;
+
+        let history = fixture.host.request_history();
+        assert_eq!(history.snapshots().len(), 3);
+        assert_eq!(history.snapshots()[0].identity.retry_number, 0);
+        assert_eq!(history.snapshots()[1].identity.retry_number, 0);
+        assert_eq!(history.snapshots()[2].identity.retry_number, 1);
+        assert_eq!(
+            history.snapshots()[1].identity.attempt_id,
+            history.snapshots()[2].identity.attempt_id
+        );
+        assert_eq!(
+            history.snapshots()[1].context_generation,
+            history.snapshots()[2].context_generation,
+            "overflow retry keeps the one admitted context generation"
+        );
+        assert_ne!(
+            history.snapshots()[1].surface_revision,
+            history.snapshots()[2].surface_revision,
+            "compaction gives the retry its own historical Surface revision"
+        );
+
+        let provider_requests = adapter.requests();
+        assert_eq!(
+            provider_requests.len(),
+            4,
+            "three primary requests plus summary"
+        );
+        for (snapshot, request) in history.snapshots().iter().zip([
+            &provider_requests[0],
+            &provider_requests[1],
+            &provider_requests[3],
+        ]) {
+            assert_eq!(
+                fixture
+                    .host
+                    .reconstruct_request(&snapshot.identity)
+                    .expect("settled historical request reconstructs"),
+                *request
+            );
+        }
+        assert!(
+            provider_requests[3].messages.iter().any(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user) if user.id.as_str() == "conv-host-inbound-2"
+                )
+            }),
+            "the retry still observes the pending fresh inbound"
+        );
     }
 
     /// Waits until the host owns the conversation state again and its
@@ -2303,6 +2506,21 @@ mod tests {
         })
         .await
         .expect("the projection mirrors the authoritative canonical history");
+    }
+
+    /// Waits for the post-settlement transfer of frozen request facts to the
+    /// host's runtime-owned append-only history.
+    async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            loop {
+                if host.request_history().snapshots().len() == expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("request history transfer must settle");
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -2828,7 +3046,7 @@ mod tests {
         let (mirror, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             mirror.messages.len(),
-            2,
+            3,
             "the projection mirrors the attempt's committed history"
         );
         assert!(fixture.host.has_current_attempt());
@@ -2927,15 +3145,19 @@ mod tests {
             roles,
             vec![
                 "user",
+                "user",
                 "assistant",
                 "tool",
                 "user",
+                "user",
                 "assistant",
+                "user",
                 "user",
                 "assistant",
             ],
-            "one authoritative history, extended across the tool turn, the \
-             safe-boundary drain, and both attempts"
+            "one authoritative history, including one canonical Runtime \
+             context fact for each fresh inbound step, extended across the \
+             tool turn, the safe-boundary drain, and both attempts"
         );
     }
 
@@ -3770,10 +3992,9 @@ mod tests {
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     }
 
-    /// Agent Status is projected from the exact same composition the model
-    /// path consumes: the client event's rendered text equals the model
-    /// request's rendered attachment, and the structured extension facts
-    /// are preserved.
+    /// Agent Status is admitted from the exact same composition the model
+    /// path consumes: the client event's rendered text equals the canonical
+    /// Runtime context fact sent in the model request.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn agent_status_projection_shares_one_composition() {
         let mut composer = composer();
@@ -3814,11 +4035,25 @@ mod tests {
         let requests = adapter.requests();
         assert_eq!(requests.len(), 1);
         let model_rendered = requests[0]
-            .agent_status
-            .as_ref()
-            .expect("model path carries Agent Status")
-            .rendered
-            .clone();
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                MessageBlock::User(user)
+                    if user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::AgentStatus,
+                        ) =>
+                {
+                    user.content.first().and_then(|content| match content {
+                        crate::message::types::UserContentBlock::Text(text) => {
+                            Some(text.text.clone())
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .expect("model path carries canonical Agent Status");
         assert_eq!(
             status_event.rendered, model_rendered,
             "the client view derives from the same composition as the model path"

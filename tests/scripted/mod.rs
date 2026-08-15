@@ -57,7 +57,6 @@ mod issue38_stdio_transport;
 mod issue42_runtime_client_model;
 mod issue42_session_model;
 mod m3_agent_loop;
-mod m4_agent_status;
 mod m4_context_engine;
 mod m5_agent_loop;
 mod m5_background;

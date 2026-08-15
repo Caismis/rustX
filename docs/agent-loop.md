@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 inbound batching)
+# Agent Loop (M3 + Issue #22 + Issue #55)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -19,7 +19,11 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
 - the recorded `RuntimeEvent` trace
 - the moved `ConversationState` owned by the attempt while it runs
 - the pending fresh inbound trigger lifecycle (`FreshInboundTurn`) and its
-  composition into exactly one Agent Status snapshot per request preparation
+  composition into one native Context Assembly generation
+- the finite `ContributorInputSnapshot` boundary and certified-extension
+  proposal admission
+- the model-step admission/request-start linearization point
+- frozen `RequestSnapshot` creation and structural reconstruction checking
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
@@ -92,15 +96,14 @@ fails explicitly.
 
 The context path is mandatory: every model request carries the finite
 projection of the current Surface (complete canonical messages in exact
-order) plus the ephemeral Agent Status attachment of a pending fresh inbound
-turn, instead of the full Ledger. A successful compaction appends one runtime
-User summary and applies one Surface Replace, establishing a new revision and
-invalidating the pending continuation; the continuation-owning turn is
-retired completely, so an old opaque provider continuation is never paired
-with a new projection. An ordinary inbound drain and an Agent Status
-attachment never clear the pending continuation. Issue #55 owns the Effective
-System Prompt and Request Snapshot; Issue #61 owns the larger
-`ConversationRuntime` extraction.
+order), the rustX-rendered Effective System Prompt, and a frozen
+RequestSnapshot. Agent Status and Skill guidance are canonical User context
+facts admitted before the snapshot; they are not hidden request attachments.
+A successful compaction appends one runtime User summary and applies one
+Surface Replace, establishing a new revision and invalidating the pending
+continuation; the continuation-owning turn is retired completely, so an old
+opaque provider continuation is never paired with a new projection. Issue #61
+owns the larger `ConversationRuntime` extraction.
 
 ## 4.1 Fresh inbound lifecycle
 
@@ -138,14 +141,72 @@ The first successfully completed model invocation consumes the fresh
 trigger (including a successful `ToolCalls` response: the model has already
 observed the turn). A safe-boundary mailbox drain appends the whole batch to
 canonical history and establishes one new `FreshInboundTurn` from the
-drained ids in sequence order. The next model request composes exactly one
-Agent Status snapshot targeting the final fresh inbound message; a
-`ContextWindowExceeded` overflow does not consume the trigger, and the retry
-composes a freshly sampled snapshot. A foreground-tool-only continuation
-with no new drain carries no Agent Status. A failure while composing or
-preparing that status is a context preparation failure
+drained ids in sequence order. The next model request samples Agent Status
+and admits it through Context Assembly as a canonical Runtime context fact.
+A `ContextWindowExceeded` overflow does not consume the trigger and the
+retry reuses the already accepted context generation; it does not resample,
+reinvoke contributors, or append duplicate context. A foreground-tool-only
+continuation with no new drain carries no Agent Status. A failure while
+composing or preparing that status is a context preparation failure
 (`AttemptFailed(Runtime(ContextPreparationFailed))`), never a compaction
 failure.
+
+## 4.2 Context Assembly and request admission
+
+The Agent Loop is the coordination owner. It creates one finite immutable
+`ContributorInputSnapshot`, samples native observations, invokes the one
+`ContextAssembly` contract, awaits every bounded contributor future, and
+receives transient typed proposals. The assembly layer assigns trusted
+provenance, finite semantic lanes, stable extension ordering, and
+`ContextGeneration`; contributors cannot allocate canonical IDs or mutate
+the conversation.
+
+The exact model-step linearization point is the generic cancellation check
+in `AgentExecution::prepare_model_request`, immediately after assembly and
+immediately before `admit_context`:
+
+```text
+transient proposals
+    ↓
+observable cancellation check
+    ↓ admission/request-start commit point
+allocate MessageIds and commit canonical context
+    ↓
+freeze RequestSnapshot and reconstruct-check ModelRequest
+    ↓
+invoke adapter
+```
+
+Cancellation before that check commits no dynamic context, no Surface
+advancement, no snapshot, and no provider request. After `admit_context`
+commits, provider failure or cancellation cannot roll back the accepted
+Ledger facts, Surface revision, ContextGeneration, or RequestSnapshot.
+
+If cancellation becomes observable while a contributor future is pending, the
+future is allowed to settle its bounded transient result; the same final
+pre-admission check then decides the race. A cancellation observed before
+that check wins. If the check observes admission before concurrent
+cancellation, admission wins and the accepted facts remain historical.
+
+`RequestSnapshot` stores the effective invocation/configuration, reasoning
+values, tool definitions, capability revision, rendered Effective System
+Prompt, continuation state, context generation, request identity, and the
+exact `SurfaceRevision`. `RequestSnapshot::reconstruct` hydrates only that
+historical revision plus the frozen values. The loop compares the actual
+provider-neutral `ModelRequest` with the reconstructed value before calling
+an adapter. It never reads current configuration, Skill discovery, live
+contributors, package contents, filesystem state, or current runtime status.
+
+Every actual primary request is retained after settlement:
+`RuntimeClientHost::finish_attempt` transfers `AgentExecutionResult`'s
+snapshots into the host-owned append-only `RequestHistory` before dropping
+the result. The host retains those frozen facts separately from the one
+historical ConversationState; it does not create a second transcript.
+`RuntimeClientHost::reconstruct_request` uses request identity, the retained
+snapshot, and its exact historical Surface revision after settlement. While
+an attempt runs, the host explicitly cannot reconstruct because the single
+ConversationState is moved into that attempt. No current model settings,
+contributors, Skills, clock, or status fill historical gaps.
 
 ## 5. Usage
 
@@ -260,8 +321,8 @@ attempt uses exactly the pinned immutable `CapabilitySnapshot`:
 
 - the ToolRegistry handle (preflight, executor resolution, model
   definitions);
-- the Skill catalog attachment on every `ModelRequest` (identical on
-  every turn);
+- the immutable Skill snapshot used to produce canonical Skill guidance
+  context once per admitted primary step;
 - the effective `ToolEnvironment` for foreground executions;
 - the effective environment captured into every background dispatch at
   `prepare_dispatch`, before the background ownership commit.

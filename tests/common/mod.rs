@@ -359,8 +359,7 @@ pub fn simple_request(
             timestamp: None,
         })],
         tools: Vec::new(),
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         continuation: None,
     }
 }

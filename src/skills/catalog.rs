@@ -6,10 +6,9 @@
 //! host absolute paths, `SKILL.md` bodies, supporting resources, and
 //! dependency metadata never appear.
 //!
-//! The catalog is capability projection, never canonical conversation
-//! history: it is carried by a provider-independent
-//! `SkillCatalogAttachment` through projection/fingerprint/token
-//! accounting and placed by provider adapters in trusted system context.
+//! The catalog is an immutable capability snapshot. Its rendered guidance
+//! enters canonical history through Context Assembly and is not carried by a
+//! provider-request special channel.
 
 use std::sync::Arc;
 
@@ -87,7 +86,7 @@ impl SkillSnapshot {
     }
 
     /// The rendered catalog text, or `None` when no Skill is active (the
-    /// caller omits the attachment entirely).
+    /// caller produces no Skill context proposal).
     #[must_use]
     pub fn render_catalog(&self) -> Option<String> {
         if self.catalog.is_empty() {

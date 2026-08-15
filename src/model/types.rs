@@ -5,64 +5,17 @@
 //! from `OpenAI` Chat Completions, `OpenAI` Responses, and `Anthropic`
 //! Messages. Provider SDK types never appear here.
 //!
-//! This Layer 0 module also owns the cross-layer model-request attachment
-//! contract of the Agent Status projection: [`AgentStatusAttachment`] is the
-//! only Agent Status data a `ModelRequest` carries, and it contains only the
-//! request-level data adapters need (the target canonical message and the
-//! rendered status text). The context plane (`src/context/status.rs`)
-//! *produces* the attachment, but model contracts never depend on context
-//! implementation modules: `ModelRequest` uses only Layer 0 runtime-owned
-//! attachment data.
+//! Request-time context semantics are frozen by
+//! [`crate::model::snapshot::RequestSnapshot`]. `ModelRequest` contains only
+//! final provider-neutral values; it has no special Agent Status or Skill
+//! semantic channels.
 
 use serde::{Deserialize, Serialize};
 
 use crate::message::types::MessageBlock;
 use crate::model::invocation::ModelInvocationConfig;
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::MessageId;
 use crate::tools::types::ModelToolDefinition;
-
-/// The ephemeral Agent Status attachment of one model request.
-///
-/// This is the Layer 0 cross-layer model-request attachment contract: it is
-/// produced by the context plane (Agent Status composition and canonical
-/// rendering) but owned here, so `ModelRequest` and every provider adapter
-/// depend only on runtime-owned data and never on context implementation
-/// modules. The attachment exists only for a pending fresh inbound turn,
-/// targets the final fresh inbound message, and is projection-only: it is
-/// never canonical conversation history, never a compaction summary, never
-/// returned in `AgentExecutionResult.messages`, and never emitted as a
-/// committed-message event. It participates in the projection fingerprint
-/// and the full request token estimate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentStatusAttachment {
-    /// The identity of the final fresh inbound message the status
-    /// accompanies.
-    pub target_message_id: MessageId,
-    /// The canonical deterministic rendered status text.
-    pub rendered: String,
-}
-
-/// The ephemeral Skill catalog attachment of one model request (M6).
-///
-/// This is the Layer 0 cross-layer model-request attachment contract of the
-/// Skill catalog projection: it is produced by the capability plane from
-/// the attempt's immutable Skill snapshot but owned here, so `ModelRequest`
-/// and every provider adapter depend only on runtime-owned data and never
-/// on context or capability implementation modules. The attachment is
-/// projection-only capability context — it is never canonical history and is
-/// never returned in
-/// `AgentExecutionResult.messages`, and never emitted as a committed-message
-/// event — and provider adapters place it in **trusted system context**
-/// (`instructions` for `OpenAI` Responses, the top-level `system` content for
-/// Anthropic Messages, and the system-level message mechanism for `OpenAI`
-/// Chat Completions). It participates in the projection fingerprint, the
-/// full request token estimate, and the hard-fit/compaction calculations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SkillCatalogAttachment {
-    /// The canonical deterministic compact rendered Skill catalog.
-    pub rendered: String,
-}
 
 /// The model interaction protocol an adapter must speak.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -80,19 +33,19 @@ pub enum ModelProtocol {
 
 /// A canonical, provider-independent model request.
 ///
-/// A request has exactly two parts, and the separation is deliberate:
+/// A request has final provider-neutral values plus an explicit effective
+/// system prompt. The separation is deliberate:
 ///
-/// - **canonical content** — the messages, the compiled model-facing tool
-///   definitions, the ephemeral Agent Status and Skill catalog attachments,
-///   and the provider continuation state;
+/// - **canonical content** — the complete projected messages and compiled
+///   model-facing tool definitions;
+/// - **request-time system content** — the exact Effective System Prompt;
 /// - **immutable resolved invocation configuration** —
 ///   [`ModelInvocationConfig`], the one channel through which provider wire
 ///   configuration reaches an adapter.
 ///
 /// Provider request schemas remain adapter concerns, provider wire
-/// parameters never enter canonical history or message types, and the Agent
-/// Status attachment is never encoded as a fake canonical `MessageBlock`:
-/// adapters own its wire placement.
+/// parameters never enter canonical history or message types, and semantic
+/// context is settled before an adapter is called.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
     /// The immutable resolved invocation configuration of this request:
@@ -105,16 +58,9 @@ pub struct ModelRequest {
     /// execution, replay, and origin policy never reach provider adapters.
     #[serde(default)]
     pub tools: Vec<ModelToolDefinition>,
-    /// The ephemeral Agent Status attachment of the pending fresh inbound
-    /// turn, when one exists. Projection-only: never canonical history.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_status: Option<AgentStatusAttachment>,
-    /// The ephemeral Skill catalog attachment of the attempt's immutable
-    /// Skill snapshot, when any Skill is active. Projection-only capability
-    /// context: never canonical history; placed by adapters in trusted
-    /// system context.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill_catalog: Option<SkillCatalogAttachment>,
+    /// The exact request-time Effective System Prompt assembled by rustX.
+    #[serde(default)]
+    pub effective_system_prompt: String,
     /// Provider continuation state, when continuing an earlier generation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<ProviderContinuationState>,
@@ -183,21 +129,6 @@ pub struct UsageDetails {
 #[cfg(test)]
 mod tests {
     use super::{ModelProtocol, ModelUsage, UsageDetails};
-    use crate::model::catalog::ModelCapabilities;
-    use crate::model::invocation::{ModelInvocationConfig, RequestParams};
-
-    /// The canonical text-only invocation configuration of a unit test.
-    fn invocation(protocol: ModelProtocol) -> ModelInvocationConfig {
-        ModelInvocationConfig {
-            model: "m".to_owned(),
-            protocol,
-            max_output_tokens: 512,
-            request_params: RequestParams::new(),
-            capabilities: ModelCapabilities::text_only(true, true),
-            compat: crate::model::catalog::ModelCompat::default(),
-        }
-    }
-
     /// Protocol discriminators are stable strings, never Rust debug output.
     #[test]
     fn protocol_discriminators_are_stable() {
@@ -233,49 +164,5 @@ mod tests {
         let json = serde_json::to_string(&usage).expect("serialize usage");
         let decoded: ModelUsage = serde_json::from_str(&json).expect("deserialize usage");
         assert_eq!(decoded, usage);
-    }
-
-    /// The Agent Status attachment is ephemeral request metadata: it
-    /// round-trips when present and is absent from the canonical encoding
-    /// when None.
-    #[test]
-    fn agent_status_attachment_is_optional_request_metadata() {
-        use crate::message::content::TextBlock;
-        use crate::message::types::{
-            InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
-        };
-        use crate::runtime::identity::MessageId;
-        let mut request = super::ModelRequest {
-            invocation: invocation(ModelProtocol::OpenAiResponses),
-            messages: vec![MessageBlock::User(UserMessageBlock {
-                id: MessageId::new("msg-inbound-1"),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: "hi".to_owned(),
-                })],
-                source: UserSource::Human,
-                kind: InboundKind::Message,
-                timestamp: None,
-            })],
-            tools: Vec::new(),
-            agent_status: None,
-            skill_catalog: None,
-            continuation: None,
-        };
-        let json = serde_json::to_string(&request).expect("serialize");
-        assert!(
-            !json.contains("agent_status") && !json.contains("skill_catalog"),
-            "absent attachments must be omitted from the canonical encoding"
-        );
-        request.agent_status = Some(super::AgentStatusAttachment {
-            target_message_id: MessageId::new("msg-inbound-1"),
-            rendered: "status".to_owned(),
-        });
-        request.skill_catalog = Some(super::SkillCatalogAttachment {
-            rendered: "## Skills\n".to_owned(),
-        });
-        let json = serde_json::to_string(&request).expect("serialize");
-        assert!(json.contains("agent_status") && json.contains("skill_catalog"));
-        let decoded: super::ModelRequest = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(decoded, request);
     }
 }

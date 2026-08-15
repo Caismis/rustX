@@ -1229,7 +1229,11 @@ fn translate_inputs(
     continuation_variant: Option<&OpenAiResponsesContinuation>,
 ) -> Result<TranslatedInputs, ModelError> {
     let mut input_items: Vec<serde_json::Value> = Vec::new();
-    let mut instructions: Vec<String> = Vec::new();
+    let mut instructions: Vec<String> = if request.effective_system_prompt.is_empty() {
+        Vec::new()
+    } else {
+        vec![request.effective_system_prompt.clone()]
+    };
     let mut previous_response_id: Option<String> = None;
     let blocks: &[MessageBlock] = match continuation_variant {
         None => &request.messages,
@@ -1250,29 +1254,18 @@ fn translate_inputs(
             tail_after_boundary(request)?
         }
     };
-    // When a continuation slices the canonical request after the previous
-    // response boundary, the Agent Status target must exist in the
-    // transmitted tail; a status whose target was sliced away fails
-    // explicitly instead of being silently dropped.
-    if continuation_variant.is_some()
-        && let Some(status) = &request.agent_status
-        && !blocks.iter().any(|block| {
-            matches!(block, MessageBlock::User(user) if user.id == status.target_message_id)
-        })
-    {
-        return Err(invalid_request(
-            "Agent Status target message is not in the transmitted continuation tail",
-        ));
-    }
     for block in blocks {
         match block {
             MessageBlock::System(system) => {
+                if !request.effective_system_prompt.is_empty() {
+                    continue;
+                }
                 for text in &system.content {
                     instructions.push(text.text.clone());
                 }
             }
             MessageBlock::User(user) => {
-                input_items.push(translate_user_input(user, request.agent_status.as_ref())?);
+                input_items.push(translate_user_input(user)?);
             }
             MessageBlock::Assistant(assistant) => {
                 input_items.extend(translate_assistant_inputs(assistant)?);
@@ -1281,13 +1274,6 @@ fn translate_inputs(
                 input_items.push(translate_tool_result(tool)?);
             }
         }
-    }
-    // The Skill catalog is trusted system context: it is combined
-    // deterministically with the canonical system instructions on every
-    // request, so a continuation that slices canonical history away never
-    // loses the catalog.
-    if let Some(catalog) = &request.skill_catalog {
-        instructions.push(catalog.rendered.clone());
     }
     Ok((input_items, instructions, previous_response_id))
 }
@@ -1312,7 +1298,6 @@ fn tail_after_boundary(request: &ModelRequest) -> Result<&[MessageBlock], ModelE
 
 fn translate_user_input(
     user: &crate::message::types::UserMessageBlock,
-    agent_status: Option<&crate::model::types::AgentStatusAttachment>,
 ) -> Result<serde_json::Value, ModelError> {
     let mut content = Vec::new();
     for block in &user.content {
@@ -1331,15 +1316,6 @@ fn translate_user_input(
                 ));
             }
         }
-    }
-    // The target fresh inbound user input receives one final input_text unit
-    // containing the rendered Agent Status. The status is never a separate
-    // input item and never appended to other user inputs of the batch.
-    if let Some(status) = agent_status.filter(|status| status.target_message_id == user.id) {
-        content.push(serde_json::json!({
-            "type": "input_text",
-            "text": status.rendered,
-        }));
     }
     Ok(serde_json::json!({
         "type": "message",

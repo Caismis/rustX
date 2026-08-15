@@ -94,7 +94,8 @@ results are committed in model call order.
 
 Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 
-- Context assembly and the explicit `ContextProjection` boundary
+- Context Engine projection and the explicit `ContextProjection` boundary;
+  unified Context Assembly is specified by M7.5b below
 - Token accounting with explicit provenance (provider-reported vs.
   deterministic estimate) and a pluggable `TokenEstimator` (default
   `ceil(bytes / 4)`); the anti-loop progress rule compares deterministic
@@ -122,18 +123,18 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 - Continuation invalidation after successful incompatible Surface replacement;
   explicit failure when the continuation-owning turn cannot be retired under
   the bounded #54 System rule
-- Mandatory Agent Status projection: explicit `FreshInboundTurn` identity
+- Mandatory Agent Status input: explicit `FreshInboundTurn` identity
   with a mandatory canonical-order validation and an explicit
   `InitialTurnTrigger` (fresh inbound vs pure continuation), structured
   section composition with reserved ids and registration-frozen section
   identities, the mandatory temporal section (clock + IANA timezone), the
   canonical deterministic renderer over structured extension facts, the
-  ephemeral `AgentStatusAttachment` as a Layer 0 `model/types.rs` contract,
-  adapter-owned wire placement, full token accounting, projection
-  fingerprinting, fresh-inbound compaction protection, and a
+  canonical Runtime context UserMessageBlock admitted through Context
+  Assembly, full canonical token accounting, fresh-inbound compaction
+  protection, and a
   `ContextPreparationFailed`/`ContextCompactionFailed` failure distinction
 - Agent Status integration with Issue #22 inbound batching: one drained
-  batch becomes one fresh inbound turn with exactly one status snapshot
+  batch becomes one fresh inbound turn with exactly one admitted status fact
   targeting the final message
 - Opt-in live repeated-compaction validation (`tests/m4_live.rs`)
 
@@ -423,6 +424,54 @@ Exit criteria:
   the cancellation notification; and an official-rmcp paginated fixture
   proves the canonical registry contains the finite complete sorted
   catalog.
+
+## Milestone 7.5b — Unified Context Assembly and Request Snapshots (Issue #55)
+
+Implemented in the current architecture:
+
+- One rustX-owned Context Assembly contract for native observations and
+  certified-extension proposals.
+- Finite immutable `ContributorInputSnapshot`; no arbitrary runtime handles,
+  history mutators, provider adapters, or current-state lookups are exposed
+  to contributors.
+- Stable serializable contributor identities, separate attestation/content
+  generations, finite semantic user/system lanes, native-reserved owners,
+  and canonical logical-identity ordering for multi-extension lanes.
+- Agent Status and Skill guidance admitted as ordinary canonical Runtime
+  context User messages. The old model-request-only semantic attachment
+  paths do not exist.
+- RustX-owned Effective System Prompt sections and deterministic rendering;
+  the exact rendered value is frozen per request.
+- Frozen provider-independent `RequestSnapshot` with exact SurfaceRevision,
+  effective model/reasoning/request parameters, tool definitions, capability
+  revision, ContextGeneration, continuation, and request identity.
+- Awaited typed `ContextContributor`/`ContextAssembly` boundary: bounded
+  futures settle against a finite immutable input before the final generic
+  admission cancellation observation.
+- Runtime-owned append-only in-memory `RequestHistory` receives every actual
+  primary snapshot at attempt settlement, retaining it beyond
+  `AgentExecutionResult` without copying a second transcript. Issue #11 will
+  later persist the same semantic object.
+- Generic pre-admission cancellation linearization, no rollback after
+  admission, and bounded overflow compact-and-retry that reuses the accepted
+  context generation without reinvoking contributors.
+- `ContextWindowExceeded` does not prove fresh inbound was observed; overflow
+  compaction keeps the pending `FreshInboundTurn` constraint while reusing
+  the accepted context generation.
+- Structural `ModelRequest` reconstruction from historical Surface plus the
+  frozen snapshot, checked before provider adapter translation.
+- Mechanically derived `ContextCompatibilityManifest` and deterministic
+  fake-provider regression coverage.
+
+Exit criteria:
+
+- An old provider-neutral request remains byte/structurally exact after live
+  model configuration, Skills, contributors, package generation, and runtime
+  state change.
+- Cancellation before admission commits no dynamic context; failure after
+  admission preserves historical context and snapshots.
+- Overflow retry produces no duplicate dynamic context and reconstructs
+  both the original and compacted request independently.
 
 ## Milestone 8 — Runtime events and durability
 

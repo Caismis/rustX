@@ -241,10 +241,19 @@ async fn submit_idle_admits_and_settles_asynchronously() {
             .iter()
             .any(|message| matches!(message, MessageBlock::User(user) if user.id == message_id))
     );
-    assert!(requests[0].agent_status.is_some());
+    assert!(requests[0].messages.iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    )
+        )
+    }));
 
     let (snapshot, _) = host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.messages.len(), 2);
+    assert_eq!(snapshot.messages.len(), 3);
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
@@ -701,7 +710,11 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     // A fresh snapshot repairs every externally visible fact, and resuming
     // at its cursor is always serviceable.
     let (snapshot, cursor) = host.snapshot().expect("snapshot");
-    assert_eq!(snapshot.messages.len(), 1, "the inbound message committed");
+    assert_eq!(
+        snapshot.messages.len(),
+        2,
+        "the inbound message and admitted Agent Status fact committed"
+    );
     let mut resumed = attachment
         .subscribe_events(cursor)
         .expect("the snapshot cursor is always serviceable");
@@ -756,7 +769,7 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
     }
 
     let (final_snapshot, _) = host.snapshot().expect("snapshot");
-    assert_eq!(final_snapshot.messages.len(), 2);
+    assert_eq!(final_snapshot.messages.len(), 3);
     assert!(matches!(
         final_snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
@@ -802,11 +815,23 @@ async fn agent_status_shares_one_composition() {
     let requests = model_handle.requests();
     assert_eq!(requests.len(), 1);
     let model_rendered = requests[0]
-        .agent_status
-        .as_ref()
-        .expect("model path carries Agent Status")
-        .rendered
-        .clone();
+        .messages
+        .iter()
+        .find_map(|message| match message {
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    ) =>
+            {
+                user.content.first().and_then(|content| match content {
+                    rustx::message::types::UserContentBlock::Text(text) => Some(text.text.clone()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .expect("model path carries canonical Agent Status");
     assert_eq!(
         status_view.rendered, model_rendered,
         "client view derives from the same composition as the model path"
@@ -829,7 +854,7 @@ async fn agent_status_shares_one_composition() {
 /// The proof is counting, not structural similarity: the composer samples
 /// its clock once per `compose`, and the registered extension provider is
 /// invoked once per `compose`. Both counters must equal the number of model
-/// requests that carried an Agent Status attachment. If the Runtime Client
+/// requests that carried a canonical Agent Status context fact. If the Runtime Client
 /// path recomposed — even through a cloned composer with the same clock and
 /// providers — the counters would exceed that number.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -888,10 +913,30 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     let composition_count = compositions.load(std::sync::atomic::Ordering::SeqCst);
     let invoked = invocations.load(std::sync::atomic::Ordering::SeqCst);
     let requests = model_handle.requests();
-    let with_status: Vec<_> = requests
-        .iter()
-        .filter_map(|request| request.agent_status.as_ref())
-        .collect();
+    let mut with_status: Vec<(String, String)> = Vec::new();
+    for request in &requests {
+        let Some((id, text)) = request.messages.iter().find_map(|message| match message {
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    ) =>
+            {
+                user.content.first().and_then(|content| match content {
+                    rustx::message::types::UserContentBlock::Text(text) => {
+                        Some((user.id.to_string(), text.text.clone()))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        if with_status.iter().all(|(known, _)| known != &id) {
+            with_status.push((id, text));
+        }
+    }
     assert!(
         !with_status.is_empty(),
         "the model path received Agent Status at least once"
@@ -920,10 +965,11 @@ async fn agent_status_is_composed_exactly_once_per_request() {
         composition_count,
         "one Runtime Client status event per composition"
     );
-    for (client, model) in status_events.iter().zip(with_status.iter()) {
+    for (client, (_, model)) in status_events.iter().zip(with_status.iter()) {
         assert_eq!(
-            client.rendered, model.rendered,
-            "the canonical rendered attachment and the client projection are the same composition"
+            client.rendered,
+            model.as_str(),
+            "the canonical rendered context fact and the client projection are the same composition"
         );
     }
 
@@ -931,7 +977,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     let (snapshot, _) = host.snapshot().expect("snapshot");
     assert_eq!(
         snapshot.status.expect("status view").rendered,
-        with_status.last().expect("status").rendered
+        with_status.last().expect("status").1.as_str()
     );
     assert_eq!(
         compositions.load(std::sync::atomic::Ordering::SeqCst),

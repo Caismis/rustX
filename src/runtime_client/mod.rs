@@ -74,6 +74,7 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
+pub mod request_history;
 pub mod snapshot;
 pub mod transport;
 pub mod types;
@@ -88,6 +89,7 @@ pub use host::{
     EventDelivery, EventSubscription, HostConstructionError, RuntimeClientContextConfig,
     RuntimeClientHost, RuntimeClientHostConfig,
 };
+pub use request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
     InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,

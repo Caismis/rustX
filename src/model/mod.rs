@@ -15,6 +15,7 @@ pub mod event;
 pub mod finish;
 pub mod invocation;
 pub mod session;
+pub mod snapshot;
 pub mod types;
 
 pub use adapter::anthropic::{AnthropicAdapterConfig, AnthropicMessagesAdapter};
@@ -39,6 +40,7 @@ pub use session::{
     AttemptModelSnapshot, AttemptModelView, AttemptSummaryModel, SessionModelConfig,
     SessionModelState, SessionModelView, SummaryModelPolicy, SummaryModelView,
 };
+pub use snapshot::{RequestIdentity, RequestReconstructionError, RequestSnapshot};
 pub use types::{ModelProtocol, ModelRequest, ModelUsage, UsageDetails};
 
 /// Test-only model protocol value for in-crate agent-loop unit tests.

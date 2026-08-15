@@ -172,10 +172,10 @@ impl ContextSummarizer for ModelBackedSummarizer {
                 messages: input.messages,
                 tools: Vec::new(),
                 // Summary generation is not an inbound Assistant turn: it never
-                // carries an Agent Status attachment and never carries the
-                // attempt's Skill catalog attachment.
-                agent_status: None,
-                skill_catalog: None,
+                // carries no primary-step dynamic context: Agent Status and
+                // Skill guidance are admitted canonical facts for primary
+                // requests only.
+                effective_system_prompt: String::new(),
                 continuation: None,
             };
             let mut stream = self

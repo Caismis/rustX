@@ -15,14 +15,16 @@
 use super::{common, support};
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    CompactionBudgets, ContextConfig, ContextEngine, ContextError, ContextErrorKind,
-    ContextRuntime, ContextSummarizer, DefaultTokenEstimator, ModelBackedSummarizer,
-    ProviderObservedInput, SummaryRequest, TokenEstimator,
+    CompactionBudgets, ContextAssembly, ContextConfig, ContextEngine, ContextError,
+    ContextErrorKind, ContextProposal, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
+    ModelBackedSummarizer, ProviderObservedInput, SummaryRequest, TokenEstimator,
+    UserMessageProposal,
 };
 use rustx::conversation::{
     ConversationState, SurfaceOp, SurfaceRevision, SurfaceSpan, summary_message_id,
@@ -212,7 +214,7 @@ fn compact_with(
     constraints: &rustx::context::CompactionConstraints<'_>,
     tools: &[rustx::tools::types::ModelToolDefinition],
 ) -> Result<rustx::conversation::CompactionRecord, ContextError> {
-    let projection = engine.build_projection(state, tools, None, None, None)?;
+    let projection = engine.build_projection(state, tools, None, "")?;
     let plan = engine.plan_compaction(state, &projection, tools, budgets, constraints)?;
     let (commit, _) =
         engine.prepare_compaction(state, &conversation(), &plan, summary_text, tools)?;
@@ -422,6 +424,23 @@ fn runtime_with(
     )
 }
 
+fn runtime_with_assembly(
+    window: u64,
+    reserve: u64,
+    keep_recent: u64,
+    estimator: Arc<dyn TokenEstimator>,
+    summarizer: FakeContextSummarizer,
+    assembly: ContextAssembly,
+) -> ContextRuntime {
+    ContextRuntime::with_scripted_summarizer_and_assembly(
+        engine(window, reserve, keep_recent, estimator),
+        Arc::new(summarizer),
+        rustx::context::AgentStatusComposer::default(),
+        assembly,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    )
+}
+
 /// Whether a canonical message is a runtime compaction summary.
 fn is_summary(message: &MessageBlock) -> bool {
     matches!(message, MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary)
@@ -497,7 +516,7 @@ fn short_history_requires_no_compaction() {
     let engine = engine(100, 10, 5, weighted(10, 10, 10));
     let state = state(vec![user("u1", "hi"), user("u2", "bye")]);
     let projection = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection");
     assert!(
         !engine
@@ -524,10 +543,10 @@ fn projection_is_the_current_surface_in_order() {
         "earlier summary",
     );
     let first = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection");
     let second = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection again");
     assert_eq!(first, second, "projection must be a pure function");
     assert_eq!(first.surface_revision, state.revision());
@@ -572,10 +591,10 @@ fn same_context_produces_same_estimate() {
         assistant("a1", vec![text_block("ok")]),
     ]);
     let first = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection");
     let second = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection again");
     assert_eq!(first.estimated_input, second.estimated_input);
     assert_eq!(
@@ -594,10 +613,10 @@ fn tool_definitions_contribute_to_the_request_estimate() {
         common::model_tool("beta", "tool-beta"),
     ];
     let without_tools = engine
-        .build_projection(&state, &[], None, None, None)
+        .build_projection(&state, &[], None, "")
         .expect("projection without tools");
     let with_tools = engine
-        .build_projection(&state, &tools, None, None, None)
+        .build_projection(&state, &tools, None, "")
         .expect("projection with tools");
     assert_eq!(with_tools.estimated_input.input_tokens, 30);
     assert_eq!(without_tools.estimated_input.input_tokens, 10);
@@ -621,10 +640,10 @@ fn tool_definitions_never_satisfy_the_recent_retention_target() {
     let cheap = engine(10_000_000, 0, 20, weighted(10, 10, 0));
     let expensive = engine(10_000_000, 0, 20, weighted(10, 10, 1_000_000));
     let projection_cheap = cheap
-        .build_projection(&history, &tools, None, None, None)
+        .build_projection(&history, &tools, None, "")
         .expect("projection");
     let projection_expensive = expensive
-        .build_projection(&history, &tools, None, None, None)
+        .build_projection(&history, &tools, None, "")
         .expect("projection");
     let plan_cheap = cheap
         .plan_compaction(
@@ -666,14 +685,14 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = state(vec![user("u1", "hi")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: projection.fingerprint(),
         input_tokens: 42,
     };
     let measured = engine
-        .build_projection(&history, &[], Some(&observed), None, None)
+        .build_projection(&history, &[], Some(&observed), "")
         .expect("projection with observed usage");
     assert_eq!(measured.estimated_input.input_tokens, 42);
     assert_eq!(
@@ -685,7 +704,7 @@ fn provider_reported_usage_applies_only_to_the_exact_projection() {
     // measurement does not apply, and the estimate is used instead.
     let grown = state(vec![user("u1", "hi"), user("u2", "more")]);
     let estimated = engine
-        .build_projection(&grown, &[], Some(&observed), None, None)
+        .build_projection(&grown, &[], Some(&observed), "")
         .expect("projection with stale observation");
     assert_eq!(estimated.estimated_input.input_tokens, 20);
     assert_eq!(
@@ -701,7 +720,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 10));
     let mut history = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
     let before = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: before.fingerprint(),
@@ -710,7 +729,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     // The measurement applies to exactly the context it measured.
     assert_eq!(
         engine
-            .build_projection(&history, &[], Some(&observed), None, None)
+            .build_projection(&history, &[], Some(&observed), "")
             .expect("measured projection")
             .estimated_input
             .source,
@@ -726,7 +745,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     )
     .expect("compact");
     let after = engine
-        .build_projection(&history, &[], Some(&observed), None, None)
+        .build_projection(&history, &[], Some(&observed), "")
         .expect("projection after the rewrite");
     assert_ne!(after.surface_revision, before.surface_revision);
     assert_eq!(
@@ -739,7 +758,7 @@ fn a_surface_rewrite_invalidates_a_stale_observed_measurement() {
     appended.commit(user("u4", "")).expect("append");
     assert_eq!(
         engine
-            .build_projection(&appended, &[], Some(&observed), None, None)
+            .build_projection(&appended, &[], Some(&observed), "")
             .expect("projection after the append")
             .estimated_input
             .source,
@@ -754,7 +773,7 @@ fn missing_usage_falls_back_to_the_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
     let history = state(vec![user("u1", "hi")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 10);
     assert_eq!(
@@ -771,7 +790,7 @@ fn estimates_never_become_model_usage() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = state(vec![user("u1", "hi")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     assert_eq!(
         projection.estimated_input.source,
@@ -795,7 +814,7 @@ fn default_estimator_formula_is_frozen() {
     let engine = engine(1_000, 10, 5, Arc::new(DefaultTokenEstimator));
     let history = state(vec![user("u1", "hi")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let expected = rustx::context::bytes_to_tokens(
         serde_json::to_vec(&projection.messages)
@@ -825,8 +844,7 @@ fn threshold_equality_compacts() {
             ]),
             &[],
             None,
-            None,
-            None,
+            "",
         )
         .expect("projection");
     assert_eq!(at.estimated_input.input_tokens, 100);
@@ -846,8 +864,7 @@ fn threshold_equality_compacts() {
             ]),
             &[],
             None,
-            None,
-            None,
+            "",
         )
         .expect("projection");
     assert_eq!(below.estimated_input.input_tokens, 80);
@@ -869,8 +886,7 @@ fn threshold_equality_compacts() {
             ]),
             &[],
             None,
-            None,
-            None,
+            "",
         )
         .expect("projection");
     assert_eq!(above.estimated_input.input_tokens, 120);
@@ -906,7 +922,7 @@ fn compaction_uses_primary_budget_for_soft_limit_and_smaller_summary_reservation
         assistant("a2", vec![text_block("y")]),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -937,7 +953,7 @@ fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
         assistant("a2", vec![text_block("y")]),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1014,7 +1030,7 @@ fn simple_complete_turn_boundary() {
         tool_message("t1", "c1"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1066,7 +1082,7 @@ fn multiple_tool_calls_stay_with_their_results() {
     }
     // The engine only ever plans a structurally complete span.
     let projection = engine
-        .build_projection(&conversation_state, &[], None, None, None)
+        .build_projection(&conversation_state, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1108,7 +1124,7 @@ fn orphan_tool_message_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![user("u1", ""), tool_message("t1", "ghost")]);
     let error = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect_err("malformed history");
     assert_eq!(error.kind, ContextErrorKind::MalformedHistory);
 }
@@ -1127,7 +1143,7 @@ fn no_edge_crosses_the_chosen_cut() {
         user("u2", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let mut history = history;
     let record = compact(
@@ -1160,7 +1176,7 @@ fn candidate_selection_is_deterministic() {
         tool_message("t2", "c2"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -1195,7 +1211,7 @@ fn message_count_alone_does_not_control_the_cut() {
         user("small2", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1224,7 +1240,7 @@ fn retained_suffix_approximates_the_recent_target() {
         user("u4", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1252,7 +1268,7 @@ fn structural_rule_may_force_extra_retention() {
         user("u2", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1281,7 +1297,7 @@ fn token_target_may_retain_fewer_messages_than_recent() {
         user("m3", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1315,7 +1331,7 @@ fn system_messages_are_never_replaced_or_summarized() {
         tool_message("t1", "c1"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     assert_eq!(projection.estimated_input.input_tokens, 310);
     let plan = engine
@@ -1405,7 +1421,7 @@ fn a_later_system_message_pins_nothing_and_resurrects_nothing() {
     // The still-active summary remains compactable: the later system
     // message pins nothing older than itself.
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1445,7 +1461,7 @@ fn pinned_context_alone_cannot_fit_fails_explicitly() {
         tool_message("t1", "c1"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let error = engine
         .plan_compaction(
@@ -1475,7 +1491,7 @@ fn oversized_material_is_retired_as_complete_messages() {
         tool_message("t1", "c1"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -1509,7 +1525,7 @@ fn a_single_oversized_message_cannot_fit_instead_of_splitting() {
     let engine = engine(60, 0, 5, scripted(10, 10, 10, &[("huge", 1_000)]));
     let history = state(vec![user("u1", ""), user("huge", "")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let fresh = rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("huge")])
         .expect("fresh turn");
@@ -1535,7 +1551,7 @@ fn a_span_never_exceeds_the_summary_model_input_limit() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 0));
     let history = state(vec![user("u1", ""), user("u2", ""), user("u3", "")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     // The deterministic assembly is one wrapper message, so the complete
     // summary request weighs ten tokens under this estimator.
@@ -1577,8 +1593,7 @@ fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
     let raw_projection = rustx::context::ContextProjection {
         surface_revision: history.revision(),
         messages: request.retired.clone(),
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,
@@ -1601,7 +1616,7 @@ fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
     );
 
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let before_ids = history.active_ids().to_vec();
     let before_revision = history.revision();
@@ -1711,7 +1726,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
 
     // First compaction: A B C -> S1, D retained.
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -1776,7 +1791,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
     // Second compaction: the plan is derived from the current Surface, so
     // its span starts at the active S1 — never at the retired A.
     let projection2 = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("second projection");
     let second = engine
         .plan_compaction(
@@ -1913,7 +1928,7 @@ fn finite_reads_for(
     history.ledger_access().reset();
     history.surface_access().reset();
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     assert_eq!(projection.messages.len(), 5);
     let plan = engine
@@ -1979,7 +1994,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
         user("u2", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2061,7 +2076,7 @@ fn second_compaction_selects_from_the_current_surface() {
         user("u4", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let first = engine
         .plan_compaction(
@@ -2090,7 +2105,7 @@ fn second_compaction_selects_from_the_current_surface() {
     history.commit(user("u6", "")).expect("commit u6");
 
     let projection2 = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("second projection");
     let second = engine
         .plan_compaction(
@@ -2126,7 +2141,7 @@ fn no_progress_compaction_is_rejected() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![user("u1", "")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2158,14 +2173,14 @@ fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
     // Provider-reported before = 1000; the deterministic estimate of the
     // same projection is 20.
     let plain_projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 1_000,
     };
     let projection = engine
-        .build_projection(&history, &[], Some(&observed), None, None)
+        .build_projection(&history, &[], Some(&observed), "")
         .expect("provider-reported projection");
     assert_eq!(
         projection.estimated_input.source,
@@ -2213,14 +2228,14 @@ fn progress_rule_accepts_decrease_even_when_provider_reported_before_is_smaller(
     // Provider-reported before = 50; the deterministic estimate of the same
     // projection is 60.
     let plain_projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let observed = ProviderObservedInput {
         fingerprint: plain_projection.fingerprint(),
         input_tokens: 50,
     };
     let projection = engine
-        .build_projection(&history, &[], Some(&observed), None, None)
+        .build_projection(&history, &[], Some(&observed), "")
         .expect("provider-reported projection");
     let plan = engine
         .plan_compaction(
@@ -2260,7 +2275,7 @@ fn empty_and_whitespace_summaries_are_rejected() {
     let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
     let history = state(vec![user("u1", ""), user("u2", "")]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2295,7 +2310,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
         tool_message("t1", "c1"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2337,7 +2352,7 @@ fn continuation_owner_is_never_split() {
         tool_message("t2", "c2"),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     // Without the constraint this turn would split (see the split test);
     // with the constraint it must be retired whole.
@@ -2370,7 +2385,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
         user("u2", ""),
     ]);
     let projection = engine
-        .build_projection(&history, &[], None, None, None)
+        .build_projection(&history, &[], None, "")
         .expect("projection");
     let error = engine
         .plan_compaction(
@@ -2399,7 +2414,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
         user("u2", ""),
     ]);
     let projection = engine
-        .build_projection(&unpinned, &[], None, None, None)
+        .build_projection(&unpinned, &[], None, "")
         .expect("projection");
     let plan = engine
         .plan_compaction(
@@ -2822,6 +2837,310 @@ async fn overflow_compact_and_retry_succeeds() {
             retry_message_id(1).as_str().to_owned(),
         ]
     );
+}
+
+/// An overflow retry reuses one admitted Context Assembly generation. The
+/// contributor, native context sampling, and ordering are never rerun; only
+/// the historical Surface revision changes because compaction committed.
+#[tokio::test]
+async fn overflow_retry_reuses_the_admitted_context_generation() {
+    let model = fake_model(vec![
+        vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let invocations_for_contributor = Arc::clone(&invocations);
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            "certified.test",
+            Some("package-generation-1".to_owned()),
+            Arc::new(move |_: &rustx::context::ContributorInputSnapshot| {
+                invocations_for_contributor.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "frozen extension context".to_owned(),
+                    })],
+                })])
+            }),
+        )
+        .expect("register extension contributor");
+    let runtime = runtime_with_assembly(
+        500,
+        0,
+        5,
+        weighted(100, 10, 0),
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]),
+        assembly,
+    );
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    assert_eq!(result.request_snapshots().len(), 2);
+    assert_eq!(
+        result.request_snapshots()[0].context_generation,
+        result.request_snapshots()[1].context_generation
+    );
+    assert_ne!(
+        result.request_snapshots()[0].surface_revision,
+        result.request_snapshots()[1].surface_revision,
+        "compaction changes the retry Surface revision"
+    );
+
+    let requests = model.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(
+            request
+                .messages
+                .iter()
+                .filter(|message| {
+                    matches!(
+                        message,
+                        MessageBlock::User(user)
+                            if user.kind == InboundKind::Context(
+                                rustx::message::types::ContextKind::ExtensionEnvironment
+                            )
+                    )
+                })
+                .count(),
+            1,
+            "the retry reuses one canonical extension fact"
+        );
+    }
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(
+                            rustx::message::types::ContextKind::ExtensionEnvironment
+                        )
+                )
+            })
+            .count(),
+        1
+    );
+    for (request, snapshot) in requests.iter().zip(result.request_snapshots()) {
+        assert_eq!(
+            snapshot
+                .reconstruct(&result.conversation)
+                .expect("reconstruct retry request"),
+            *request
+        );
+    }
+}
+
+/// `ContextWindowExceeded` is a rejected provider request, so it does not
+/// prove that the fresh inbound turn was observed. Overflow compaction must
+/// therefore retain the pending inbound while reusing the already-admitted
+/// dynamic context generation.
+#[tokio::test]
+async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation() {
+    let planner = engine(500, 0, 5, weighted(100, 10, 0));
+    let candidate_history = state(vec![
+        user("old", "old history"),
+        fresh_user("msg-inbound-1", "fresh inbound"),
+        user("accepted-context-1", "accepted dynamic context"),
+        user("accepted-context-2", "another accepted fact"),
+    ]);
+    let candidate_projection = planner
+        .build_projection(&candidate_history, &[], None, "")
+        .expect("candidate projection");
+    let unconstrained = planner
+        .plan_compaction(
+            &candidate_history,
+            &candidate_projection,
+            &[],
+            CompactionBudgets::new(1, 1, 1_000_000),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("an unrestricted candidate crosses fresh inbound");
+    assert_eq!(unconstrained.span.end, MessageId::new("accepted-context-1"));
+    assert_ne!(
+        unconstrained.span.end,
+        MessageId::new("old"),
+        "the unrestricted candidate crosses the pending fresh inbound"
+    );
+    let fresh =
+        rustx::runtime::inbound::FreshInboundTurn::new(vec![MessageId::new("msg-inbound-1")])
+            .expect("fresh trigger");
+    let protected = planner
+        .plan_compaction(
+            &candidate_history,
+            &candidate_projection,
+            &[],
+            CompactionBudgets::new(1, 1, 1_000_000),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: None,
+                fresh_inbound: Some(&fresh),
+            },
+        )
+        .expect("fresh inbound leaves an earlier candidate");
+    assert_eq!(protected.span.end, MessageId::new("old"));
+    assert!(
+        !protected
+            .retired
+            .iter()
+            .any(|message| message_id_of(message) == "msg-inbound-1"),
+        "the pending fresh identity is not in the overflow summary span"
+    );
+
+    let model = fake_model(vec![
+        vec![FakeStep::Emit(started()), FakeStep::Emit(overflow_event())],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(done(ModelFinishReason::Stop)),
+        ],
+    ]);
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let invocations_for_contributor = Arc::clone(&invocations);
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            "fresh-overflow.test",
+            Some("package-generation-1".to_owned()),
+            Arc::new(move |_: &rustx::context::ContributorInputSnapshot| {
+                invocations_for_contributor.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
+                    content: vec![UserContentBlock::Text(TextBlock {
+                        text: "accepted once".to_owned(),
+                    })],
+                })])
+            }),
+        )
+        .expect("register overflow contributor");
+    let runtime = runtime_with_assembly(
+        500,
+        0,
+        5,
+        weighted(100, 10, 0),
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]),
+        assembly,
+    );
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let result = AgentExecution::new(
+        fresh_request(
+            "attempt-1",
+            vec![
+                user("old", "old history"),
+                fresh_user("msg-inbound-1", "fresh inbound"),
+            ],
+            &model,
+        ),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+
+    assert_outcome(
+        &result,
+        &AttemptOutcome::Completed {
+            finish_reason: ModelFinishReason::Stop,
+        },
+    );
+    assert_eq!(model.requests().len(), 2);
+    assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    assert_eq!(result.request_snapshots().len(), 2);
+    assert_eq!(
+        result.request_snapshots()[0].context_generation,
+        result.request_snapshots()[1].context_generation,
+        "overflow retry reuses the admitted ContextGeneration"
+    );
+    assert_ne!(
+        result.request_snapshots()[0].surface_revision,
+        result.request_snapshots()[1].surface_revision,
+        "successful overflow compaction creates a new historical Surface revision"
+    );
+    let retry = &model.requests()[1];
+    assert!(
+        retry.messages.iter().any(|message| {
+            matches!(
+                message,
+                MessageBlock::User(user) if user.id == MessageId::new("msg-inbound-1")
+            )
+        }),
+        "the retry still presents pending fresh inbound"
+    );
+    assert!(
+        result
+            .active_ids()
+            .contains(&MessageId::new("msg-inbound-1")),
+        "fresh inbound remains active until the successful retry observes it"
+    );
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(
+                            rustx::message::types::ContextKind::AgentStatus
+                        )
+                )
+            })
+            .count(),
+        1,
+        "Agent Status is sampled and committed once"
+    );
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user)
+                        if user.kind == InboundKind::Context(
+                            rustx::message::types::ContextKind::ExtensionEnvironment
+                        )
+                )
+            })
+            .count(),
+        1,
+        "dynamic extension context is committed once"
+    );
+    for (request, snapshot) in model.requests().iter().zip(result.request_snapshots()) {
+        assert_eq!(
+            snapshot
+                .reconstruct(&result.conversation)
+                .expect("reconstruct overflow request"),
+            *request
+        );
+    }
 }
 
 /// A second overflow after the retry settles the attempt with the second
@@ -3879,8 +4198,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     );
     assert_eq!(requests[0].max_output_tokens(), 128);
     assert!(requests[0].tools.is_empty());
-    assert_eq!(requests[0].agent_status, None);
-    assert_eq!(requests[0].skill_catalog, None);
+    assert_eq!(requests[0].effective_system_prompt, "");
     assert_eq!(requests[0].continuation, None);
     let MessageBlock::User(user) = &requests[0].messages[0] else {
         panic!("summary instruction must be a user message");
@@ -4325,6 +4643,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
             assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
             assistant_message_id(2).to_string(),
         ]
     );
@@ -4339,6 +4658,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
             assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
         ],
         "the projection was built after the batch drain, never before"
     );
@@ -4354,12 +4674,13 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let model = parked_two_turn_model(parked.clone());
     let tools = tool_registry_with_alpha();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    // per-message = 100, per-block = 10, window = 250:
+    // per-message = 100, per-block = 10, window = 350:
     // before the drain the projection is 100 tokens (below the threshold);
-    // after the drain [u0, agent, A, B] is 310 tokens (at/above it), so the
-    // drained batch deterministically triggers proactive compaction.
+    // after the drain [u0, agent, A, B, Agent Status] is 410 tokens
+    // (at/above it), so the drained batch deterministically triggers
+    // proactive compaction while retaining the complete fresh inbound batch.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
-    let runtime = runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer);
+    let runtime = runtime_with(350, 0, 0, weighted(100, 10, 0), summarizer);
     let mailbox = ConversationInboundMailbox::new(conversation());
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
     let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
@@ -4405,6 +4726,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
             summary_id(1).to_string(),
             assistant_message_id(2).to_string(),
         ],
@@ -4423,26 +4745,36 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             summary_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
         ],
         "the continuation request uses the compacted projection with the \
          unobserved fresh inbound preserved literally"
     );
     // Exactly one Agent Status snapshot accompanies the fresh inbound turn,
-    // targeting its final message; the attachment is never a canonical
-    // message.
-    let status = requests[1]
-        .agent_status
-        .as_ref()
-        .expect("one status snapshot");
-    assert_eq!(
-        status.target_message_id,
-        MessageId::new("msg-inbound-b"),
-        "the status targets the final fresh inbound message"
-    );
+    // and it is now a canonical Runtime context fact with a core-owned id.
+    let status_messages = requests[1]
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::User(user)
+                if user.kind
+                    == rustx::message::types::InboundKind::Context(
+                        rustx::message::types::ContextKind::AgentStatus,
+                    ) =>
+            {
+                Some(user)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(status_messages.len(), 1, "one canonical status fact");
+    let status_text = match &status_messages[0].content[0] {
+        UserContentBlock::Text(text) => &text.text,
+        _ => panic!("status context is text"),
+    };
     assert!(
-        status.rendered.contains("<system-reminder>")
-            && status.rendered.contains("Inbound message time"),
-        "the rendered status is the canonical system-reminder footer"
+        status_text.contains("<system-reminder>") && status_text.contains("Inbound message time"),
+        "the rendered status is committed through Context Assembly"
     );
     let serialized = serde_json::to_string(&requests[1].messages).expect("serialize");
     assert!(
@@ -4463,12 +4795,13 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         ),
         "a compaction summary never carries a fabricated timestamp"
     );
-    // The status is projection-only: it never appears in the Message Ledger
-    // and never reaches the committed canonical summary.
+    // Agent Status is now an admitted canonical Runtime fact. It therefore
+    // appears in the Ledger exactly once; compaction may project it away only
+    // by replacing a complete active span with the canonical summary.
     let ledger_serialized = serde_json::to_string(result.messages()).expect("serialize");
     assert!(
-        !ledger_serialized.contains("<system-reminder>"),
-        "the message ledger must never contain the Agent Status footer"
+        ledger_serialized.contains("<system-reminder>"),
+        "the admitted Agent Status fact must remain in the Message Ledger"
     );
 }
 

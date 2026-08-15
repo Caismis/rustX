@@ -106,13 +106,12 @@ tools/mcp/                MCP adapter: protocol-revision negotiation,
 tools/python.rs           immutable ToolVersion discovery/publication,
                            PythonToolEnvironment materialization, and the
                            canonical Python executor
-model/types.rs             ModelRequest, ModelUsage, ModelProtocol,
-                           AgentStatusAttachment (the cross-layer
-                           model-request attachment contract of the Agent
-                           Status projection: the context plane produces it,
-                           `ModelRequest` and adapters consume it, and model
-                           contracts never depend on context implementation
-                           modules)
+model/types.rs             ModelRequest, ModelUsage, ModelProtocol, and the
+                           provider-neutral request boundary. Model-visible
+                           runtime context is canonical UserMessageBlock
+                           history plus the frozen Effective System Prompt;
+                           no semantic context attachment type crosses this
+                           layer.
 model/catalog.rs           the validated models.json catalog: explicit
                            provider endpoints and credential sources,
                            redacted credentials, model definitions,
@@ -430,13 +429,10 @@ Context Engine
   projection, token pressure, retention, and compaction planning
 ```
 
-The context engine owns what the model sees:
-
-- Context assembly
-- Token accounting
-- Pi-style compaction
-- Valid compaction cut-point selection
-- Provider-context compilation
+The Context Engine owns only the finite projection of canonical conversation
+and its token/retention/compaction behavior. Context Assembly, request
+admission, RequestSnapshot creation, and provider translation are owned by
+the Agent Loop and model plane respectively.
 
 Compaction appends one canonical `User` message with
 `UserSource::Runtime` and `InboundKind::CompactionSummary`, then applies one
@@ -444,24 +440,28 @@ complete-message Surface `Replace`. It never deletes or mutates Ledger facts.
 
 #### Current context implementation
 
-The M4 implementation freezes the context-plane boundary in `src/context`
-and its integration point in `src/agent/execution.rs`:
+The Issue #55 implementation freezes the boundaries in src/context and
+src/agent/execution.rs:
 
 ```text
-ConversationState @ SurfaceRevision
-    ↓ current active identities → keyed Ledger reads
-ContextEngine (build_projection, plan_compaction, prepare_compaction)
-    ↓ complete canonical messages + ephemeral attachments
-ContextProjection → canonical ModelRequest.messages
+claimed inbound
+    ↓ finite ContributorInputSnapshot
+ContextAssembly (native + certified extension proposals)
+    ↓ validated AcceptedContext
+Agent Loop admission (MessageId/Ledger/Surface ownership)
+    ↓ canonical User context + Effective System Prompt
+ConversationSurface @ SurfaceRevision
+    ↓
+ContextEngine → RequestSnapshot → ModelRequest
     ↓
 ModelAdapter → provider
 ```
 
 The engine is a deterministic pure function of the current Surface, keyed
-Ledger results, tool definitions, ephemeral attachments, and observed provider
-usage: the same inputs
-always produce the same projection, plan, and estimate. It owns no provider
-knowledge — token estimation is pluggable (`TokenEstimator`, with a default
+Ledger results, tool definitions, the exact Effective System Prompt, and
+observed provider usage: the same inputs always produce the same projection,
+plan, and estimate. It owns no provider knowledge — token estimation is
+pluggable (`TokenEstimator`, with a default
 `ceil(bytes / 4)` formula), and the engine holds no model catalog.
 
 Its configuration is split by ownership. The session owns the static
@@ -523,21 +523,13 @@ Key contracts:
   `ContextWindowExceeded` is recovered through exactly one bounded
   compact-and-retry
   (`MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN = 1`).
-- Agent Status is the mandatory, provider-neutral, ephemeral projection of
-  current runtime facts (temporal section with a narrow clock/timezone
-  boundary, structured section providers with stable reserved ids, and a
-  canonical deterministic renderer). It exists only while a
-  `FreshInboundTurn` is pending, participates in the full token estimate
-  and the projection fingerprint, is excluded from recent-conversation
-  retention, and is protected from compaction until a successful model
-  invocation observes it. Adapters own its wire placement.
-- The cross-layer `AgentStatusAttachment` is a Layer 0 contract owned by
-  `model/types.rs`: it holds only the request-level data adapters need (the
-  target canonical `MessageId` and the rendered status text). The context
-  plane (`src/context/status.rs`) *produces* the attachment, but `ModelRequest`
-  uses only Layer 0 runtime-owned attachment data — `model` never depends on
-  `context`. `ContextProjection`, `CompiledContext`, `ModelRequest`, token
-  accounting, and every provider adapter refer to the Layer 0 type.
+- Agent Status is sampled from authoritative runtime facts and admitted as a
+  canonical `UserSource::Runtime` context message with
+  `InboundKind::Context(ContextKind::AgentStatus)`. It is rendered by the
+  native composer before assembly, participates in normal history,
+  projection, token accounting, and Surface revisioning, and is never
+  reinjected by an adapter. Identical rendered bytes at distinct admitted
+  steps receive distinct canonical identities.
 - The initial-turn trigger is an explicit execution mode, never an `Option`
   used as a status switch: `AgentExecutionRequest` carries one
   `InitialTurnTrigger` — `FreshInbound(FreshInboundTurn)` makes validation,
@@ -577,35 +569,27 @@ Key contracts:
   away; when preserving it makes the projection impossible, planning fails
   with `CannotFit` rather than summarizing the unobserved instruction.
 
-#### M6 implementation (Skill catalog projection)
+#### Native Skill context (Issue #55)
 
-The Skill catalog follows the Agent Status attachment pattern:
+The Skill catalog is rendered once from the attempt's immutable capability
+snapshot and enters the same Context Assembly path as every other
+model-visible context fact:
 
-- The cross-layer `SkillCatalogAttachment` is a Layer 0 contract owned by
-  `model/types.rs`: it holds only the rendered catalog text. The capability
-  plane produces it from the attempt's immutable Skill snapshot;
-  `ContextProjection`, `CompiledContext`, `ModelRequest`, fingerprinting,
-  token accounting, and every provider adapter refer to the Layer 0 type.
-- It is projection-only capability context: never a canonical conversation
-  fact and never returned in `AgentExecutionResult.messages`,
-  and never emitted as a committed-message event. The existing
-  `SystemAuthority::Skill` canonical variant does not justify durable
-  Skill-catalog history and is not used for the catalog.
-- It participates in the projection fingerprint, the full request token
-  estimate, the hard-fit calculation, the soft compaction threshold, and
-  the before/after compaction progress comparison (the exact attachment is
-  carried by `CompactionPlan` and reused on both sides); it never counts
-  toward `keep_recent_tokens`. A large catalog can therefore contribute to
-  `CannotFit`.
-- Provider adapters own wire placement: OpenAI Responses combines it
-  deterministically with the canonical system instructions in the trusted
-  `instructions` channel on every request (a continuation never loses it),
-  Anthropic Messages places it in the top-level `system` content, and
-  OpenAI Chat Completions translates it through a system-level message —
-  never a user message. Agent Status remains a separate user-targeted
-  ephemeral attachment with its existing semantics.
+- Skill guidance is admitted as canonical
+  `UserSource::Runtime`/`InboundKind::Context(ContextKind::SkillGuidance)`
+  context. It is not a special request attachment and is never copied into
+  canonical tool definitions. Tool definitions remain immutable capability
+  state and are frozen independently in `RequestSnapshot`.
+- The accepted Skill fact is an ordinary committed User message and is
+  therefore included in Ledger, Surface, compaction, and historical request
+  reconstruction. The capability snapshot itself remains immutable for the
+  attempt.
+- It participates in normal canonical-message token accounting and
+  complete-message compaction.
+- Adapters receive it only through the final canonical User projection and
+  perform protocol translation; they do not discover or inject it.
 
-The M4 context path is **mandatory**: every `AgentExecution` is constructed
+The context path is **mandatory**: every `AgentExecution` is constructed
 with a `ContextRuntime`, a `ConversationToolRuntime`, and an attempt
 capability lease
 (`AgentExecution::new(request, adapter, capability, cancellation,
@@ -613,6 +597,54 @@ context_runtime, tool_runtime)`); the no-context compatibility path,
 `with_context_runtime`, and any capability-free constructor are gone, and
 there is no Agent Status disable flag.
 See `docs/context-engine.md` for the full boundary description.
+
+#### Issue #55 request reconstruction contract
+
+The Agent Loop is the single coordination owner for Context Assembly and
+request admission. `ContextContributor` receives only a finite
+`ContributorInputSnapshot` and returns an awaited boxed future of transient
+`ContextProposal` values; `ContextAssembly::assemble` is the one async typed
+assembly boundary. Bounded contributor work settles before the generic final
+admission check.
+RustX owns contributor identity, trusted provenance, semantic lanes,
+canonical `MessageId` allocation, Ledger/Surface mutation, cancellation,
+and provider dispatch. Native context and certified extensions therefore
+share one validation path.
+
+The generic request-start commit point is the cancellation check immediately
+after `ContextAssembly::assemble` and immediately before `admit_context` in
+`src/agent/execution.rs`. Before it, no dynamic context, Surface advancement,
+RequestSnapshot, or provider request exists. After it, accepted context and
+its Surface revision are historical and are not rolled back by provider
+failure or cancellation.
+
+`RequestSnapshot` freezes every non-history input needed by one
+provider-neutral request: `RequestIdentity`, exact `SurfaceRevision`, the
+rendered Effective System Prompt, effective `ModelInvocationConfig`, model
+window, reasoning values, tool definitions, capability revision,
+`ContextGeneration`, and opaque continuation state. The Surface revision is
+an exact historical reference; request-time rendered/configuration values
+are stored by value. `RequestSnapshot::reconstruct` hydrates only that
+historical Surface revision and the frozen values, and the Agent Loop checks
+structural equality with the actual `ModelRequest` before adapter
+translation. Current contributors, Skills, configuration, filesystem, and
+runtime status are never consulted.
+
+During execution, `AgentExecution` owns the transient ordered snapshot list.
+At attempt settlement, `RuntimeClientHost::finish_attempt` transfers those
+immutable values into its append-only `RequestHistory` before dropping the
+`AgentExecutionResult`. The host retains request facts separately from the
+Message Ledger and Conversation Surface; `RequestHistory` never becomes a
+second transcript. After settlement, the host can reconstruct by request
+identity from the retained snapshot plus the exact historical Surface
+revision. Issue #11 may later persist this same object, but no persistence
+framework is part of M7.5b.
+
+An overflow retry reuses the admitted ContextGeneration and canonical
+context facts. `ContextWindowExceeded` does not prove that fresh inbound was
+observed, so compaction still protects the pending `FreshInboundTurn`. Only
+compaction-dependent Surface/request fields may change; contributors are not
+reinvoked and duplicate context is never committed.
 
 #### M5 implementation (native tool plane)
 
@@ -1567,6 +1599,10 @@ runtime_client/host.rs         RuntimeClientHost: ConversationState
                                coordinator, ownership between attempts,
                                current-attempt handle,
                                observer wiring, admission, shutdown
+runtime_client/request_history.rs
+                               append-only in-memory owner of frozen
+                               settled RequestSnapshots and reconstruction
+                               lookup; never a message transcript
 runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                RAII/explicit detach, request dispatch,
                                event subscription delivery
@@ -1820,13 +1856,13 @@ runtime_client/transport/      byte-stream adapters beneath the semantic
 - **Agent Status projection: composed exactly once.** One request
   preparation calls `AgentStatusComposer::compose` exactly once
   (`AgentExecution::compose_status`), sampling the clock once and
-  invoking each registered provider once. That one `AgentStatus` value
-  fans out to both destinations: `render_agent_status` produces the
-  canonical model-facing attachment, and the same value is handed to
-  `observe_status` for the Runtime Client projection. The client path
-  never calls `compose` again — not even through a cloned composer
-  sharing the same clock and providers — and never parses the rendered
-  prompt text to recover structure.
+  invoking each registered provider once. That one structured `AgentStatus`
+  value fans out to two core-owned destinations: `render_agent_status`
+  produces the canonical Runtime context UserMessageBlock for Context
+  Assembly, and the same structured value is handed to `observe_status` for
+  the Runtime Client projection. The client path never calls `compose` again
+  — not even through a cloned composer sharing the same clock and providers
+  — and never parses the rendered prompt text to recover structure.
 - **Protocol envelope.** A transport-neutral JSON-RPC-style envelope:
   `request(id, method + typed params)`, `response(id, result | error)`,
   and `event(cursor + typed payload)` with no request ids on

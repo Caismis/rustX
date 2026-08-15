@@ -286,6 +286,36 @@ impl ConversationState {
         Ok(self.surface.reconstruct(revision)?)
     }
 
+    /// Reconstructs the exact canonical messages of a historical Surface
+    /// revision. Surface history supplies identities and order first; the
+    /// Ledger is then queried only for those identities.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversation error when the revision is unavailable or a
+    /// referenced message cannot be hydrated.
+    pub fn reconstruct_messages(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageBlock>, ConversationError> {
+        let ids = self.reconstruct(revision)?;
+        self.hydrate(&ids)
+    }
+
+    /// Allocates a core-owned context `MessageId`. Transient contributors do
+    /// not receive this allocator and therefore cannot choose canonical ids.
+    #[must_use]
+    pub fn allocate_context_message_id(&self, namespace: &str) -> MessageId {
+        let mut serial = self.ledger.len();
+        loop {
+            let candidate = MessageId::new(format!("rustx-context-{namespace}-{serial}"));
+            if !self.ledger.contains(&candidate) {
+                return candidate;
+            }
+            serial = serial.saturating_add(1);
+        }
+    }
+
     /// The structural index of the current active conversation.
     ///
     /// # Errors
@@ -412,8 +442,9 @@ mod tests {
     use crate::conversation::structure::StructuralError;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
-        SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+        AssistantContentBlock, AssistantMessageBlock, ContextKind, InboundKind, MessageBlock,
+        SystemAuthority, SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+        UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -729,6 +760,37 @@ mod tests {
         );
         assert_eq!(state.ledger().get(&MessageId::new("same-a")), Some(&first));
         assert_eq!(state.ledger().get(&MessageId::new("same-b")), Some(&second));
+    }
+
+    /// Two admitted Runtime context snapshots with identical rendered bytes
+    /// remain distinct historical facts: identity is allocated at admission,
+    /// never deduplicated by content.
+    #[test]
+    fn identical_runtime_context_bytes_are_distinct_admitted_facts() {
+        let context = |id: MessageId| {
+            MessageBlock::User(UserMessageBlock {
+                id,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "identical runtime snapshot".to_owned(),
+                })],
+                source: UserSource::Runtime,
+                kind: InboundKind::Context(ContextKind::AgentStatus),
+                timestamp: None,
+            })
+        };
+        let mut state = ConversationState::new();
+        let first_id = state.allocate_context_message_id("attempt-1-turn-1");
+        state
+            .commit(context(first_id.clone()))
+            .expect("commit first");
+        let second_id = state.allocate_context_message_id("attempt-1-turn-2");
+        state
+            .commit(context(second_id.clone()))
+            .expect("commit second");
+
+        assert_ne!(first_id, second_id);
+        assert_eq!(state.ledger().len(), 2);
+        assert_eq!(state.active_ids(), &[first_id, second_id]);
     }
 
     /// Invalid replacements are rejected at preparation and never mutate.

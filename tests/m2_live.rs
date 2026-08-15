@@ -105,8 +105,7 @@ fn live_request_with_storage(
             timestamp: None,
         })],
         tools: Vec::new(),
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         continuation: None,
     }
 }
@@ -274,8 +273,7 @@ async fn live_openai_chat_tool_call() {
                 "required": ["location"],
             }),
         }],
-        agent_status: None,
-        skill_catalog: None,
+        effective_system_prompt: String::new(),
         continuation: None,
     };
     let adapter =
