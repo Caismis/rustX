@@ -669,6 +669,13 @@ impl HostInner {
             cancellation,
             context_runtime,
             &self.tool_runtime,
+            // The identity lifecycle configuration: enter every step, defer
+            // no context. The host has no native pre-step policy or
+            // tool-result observer consumer, exactly as it has no certified
+            // context contributor yet (`ContextRuntime::for_attempt`). A
+            // configured owner arrives with the consumer that needs it, not
+            // as speculative plumbing.
+            crate::agent::AttemptLifecycle::inert(),
         )
         // Neither rejection is reachable: `conversation_id` *is* the tool
         // runtime's own identity (the host has no independent conversation

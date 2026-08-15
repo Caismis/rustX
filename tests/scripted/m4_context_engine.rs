@@ -441,6 +441,28 @@ fn runtime_with_assembly(
     )
 }
 
+/// A pre-step policy that only counts how often it was evaluated.
+///
+/// It exists to prove the Issue #56 admission contract inside the Issue #55
+/// overflow-retry regression: an overflow retry is not a new model-step
+/// admission, so the policy must not run a second time.
+struct CountingPreStepPolicy {
+    evaluations: Arc<AtomicUsize>,
+}
+
+impl rustx::agent::PreStepPolicy for CountingPreStepPolicy {
+    fn evaluate<'a>(
+        &'a self,
+        _batch: &'a rustx::agent::PreStepBatch<'a>,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<rustx::agent::PreStepDecision, rustx::agent::LifecycleError>,
+    > {
+        self.evaluations.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(rustx::agent::PreStepDecision::Enter) })
+    }
+}
+
 /// Whether a canonical message is a runtime compaction summary.
 fn is_summary(message: &MessageBlock) -> bool {
     matches!(message, MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary)
@@ -1677,6 +1699,7 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2476,6 +2499,7 @@ async fn proactive_compaction_before_the_next_turn() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2671,6 +2695,7 @@ async fn below_threshold_runs_without_compaction() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2728,6 +2753,7 @@ async fn overflow_compact_and_retry_succeeds() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2886,6 +2912,7 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3046,6 +3073,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
+    let evaluations = Arc::new(AtomicUsize::new(0));
     let result = AgentExecution::new(
         fresh_request(
             "attempt-1",
@@ -3059,6 +3087,11 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert().with_pre_step_policy(Arc::new(
+            CountingPreStepPolicy {
+                evaluations: Arc::clone(&evaluations),
+            },
+        )),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3072,6 +3105,12 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
     );
     assert_eq!(model.requests().len(), 2);
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        evaluations.load(Ordering::SeqCst),
+        1,
+        "an overflow retry is not a new model-step admission: the pre-step \
+         policy is not re-evaluated"
+    );
     assert_eq!(result.request_snapshots().len(), 2);
     assert_eq!(
         result.request_snapshots()[0].context_generation,
@@ -3172,6 +3211,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3244,6 +3284,7 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3318,6 +3359,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3393,6 +3435,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3467,6 +3510,7 @@ async fn invalid_summary_fails_without_commit_or_retry() {
             &cancellation,
             runtime,
             &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime")
         .run()
@@ -3535,6 +3579,7 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3680,6 +3725,7 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
             CompactionBudgets::new(1, 1, 1_000_000),
         ),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3766,6 +3812,7 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
         &cancellation,
         runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3836,6 +3883,7 @@ async fn no_progress_compaction_fails_without_retry() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -3907,6 +3955,7 @@ async fn cancel_before_proactive_compaction() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime");
     // Wait until the model stream was fully consumed, then cancel while the
@@ -3966,6 +4015,7 @@ async fn cancel_while_summary_generation_is_pending() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime");
     // Wait until the summarizer parked, then cancel.
@@ -4058,6 +4108,7 @@ async fn run_continuation_case(
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -4413,6 +4464,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -4614,6 +4666,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -4691,6 +4744,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -4857,6 +4911,7 @@ async fn m4_drain_retains_continuation_without_compaction() {
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

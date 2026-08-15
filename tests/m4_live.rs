@@ -135,6 +135,7 @@ async fn live_step(
         &cancellation,
         runtime,
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

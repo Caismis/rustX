@@ -36,7 +36,7 @@ use crate::tools::schema::{
 };
 use crate::tools::types::{
     ModelToolDefinition, ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult,
-    ToolInvocation, ToolProgress,
+    ToolInvocation, ToolOrigin, ToolProgress,
 };
 use crate::tools::workspace::Workspace;
 
@@ -168,28 +168,45 @@ pub enum ToolPreflightError {
 }
 
 /// The preflight outcome of one model-issued tool call.
+///
+/// Both variants carry the canonical registry-resolved [`ToolId`] and
+/// [`ToolOrigin`]: identity resolution succeeds before argument validation
+/// can reject a call, so every settled result slot of a committed batch has a
+/// stable typed identity available to the Agent Loop. Consumers therefore
+/// never have to compare model-facing tool names to recognize a native
+/// capability.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PreflightOutcome {
-    /// The call is ready to execute: the stripped, validated invocation and
-    /// its scheduling policy.
+    /// The call is ready to execute: the stripped, validated invocation, its
+    /// scheduling policy, and its resolved origin.
     Ready(PreparedInvocation),
     /// The call is rejected as a normal failed result: the reserved runtime
     /// metadata is missing/invalid or the business arguments violate the
     /// canonical schema. The executor must not run.
     Rejected {
+        /// The canonical registry-resolved tool identity of the call.
+        tool_id: ToolId,
+        /// The canonical registry-resolved origin of the tool.
+        origin: ToolOrigin,
         /// The deterministic rejection reason.
         error: String,
     },
 }
 
 /// A fully preflighted invocation: the canonical invocation plus its
-/// scheduling policy.
+/// scheduling policy and resolved origin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedInvocation {
     /// The stripped, validated canonical invocation.
     pub invocation: ToolInvocation,
     /// The tool's concurrency policy for batch scheduling.
     pub concurrency: ToolConcurrencyPolicy,
+    /// The canonical registry-resolved origin of the tool.
+    ///
+    /// It is taken from the same resolved [`ToolDefinition`] that produced
+    /// `invocation`, so no second stored identity can disagree with the
+    /// registry.
+    pub origin: ToolOrigin,
 }
 
 /// The immutable validating tool registry of one attempt's capability set.
@@ -416,12 +433,16 @@ impl ToolRegistry {
                 Ok(value) => value,
                 Err(error) => {
                     return Ok(PreflightOutcome::Rejected {
+                        tool_id: entry.definition.id.clone(),
+                        origin: entry.definition.origin.clone(),
                         error: error.to_string(),
                     });
                 }
             };
         if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &stripped) {
             return Ok(PreflightOutcome::Rejected {
+                tool_id: entry.definition.id.clone(),
+                origin: entry.definition.origin.clone(),
                 error: error.to_string(),
             });
         }
@@ -434,6 +455,7 @@ impl ToolRegistry {
                 arguments: stripped,
             },
             concurrency: entry.definition.concurrency_policy,
+            origin: entry.definition.origin.clone(),
         }))
     }
 
@@ -815,7 +837,7 @@ mod tests {
         let missing = registry
             .preflight(&call("tool-sel", "sel", json!({"path": "a.txt"})))
             .expect("preflight outcome");
-        let PreflightOutcome::Rejected { error } = missing else {
+        let PreflightOutcome::Rejected { error, .. } = missing else {
             panic!("expected rejection");
         };
         assert!(error.contains("__rustx_execution"));
@@ -847,7 +869,7 @@ mod tests {
         let outcome = registry
             .preflight(&call("tool-read", "read", json!({"path": 42})))
             .expect("preflight outcome");
-        let PreflightOutcome::Rejected { error } = outcome else {
+        let PreflightOutcome::Rejected { error, .. } = outcome else {
             panic!("expected rejection");
         };
         assert!(!error.is_empty());
@@ -972,7 +994,7 @@ mod tests {
                 json!({"__rustx_execution": "foreground"}),
             ))
             .expect("preflight outcome");
-        let PreflightOutcome::Rejected { error } = outcome else {
+        let PreflightOutcome::Rejected { error, .. } = outcome else {
             panic!("expected rejection");
         };
         assert!(error.contains("__rustx_"));

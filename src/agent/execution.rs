@@ -9,7 +9,12 @@
 //! ConversationState (Message Ledger + Conversation Surface) + pending
 //! FreshInboundTurn
 //!  ↓
-//! Context Assembly → admitted canonical User context + Surface revision
+//! Context Assembly (native + extension + deferred post-tool proposals)
+//!  ↓
+//! PreStepPolicy → Enter | Reject(reason)
+//!  ↓
+//! generic cancellation checkpoint → admitted canonical User context +
+//! Surface revision
 //!  ↓
 //! Context Engine → ContextProjection + frozen RequestSnapshot
 //!  ↓
@@ -21,6 +26,9 @@
 //!  ↓
 //! tool calls (if requested): resolve, execute, record
 //!  ↓
+//! tool batch structural settlement → ToolResultObserver pass →
+//! Agent-Loop-owned deferred context buffer
+//!  ↓
 //! TurnCompleted → safe boundary → one finite inbound mailbox drain
 //!  ↓
 //! continuation (or proactive compaction / compact-and-retry on overflow)
@@ -31,9 +39,21 @@
 //! Ownership: the loop owns execution semantics, message assembly, tool
 //! execution, continuation state, cancellation observation, context assembly,
 //! request admission/snapshots, fresh-inbound lifecycle, safe-boundary inbound
-//! consumption, and the runtime event trace. The adapter owns provider
-//! protocol translation only. No provider protocol concept appears in this
-//! module.
+//! consumption, lifecycle-extension coordination, and the runtime event trace.
+//! The adapter owns provider protocol translation only. No provider protocol
+//! concept appears in this module.
+//!
+//! The typed lifecycle seams of Issue #56 live on the required immutable
+//! [`AttemptLifecycle`]: exactly one [`PreStepPolicy`] evaluation per primary
+//! step and exactly one [`ToolResultObserver`] pass per structurally settled
+//! tool batch. Neither seam receives canonical-history, tool-identity,
+//! cancellation, or terminal authority, and neither can create a second
+//! context-admission path: deferred post-tool proposals re-enter the same
+//! Context Assembly → pre-step policy → admission pipeline as every other
+//! proposal.
+//!
+//! [`PreStepPolicy`]: super::lifecycle::PreStepPolicy
+//! [`ToolResultObserver`]: super::lifecycle::ToolResultObserver
 //!
 //! The context path is mandatory: every normal `AgentExecution` is
 //! constructed with a [`ContextRuntime`], and there is exactly one normal
@@ -55,8 +75,9 @@ use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
 use crate::context::{
-    AcceptedContext, ContextRuntime, ContributorInputSnapshot, NativeContextInput,
-    render_effective_system_prompt,
+    AcceptedContext, ContextRuntime, ContributorInputSnapshot, DeferredContextProposal,
+    MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
+    render_effective_system_prompt, validate_user_message_proposal,
 };
 use crate::conversation::{CompactionRecord, ConversationError, ConversationState};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
@@ -81,11 +102,14 @@ use crate::tools::executor::{
 use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::{
     ToolCall, ToolConcurrencyPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
-    ToolInvocationMode, ToolProgress,
+    ToolInvocationMode, ToolOrigin, ToolProgress,
 };
 
 use super::assembly::ModelEventAssembler;
 use super::cancellation::AgentCancellation;
+use super::lifecycle::{
+    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, ToolResultObservation,
+};
 use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
 
@@ -232,6 +256,26 @@ pub struct AgentExecution<'a> {
     /// It is retained across an overflow compaction/retry and discarded only
     /// when the next primary step begins.
     accepted_context: Option<AcceptedContext>,
+    /// The one required immutable lifecycle configuration of the attempt.
+    /// It carries the attempt's single pre-step policy owner and its
+    /// identity-registered tool-result observers; the inert configuration is
+    /// the identity.
+    lifecycle: AttemptLifecycle,
+    /// The Agent-Loop-owned staging buffer of deferred context.
+    ///
+    /// It is **not** canonical history and **not** a second transcript: a
+    /// staged proposal is a transient value that becomes a conversation fact
+    /// only after the next Context Assembly, the pre-step policy, and the
+    /// admission boundary accept it. The buffer is filled after a tool batch
+    /// reaches structural settlement, in canonical `(ToolCall batch position,
+    /// producer identity, proposal FIFO)` order, and drained by the very next
+    /// primary step's assembly, so it never accumulates across turns.
+    ///
+    /// Each entry carries the trusted producer identity the Agent Loop stamped
+    /// from the observer's registration. The buffer records *timing*; the
+    /// identity records *ownership*, and Context Assembly derives lane and
+    /// provenance from the identity alone.
+    deferred_context: Vec<DeferredContextProposal>,
     /// Per-attempt context-generation allocator owned by the Agent Loop.
     context_generation_serial: u64,
     /// Historical frozen request boundaries.
@@ -334,6 +378,12 @@ impl<'a> AgentExecution<'a> {
     /// inbound turn exists. There is no no-context mode and no Agent Status
     /// disable flag.
     ///
+    /// The [`AttemptLifecycle`] is required for the same reason: the loop
+    /// always evaluates exactly one pre-step policy and always runs exactly
+    /// one tool-result observation pass, so no code path branches on whether
+    /// a seam is attached. [`AttemptLifecycle::inert`] is the identity
+    /// configuration.
+    ///
     /// # Errors
     ///
     /// Returns [`MailboxError::ConversationMismatch`] when the request's
@@ -345,6 +395,7 @@ impl<'a> AgentExecution<'a> {
         cancellation: &'a AgentCancellation,
         context_runtime: ContextRuntime,
         tool_runtime: &'a ConversationToolRuntime,
+        lifecycle: AttemptLifecycle,
     ) -> Result<Self, MailboxError> {
         if tool_runtime.conversation_id() != &request.conversation_id {
             return Err(MailboxError::ConversationMismatch {
@@ -378,6 +429,8 @@ impl<'a> AgentExecution<'a> {
             pending_fresh_inbound: None,
             context_runtime,
             accepted_context: None,
+            lifecycle,
+            deferred_context: Vec::new(),
             context_generation_serial: 0,
             request_snapshots: Vec::new(),
             observed: None,
@@ -690,12 +743,24 @@ impl<'a> AgentExecution<'a> {
         // order. Attempt cancellation can still settle the attempt as
         // cancelled after the structurally complete result batch is
         // committed; no next model turn starts after cancellation.
-        self.execute_tools(&turn_assembly.tool_calls, preflight)
+        let settled = self
+            .execute_tools(&turn_assembly.tool_calls, preflight)
             .await;
+        // Cancellation observed before the observation phase begins wins
+        // immediately: the batch is already structurally settled, so there is
+        // no useful deferred model context to produce and no observation runs.
         if self.cancellation.is_cancelled() {
             return Some(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
             });
+        }
+        // The immutable tool-result observation pass runs only here, after
+        // the complete owning batch is structurally settled. Observer failure
+        // therefore cannot split the batch or prevent a committed Assistant
+        // tool-call message from receiving its complete canonical result
+        // batch.
+        if let Err(terminal) = self.run_tool_result_observations(&settled).await {
+            return Some(terminal);
         }
         if let Err(error) = self.state.tools_finished() {
             return Some(Terminal::Failed {
@@ -818,9 +883,31 @@ impl<'a> AgentExecution<'a> {
     /// the context engine into a projection, and the projection is compiled
     /// into the request messages. The pending fresh inbound turn (when one
     /// exists) is sampled into one native context fact for the admitted
-    /// primary step. That accepted generation is reused throughout proactive
-    /// compaction and overflow retry. Proactive automatic compaction runs
-    /// when the projected input reaches the soft input limit.
+    /// primary step, together with the deferred post-tool proposals staged by
+    /// the previous structurally settled tool batch. That accepted generation
+    /// is reused throughout proactive compaction and overflow retry.
+    /// Proactive automatic compaction runs when the projected input reaches
+    /// the soft input limit.
+    ///
+    /// The exact linearization is:
+    ///
+    /// ```text
+    /// Context Assembly (native + extension + deferred post-tool)
+    ///     ↓ final immutable AcceptedContext
+    /// PreStepPolicy → Enter | Reject(reason)
+    ///     ↓
+    /// generic cancellation checkpoint      ← the admission linearization point
+    ///     ↓
+    /// admit_context → Ledger + Surface
+    ///     ↓
+    /// Effective System Prompt → RequestSnapshot → ModelRequest
+    /// ```
+    ///
+    /// A rejection, a policy failure, or observable cancellation before the
+    /// checkpoint leaves no canonical context, no Surface advancement, no
+    /// frozen snapshot, and no provider request. An overflow retry never
+    /// re-enters this block: it reuses the already-admitted context
+    /// generation, so the policy is evaluated exactly once per primary step.
     #[allow(clippy::too_many_lines)]
     async fn prepare_model_request(&mut self) -> Result<ModelRequest, Terminal> {
         if self.cancellation.is_cancelled() {
@@ -871,6 +958,13 @@ impl<'a> AgentExecution<'a> {
                 Ok(input) => input,
                 Err(terminal) => return Err(terminal),
             };
+            // The deferred proposals of the previous structurally settled tool
+            // batch enter the *same* final transient batch as every other
+            // proposal, and are laned and given provenance by their producer
+            // identity, not by their timing. There is exactly one
+            // model-visible dynamic-context admission path: an observer has no
+            // privileged committer role and cannot bypass the policy below.
+            let deferred = core::mem::take(&mut self.deferred_context);
             let native = NativeContextInput {
                 skill_guidance,
                 agent_status: status,
@@ -879,7 +973,7 @@ impl<'a> AgentExecution<'a> {
             let accepted = self
                 .context_runtime
                 .assembly
-                .assemble(&input, &native)
+                .assemble(&input, &native, &deferred)
                 .await
                 .map_err(|error| {
                     Self::context_failure_terminal(&ContextError::new(
@@ -887,6 +981,41 @@ impl<'a> AgentExecution<'a> {
                         error.to_string(),
                     ))
                 })?;
+            // The typed pre-step policy boundary (Issue #56). It observes the
+            // complete final proposal batch and returns Enter/Reject only. It
+            // owns no cancellation, allocates no identity, and commits
+            // nothing; a rejection settles the attempt strictly before the
+            // admission linearization point below.
+            let policy = self.lifecycle.pre_step_policy();
+            let decision = {
+                let batch = PreStepBatch {
+                    attempt_id: &self.request.attempt_id,
+                    conversation_id: &self.request.conversation_id,
+                    turn: self.turn,
+                    surface_revision: self.conversation.revision(),
+                    context: &accepted,
+                };
+                policy.evaluate(&batch).await
+            };
+            match decision {
+                Ok(PreStepDecision::Enter) => {}
+                Ok(PreStepDecision::Reject { reason }) => {
+                    return Err(Terminal::Failed {
+                        failure: AttemptFailure::Runtime {
+                            error: RuntimeError::PreStepRejected { reason },
+                        },
+                    });
+                }
+                Err(error) => {
+                    return Err(Terminal::Failed {
+                        failure: AttemptFailure::Runtime {
+                            error: RuntimeError::PreStepPolicyFailed {
+                                message: error.message,
+                            },
+                        },
+                    });
+                }
+            }
             #[cfg(test)]
             if let Some(pause) = &self
                 .admission_pause
@@ -1613,8 +1742,17 @@ impl<'a> AgentExecution<'a> {
     /// background executions stay conversation-owned, prepared-but-
     /// uncommitted dispatches roll back, and the complete batch commits in
     /// call order.
+    ///
+    /// The returned [`SettledCall`] values are immutable copies of exactly
+    /// the committed facts, in canonical call order. They are the only input
+    /// of the tool-result observation pass, which runs strictly after this
+    /// function returns and therefore cannot influence structural settlement.
     #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
-    async fn execute_tools(&mut self, calls: &[ToolCall], preflight: Vec<PreflightOutcome>) {
+    async fn execute_tools(
+        &mut self,
+        calls: &[ToolCall],
+        preflight: Vec<PreflightOutcome>,
+    ) -> Vec<SettledCall> {
         let mut slots: Vec<CallSlot> = calls
             .iter()
             .cloned()
@@ -1622,22 +1760,26 @@ impl<'a> AgentExecution<'a> {
             .map(|(call, outcome)| match outcome {
                 PreflightOutcome::Ready(prepared) => CallSlot {
                     call,
+                    tool_id: prepared.invocation.tool_id.clone(),
+                    origin: prepared.origin.clone(),
                     prepared: Some(prepared),
                     result: None,
                     started: false,
                     progress: Vec::new(),
                 },
-                PreflightOutcome::Rejected { error } => {
-                    let mut slot = CallSlot {
-                        call,
-                        prepared: None,
-                        result: None,
-                        started: false,
-                        progress: Vec::new(),
-                    };
-                    slot.result = Some(failed_result(&error));
-                    slot
-                }
+                PreflightOutcome::Rejected {
+                    tool_id,
+                    origin,
+                    error,
+                } => CallSlot {
+                    call,
+                    tool_id,
+                    origin,
+                    prepared: None,
+                    result: Some(failed_result(&error)),
+                    started: false,
+                    progress: Vec::new(),
+                },
             })
             .collect();
         let mut index = 0;
@@ -1654,7 +1796,7 @@ impl<'a> AgentExecution<'a> {
                         slots[index].started = true;
                         self.emit(RuntimeEvent::ToolExecutionStarted {
                             tool_call_id: slots[index].call.id.clone(),
-                            tool_id: slots[index].tool_id(),
+                            tool_id: slots[index].tool_id.clone(),
                         });
                         let invocation = slots[index]
                             .prepared
@@ -1679,7 +1821,7 @@ impl<'a> AgentExecution<'a> {
                             slot.started = true;
                             self.emit(RuntimeEvent::ToolExecutionStarted {
                                 tool_call_id: slot.call.id.clone(),
-                                tool_id: slot.tool_id(),
+                                tool_id: slot.tool_id.clone(),
                             });
                         }
                     }
@@ -1742,7 +1884,15 @@ impl<'a> AgentExecution<'a> {
         // facts precede their completion event; the completion events
         // themselves are committed in canonical order regardless of physical
         // completion order.
-        for slot in &slots {
+        //
+        // The **structural settlement point of the whole batch** is the last
+        // `commit_canonical` of this loop: at that instant every logical call
+        // of the committed Assistant tool-call message owns exactly one
+        // canonical `ToolMessage`, in original model call order. The settled
+        // facts collected here are immutable copies of exactly what was
+        // committed, and they are the only input of the observation pass.
+        let mut settled = Vec::with_capacity(slots.len());
+        for (batch_position, slot) in slots.iter().enumerate() {
             let result = slot.result.clone().expect("every call slot settles");
             for event in &slot.progress {
                 self.emit(event.clone());
@@ -1750,7 +1900,7 @@ impl<'a> AgentExecution<'a> {
             if slot.started {
                 self.emit(RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: slot.call.id.clone(),
-                    tool_id: slot.tool_id(),
+                    tool_id: slot.tool_id.clone(),
                     result: result.clone(),
                 });
             }
@@ -1760,13 +1910,214 @@ impl<'a> AgentExecution<'a> {
                     self.request.attempt_id, self.turn, slot.call.id
                 )),
                 tool_call_id: slot.call.id.clone(),
-                tool_id: slot.tool_id(),
-                result,
+                tool_id: slot.tool_id.clone(),
+                result: result.clone(),
             });
             self.commit_canonical(&block)
                 .expect("a tool result identity is unique within one attempt");
+            settled.push(SettledCall {
+                batch_position,
+                call_id: slot.call.id.clone(),
+                tool_id: slot.tool_id.clone(),
+                origin: slot.origin.clone(),
+                // The invocation facts are copied from the one
+                // `PreparedInvocation` that executed, and the canonical
+                // identity/origin are the slot's, so no second stored identity
+                // can disagree with the registry. A preflight-rejected call
+                // never resolved an invocation and exposes none.
+                invocation: slot
+                    .prepared
+                    .as_ref()
+                    .map(|prepared| ObservedToolInvocation {
+                        tool_id: slot.tool_id.clone(),
+                        origin: slot.origin.clone(),
+                        mode: prepared.invocation.mode,
+                        arguments: prepared.invocation.arguments.clone(),
+                    }),
+                result,
+            });
         }
         self.emit(RuntimeEvent::TurnCompleted);
+        settled
+    }
+
+    /// Runs the immutable tool-result observation pass of one structurally
+    /// settled tool batch and stages its bounded deferred context proposals.
+    ///
+    /// Invocation order is the canonical `ToolCall` batch order (never
+    /// physical completion order) and, within one call, the registered
+    /// observers' logical identity order. The staged proposals therefore keep
+    /// the canonical deferred order
+    /// `(ToolCall batch position, producer identity, proposal FIFO)`, with no
+    /// registration-order term.
+    ///
+    /// # The transaction boundary
+    ///
+    /// Every observer return value is validated **before** anything is staged:
+    /// its proposal count against the established
+    /// [`MAX_PROPOSALS_PER_CONTRIBUTOR`] bound, the running total against
+    /// [`MAX_DEFERRED_CONTEXT_PROPOSALS`], and every proposal body against the
+    /// same bounded content contract Context Assembly applies. An oversized
+    /// observation can therefore never be appended to the attempt buffer and
+    /// discovered one step later.
+    ///
+    /// The pass is transactional: any failure — a failing observer, a bound
+    /// violation, invalid content, or observable cancellation — discards every
+    /// proposal of this pass *and* clears the attempt's deferred buffer, so no
+    /// partial deferred state survives. The already-committed Assistant
+    /// tool-call message and its complete canonical `ToolMessage` batch are
+    /// untouched either way; they were committed before this function is
+    /// called.
+    ///
+    /// # Cancellation precedence
+    ///
+    /// The observer receives no cancellation handle; the loop keeps
+    /// cancellation ownership. A bounded observation that is already running
+    /// settles rather than being dropped, but observable cancellation is
+    /// checked before each observer starts and again once it settles, before
+    /// its return value is consumed. Once cancellation is observable, no later
+    /// observer starts and neither an observer's success nor its failure can
+    /// decide the terminal outcome.
+    async fn run_tool_result_observations(
+        &mut self,
+        settled: &[SettledCall],
+    ) -> Result<(), Terminal> {
+        let observers = self.lifecycle.tool_result_observers().to_vec();
+        if observers.is_empty() {
+            return Ok(());
+        }
+        match self.observe_settled_batch(&observers, settled).await {
+            Ok(staged) => {
+                self.deferred_context.extend(staged);
+                Ok(())
+            }
+            Err(terminal) => {
+                // Nothing of this pass was staged, and no earlier pass may
+                // survive a failed or cancelled one: the attempt settles
+                // terminally, and it settles with an empty deferred buffer.
+                self.deferred_context.clear();
+                Err(terminal)
+            }
+        }
+    }
+
+    /// The pass body: one observation per (settled call, bound observer),
+    /// validated at its transaction boundary and accumulated into a
+    /// pass-local buffer that is never visible to the attempt on failure.
+    ///
+    /// Cancellation is checked at two points around every observation, and
+    /// both belong to the Agent Loop alone:
+    ///
+    /// ```text
+    /// cancellation check          ← an observer never starts after this
+    /// await observer
+    /// cancellation check          ← wins over the observer's Ok *or* Err
+    /// consume result, validate, stage
+    /// ```
+    ///
+    /// An in-flight bounded observation is allowed to settle rather than being
+    /// dropped, but once cancellation is observable it decides the terminal
+    /// outcome: a later observer never starts, and an observer's failure can
+    /// no longer become `ToolResultObservationFailed`.
+    async fn observe_settled_batch(
+        &self,
+        observers: &[super::lifecycle::RegisteredToolResultObserver],
+        settled: &[SettledCall],
+    ) -> Result<Vec<DeferredContextProposal>, Terminal> {
+        let already_staged = self.deferred_context.len();
+        let mut staged: Vec<DeferredContextProposal> = Vec::new();
+        for call in settled {
+            for registered in observers {
+                if self.cancellation.is_cancelled() {
+                    return Err(self.cancelled_terminal());
+                }
+                let observation = ToolResultObservation {
+                    attempt_id: &self.request.attempt_id,
+                    conversation_id: &self.request.conversation_id,
+                    turn: self.turn,
+                    batch_position: call.batch_position,
+                    call_id: &call.call_id,
+                    tool_id: &call.tool_id,
+                    origin: &call.origin,
+                    invocation: call.invocation.as_ref(),
+                    result: &call.result,
+                };
+                let observed = registered
+                    .observer()
+                    .observe_tool_result(&observation)
+                    .await;
+                // Cancellation that became observable while this bounded
+                // observation was in flight wins here, before the return value
+                // is consumed. This is why an observer that fails during an
+                // already-cancelled attempt cannot convert cancellation into
+                // `ToolResultObservationFailed`.
+                if self.cancellation.is_cancelled() {
+                    return Err(self.cancelled_terminal());
+                }
+                let proposals = observed.map_err(|error| Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ToolResultObservationFailed {
+                            message: error.message,
+                        },
+                    },
+                })?;
+                // The transaction boundary. Nothing below has touched the
+                // attempt's deferred buffer yet, and nothing will until the
+                // whole pass validates.
+                if proposals.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
+                    return Err(Self::deferred_rejected(format!(
+                        "deferred-context producer {:?} returned {} proposals for call {}, \
+                         above the bounded proposal limit {MAX_PROPOSALS_PER_CONTRIBUTOR}",
+                        registered.producer(),
+                        proposals.len(),
+                        call.call_id
+                    )));
+                }
+                if already_staged + staged.len() + proposals.len() > MAX_DEFERRED_CONTEXT_PROPOSALS
+                {
+                    return Err(Self::deferred_rejected(format!(
+                        "the observation pass of turn {} would stage more than \
+                         {MAX_DEFERRED_CONTEXT_PROPOSALS} deferred proposals",
+                        self.turn
+                    )));
+                }
+                for proposal in proposals {
+                    validate_user_message_proposal(&proposal).map_err(|error| {
+                        Self::deferred_rejected(format!(
+                            "deferred-context producer {:?} proposed invalid context for \
+                             call {}: {error}",
+                            registered.producer(),
+                            call.call_id
+                        ))
+                    })?;
+                    staged.push(DeferredContextProposal {
+                        // The producer comes from the binding, never from the
+                        // observer's return value — and it is still only a
+                        // reference until Context Assembly resolves it.
+                        producer: registered.producer().clone(),
+                        proposal,
+                    });
+                }
+            }
+        }
+        Ok(staged)
+    }
+
+    /// The attempt's cancellation terminal, sampled at an observation
+    /// checkpoint.
+    fn cancelled_terminal(&self) -> Terminal {
+        Terminal::Cancelled {
+            reason: self.cancellation.reason(),
+        }
+    }
+
+    /// The terminal of a deferred batch rejected at the transaction boundary.
+    fn deferred_rejected(message: String) -> Terminal {
+        Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::DeferredContextRejected { message },
+            },
+        }
     }
 
     /// Runs one logical tool call of the batch.
@@ -2028,19 +2379,33 @@ impl<'a> AgentExecution<'a> {
 /// canonical ordering.
 struct CallSlot {
     call: ToolCall,
+    /// The canonical registry-resolved tool identity of the call. Both
+    /// preflight outcomes carry it, so a rejected slot is identified by the
+    /// registry's resolution rather than by the raw model-issued value.
+    tool_id: ToolId,
+    /// The canonical registry-resolved typed origin of the tool.
+    origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
     result: Option<ToolExecutionResult>,
     started: bool,
     progress: Vec<RuntimeEvent>,
 }
 
-impl CallSlot {
-    fn tool_id(&self) -> ToolId {
-        match &self.prepared {
-            Some(prepared) => prepared.invocation.tool_id.clone(),
-            None => self.call.tool_id.clone(),
-        }
-    }
+/// The immutable facts of one settled call of a structurally settled batch.
+///
+/// These are copies of exactly what was committed as canonical history, kept
+/// in canonical model call order. They are the only input the tool-result
+/// observation pass receives, so an observer can neither reach the live call
+/// slot nor influence the committed result.
+struct SettledCall {
+    batch_position: usize,
+    call_id: ToolCallId,
+    tool_id: ToolId,
+    origin: ToolOrigin,
+    /// The immutable invocation facts, absent exactly when preflight rejected
+    /// the call before invocation resolution.
+    invocation: Option<ObservedToolInvocation>,
+    result: ToolExecutionResult,
 }
 
 /// One deterministic scheduling phase of a tool-call batch.
@@ -2629,6 +2994,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("matching capability owner is accepted");
 
@@ -2662,6 +3028,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &other_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         );
 
         assert!(matches!(
@@ -2699,6 +3066,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &other_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         );
 
         assert!(matches!(
@@ -2771,8 +3139,15 @@ mod tests {
         let tool_runtime = tool_runtime();
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
-        let execution = AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
-            .expect("conversation identity matches the tool runtime");
+        let execution = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
         execution
             .admission_pause
             .lock()
@@ -2860,10 +3235,17 @@ mod tests {
         let tool_runtime = tool_runtime();
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
-        let result = AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
-            .expect("conversation identity matches the tool runtime")
-            .run()
-            .await;
+        let result = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await;
         controller.await.expect("cancellation controller");
 
         assert_eq!(
@@ -2916,6 +3298,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime")
         .run()
@@ -2975,6 +3358,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");
         execution
@@ -3065,6 +3449,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");
         execution
@@ -3376,6 +3761,7 @@ mod tests {
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");
         execution

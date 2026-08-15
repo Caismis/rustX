@@ -102,6 +102,7 @@ async fn run(
         cancellation,
         runtime(model),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2517,6 +2518,7 @@ async fn run_with_mailbox(
         cancellation,
         runtime(model),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()
@@ -2539,6 +2541,7 @@ async fn conversation_mismatch_with_the_tool_runtime_is_rejected() {
         &cancellation,
         runtime(&model),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .err()
     .expect("a mismatched conversation must be rejected");

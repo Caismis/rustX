@@ -473,6 +473,100 @@ Exit criteria:
 - Overflow retry produces no duplicate dynamic context and reconstructs
   both the original and compacted request independently.
 
+## Milestone 7.5c — Typed lifecycle interception and deterministic post-tool context settlement (Issue #56)
+
+Implemented in the current architecture:
+
+- One required immutable `AttemptLifecycle` per attempt carrying exactly two
+  phase-specific typed seams. `AttemptLifecycle::inert()` is the identity
+  configuration, so no execution path branches on whether a seam is attached.
+- `PreStepPolicy`: an awaited `Enter`/`Reject(reason)` boundary over the
+  final immutable `AcceptedContext`, evaluated after Context Assembly and
+  before the generic pre-admission cancellation checkpoint. It is the single
+  downstream authority every proposal — native, certified-extension, and
+  deferred post-tool — converges on.
+- `ToolResultObserver`: an immutable observation of each finalized tool
+  result, run in canonical `ToolCall` order strictly after the owning batch
+  reaches structural settlement. It carries canonical batch position,
+  `ToolCallId`, registry-resolved `ToolId`, typed `ToolOrigin`, the committed
+  `ToolExecutionResult`, and an `ObservedToolInvocation` (resolved
+  `ToolInvocationMode` plus the validated business arguments, absent for a
+  preflight-rejected call). The model-facing tool name is deliberately absent
+  so capability recognition is a typed-identity question.
+- Bounded preflight refactor: both `PreflightOutcome` variants carry the
+  registry-resolved `ToolId` and `ToolOrigin` from the same resolved
+  `ToolDefinition`, so no second stored identity can disagree with the
+  registry.
+- Timing/ownership separation: observers are *bound* to a
+  `DeferredContextProducer` (at most one per semantic owner). "Post-tool" is a
+  lifecycle *timing* fact owned by the Agent Loop; the lane, `UserSource`, and
+  `ContextKind` come from the resolved producer through the same table Context
+  Assembly applies to that owner's request-time proposals. A certified
+  extension keeps its identity and provenance when it defers.
+- Binding is not admission: `ContextAssembly::register_extension` is the one
+  semantic identity/provenance/attestation authority. A deferred extension
+  producer is resolved against it and uses **that registration's** generation
+  and attestation; an unregistered key fails the assembly with
+  `UnregisteredContributor` before admission, with no lane, no extension
+  provenance, and no synthesized generation. Registration — not request-time
+  output — is what makes an extension, so a post-tool-only certified extension
+  works.
+- Deferred output is User context only: `ToolResultObserver` returns
+  `UserMessageProposal`, so a deferred Effective System Prompt section is
+  unrepresentable. System sections stay on the request-time contributor path.
+- Cancellation precedence: observable cancellation is checked before each
+  observer starts and again once it settles, before its return value is
+  consumed. An in-flight bounded observation settles rather than being
+  dropped, but cancellation then wins over its success *and* its failure, and
+  no later observer starts.
+- Deferred context: an Agent-Loop-owned transient buffer ordered by
+  `(canonical ToolCall batch position, producer identity, proposal FIFO)`,
+  admitted through the ordinary Context Assembly path. The buffer is never
+  canonical history. It is bounded at the observer transaction boundary —
+  per-observation count against the established `MAX_PROPOSALS_PER_CONTRIBUTOR`
+  limit, running attempt total, and per-proposal content — before anything is
+  staged, and again in assembly.
+- Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`,
+  `ToolResultObservationFailed`, and `DeferredContextRejected`, each
+  preserving exactly one terminal event.
+
+Intentionally absent (no concrete native owner or consumer):
+`PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
+replacement or retroactive blocking, pre-tool argument or identity
+rewriting, `Ask`/human approval (Issue #64), subagent lifecycle observation
+(Issue #60), and turn-stopping/forced continuation.
+
+Exit criteria:
+
+- A pre-step rejection commits no dynamic context, advances no Surface
+  revision, freezes no `RequestSnapshot`, and starts no provider request; no
+  contributor and no observer can bypass it.
+- `Assistant(A, B)` always produces `ToolResult A` then `ToolResult B`, and
+  deferred context never interleaves between sibling results, even when B
+  physically completes first.
+- Observer failure keeps the complete canonical result batch, commits no
+  deferred context — including proposals earlier observations of the same
+  pass produced — and settles the attempt exactly once.
+- A native producer's deferred proposal gets native provenance and a
+  *registered* certified extension's keeps extension identity/provenance and
+  its registered attestation; post-tool timing rewrites no contributor
+  identity; producers with different identities keep a deterministic order
+  that does not depend on registration order.
+- An observer bound to an extension the attempt's Context Assembly never
+  registered admits nothing and gets no extension provenance.
+- Deferred context never changes the Effective System Prompt.
+- Cancellation observed around an observation prevents any later observer from
+  starting, discards the pass, and outranks the observer's own success or
+  failure.
+- An observer can identify the native Read target path from the validated
+  invocation arguments, without any model-facing name, and a
+  preflight-rejected call exposes no invocation arguments.
+- A single observation above the per-observation bound, or observations that
+  together cross the aggregate bound, are rejected at the transaction
+  boundary and stage nothing.
+- An overflow retry re-evaluates neither the pre-step policy nor the
+  contributors, and duplicates no deferred context.
+
 ## Milestone 8 — Runtime events and durability
 
 Implement interfaces for:

@@ -196,6 +196,15 @@ pub enum InboundKind {
 pub enum ContextKind {
     /// Workspace/project instructions.
     WorkspaceInstructions,
+    /// The rustX runtime's own observation of a structurally settled tool
+    /// batch (Issue #56).
+    ///
+    /// This family names the native runtime owner, not the timing that made
+    /// the fact eligible: a certified extension observing the same batch
+    /// produces `ExtensionEnvironment`. The fact is admitted through the
+    /// ordinary Context Assembly / pre-step policy / admission path; the
+    /// observer never commits it.
+    RuntimeToolObservation,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
     /// Native capability/Skill guidance.

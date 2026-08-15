@@ -448,7 +448,7 @@ observed only at the next quiescent re-discovery.
 
 ## Tool ordering
 
-Tool execution may be parallel. Runtime completion events may reflect actual completion order. Canonical tool-result messages are committed in the original tool-call order unless a future protocol explicitly defines otherwise.
+Tool execution may be parallel. Runtime completion events may reflect actual completion order. Canonical tool-result messages are committed in the original tool-call order unless a future protocol explicitly defines otherwise. Deferred context observed from a settled tool batch (Issue #56) never interleaves between sibling tool results: it is admitted only at the next primary step, after the complete owning batch reached structural settlement. That timing does not decide its provenance or lane; its registered producer identity does.
 
 ## Tool plane (M5)
 
@@ -479,6 +479,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   metadata, strip metadata, validate business arguments against the
   canonical schema, dispatch executor. A business validation failure is a
   normal failed result slot; the executor never runs.
+- Both `PreflightOutcome` variants carry the canonical registry-resolved
+  `ToolId` and `ToolOrigin`, taken from the same resolved `ToolDefinition`
+  that produces the invocation. Identity resolution always precedes
+  argument validation, so every settled result slot of a committed batch has
+  a stable typed identity, and no second stored identity can disagree with
+  the registry.
 - One native capability owns one module boundary: a native tool module owns
   its name, description, typed input contract, generated schema, executor,
   and private helpers, and constructs itself through its own
@@ -1061,6 +1067,234 @@ message role, history shape, or timestamps:
   a second history authority. After settlement, lookup by RequestIdentity
   reconstructs from the retained snapshot and its exact SurfaceRevision;
   #11 may later persist the same object.
+
+## Typed lifecycle interception (Issue #56)
+
+Core invariant:
+
+> An extension receives only the authority required by its lifecycle phase.
+> No lifecycle extension can mutate arbitrary Agent Loop state, the Message
+> Ledger, the Conversation Surface, canonical message commit, tool identity
+> or arguments, cancellation ownership, provider dispatch/retry, or terminal
+> state.
+
+### Configuration
+
+- Every `AgentExecution` carries exactly one required immutable
+  `AttemptLifecycle`. `AttemptLifecycle::inert()` is the identity
+  configuration (always enter, never defer context). No code path branches on
+  whether a seam is attached, so attaching one cannot change ordering,
+  cancellation, or settlement semantics.
+- The pre-step phase has exactly one owner per attempt: one `PreStepPolicy`.
+- The tool-result phase **binds** observers to a `DeferredContextProducer`, at
+  most one per semantic owner; a duplicate binding is rejected. There is no
+  hook registry, policy chain, middleware chain, around-dispatch wrapper, or
+  priority number, and therefore no registration-order, address-order, or
+  map-iteration-order semantics anywhere in the seam: observers are invoked and
+  ordered by logical producer only.
+- **Binding is not admission.** `ContextAssembly::register_extension` is the
+  single semantic identity/provenance/attestation authority. The lifecycle
+  seam exposes exactly two binders — `with_native_tool_result_observer` and
+  `with_extension_tool_result_observer` — and no public generic binder over an
+  arbitrary contributor identity, so it cannot read or act as a second
+  extension registry. A `CertifiedExtensionIdentity` passed to the extension
+  binder is a reference, not a credential.
+- The existing `AgentExecutionObserver` remains a read-only projection
+  observer of committed facts. It is never a policy owner, a tool-result
+  decision owner, a deferred-context producer, or a cancellation owner.
+
+### PreStepPolicy
+
+- The policy observes the **final** immutable `AcceptedContext` — the exact
+  batch that would otherwise be admitted, including native Agent Status,
+  native Skill guidance, certified-extension proposals, and deferred context
+  from every producer — plus attempt/conversation identity, the
+  turn, and the pre-admission `SurfaceRevision`. It returns `Enter` or
+  `Reject { reason }` and nothing else; it cannot rewrite, extend, or replace
+  the batch.
+- There is exactly one model-visible dynamic-context admission path. No
+  contributor and no observer may commit context around this evaluation.
+- The evaluation happens after `ContextAssembly::assemble` and before the
+  generic pre-admission cancellation checkpoint, which remains the model-step
+  admission linearization point. Therefore a rejection proves: no proposed
+  dynamic context committed, no Surface revision caused by those proposals,
+  no `RequestSnapshot`, and no provider request.
+- `Reject` settles as `AttemptFailed(Runtime(PreStepRejected { reason }))`; a
+  policy failure settles as
+  `AttemptFailed(Runtime(PreStepPolicyFailed { message }))`. Neither admits
+  partial context.
+- The policy owns no cancellation signal. Cancellation observed while a
+  bounded evaluation is pending lets the evaluation settle; the generic
+  checkpoint then owns admission — the same settlement rule Issue #55 defines
+  for a pending contributor future. A policy can never convert cancellation
+  into success, restart a turn, trigger a provider retry, or force
+  continuation.
+- An overflow compact-and-retry is not a new model-step admission: it reuses
+  the admitted `ContextGeneration` and never re-enters assembly, so the
+  policy is evaluated exactly once per primary step.
+
+### ToolResultObserver
+
+- The observation pass runs **after** the owning tool batch reaches
+  structural settlement — the last canonical `ToolMessage` commit of the
+  batch — and before `tools_finished()` and the safe-boundary mailbox drain.
+  Observer failure therefore cannot split a batch or prevent a committed
+  Assistant tool-call message from receiving its complete canonical result
+  batch.
+- The observation carries only immutable facts: attempt/conversation
+  identity, turn, canonical batch position, canonical `ToolCallId`,
+  registry-resolved `ToolId`, typed `ToolOrigin`, the finalized
+  `ToolExecutionResult` exactly as committed, and an `ObservedToolInvocation`.
+- `ObservedToolInvocation` carries the registry-resolved `ToolId`, the typed
+  `ToolOrigin`, the resolved `ToolInvocationMode`, and the **validated
+  business arguments** — the stripped value preflight checked against the
+  canonical schema. Reserved `__rustx_*` invocation metadata is already
+  removed and no raw provider payload is exposed. It exists so a consumer can
+  name the fact a result under-determines (which file the native Read
+  capability touched) without re-reading history, parsing Assistant messages,
+  or keeping a duplicate invocation index.
+- `ObservedToolInvocation` is absent exactly when preflight rejected the call
+  before invocation resolution: no invocation was ever validated, so none is
+  exposed. `ToolId` and `ToolOrigin` still identify the refused capability.
+- The invocation facts carry no authority. They are a read-only borrow held
+  after the result is already canonical, with no interior mutability and no
+  execution handle, so an observer cannot re-run, rewrite, or replay the
+  invocation.
+- The model-facing tool **name** is not part of the observation. Capability
+  recognition uses `ToolId` + `ToolOrigin` only, so an MCP or Python tool
+  whose public name is `read` can never be classified as the native rustX
+  Read capability. Both `PreflightOutcome` variants carry the
+  registry-resolved `ToolId` and `ToolOrigin` from the same resolved
+  `ToolDefinition`, so no second stored identity can disagree with the
+  registry.
+- `ToolInvocationMode::Background` reports an accepted background dispatch,
+  never completion of the detached work.
+- An observer may return zero or more bounded `UserMessageProposal` values and
+  nothing else. It returns *content*, never *semantics*: it cannot choose a
+  `UserSource`, a `ContextKind`, a semantic lane, or a contributor identity.
+  It cannot mutate a finalized result, reject or undo it, create a second
+  `ToolMessage`, mutate `ToolCall` id/arguments, dispatch another tool, start
+  a hidden model request, own cancellation, change the terminal outcome, or
+  touch the Ledger/Surface.
+- The observer seam produces **User context only**. It cannot contribute an
+  Effective System Prompt section on the following turn; system sections stay
+  owned by the request-time `ContextContributor` path. The restriction is the
+  return type, so a deferred system section is unrepresentable rather than
+  rejected at runtime.
+- Every observer return value is validated at the **observer transaction
+  boundary**, before any proposal is staged: the proposal count against the
+  established `MAX_PROPOSALS_PER_CONTRIBUTOR` bound, the running total against
+  `MAX_DEFERRED_CONTEXT_PROPOSALS` (counting what the attempt already staged),
+  and every proposal body against the same bounded content contract Context
+  Assembly applies. The deferred path reuses the established context proposal
+  limit; there is no separate deferred-only per-observation constant. An
+  observer can therefore never append an unbounded proposal set to the attempt
+  buffer for a later step to reject. A violation settles as
+  `AttemptFailed(Runtime(DeferredContextRejected { message }))`.
+- **Cancellation precedence.** Cancellation ownership stays with the Agent
+  Loop. Observable cancellation is checked before each observer starts and
+  again once it settles, before its return value is consumed. An in-flight
+  bounded observation is allowed to settle rather than being dropped, but once
+  cancellation is observable: no later observer starts, every pass-local
+  proposal (including an earlier observer's) is discarded, and neither the
+  observer's success nor its failure can decide the terminal outcome — an
+  observer that errors during an already-cancelled attempt settles
+  `AttemptCancelled`, never `ToolResultObservationFailed`.
+- Observer failure settles as
+  `AttemptFailed(Runtime(ToolResultObservationFailed { message }))`. The
+  finalized results stay canonical and unchanged, no second result appears,
+  the batch is never partial, no provider request begins afterwards, and the
+  attempt emits exactly one terminal event, last.
+- The pass is one transaction. Any failure — a failing observer, a bound
+  violation, or invalid content — discards every proposal of the pass,
+  including proposals earlier observations of the same pass already produced,
+  and clears the attempt's deferred buffer. No partial deferred state
+  survives a failed observation pass.
+
+### Deferred context: timing is not ownership
+
+The load-bearing split of this seam:
+
+| Question | Answer | Owner |
+|---|---|---|
+| *When* does a proposal become eligible? | after its owning tool batch reaches structural settlement, at the next primary step | Agent Loop |
+| *Who* owns the fact it states? | the trusted identity its observer was registered under | Context Assembly |
+
+- "Post-tool" is a **lifecycle timing** property. It never determines a
+  `UserSource`, a `ContextKind`, a semantic lane, or a contributor identity.
+  There is no rule converting post-tool proposals into native runtime
+  context.
+- Each staged proposal carries the `DeferredContextProducer` the Agent Loop
+  stamped from its observer's **binding** — never from anything the observer
+  returned. Context Assembly first resolves that reference to an authoritative
+  registration, then derives lane, provenance, and semantic family from the
+  resolved identity alone, through the same table it applies to that owner's
+  request-time proposals:
+  - `NativeRuntimeObservation` → the native-reserved
+    `UserContextLane::RuntimeToolObservation` (immediately after
+    `ClaimedInbound` and before `WorkspaceInstructions`,
+    `ExtensionEnvironment`, `SkillGuidance`, and `AgentStatus`),
+    `UserSource::Runtime`,
+    `InboundKind::Context(ContextKind::RuntimeToolObservation)`. rustX owns
+    this owner, so it needs no registration and carries no attestation;
+  - `CertifiedExtension { identity }` → the matching **registered** extension:
+    `UserContextLane::ExtensionEnvironment`,
+    `UserSource::Extension { contributor: key }`,
+    `InboundKind::Context(ContextKind::ExtensionEnvironment)`, and **that
+    registration's own** `ContributorGeneration` including its attestation.
+  An extension cannot claim the native-reserved logical key or lane, and an
+  extension's deferred fact is never attributed to the native observation
+  owner in the accepted `ContextGeneration`.
+- A deferred producer naming an extension the attempt's Context Assembly never
+  registered fails the assembly with
+  `ContextAssemblyError::UnregisteredContributor` before admission: no lane,
+  no `UserSource::Extension`, no synthesized generation, and no partially
+  admitted batch. Naming an extension never makes an observer one.
+- Registration, not request-time output, is what makes an extension. A
+  certified extension that produces deferred context and nothing else still
+  resolves to its authoritative registered generation.
+- The deferred buffer is Agent-Loop-owned and transient. It is not canonical
+  history, not a second transcript, not a second context ledger, and not a
+  second Surface. A proposal becomes a conversation fact only after the
+  normal Context Assembly, the pre-step policy, and the admission boundary
+  accept it, so a later rejection or cancellation prevents it from ever
+  becoming canonical.
+- The buffer is filled after structural settlement and drained by the very
+  next primary step's assembly, so it never accumulates across turns. It is
+  bounded twice: at the observer transaction boundary, and again by
+  `MAX_DEFERRED_CONTEXT_PROPOSALS` in assembly, which never trusts its input.
+- Canonical deferred order is `(canonical ToolCall batch position, producer
+  identity, proposal FIFO)`. Physical completion timing never appears in the
+  key: the observation pass walks the preallocated call-order vector after
+  the whole batch settled, invoking registered observers in logical identity
+  order. Registration order is not observable.
+- Inside one `(lane, contributor)` bucket a deferred fact precedes the same
+  owner's request-time fact, because it describes the batch that precedes the
+  step. Beyond that, ordering is the one documented total lane order, never
+  incidental `Vec` concatenation or map iteration.
+- For `Assistant(A, B)` canonical history is always
+  `Assistant(A, B)`, `ToolResult A`, `ToolResult B`, and only afterwards any
+  admitted deferred context — even when B physically completes first.
+  Deferred context never interleaves between sibling results.
+- A deferred proposal is a `UserMessageProposal`, laned by the same owner
+  table as a contributor's User proposal. An observer cannot contribute to the
+  Effective System Prompt, replace the system prompt, or create Tool or
+  Assistant messages.
+- Because accepted deferred context is an ordinary canonical fact before the
+  corresponding snapshot is frozen, the Issue #55 reconstruction invariant is
+  unchanged: no historical request reruns a policy or an observer, and none
+  consults the current lifecycle configuration.
+
+### Seams intentionally absent
+
+`PreToolPolicy`/pre-dispatch `Allow`-`Deny`, `ToolExecutionWrapper`/
+`around_tool`/middleware chains, post-tool result replacement or retroactive
+blocking, pre-tool argument or identity rewriting, `Ask`/human approval
+(Issue #64), subagent lifecycle observation (Issue #60), and
+`TurnStoppingPolicy`/forced continuation are **absent by decision**, not as
+TODO compatibility hooks. Each would need a concrete native owner or
+consumer that does not exist; the two seams above cover every current
+requirement.
 
 ## Runtime Client projection (Issue #37)
 
