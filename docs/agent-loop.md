@@ -1,4 +1,4 @@
-# Agent Loop (M3 + Issue #22 + Issue #55)
+# Agent Loop (M3 + Issue #22 + Issue #55 + Issue #56)
 
 This document describes the runtime boundary implemented by the M3
 deterministic agent loop, mirroring the M2 model-plane documentation in
@@ -24,6 +24,9 @@ The loop (`src/agent`) executes one attempt to its single terminal outcome:
   proposal admission
 - the model-step admission/request-start linearization point
 - frozen `RequestSnapshot` creation and structural reconstruction checking
+- the two typed lifecycle interception seams of Issue #56 (`PreStepPolicy`
+  and `ToolResultObserver`) and the deferred post-tool context buffer they
+  feed
 
 Execution semantics are explicit: an `ExecutionStateMachine`
 (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`, with
@@ -208,6 +211,236 @@ an attempt runs, the host explicitly cannot reconstruct because the single
 ConversationState is moved into that attempt. No current model settings,
 contributors, Skills, clock, or status fill historical gaps.
 
+## 4.3 Typed lifecycle interception (Issue #56)
+
+Issue #56 adds exactly two phase-specific typed seams. They live on one
+**required** immutable per-attempt value, `AttemptLifecycle`
+(`src/agent/lifecycle.rs`), passed to `AgentExecution::new`.
+`AttemptLifecycle::inert()` is the identity configuration: the policy always
+enters and the observer never proposes context. Because the configuration is
+required and total, no execution path branches on "is a hook attached?", so
+attaching a seam cannot change ordering, cancellation, or settlement
+semantics. There is no hook registry, no chain, no middleware, and no
+around-dispatch wrapper.
+
+Each phase has exactly **one** owner per attempt rather than a chain. A chain
+would require a second deterministic ordering model purely to sequence hook
+implementations, on top of the Issue #55 contributor lane/identity order, and
+no native consumer needs several independent policies or observers.
+Composition, when a consumer eventually needs it, belongs inside that
+consumer's own implementation where its own domain identities can order it.
+This is what keeps the deferred-context ordering rule reducible to
+`(canonical ToolCall batch position, proposal FIFO)` with no observer-identity
+term.
+
+### PreStepPolicy
+
+```text
+Context Assembly
+    ↓ final immutable AcceptedContext (native + extension + deferred post-tool)
+PreStepPolicy::evaluate      →  Enter | Reject { reason }
+    ↓
+generic cancellation checkpoint            ← admission linearization point
+    ↓
+admit_context → Ledger + Surface
+    ↓
+Effective System Prompt → RequestSnapshot → ModelRequest
+```
+
+The policy observes `PreStepBatch`: attempt/conversation identity, the turn
+number, the pre-admission `SurfaceRevision`, and an immutable borrow of the
+validated `AcceptedContext`. It returns `Enter` or `Reject { reason }` and
+nothing else — it cannot rewrite, extend, or replace the batch, because a
+policy that could synthesize a replacement batch would be a second context
+authority.
+
+There is exactly **one** model-visible dynamic-context admission path. Every
+proposal — native Agent Status, native Skill guidance, certified-extension
+context, and deferred post-tool observation context — converges on this same
+evaluation before the same admission boundary. No contributor and no observer
+has a private commit path.
+
+A `Reject` settles the attempt as
+`AttemptFailed(Runtime(PreStepRejected { reason }))`, and a policy failure as
+`AttemptFailed(Runtime(PreStepPolicyFailed { message }))`. Both happen
+strictly before the admission linearization point, so a rejection proves: no
+proposed dynamic context committed, no Surface revision caused by those
+proposals, no `RequestSnapshot`, and no provider request.
+
+The policy owns no cancellation. If cancellation becomes observable while a
+bounded evaluation is pending, the evaluation settles and the loop's own
+generic pre-admission checkpoint still decides admission — exactly the
+settlement rule Issue #55 defines for a pending `ContextContributor` future.
+The policy cannot convert cancellation into success, restart the turn,
+trigger a provider retry, or force continuation.
+
+An overflow retry is not a new model-step admission: it reuses the already
+admitted `ContextGeneration` and never re-enters assembly, so the policy is
+evaluated exactly once per primary step.
+
+### ToolResultObserver
+
+```text
+Assistant(ToolCall A, ToolCall B) committed
+    ↓ execute (scheduling per ToolConcurrencyPolicy)
+every CallSlot settled (including cancellation fill)
+    ↓
+commit ToolResult A, then ToolResult B          ← structural settlement point
+    ↓
+ToolResultObserver pass, in canonical ToolCall order
+    ↓ bounded UserMessageProposal values
+Agent-Loop-owned deferred buffer
+    ↓ next primary step
+Context Assembly → PreStepPolicy → admission → canonical User context
+```
+
+The observer receives `ToolResultObservation`, a borrow of already-canonical
+facts: attempt/conversation identity, the turn, the canonical
+`batch_position`, the canonical `ToolCallId`, the registry-resolved `ToolId`,
+the typed `ToolOrigin`, the resolved `ToolInvocationMode` (absent when
+preflight rejected the call before invocation resolution), and the finalized
+`ToolExecutionResult` exactly as committed.
+
+The model-facing tool **name** is deliberately not part of the observation.
+Capability recognition uses `ToolId` + `ToolOrigin` only, so an MCP or Python
+tool whose public name happens to be `read` can never be mistaken for the
+native rustX Read capability (`tool-read`, `ToolOrigin::Builtin`). Making the
+name unavailable turns that discipline into a structural property rather than
+advice. Both `PreflightOutcome` variants now carry the registry-resolved
+`ToolId` and `ToolOrigin`, taken from the same resolved `ToolDefinition`, so
+no second stored identity can disagree with the registry.
+
+A `ToolInvocationMode::Background` observation reports an **accepted
+background dispatch**, not the completion of the detached work. An observer
+must not infer an external side effect from it.
+
+The observer may return zero or more bounded `UserMessageProposal` values and
+nothing else. It cannot mutate the finalized result, reject or undo it,
+create a second `ToolMessage`, dispatch another tool, start a model request,
+own cancellation, change the terminal outcome, or touch the Ledger/Surface.
+
+### Exact settlement and eligibility points
+
+The stages are distinct and named:
+
+| # | Point | Owner |
+|---|-------|-------|
+| 1 | physical tool execution completion | executor |
+| 2 | normalized `ToolExecutionResult` finalization | Agent Loop (`run_single_call`) |
+| 3 | every sibling `CallSlot` settled, including cancellation fill | Agent Loop (`execute_tools`) |
+| 4 | canonical `ToolMessage` commit, in original model call order | Agent Loop (`commit_canonical`) |
+| 5 | **batch structural settlement** — the last `commit_canonical` of the batch | Agent Loop |
+| 6 | `ToolResultObserver` pass → deferred proposals staged | Agent Loop |
+| 7 | deferred proposals become **eligible** — the next `prepare_model_request` drains the buffer into `NativeContextInput` | Agent Loop |
+| 8 | next model-step admission (policy + cancellation checkpoint + `admit_context`) | Agent Loop |
+
+`TurnCompleted` is emitted at the end of stage 4/5; the observation pass runs
+after it and before `tools_finished()` and the safe-boundary mailbox drain.
+
+### Canonical ordering
+
+For `Assistant(A, B)` the canonical history is always
+
+```text
+Assistant(A, B)
+ToolResult A
+ToolResult B
+User(PostToolObservation …)   ← only at the next admitted step
+```
+
+even when B physically completes first. Two structures guarantee it:
+
+- result slots are preallocated in model call order and the commit loop walks
+  that vector, so completion order only decides *when* a slot's `result` field
+  is filled, never *where* it is committed;
+- the observation pass walks the same settled vector in the same order, and
+  each observation's proposals are appended in the order the observer returned
+  them.
+
+The deferred order key is therefore `(canonical ToolCall batch position,
+proposal FIFO)`. With one observer owner per attempt there is no
+observer-identity term. Physical timing never appears in the key.
+
+Relative to ordinary proposals of the next primary step, deferred post-tool
+context occupies its own native-reserved user-context lane
+`UserContextLane::PostToolObservation`, placed immediately after
+`ClaimedInbound` and before `WorkspaceInstructions`, `ExtensionEnvironment`,
+`SkillGuidance`, and `AgentStatus`. A post-tool observation describes what the
+environment just did for the *preceding* tool batch, while the request-time
+lanes describe the *current* step. The ordering is a documented total order in
+the lane contract, never incidental `Vec` concatenation or map iteration.
+
+Admitted deferred context is committed with rustX-assigned provenance
+(`UserSource::Runtime`) and semantic family
+(`InboundKind::Context(ContextKind::PostToolObservation)`), and the accepted
+`ContextGeneration` records
+`ContextContributorIdentity::Native(NativeContextContributor::ToolResultObservation)`.
+The staging buffer is transient by construction: it is **not** canonical
+history, not a second transcript, and not a second context ledger, and it is
+drained by the very next primary step's assembly.
+
+### Failure and cancellation semantics
+
+| Situation | Outcome |
+|-----------|---------|
+| policy returns `Reject` | `AttemptFailed(Runtime(PreStepRejected))`; nothing admitted, no snapshot, no request |
+| policy returns `Err` | `AttemptFailed(Runtime(PreStepPolicyFailed))`; nothing admitted |
+| cancellation while policy pending | evaluation settles; the generic checkpoint wins; `AttemptCancelled`; nothing admitted |
+| observer returns `Err` | `AttemptFailed(Runtime(ToolResultObservationFailed))`; the committed Assistant batch keeps its complete canonical result batch; every proposal of the failed pass is discarded; no further provider request |
+| cancellation already observable when the batch settles | the observation phase is skipped entirely; `AttemptCancelled` |
+| cancellation while an observation is pending | the bounded observation settles; the staged proposals are never admitted; `AttemptCancelled` |
+
+In every case the attempt emits exactly one terminal event and it is last.
+Because the observation pass runs strictly after structural settlement,
+observer failure can never prevent a committed Assistant `ToolCall` batch from
+receiving its complete canonical `ToolMessage` result batch, and it can never
+strand a later sibling's result.
+
+### Request Snapshot implications
+
+Accepted deferred context is an ordinary canonical Ledger/Surface fact before
+the corresponding `RequestSnapshot` is frozen, so the Issue #55 reconstruction
+invariant is unchanged:
+
+```text
+ConversationSurface @ revision X + RequestSnapshot X = exact ModelRequest X
+```
+
+No historical request needs to rerun a policy, rerun an observer, or consult
+the current lifecycle configuration. The `ContextGeneration` frozen in the
+snapshot names the deferred-context owner, which is an explanation of the
+assembly, never a re-execution handle.
+
+### Authority matrix
+
+| Phase | Can observe | Can propose/decide | Cannot mutate | Owner |
+|-------|-------------|--------------------|---------------|-------|
+| `ContextContributor` (#55) | finite immutable `ContributorInputSnapshot` | bounded typed proposals | canonical state, identity, provenance, lanes, ordering | Context Assembly |
+| `PreStepPolicy` (#56) | final immutable `AcceptedContext` + attempt/turn/revision identity | `Enter` / `Reject { reason }` | history, Surface, `MessageId`s, tool identity/arguments, cancellation, provider dispatch, terminal state | Agent Loop |
+| `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, resolved mode | bounded deferred `UserMessageProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state | Agent Loop / tool batch |
+| Deferred context staging | ordered transient proposals | candidate input of the next Context Assembly | Ledger and Surface directly | Agent Loop |
+| Context admission | final accepted context | canonical `User` facts + Surface advancement | arbitrary history | Agent Loop + `ConversationState` |
+| `AgentExecutionObserver` (#37) | emitted `RuntimeEvent`s, committed `MessageBlock`s, composed Agent Status | nothing | everything | Agent Loop (projection seam only) |
+
+### Seams intentionally absent
+
+These are absent by decision, not as TODO compatibility hooks:
+
+- **`PreToolPolicy` / pre-dispatch `Allow`/`Deny`** — no concrete native
+  consumer exists. `ToolRegistry::preflight` already owns canonical identity
+  resolution, reserved-metadata stripping, and business argument validation.
+- **`ToolExecutionWrapper` / `around_tool` / middleware chain** — no concrete
+  native requirement that the two seams above cannot express.
+- **Post-tool result replacement or retroactive blocking** — a finalized
+  result is canonical by the time an observer sees it;
+  `ToolResultObservation` is immutable by construction.
+- **Pre-tool argument or identity rewriting** — a committed Assistant
+  `ToolCall` (`id`, `tool_id`, `name`, `arguments`) is a conversation fact.
+- **`Ask` / human approval** — Issue #64 owns real interaction.
+- **Subagent lifecycle observation** — Issue #60 owns the native subagent
+  runtime; the observation seam follows the owner.
+- **`TurnStoppingPolicy` / forced continuation** — no native owner exists.
+
 ## 5. Usage
 
 `ModelRequestCompleted.usage` reports the canonical final usage of the
@@ -274,6 +507,11 @@ structurally exactly once:
   model call order.
 - After the structurally complete batch commits, the attempt settles
   cancelled exactly once with one terminal event last.
+- The batch's **structural settlement point** is the last canonical
+  `ToolMessage` commit of the batch. The Issue #56 `ToolResultObserver` pass
+  runs strictly after that point (see section 4.3), so an observer failure
+  can never split the batch or prevent a committed Assistant tool-call
+  message from receiving its complete canonical result batch.
 
 ### Generic Agent Loop cancellation
 

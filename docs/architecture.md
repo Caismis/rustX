@@ -58,6 +58,8 @@ tools/types.rs             ToolDefinition (id, name, description, canonical
 tools/executor.rs          ToolExecutor boundary, ToolExecutionContext,
                            ProgressReporter, ToolRegistry (validating
                            definition/executor registry), PreflightOutcome
+                           (both variants carry the registry-resolved ToolId
+                           and ToolOrigin)
 tools/schema.rs            JSON Schema validation, the reserved __rustx_
                            namespace, the model-facing schema compiler, and
                            reserved invocation metadata extraction
@@ -280,6 +282,8 @@ The kernel owns deterministic execution semantics:
 - Turn-boundary inbound message draining
 - Attempt termination rules
 - Retry and compaction decision points
+- Typed lifecycle interception coordination (`PreStepPolicy`,
+  `ToolResultObserver`) and the deferred post-tool context buffer
 
 The kernel operates only on rustX canonical types and interfaces.
 
@@ -644,7 +648,77 @@ An overflow retry reuses the admitted ContextGeneration and canonical
 context facts. `ContextWindowExceeded` does not prove that fresh inbound was
 observed, so compaction still protects the pending `FreshInboundTurn`. Only
 compaction-dependent Surface/request fields may change; contributors are not
-reinvoked and duplicate context is never committed.
+reinvoked, the pre-step policy is not re-evaluated, tool-result observations
+are not replayed, and duplicate context is never committed.
+
+#### Issue #56 typed lifecycle interception
+
+The Agent Loop remains the lifecycle owner. Issue #56 adds exactly two
+phase-specific typed seams, carried by one required immutable
+`AttemptLifecycle` value (`src/agent/lifecycle.rs`) per attempt:
+
+```text
+Context Assembly (native + extension + deferred post-tool proposals)
+        |
+PreStepPolicy               Enter | Reject(reason)
+        |
+generic cancellation checkpoint          <- admission linearization point
+        |
+admit_context -> Ledger + Surface -> RequestSnapshot -> ModelRequest
+
+Assistant(ToolCall A, ToolCall B) committed
+        |
+execute, settle every CallSlot, commit ToolResult A then ToolResult B
+        |                                <- batch structural settlement point
+ToolResultObserver pass, in canonical ToolCall order
+        |
+Agent-Loop-owned deferred buffer (transient, not history)
+        |
+next Context Assembly -> PreStepPolicy -> admission
+        |
+canonical User(PostToolObservation) context
+```
+
+`AttemptLifecycle::inert()` is the identity configuration, so no execution
+path branches on whether a seam is attached. Each phase has one owner per
+attempt rather than a chain: a chain would require a second deterministic
+ordering model on top of the Issue #55 lane/identity order, and no native
+consumer needs one. The `RuntimeClientHost` currently constructs the inert
+configuration, exactly as it constructs `ContextRuntime::for_attempt`
+without certified contributors — a configured owner arrives with the
+consumer that needs it, not as speculative plumbing.
+
+`PreStepPolicy` observes the final immutable `AcceptedContext` and returns
+`Enter` or `Reject`. It is the single downstream authority every proposal
+converges on, so a rejection proves no proposed dynamic context committed,
+no Surface revision advanced because of it, no `RequestSnapshot` was frozen,
+and no provider request started. It owns no cancellation: a pending bounded
+evaluation settles and the generic checkpoint still decides admission.
+
+`ToolResultObserver` receives an immutable `ToolResultObservation` of one
+finalized result — canonical batch position, `ToolCallId`, registry-resolved
+`ToolId`, typed `ToolOrigin`, resolved `ToolInvocationMode`, and the
+committed `ToolExecutionResult`. The model-facing tool name is deliberately
+absent, so recognizing the native rustX Read capability is a typed identity
+question (`tool-read` + `ToolOrigin::Builtin`) rather than a name comparison;
+an MCP or Python tool publicly named `read` can never be confused with it.
+Both `PreflightOutcome` variants now carry the registry-resolved identity and
+origin from the same resolved `ToolDefinition`.
+
+The observer may return only bounded `UserMessageProposal` values. They are
+staged in the Agent-Loop-owned deferred buffer in the canonical order
+`(ToolCall batch position, proposal FIFO)` and admitted through the ordinary
+Context Assembly path in the native-reserved
+`UserContextLane::PostToolObservation` lane. The buffer is not a second
+transcript, ledger, or Surface, and the observer is not a privileged
+committer: a later pre-step rejection or cancellation prevents the deferred
+context from ever becoming canonical.
+
+`PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
+replacement, pre-tool argument rewriting, `Ask`/human approval (#64),
+subagent lifecycle observation (#60), and turn-stopping/forced continuation
+are intentionally absent: none has a concrete native owner or consumer.
+`docs/agent-loop.md` section 4.3 carries the full authority matrix.
 
 #### M5 implementation (native tool plane)
 

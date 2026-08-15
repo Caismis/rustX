@@ -140,10 +140,20 @@ registration order, discovery timing, an address, a handle, or an index.
 The finite user lanes are ordered as:
 
 1. ClaimedInbound — already claimed canonical input, never extension-owned;
-2. WorkspaceInstructions — one native semantic owner;
-3. ExtensionEnvironment — multiple certified extensions;
-4. SkillGuidance — one native-reserved owner;
-5. AgentStatus — one native-reserved owner.
+2. PostToolObservation — deferred context proposed by the Issue #56
+   `ToolResultObserver` for the preceding structurally settled tool batch;
+   native-reserved and staged by the Agent Loop, never extension-owned;
+3. WorkspaceInstructions — one native semantic owner;
+4. ExtensionEnvironment — multiple certified extensions;
+5. SkillGuidance — one native-reserved owner;
+6. AgentStatus — one native-reserved owner.
+
+The deferred lane sits directly after claimed inbound because a post-tool
+observation describes what the environment just did for the *preceding* tool
+batch, while every later lane describes the *current* request. Within the
+lane the order is the Agent Loop's staging order, which is
+`(canonical ToolCall batch position, proposal FIFO)`; physical tool
+completion timing never reaches it.
 
 The finite system-section lanes are ordered as:
 
@@ -294,6 +304,11 @@ toward keep_recent_tokens. A projection contains complete canonical
 messages only and carries surface_revision, messages, the exact prompt, and
 its measurement.
 
+The Context Engine is deliberately narrow. It is not a lifecycle or hook
+host: the Issue #56 `PreStepPolicy` and `ToolResultObserver` seams belong to
+the Agent Loop (`src/agent/lifecycle.rs`), and the engine never observes,
+evaluates, or stages them.
+
 Compaction is structural. It never splits an Assistant message or a
 tool-call/result pair. It appends one canonical runtime summary and applies
 one complete-message Surface replacement. Historical ledger facts remain
@@ -305,7 +320,12 @@ The Agent Loop owns the model-step admission boundary in
 AgentExecution::prepare_model_request:
 
 ~~~text
+Agent-Loop-owned deferred post-tool proposals (staged after the previous
+tool batch reached structural settlement)
+    ↓ drained into NativeContextInput
 ContextAssembly::assemble (transient proposals)
+    ↓
+PreStepPolicy → Enter | Reject(reason)          (Issue #56)
     ↓ test synchronization seam, when enabled
 generic cancellation check
     ↓ documented request-start/admission commit point
@@ -323,6 +343,12 @@ RequestSnapshot, and no provider request. The contributors may have
 performed one bounded read, but their transient proposals are discarded.
 The race regression uses a watch reached signal and an explicit mpsc release
 channel, never a sleep.
+
+A pre-step rejection or policy failure settles the attempt at the same
+boundary and with the same guarantee: no accepted dynamic context, no Surface
+advancement, no RequestSnapshot, and no provider request. Because deferred
+post-tool proposals enter the *same* final batch, an observer cannot commit
+context around the policy either.
 
 After admit_context commits, the accepted context is historical. Provider
 failure, disconnect, timeout, or cancellation does not roll back the ledger,

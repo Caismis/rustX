@@ -473,6 +473,57 @@ Exit criteria:
 - Overflow retry produces no duplicate dynamic context and reconstructs
   both the original and compacted request independently.
 
+## Milestone 7.5c — Typed lifecycle interception and deterministic post-tool context settlement (Issue #56)
+
+Implemented in the current architecture:
+
+- One required immutable `AttemptLifecycle` per attempt carrying exactly two
+  phase-specific typed seams. `AttemptLifecycle::inert()` is the identity
+  configuration, so no execution path branches on whether a seam is attached.
+- `PreStepPolicy`: an awaited `Enter`/`Reject(reason)` boundary over the
+  final immutable `AcceptedContext`, evaluated after Context Assembly and
+  before the generic pre-admission cancellation checkpoint. It is the single
+  downstream authority every proposal — native, certified-extension, and
+  deferred post-tool — converges on.
+- `ToolResultObserver`: an immutable observation of each finalized tool
+  result, run in canonical `ToolCall` order strictly after the owning batch
+  reaches structural settlement. It carries canonical batch position,
+  `ToolCallId`, registry-resolved `ToolId`, typed `ToolOrigin`, resolved
+  `ToolInvocationMode`, and the committed `ToolExecutionResult`; the
+  model-facing tool name is deliberately absent so capability recognition is
+  a typed-identity question.
+- Bounded preflight refactor: both `PreflightOutcome` variants carry the
+  registry-resolved `ToolId` and `ToolOrigin` from the same resolved
+  `ToolDefinition`, so no second stored identity can disagree with the
+  registry.
+- Deferred post-tool context: an Agent-Loop-owned transient buffer ordered by
+  `(canonical ToolCall batch position, proposal FIFO)`, admitted through the
+  ordinary Context Assembly path in the native-reserved
+  `UserContextLane::PostToolObservation` lane with rustX-assigned
+  `UserSource::Runtime` provenance and
+  `ContextKind::PostToolObservation`. The buffer is never canonical history.
+- Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`, and
+  `ToolResultObservationFailed`, each preserving exactly one terminal event.
+
+Intentionally absent (no concrete native owner or consumer):
+`PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
+replacement or retroactive blocking, pre-tool argument or identity
+rewriting, `Ask`/human approval (Issue #64), subagent lifecycle observation
+(Issue #60), and turn-stopping/forced continuation.
+
+Exit criteria:
+
+- A pre-step rejection commits no dynamic context, advances no Surface
+  revision, freezes no `RequestSnapshot`, and starts no provider request; no
+  contributor and no observer can bypass it.
+- `Assistant(A, B)` always produces `ToolResult A` then `ToolResult B`, and
+  deferred context never interleaves between sibling results, even when B
+  physically completes first.
+- Observer failure keeps the complete canonical result batch, commits no
+  deferred context, and settles the attempt exactly once.
+- An overflow retry re-evaluates neither the pre-step policy nor the
+  contributors, and duplicates no deferred context.
+
 ## Milestone 8 — Runtime events and durability
 
 Implement interfaces for:
