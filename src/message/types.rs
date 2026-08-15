@@ -196,6 +196,11 @@ pub enum InboundKind {
 pub enum ContextKind {
     /// Workspace/project instructions.
     WorkspaceInstructions,
+    /// Deferred context derived from an immutable observation of one
+    /// structurally settled tool batch (Issue #56). The fact is admitted
+    /// through the ordinary Context Assembly / pre-step policy / admission
+    /// path; the observer never commits it.
+    PostToolObservation,
     /// Generic certified-extension/environment context.
     ExtensionEnvironment,
     /// Native capability/Skill guidance.

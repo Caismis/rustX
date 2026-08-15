@@ -104,6 +104,32 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// The attempt-level pre-step policy rejected the proposed model step
+    /// (Issue #56). The rejection happens strictly before the admission
+    /// linearization point, so no proposed dynamic context became canonical,
+    /// no Surface revision advanced because of it, no `RequestSnapshot` was
+    /// frozen, and no provider request started.
+    PreStepRejected {
+        /// The policy's bounded rejection reason.
+        reason: String,
+    },
+    /// The attempt-level pre-step policy itself failed while evaluating the
+    /// final immutable proposal batch (Issue #56). Like a rejection, this
+    /// settles the attempt before admission, so no partial context admission
+    /// exists.
+    PreStepPolicyFailed {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
+    /// The attempt-level tool-result observer failed (Issue #56). The
+    /// observation pass runs strictly **after** the owning tool batch reached
+    /// structural settlement, so the committed Assistant tool-call message and
+    /// its complete canonical `ToolMessage` batch are unaffected; only the
+    /// deferred context of the failed observation pass is discarded.
+    ToolResultObservationFailed {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
 }
 
 /// A runtime-owned UTC clock boundary.
@@ -187,6 +213,24 @@ mod tests {
                     message: "no progress".to_owned(),
                 },
                 "context_compaction_failed",
+            ),
+            (
+                RuntimeError::PreStepRejected {
+                    reason: "policy rejected the step".to_owned(),
+                },
+                "pre_step_rejected",
+            ),
+            (
+                RuntimeError::PreStepPolicyFailed {
+                    message: "policy failed".to_owned(),
+                },
+                "pre_step_policy_failed",
+            ),
+            (
+                RuntimeError::ToolResultObservationFailed {
+                    message: "observer failed".to_owned(),
+                },
+                "tool_result_observation_failed",
             ),
         ];
         for (error, expected) in cases {

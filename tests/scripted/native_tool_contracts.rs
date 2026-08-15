@@ -850,6 +850,7 @@ async fn run_through_agent_loop(
         &cancellation,
         context_runtime(&model),
         &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

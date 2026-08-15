@@ -28,6 +28,17 @@ pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 1;
 pub enum UserContextLane {
     /// Claimed inbound input. This is not extension-controlled.
     ClaimedInbound,
+    /// Deferred context derived from an immutable observation of one
+    /// structurally settled tool batch (Issue #56). It is a native-reserved
+    /// lane: the Agent Loop stages the proposals, and no extension can claim
+    /// the lane or reorder it.
+    ///
+    /// The lane sits immediately after claimed inbound because a post-tool
+    /// observation describes what the environment just did for the tool batch
+    /// that precedes this step; the request-time workspace/extension/Skill
+    /// and Agent Status lanes still describe the *current* step and therefore
+    /// stay after it.
+    PostToolObservation,
     /// Workspace/project instructions, with one semantic owner.
     WorkspaceInstructions,
     /// Generic certified-extension/environment context.
@@ -40,8 +51,9 @@ pub enum UserContextLane {
 
 impl UserContextLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ClaimedInbound,
+        Self::PostToolObservation,
         Self::WorkspaceInstructions,
         Self::ExtensionEnvironment,
         Self::SkillGuidance,
@@ -53,6 +65,7 @@ impl UserContextLane {
     pub const fn manifest_name(self) -> &'static str {
         match self {
             Self::ClaimedInbound => "claimed_inbound",
+            Self::PostToolObservation => "post_tool_observation",
             Self::WorkspaceInstructions => "workspace_instructions",
             Self::ExtensionEnvironment => "extension_environment",
             Self::SkillGuidance => "skill_guidance",
@@ -149,6 +162,23 @@ pub struct NativeContextInput {
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
     pub agent_profile: Option<String>,
+    /// Deferred post-tool context proposals staged by the Agent Loop after
+    /// one tool batch reached structural settlement (Issue #56).
+    ///
+    /// The Agent Loop is the staging owner: it runs the immutable
+    /// [`ToolResultObserver`] pass in canonical `ToolCall` batch order and
+    /// appends each observation's proposals in the order the observer
+    /// returned them, so this vector is already in the canonical deferred
+    /// order `(ToolCall batch position, proposal FIFO)`. Assembly preserves
+    /// that order through the [`UserContextLane::PostToolObservation`] lane
+    /// and never consults completion timing.
+    ///
+    /// These proposals are transient exactly like every other proposal: they
+    /// reach the pre-step policy inside the same final batch and become
+    /// canonical only at the Agent Loop's one admission boundary.
+    ///
+    /// [`ToolResultObserver`]: crate::agent::ToolResultObserver
+    pub post_tool_observations: Vec<UserMessageProposal>,
 }
 
 /// A transient User context proposal. It contains no id, source, kind, lane,
@@ -509,10 +539,33 @@ impl ContextAssembly {
                 .agent_profile
                 .as_ref()
                 .map(|_| native_generation(NativeContextContributor::AgentProfile)),
+            (!native.post_tool_observations.is_empty())
+                .then(|| native_generation(NativeContextContributor::ToolResultObservation)),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+
+        // Deferred post-tool observation context. The Agent Loop already
+        // staged these in canonical `(ToolCall batch position, proposal
+        // FIFO)` order; the enumerated sequence preserves exactly that order
+        // inside the native-reserved lane, so physical tool completion
+        // timing can never reach canonical history.
+        if native.post_tool_observations.len() > MAX_PROPOSALS_PER_CONTRIBUTOR {
+            return Err(ContextAssemblyError::ProposalLimitExceeded);
+        }
+        for (sequence, proposal) in native.post_tool_observations.iter().enumerate() {
+            entries.push(ContributionEntry {
+                lane: UserContextLane::PostToolObservation,
+                identity: ContextContributorIdentity::Native(
+                    NativeContextContributor::ToolResultObservation,
+                ),
+                source: UserSource::Runtime,
+                kind: ContextKind::PostToolObservation,
+                content: text_content(&proposal.content)?,
+                sequence,
+            });
+        }
 
         if let Some(text) = &native.workspace_instructions {
             entries.push(ContributionEntry::native_user(
@@ -822,7 +875,12 @@ mod tests {
     #[test]
     fn extension_cannot_claim_native_identity() {
         let mut assembly = ContextAssembly::new();
-        for key in ["Agent-Status", "skill-guidance", "core-runtime-identity"] {
+        for key in [
+            "Agent-Status",
+            "skill-guidance",
+            "core-runtime-identity",
+            "Tool-Result-Observation",
+        ] {
             let error = assembly
                 .register_extension(
                     key,
@@ -955,6 +1013,121 @@ mod tests {
             render_effective_system_prompt(&[], &accepted.system_sections),
             "core identity\n\nagent profile\n\nalpha section\n\nzeta section"
         );
+    }
+
+    /// Deferred post-tool proposals keep the exact staging order the Agent
+    /// Loop produced, are placed in the native-reserved
+    /// `PostToolObservation` lane, and sit between claimed inbound and every
+    /// request-time lane in the documented total order.
+    #[tokio::test]
+    async fn post_tool_observations_keep_staging_order_in_their_reserved_lane() {
+        let mut assembly = ContextAssembly::new();
+        assembly
+            .register_extension(
+                "example.extension",
+                None,
+                Arc::new(|_: &ContributorInputSnapshot| {
+                    Ok(vec![ContextProposal::UserMessage(UserMessageProposal {
+                        content: vec![UserContentBlock::Text(TextBlock {
+                            text: "extension context".to_owned(),
+                        })],
+                    })])
+                }),
+            )
+            .expect("register extension");
+        let accepted = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput {
+                    workspace_instructions: Some("workspace".to_owned()),
+                    agent_status: Some("status".to_owned()),
+                    post_tool_observations: vec![
+                        UserMessageProposal {
+                            content: vec![UserContentBlock::Text(TextBlock {
+                                text: "A1".to_owned(),
+                            })],
+                        },
+                        UserMessageProposal {
+                            content: vec![UserContentBlock::Text(TextBlock {
+                                text: "A2".to_owned(),
+                            })],
+                        },
+                        UserMessageProposal {
+                            content: vec![UserContentBlock::Text(TextBlock {
+                                text: "B1".to_owned(),
+                            })],
+                        },
+                    ],
+                    ..NativeContextInput::default()
+                },
+            )
+            .await
+            .expect("assemble deferred context");
+        assert_eq!(
+            accepted
+                .user_messages
+                .iter()
+                .map(|message| (message.kind, message.source.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (ContextKind::PostToolObservation, UserSource::Runtime),
+                (ContextKind::PostToolObservation, UserSource::Runtime),
+                (ContextKind::PostToolObservation, UserSource::Runtime),
+                (ContextKind::WorkspaceInstructions, UserSource::Runtime),
+                (
+                    ContextKind::ExtensionEnvironment,
+                    UserSource::Extension {
+                        contributor: CertifiedExtensionIdentity::new("example.extension")
+                            .expect("identity"),
+                    }
+                ),
+                (ContextKind::AgentStatus, UserSource::Runtime),
+            ],
+            "the deferred lane precedes every request-time lane"
+        );
+        assert_eq!(
+            accepted.user_messages[..3]
+                .iter()
+                .map(|message| match &message.content[0] {
+                    UserContentBlock::Text(text) => text.text.clone(),
+                    _ => unreachable!("text proposals"),
+                })
+                .collect::<Vec<_>>(),
+            vec!["A1".to_owned(), "A2".to_owned(), "B1".to_owned()],
+            "staging order is preserved exactly"
+        );
+        assert!(
+            accepted.generation.contributors.iter().any(|entry| {
+                entry.identity
+                    == ContextContributorIdentity::Native(
+                        NativeContextContributor::ToolResultObservation,
+                    )
+            }),
+            "the accepted generation explains the deferred-context owner"
+        );
+    }
+
+    /// A deferred batch is bounded exactly like a contributor batch.
+    #[tokio::test]
+    async fn post_tool_observations_are_bounded() {
+        let assembly = ContextAssembly::new();
+        let error = assembly
+            .assemble(
+                &input(),
+                &NativeContextInput {
+                    post_tool_observations: (0..=MAX_PROPOSALS_PER_CONTRIBUTOR)
+                        .map(|index| UserMessageProposal {
+                            content: vec![UserContentBlock::Text(TextBlock {
+                                text: format!("proposal {index}"),
+                            })],
+                        })
+                        .collect(),
+                    ..NativeContextInput::default()
+                },
+            )
+            .await
+            .expect_err("an unbounded deferred batch is rejected");
+        assert_eq!(error, ContextAssemblyError::ProposalLimitExceeded);
     }
 
     #[test]

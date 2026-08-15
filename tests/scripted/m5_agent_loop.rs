@@ -93,6 +93,7 @@ async fn run(
         cancellation,
         runtime(model),
         &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

@@ -711,6 +711,7 @@ async fn run_with_mailbox(
         cancellation,
         runtime(model),
         tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
     .run()

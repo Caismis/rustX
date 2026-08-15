@@ -1604,6 +1604,7 @@ mod tests {
             &cancellation,
             runtime,
             &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");
         execution.observe(observer.as_ref());

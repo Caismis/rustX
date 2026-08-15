@@ -207,18 +207,24 @@ pub enum NativeContextContributor {
     CoreSystemIdentity,
     /// The native agent profile/persona owner.
     AgentProfile,
+    /// The native owner of deferred post-tool observation context (Issue
+    /// #56). The Agent Loop stages the observer's bounded proposals and this
+    /// owner explains them inside the accepted context generation; the
+    /// observer never supplies its own provenance or identity.
+    ToolResultObservation,
 }
 
 impl NativeContextContributor {
     /// Every native semantic owner, in contract order. This is the source
     /// used by the compatibility manifest and reserved-identity validation;
     /// callers must not maintain a second list of native slots.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::WorkspaceInstructions,
         Self::SkillGuidance,
         Self::AgentStatus,
         Self::CoreSystemIdentity,
         Self::AgentProfile,
+        Self::ToolResultObservation,
     ];
 
     /// The canonical extension-key spelling reserved for this native owner.
@@ -230,6 +236,7 @@ impl NativeContextContributor {
             Self::AgentStatus => "agent-status",
             Self::CoreSystemIdentity => "core-runtime-identity",
             Self::AgentProfile => "agent-profile",
+            Self::ToolResultObservation => "tool-result-observation",
         }
     }
 
@@ -242,6 +249,7 @@ impl NativeContextContributor {
             Self::AgentStatus => "agent_status",
             Self::CoreSystemIdentity => "core_runtime_identity",
             Self::AgentProfile => "agent_profile",
+            Self::ToolResultObservation => "tool_result_observation",
         }
     }
 }

@@ -1489,11 +1489,17 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         &request.model,
     )
     .expect("context runtime");
-    let result =
-        rustx::agent::AgentExecution::new(request, lease, &cancellation, runtime, &tool_runtime)
-            .expect("execution")
-            .run()
-            .await;
+    let result = rustx::agent::AgentExecution::new(
+        request,
+        lease,
+        &cancellation,
+        runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("execution")
+    .run()
+    .await;
     assert!(matches!(
         result.outcome,
         rustx::events::types::AttemptOutcome::Completed { .. }
