@@ -933,7 +933,7 @@ impl AnthropicStreamNormalizer {
     ///
     /// Provider deltas were already streamed as they arrived; `ModelEvent`
     /// is provisional adapter output and the completed
-    /// `AgentMessageBlock` assembly (including any rollback of partial
+    /// `AssistantMessageBlock` assembly (including any rollback of partial
     /// output on a refusal) is owned by the future Agent Loop, not by M2.
     fn terminal(&mut self) -> Result<Vec<ModelEvent>, ModelError> {
         if self.terminal_emitted {

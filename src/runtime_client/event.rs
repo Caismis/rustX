@@ -85,20 +85,21 @@ pub enum RuntimeClientEvent {
         /// The exact normalized usage folded into the attempt view.
         usage: crate::model::types::ModelUsage,
     },
-    /// A context checkpoint was committed after automatic compaction.
+    /// A canonical runtime summary and Surface replacement were committed
+    /// after automatic compaction.
     ///
-    /// This is the semantic completion fact for clients: the checkpoint is
-    /// already saved, and the carried snapshot metadata is sufficient to
-    /// observe generation advancement and token-measurement provenance
-    /// without exposing summary text or provider credentials.
+    /// This is the semantic completion fact for clients: the semantic
+    /// compaction commit already happened, and the carried snapshot metadata
+    /// is sufficient to observe Surface advancement and token-measurement
+    /// provenance without exposing summary text or provider credentials.
     ContextCompacted {
-        /// The attempt that committed the checkpoint.
+        /// The attempt that committed the compaction.
         attempt_id: AttemptId,
-        /// The context diagnostics after this committed checkpoint.
+        /// The context diagnostics after this committed compaction.
         context: RuntimeClientContextView,
     },
 
-    /// Assembly of a canonical agent message began.
+    /// Assembly of a canonical Assistant message began.
     AssistantMessageStarted {
         /// The attempt streaming the message.
         attempt_id: AttemptId,
@@ -140,7 +141,7 @@ pub enum RuntimeClientEvent {
         delta: String,
     },
 
-    /// A tool call within the in-flight agent message started.
+    /// A tool call within the in-flight Assistant message started.
     ToolCallStarted {
         /// The attempt assembling the call.
         attempt_id: AttemptId,
@@ -164,7 +165,7 @@ pub enum RuntimeClientEvent {
         /// The incremental JSON argument fragment.
         arguments_delta: String,
     },
-    /// A tool call within the in-flight agent message finished assembly.
+    /// A tool call within the in-flight Assistant message finished assembly.
     ToolCallAssembled {
         /// The attempt assembling the call.
         attempt_id: AttemptId,

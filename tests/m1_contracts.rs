@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use rustx::events::types::{RuntimeEvent, RuntimeEventEnvelope};
 use rustx::message::types::{
-    AgentContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
+    AssistantContentBlock, InboundKind, MessageBlock, UserMessageBlock, UserSource,
 };
 use rustx::protocol::manifest::RuntimeManifest;
 use rustx::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
@@ -58,7 +58,7 @@ fn human_input_round_trip() {
 }
 
 /// Fixture B: an inbound message from another agent remains a
-/// `UserMessageBlock` with agent provenance — never an `AgentMessageBlock`.
+/// `UserMessageBlock` with agent provenance — never an `AssistantMessageBlock`.
 #[test]
 fn agent_to_agent_inbound_remains_user() {
     let block: MessageBlock = serde_json::from_str(&read_fixture("b_agent_to_agent_inbound.json"))
@@ -71,7 +71,7 @@ fn agent_to_agent_inbound_remains_user() {
         UserSource::Agent { ref agent_id } if agent_id.as_str() == "agent-b"
     ));
     assert_eq!(user.kind, InboundKind::Message);
-    assert!(!matches!(block, MessageBlock::Agent(_)));
+    assert!(!matches!(block, MessageBlock::Assistant(_)));
     assert!(!matches!(block, MessageBlock::Tool(_)));
     let _ = round_trip(&block);
 }
@@ -79,23 +79,23 @@ fn agent_to_agent_inbound_remains_user() {
 /// Fixture C: one completed generation with text, reasoning (including
 /// stateful `OpenAI` Responses continuation state), and a tool call.
 #[test]
-fn agent_generation_round_trip() {
+fn assistant_generation_round_trip() {
     let block: MessageBlock =
-        serde_json::from_str(&read_fixture("c_agent_generation.json")).expect("parse fixture");
-    let MessageBlock::Agent(agent) = &block else {
-        panic!("fixture C must deserialize as an Agent message");
+        serde_json::from_str(&read_fixture("c_assistant_generation.json")).expect("parse fixture");
+    let MessageBlock::Assistant(assistant) = &block else {
+        panic!("fixture C must deserialize as an Assistant message");
     };
-    assert_eq!(agent.id, MessageId::new("msg-agent-a-gen-3"));
+    assert_eq!(assistant.id, MessageId::new("msg-agent-a-gen-3"));
     let mut saw_text = false;
     let mut saw_reasoning_with_state = false;
     let mut saw_tool_call = false;
-    for content in &agent.content {
+    for content in &assistant.content {
         match content {
-            AgentContentBlock::Text(text) => {
+            AssistantContentBlock::Text(text) => {
                 saw_text = true;
                 assert!(text.text.contains("Cargo manifest"));
             }
-            AgentContentBlock::Reasoning(reasoning) => {
+            AssistantContentBlock::Reasoning(reasoning) => {
                 assert_eq!(
                     reasoning.text.as_deref(),
                     Some(
@@ -113,7 +113,7 @@ fn agent_generation_round_trip() {
                 assert_eq!(previous_response_id, "resp_abc123");
                 saw_reasoning_with_state = true;
             }
-            AgentContentBlock::ToolCall(call) => {
+            AssistantContentBlock::ToolCall(call) => {
                 saw_tool_call = true;
                 assert_eq!(call.id.as_str(), "call_01");
                 assert_eq!(call.name, "list_directory");
@@ -251,12 +251,12 @@ fn attempt_started_envelope_round_trip() {
 
 /// A model delta event is an execution fact, never a conversation message.
 #[test]
-fn agent_text_delta_envelope_round_trip() {
+fn assistant_text_delta_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
-        serde_json::from_str(&read_fixture("f_agent_text_delta.json")).expect("parse fixture");
+        serde_json::from_str(&read_fixture("f_assistant_text_delta.json")).expect("parse fixture");
     assert!(matches!(
         envelope.event,
-        RuntimeEvent::AgentTextDelta {
+        RuntimeEvent::AssistantTextDelta {
             ref message_id,
             block_index,
             ref delta
@@ -282,22 +282,23 @@ fn agent_text_delta_envelope_round_trip() {
 /// A refusal delta event preserves refusal semantics as an execution fact,
 /// never flattening it into text.
 #[test]
-fn agent_refusal_delta_envelope_round_trip() {
+fn assistant_refusal_delta_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
-        serde_json::from_str(&read_fixture("f_agent_refusal_delta.json")).expect("parse fixture");
-    let RuntimeEvent::AgentRefusalDelta {
+        serde_json::from_str(&read_fixture("f_assistant_refusal_delta.json"))
+            .expect("parse fixture");
+    let RuntimeEvent::AssistantRefusalDelta {
         message_id,
         block_index,
         delta,
     } = &envelope.event
     else {
-        panic!("fixture F-refusal must deserialize as AgentRefusalDelta");
+        panic!("fixture F-refusal must deserialize as AssistantRefusalDelta");
     };
     assert_eq!(message_id.as_str(), "msg-agent-a-gen-4");
     assert_eq!(block_index.get(), 1);
     assert_eq!(delta, "I cannot comply with that request.");
     let value = serde_json::to_value(&envelope.event).expect("serialize event");
-    assert_eq!(value["type"], "agent_refusal_delta");
+    assert_eq!(value["type"], "assistant_refusal_delta");
     let _ = round_trip(&envelope);
 }
 
@@ -323,15 +324,15 @@ fn tool_execution_completed_envelope_round_trip() {
     let _ = round_trip(&envelope);
 }
 
-/// A committed agent message is an execution fact referencing the message by
+/// A committed Assistant message is an execution fact referencing the message by
 /// identity; the event never embeds message content.
 #[test]
-fn agent_message_committed_envelope_round_trip() {
+fn assistant_message_committed_envelope_round_trip() {
     let envelope: RuntimeEventEnvelope =
-        serde_json::from_str(&read_fixture("f_agent_message_committed.json"))
+        serde_json::from_str(&read_fixture("f_assistant_message_committed.json"))
             .expect("parse fixture");
-    let RuntimeEvent::AgentMessageCommitted { message_id } = &envelope.event else {
-        panic!("fixture F-commit must deserialize as AgentMessageCommitted");
+    let RuntimeEvent::AssistantMessageCommitted { message_id } = &envelope.event else {
+        panic!("fixture F-commit must deserialize as AssistantMessageCommitted");
     };
     assert_eq!(message_id, &MessageId::new("msg-agent-a-gen-3"));
     let value = serde_json::to_value(&envelope.event).expect("serialize event");

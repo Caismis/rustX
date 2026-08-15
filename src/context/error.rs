@@ -33,26 +33,24 @@ pub enum ContextErrorKind {
     /// The context configuration is impossible: the window does not leave a
     /// positive effective input budget after reserve and output tokens.
     InvalidConfiguration,
-    /// The current context cannot fit even after full compaction: pinned
-    /// context (system messages, tool definitions, summary) alone consumes
-    /// the whole budget. Compaction cannot fix this; the caller must fail
-    /// explicitly rather than pretend it can.
+    /// The current context cannot fit even after the available complete
+    /// messages have been retired: non-retirable context (system messages,
+    /// tool definitions, or the summary request itself) consumes the whole
+    /// budget. Compaction cannot fix this; the caller must fail explicitly.
     CannotFit,
-    /// The canonical history violates the structural contract: a
-    /// `ToolMessageBlock` whose tool call resolves to no requesting agent
-    /// message, or a checkpoint whose boundary is inconsistent with the
-    /// history. Malformed history is rejected, never guessed around.
+    /// The canonical conversation violates the structural contract: a
+    /// `ToolMessageBlock` whose tool call resolves to no requesting
+    /// `AssistantMessageBlock`, or a Surface span whose boundary is
+    /// inconsistent with the active conversation. Malformed state is
+    /// rejected, never guessed around.
     MalformedHistory,
-    /// A compaction plan would make no measurable progress: the new
-    /// checkpoint would cover no additional canonical unit and the projected
-    /// estimate would not strictly decrease. This is the central anti-loop
-    /// invariant.
+    /// A compaction plan would make no measurable progress: the new summary
+    /// would cover no additional canonical unit and the projected estimate
+    /// would not strictly decrease. This is the central anti-loop invariant.
     NoProgress,
     /// Summary generation failed (a model-backed summarizer refusal, a tool
     /// request, a model failure, or a scripted fake failure).
     SummaryFailed,
-    /// The checkpoint store failed to persist the new checkpoint.
-    CheckpointSaveFailed,
     /// Summary generation was cancelled.
     Cancelled,
     /// Agent Status composition failed: an extension section provider

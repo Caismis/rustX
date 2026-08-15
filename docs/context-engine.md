@@ -4,13 +4,11 @@ This document describes the conversation domain (`src/conversation`), the
 context plane implemented in `src/context`, and their integration into the
 agent loop (`src/agent/execution.rs`).
 
-> **M7.5 (Issue #54) supersedes the M4 projection-only compaction model.**
-> The M4 design — a `Vec<MessageBlock>` canonical history, a
-> checkpoint-owned summary, a projection-only `AgentSlice`, split-turn
-> compaction, checkpoint absorption, and a last-`System` pinned prefix — is
-> gone. A compaction summary is now a genuine canonical conversational
-> fact, and compaction rewrites the Conversation Surface, never the Message
-> Ledger.
+> **Current Issue #54 contract.** The Message Ledger retains immutable
+> canonical facts; the Conversation Surface selects the finite active
+> identity/order/visibility view; and compaction appends one canonical runtime
+> summary before applying one complete-message Surface replacement. The
+> context plane never creates partial messages or a second history authority.
 
 ## 1. Core invariant
 
@@ -164,11 +162,12 @@ never "whatever messages happened to exist around that time".
 
 ### The compaction generation
 
-The compaction generation is *derived*: it is the number of accepted
-`Replace` operations in Surface history. There is no separate store that
-could drift from it. Summary messages use deterministic namespaced
-identities (`{conversation_id}-summary-{generation}`); no random ids appear
-in assertions.
+The compaction generation is current Surface head metadata, incremented in
+O(1) whenever a validated `Replace` commits. Historical operations remain
+available for deterministic reconstruction/audit, but normal planning never
+scans them. Summary messages use deterministic namespaced identities
+(`{conversation_id}-summary-{generation}`); no random ids appear in
+assertions.
 
 ### Rejected mutations
 
@@ -196,11 +195,9 @@ pub struct ContextProjection {
 }
 ```
 
-Every projected item is a **complete canonical message**. There is no
-projection-only partial agent message: `ProjectionItem`, its `AgentSlice`
-variant, `CompiledContext`, and `compile_projection` are all gone, because
-once every item is a whole canonical message the projection's messages *are*
-the request messages.
+Every projected item is a **complete canonical message**. The projection has
+no partial Assistant node and no projection-only message variant: its
+`messages` are the exact canonical request messages.
 
 `AgentStatusAttachment` and `SkillCatalogAttachment` are Layer 0 cross-layer
 request attachments owned by `src/model/types.rs`: the context plane
@@ -226,12 +223,9 @@ contiguous run of non-`System` active messages**. Trusted system content is
 never demoted into a runtime `User` summary and is never fed to the
 summarizer.
 
-The removed M4 coupling is important: a later `System` message no longer
-pins every older conversational message, and it never resurrects a
-previously retired Surface span. Checkpoint "absorption" — where covered
-history became literal again once the pinned prefix advanced — is gone
-entirely, because Surface visibility is now authoritative. A later `System`
-message only bounds the *current* compactable run at its own position; the
+The important bounded behavior is that a later `System` message does not pin
+all earlier conversation and does not resurrect a retired Surface span. It
+only bounds the current compactable non-System run at its own position; the
 run before it stays compactable, and retired history stays retired. A
 deterministic regression asserts exactly this.
 
@@ -334,17 +328,17 @@ Status attachment never count toward satisfying `keep_recent_tokens`.
 ## 7. Structural rules
 
 A deterministic structural index is built over the **active Surface
-messages** (never over the complete Ledger): every `AgentMessageBlock`'s
+messages** (never over the complete Ledger): every `AssistantMessageBlock`'s
 `ToolCall` ids are recorded, and every `ToolMessageBlock` resolves its
-`tool_call_id` to the requesting agent message. Malformed structure — a tool
-result with no active owning agent message, a call issued twice, a
+`tool_call_id` to the requesting Assistant message. Malformed structure — a tool
+result with no active owning Assistant message, a call issued twice, a
 duplicated result — is rejected explicitly
 (`ContextErrorKind::MalformedHistory`), never guessed around.
 
 The ownership contracts are frozen:
 
 ```text
-Agent/Assistant owns ToolCall identity and arguments
+Assistant owns ToolCall identity and arguments
 Tool            owns the execution result and references ToolCallId
 ```
 
@@ -385,20 +379,24 @@ invocation's effective `max_output_tokens` as a conservative bound.
 
 ### Summary-model input bound
 
-The selected span is additionally bounded by the summary model's own
-request budget, so an arbitrarily large span can never be serialized into an
-impossible summary-model request:
+The selected span is additionally bounded by the summary model's own request
+budget, and the bound is measured over the exact input the production
+summarizer sends:
 
 ```text
-summary_input_limit = summary context window - summary max_output_tokens
+summary_input_limit = effective summary context window
+                     - effective summary max_output_tokens
 ```
 
-The summary request is a bounded one-off — no tools, no Agent Status, no
-Skill catalog, no continuation — so its bound is the summary model's own
-window minus its output budget; the session's conversational safety reserve
-belongs to the primary loop, not to this single request. A candidate whose
-span estimate exceeds the limit is not planned. If no candidate remains,
-planning fails explicitly with `CannotFit`.
+`SummaryRequest::model_input()` is the single provider-neutral assembly
+boundary shared by planning and `ModelBackedSummarizer`. It serializes the
+selected complete canonical messages, adds the fixed instruction, and wraps
+that text in the canonical runtime `User` message with its id, source, kind,
+and timestamp shape. The estimator measures those assembled message(s), not
+the raw retired span. The one-off request has no tools, Agent Status, Skill
+catalog, or provider continuation. A candidate whose assembled input estimate
+exceeds the limit is not planned; if no candidate remains, planning fails
+explicitly with `CannotFit`.
 
 ### Fresh-inbound retention constraint
 
@@ -421,11 +419,9 @@ never summarized merely to make the request fit.
 
 ## 9. Complete-message compaction
 
-Compaction operates on complete canonical messages only. Split-turn
-compaction is gone: `ContextBoundary::InsideAgent`,
-`ProjectionItem::AgentSlice`, `SummaryInputItem::AgentSlice`,
-`SplitTurnSummaryInput`, `SummaryRequest.split_turn_prefix`, split candidate
-selection, and partial agent compilation no longer exist.
+Compaction operates on complete canonical messages only. It never splits an
+Assistant message or a tool-call/result structural unit, and it never emits a
+partial projection node.
 
 A single oversized message therefore never produces a half-message Surface
 node. If no valid complete-message span leaves a fitting request, planning
@@ -483,16 +479,15 @@ pub struct CompactionRecord {
     pub summary_message_id: MessageId,     // identity, never a second copy
     pub replaced: SurfaceSpan,
     pub surface_revision: SurfaceRevision,
-    pub generation: u64,                   // derived from Surface history
+    pub generation: u64,                   // current Surface head metadata
 }
 ```
 
-`ContextCheckpoint`, `ContextBoundary`, `ContextCheckpointStore`, and
-`InMemoryCheckpointStore` are **removed**. Everything the checkpoint carried
-is now either a canonical Ledger fact (the summary) or derivable from
-committed conversation state (the span, the revision, the generation), so
-there is no second store that could become a competing active-projection
-authority and no place for a duplicate summary truth to live.
+There is no `ContextCheckpoint` and no separate summary authority. Everything
+compaction needs is either a canonical Ledger fact (the summary) or derivable
+from committed conversation state (the span, the revision, and current
+generation), so no second store can become a competing active-projection
+authority.
 
 ## 11. Repeated compaction
 
@@ -510,7 +505,7 @@ The second compaction selects its span from the active Surface, so it never
 rediscovers `A B C` merely because they remain committed in the Ledger. A
 still-active previous summary such as `S1` is simply one canonical
 `User(Runtime / CompactionSummary)` message inside the selected span; there
-is no hidden "previous checkpoint summary" channel beside it.
+is no hidden previous-summary channel beside it.
 
 ## 12. Summary provenance
 
@@ -575,7 +570,7 @@ and discards any provider continuation the one-off request emits. A refusal, a
 tool request, an invalid stream, or a model failure is a compaction
 failure; cancellation aborts the summary. Summary activity is represented
 at the event layer only by `CompactionStarted`/`CompactionCompleted`/
-`CompactionFailed` — no fake `AgentMessageCommitted` events and no
+`CompactionFailed` — no fake `AssistantMessageCommitted` events and no
 canonical-history append.
 
 After successful compaction the generated text is wrapped as:
@@ -633,8 +628,8 @@ before anything is committed.
   No caller clears it a second time (a source-level regression enforces the
   single assignment site). The context engine receives the structural
   constraint that the span must retire the continuation-owning turn
-  completely — its agent message and the complete tool-result portion of
-  that turn — and the continuation-owning agent message is never split.
+  completely — its Assistant message and the complete tool-result portion of
+  that turn — and the continuation-owning Assistant message is never split.
   Opaque provider state is never inspected, transformed, or stored in
   compaction metadata.
 - **Failed or cancelled compaction**: the continuation is *not* cleared.
@@ -713,7 +708,7 @@ generic runtime preparation failure.
 
 ## 16. Provisional identity across retry
 
-The failed invocation emits no committed `AgentMessageBlock`. The first
+The failed invocation emits no committed `AssistantMessageBlock`. The first
 invocation keeps the M3 identity `{attempt}-agent-{turn}`; the context
 retry uses the deterministic retry-specific identity
 `{attempt}-agent-{turn}-retry-1`. The successfully completed invocation's
@@ -1010,17 +1005,18 @@ extraction belongs to Issue #61.)
 
 ### The one canonical commit path
 
-Every canonical commit of the loop — drained inbound user messages,
-committed agent messages, committed tool messages, and the runtime
+Every canonical commit of the loop — drained inbound User messages,
+committed Assistant messages, committed Tool messages, and the runtime
 compaction summary — goes through `commit_canonical`, which performs one
 `ConversationState::commit` (or, for compaction, one
 `commit_compaction`) and then fires the commit observation at that same
 linearization point.
 
 `ContextRuntime` owns the engine, the summary service, and the Agent Status
-composer. There is deliberately no checkpoint store: compaction lineage is
-derived from Conversation Surface history, so no second store can drift from
-the authoritative state. No hidden model-specific defaults are added to
+composer. There is deliberately no separate summary store: compaction
+lineage is derived from Conversation Surface history, so no second authority
+can drift from the authoritative state. No hidden model-specific defaults are
+added to
 `AgentExecution::new`.
 
 Before each request: check cancellation, compose the status snapshot (when a

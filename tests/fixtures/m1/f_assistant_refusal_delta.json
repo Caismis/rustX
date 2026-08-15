@@ -7,7 +7,7 @@
   "turn_id": "turn-1",
   "timestamp": "2026-08-07T12:00:06Z",
   "event": {
-    "type": "agent_refusal_delta",
+    "type": "assistant_refusal_delta",
     "message_id": "msg-agent-a-gen-4",
     "block_index": 1,
     "delta": "I cannot comply with that request."

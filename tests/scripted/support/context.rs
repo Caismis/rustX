@@ -114,7 +114,7 @@ impl ContextSummarizer for FakeContextSummarizer {
 /// Weights:
 ///
 /// - `per_message`: one whole user/tool/system message.
-/// - `per_block`: one content block of an agent message.
+/// - `per_block`: one content block of an Assistant message.
 /// - `per_tool`: one tool definition.
 /// - `per_summary_byte`: one summary text byte; a compaction summary message
 ///   weighs `ceil(bytes / 4)`, mirroring the default estimator formula, so
@@ -190,8 +190,8 @@ impl ScriptedEstimator {
             *weight
         } else if is_summary(message) {
             (summary_text(message).len() as u64).div_ceil(4)
-        } else if let MessageBlock::Agent(agent) = message {
-            agent.content.len() as u64 * self.per_block
+        } else if let MessageBlock::Assistant(assistant) = message {
+            assistant.content.len() as u64 * self.per_block
         } else {
             self.per_message
         }
@@ -202,7 +202,7 @@ fn message_id(message: &MessageBlock) -> rustx::runtime::identity::MessageId {
     match message {
         MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
-        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
     }
 }

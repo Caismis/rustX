@@ -10,11 +10,12 @@
 //!
 mod common;
 
-/// The scenario starts with canonical conversation history, uses a
+/// The scenario starts with the canonical Message Ledger and Conversation
+/// Surface, uses a
 /// deliberately small rustX context threshold, continues the conversation
-/// across enough attempts to force at least two compactions, reuses one
-/// checkpoint store across the conversation, uses the model-backed
-/// `ContextSummarizer`, and verifies that the checkpoint generation
+/// across enough attempts to force at least two compactions, uses one
+/// `ConversationState` across the conversation, uses the model-backed
+/// `ContextSummarizer`, and verifies that the Surface generation
 /// advances at least twice and that every model request completes
 /// coherently. When credentials are unavailable the test skips and reports
 /// `NOT RUN`; it never claims to have passed.
@@ -143,9 +144,9 @@ async fn live_step(
 /// Live repeated-compaction validation over one shared conversation.
 ///
 /// A deliberately small rustX context threshold forces proactive compaction
-/// as the canonical history grows; one checkpoint store is reused across
+/// as the active Surface grows; one `ConversationState` is reused across
 /// attempts and one model-backed summarizer serves every compaction. The
-/// test asserts the checkpoint generation advanced at least twice and that
+/// test asserts the Surface generation advanced at least twice and that
 /// each attempt completed coherently.
 #[tokio::test]
 #[ignore = "requires OPENAI_API_KEY and network access"]

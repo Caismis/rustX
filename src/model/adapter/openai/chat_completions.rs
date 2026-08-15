@@ -46,7 +46,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 
 use crate::message::types::ContentBlockIndex;
-use crate::message::types::{AgentContentBlock, MessageBlock, ToolMessageBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::block_index::BlockAllocator;
 use crate::model::adapter::openai::client::build_client;
 use crate::model::adapter::openai::config::OpenAiAdapterConfig;
@@ -586,7 +586,7 @@ impl ChatStreamNormalizer {
         }
         if chunk.choices.len() > 1 {
             return Err(unsupported(
-                "multiple Chat Completions choices cannot be represented as one canonical agent turn",
+                "multiple Chat Completions choices cannot be represented as one canonical Assistant turn",
             ));
         }
         let mut events = Vec::new();
@@ -601,7 +601,7 @@ impl ChatStreamNormalizer {
             })?;
             if choice_index != 0 {
                 return Err(unsupported(format!(
-                    "Chat Completions choice index {choice_index} cannot be represented as the single canonical agent turn"
+                    "Chat Completions choice index {choice_index} cannot be represented as the single canonical Assistant turn"
                 )));
             }
             if let Some(delta) = &choice.delta {
@@ -1193,50 +1193,13 @@ fn translate_messages(request: &ModelRequest) -> Result<Vec<TranslatedChatMessag
                     None,
                 )
             }
-            MessageBlock::User(user) => {
-                let mut parts = Vec::new();
-                for content in &user.content {
-                    match content {
-                        crate::message::types::UserContentBlock::Text(text) => {
-                            parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-                                ChatCompletionRequestMessageContentPartText {
-                                    text: text.text.clone(),
-                                },
-                            ));
-                        }
-                        crate::message::types::UserContentBlock::Image(_)
-                        | crate::message::types::UserContentBlock::File(_) => {
-                            return Err(unsupported(
-                                "OpenAI Chat Completions cannot represent canonical image/file references without artifact resolution",
-                            ));
-                        }
-                    }
-                }
-                // The target fresh inbound user message receives one final
-                // rendered Agent Status text part. The status is never a
-                // separate canonical message and never appended to other
-                // user messages of the batch.
-                if let Some(status) = request
-                    .agent_status
-                    .as_ref()
-                    .filter(|status| status.target_message_id == user.id)
-                {
-                    parts.push(ChatCompletionRequestUserMessageContentPart::Text(
-                        ChatCompletionRequestMessageContentPartText {
-                            text: status.rendered.clone(),
-                        },
-                    ));
-                }
-                (
-                    ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-                        content: ChatCompletionRequestUserMessageContent::Array(parts),
-                        name: None,
-                    }),
-                    None,
-                )
-            }
-            MessageBlock::Agent(agent) => {
-                let (message, reasoning) = translate_agent_message(agent, reasoning_replay)?;
+            MessageBlock::User(user) => (
+                translate_user_message(user, request.agent_status.as_ref())?,
+                None,
+            ),
+            MessageBlock::Assistant(assistant) => {
+                let (message, reasoning) =
+                    translate_assistant_message(assistant, reasoning_replay)?;
                 (ChatCompletionRequestMessage::Assistant(message), reasoning)
             }
             MessageBlock::Tool(tool_message) => (
@@ -1283,15 +1246,56 @@ fn append_skill_catalog(request: &ModelRequest, messages: &mut Vec<TranslatedCha
     });
 }
 
-/// Translates one canonical agent message into an assistant message.
+fn translate_user_message(
+    user: &crate::message::types::UserMessageBlock,
+    agent_status: Option<&crate::model::types::AgentStatusAttachment>,
+) -> Result<ChatCompletionRequestMessage, ModelError> {
+    let mut parts = Vec::new();
+    for content in &user.content {
+        match content {
+            crate::message::types::UserContentBlock::Text(text) => {
+                parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+                    ChatCompletionRequestMessageContentPartText {
+                        text: text.text.clone(),
+                    },
+                ));
+            }
+            crate::message::types::UserContentBlock::Image(_)
+            | crate::message::types::UserContentBlock::File(_) => {
+                return Err(unsupported(
+                    "OpenAI Chat Completions cannot represent canonical image/file references without artifact resolution",
+                ));
+            }
+        }
+    }
+    // The target fresh inbound user message receives one final rendered Agent
+    // Status text part. The status is never a separate canonical message and
+    // never appended to other user messages of the batch.
+    if let Some(status) = agent_status.filter(|status| status.target_message_id == user.id) {
+        parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+            ChatCompletionRequestMessageContentPartText {
+                text: status.rendered.clone(),
+            },
+        ));
+    }
+    Ok(ChatCompletionRequestMessage::User(
+        ChatCompletionRequestUserMessage {
+            content: ChatCompletionRequestUserMessageContent::Array(parts),
+            name: None,
+        },
+    ))
+}
+
+/// Translates one canonical Assistant message into the provider's assistant
+/// message shape.
 ///
 /// A Chat Completions dialect represents one previous reasoning block in its
 /// provider-specific extension field. The typed `OpenAI` SDK message and that
 /// extension value stay separate until the final BYOT JSON is assembled.
 /// Shapes that cannot be represented losslessly remain unsupported; the
 /// explicit omit policy skips canonical reasoning before this validation.
-fn translate_agent_message(
-    agent: &crate::message::types::AgentMessageBlock,
+fn translate_assistant_message(
+    assistant: &crate::message::types::AssistantMessageBlock,
     reasoning_replay: Option<ChatReasoningReplay>,
 ) -> Result<
     (
@@ -1303,23 +1307,23 @@ fn translate_agent_message(
     let mut parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut reasoning = None;
-    for content in &agent.content {
+    for content in &assistant.content {
         match content {
-            AgentContentBlock::Text(text) => {
+            AssistantContentBlock::Text(text) => {
                 parts.push(ChatCompletionRequestAssistantMessageContentPart::Text(
                     ChatCompletionRequestMessageContentPartText {
                         text: text.text.clone(),
                     },
                 ));
             }
-            AgentContentBlock::Refusal(refusal) => {
+            AssistantContentBlock::Refusal(refusal) => {
                 parts.push(ChatCompletionRequestAssistantMessageContentPart::Refusal(
                     ChatCompletionRequestMessageContentPartRefusal {
                         refusal: refusal.text.clone(),
                     },
                 ));
             }
-            AgentContentBlock::ToolCall(call) => {
+            AssistantContentBlock::ToolCall(call) => {
                 let arguments = serde_json::to_string(&call.arguments).map_err(|e| {
                     unsupported(format!(
                         "tool call arguments are not JSON-serializable: {e}"
@@ -1335,7 +1339,7 @@ fn translate_agent_message(
                     },
                 ));
             }
-            AgentContentBlock::Reasoning(block) => {
+            AssistantContentBlock::Reasoning(block) => {
                 // Omit is a translation policy, not a serialized-JSON
                 // cleanup step: this branch deliberately does nothing for
                 // that policy, without inspecting text or provider state.
@@ -1359,7 +1363,7 @@ fn translate_agent_message(
                     }
                 }
             }
-            AgentContentBlock::Image(_) => {
+            AssistantContentBlock::Image(_) => {
                 return Err(unsupported(
                     "OpenAI Chat Completions cannot represent generated image references",
                 ));

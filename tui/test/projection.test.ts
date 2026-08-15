@@ -20,7 +20,7 @@ import type {
   RuntimeClientProtocolEvent,
 } from "../src/protocol/types.ts";
 import {
-  agentMessage,
+  assistantMessage,
   attemptModel,
   backgroundExecution,
   capabilities,
@@ -60,7 +60,7 @@ describe("presentation projection", () => {
     const state = replaceFromSnapshot(
       snapshot({
         conversation_id: "conv-1",
-        messages: [userMessage("m1", "hello"), agentMessage("m2", "hi")],
+        messages: [userMessage("m1", "hello"), assistantMessage("m2", "hi")],
         capabilities: capabilities(4),
       }),
       9,
@@ -264,7 +264,7 @@ describe("presentation projection", () => {
       {
         type: "message_committed",
         attempt_id: "a1",
-        message: agentMessage("m1", "hi"),
+        message: assistantMessage("m1", "hi"),
       },
     ]);
 
@@ -561,7 +561,7 @@ describe("presentation projection", () => {
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "assistant_message_started", attempt_id: "a1", message_id: "m2" },
       { type: "assistant_text_delta", attempt_id: "a1", message_id: "m2", block_index: 0, delta: "hi" },
-      { type: "message_committed", attempt_id: "a1", message: agentMessage("m2", "hi") },
+      { type: "message_committed", attempt_id: "a1", message: assistantMessage("m2", "hi") },
       {
         type: "attempt_settled",
         attempt_id: "a1",
@@ -571,7 +571,7 @@ describe("presentation projection", () => {
 
     const repaired = replaceFromSnapshot(
       snapshot({
-        messages: [agentMessage("m2", "hi")],
+        messages: [assistantMessage("m2", "hi")],
         attempt: {
           attempt_id: "a1",
           phase: {

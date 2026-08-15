@@ -8,11 +8,11 @@
 //! The contracts it enforces are frozen:
 //!
 //! ```text
-//! Agent/Assistant owns ToolCall identity and arguments
+//! Assistant owns ToolCall identity and arguments
 //! Tool            owns the execution result and references ToolCallId
 //! ```
 //!
-//! A `ToolMessageBlock` whose call resolves to no active owning agent
+//! A `ToolMessageBlock` whose call resolves to no active owning Assistant
 //! message is malformed and rejected explicitly, never guessed around. A
 //! Surface span is replaceable only when no tool-call/result relationship
 //! crosses either of its boundaries: a retained tool result can never lose
@@ -21,20 +21,20 @@
 
 use std::collections::BTreeMap;
 
-use crate::message::types::{AgentContentBlock, MessageBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock};
 use crate::runtime::identity::{MessageId, ToolCallId};
 
 /// A structural contract violation of the active conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StructuralError {
-    /// A tool result references a tool call no active agent message issued.
+    /// A tool result references a tool call no active Assistant message issued.
     OrphanToolResult {
         /// The offending tool message.
         message_id: MessageId,
         /// The unresolvable tool call identity.
         tool_call_id: ToolCallId,
     },
-    /// The same tool call identity is issued by more than one agent message.
+    /// The same tool call identity is issued by more than one Assistant message.
     DuplicateToolCall(ToolCallId),
     /// The same tool call has more than one result.
     DuplicateToolResult {
@@ -65,10 +65,13 @@ impl core::fmt::Display for StructuralError {
             } => write!(
                 f,
                 "tool message {message_id} references tool call {tool_call_id}, \
-                 which no active agent message issued"
+                 which no active Assistant message issued"
             ),
             Self::DuplicateToolCall(id) => {
-                write!(f, "tool call {id} is issued by more than one agent message")
+                write!(
+                    f,
+                    "tool call {id} is issued by more than one Assistant message"
+                )
             }
             Self::DuplicateToolResult {
                 tool_call_id,
@@ -95,13 +98,13 @@ impl std::error::Error for StructuralError {}
 /// The structural facts of one active conversation, by active position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructuralIndex {
-    /// Every agent message position, in active order.
-    agent_positions: Vec<usize>,
-    /// `tool_call_id` → the active position of the requesting agent message.
+    /// Every Assistant message position, in active order.
+    assistant_positions: Vec<usize>,
+    /// `tool_call_id` → the active position of the requesting Assistant message.
     call_owners: BTreeMap<ToolCallId, usize>,
     /// `tool_call_id` → the active position of its result, when one exists.
     results: BTreeMap<ToolCallId, usize>,
-    /// agent position → the last active position of its turn.
+    /// Assistant position → the last active position of its turn.
     turn_ends: BTreeMap<usize, usize>,
     /// active position → whether the message is a `System` message.
     system_positions: Vec<usize>,
@@ -117,7 +120,7 @@ impl StructuralIndex {
     /// Returns the [`StructuralError`] of the first violation: an orphan
     /// tool result, a tool call issued twice, or a duplicated tool result.
     pub fn build(active: &[MessageBlock]) -> Result<Self, StructuralError> {
-        let mut agent_positions = Vec::new();
+        let mut assistant_positions = Vec::new();
         let mut call_owners: BTreeMap<ToolCallId, usize> = BTreeMap::new();
         let mut results: BTreeMap<ToolCallId, usize> = BTreeMap::new();
         let mut system_positions = Vec::new();
@@ -126,10 +129,10 @@ impl StructuralIndex {
             ids.push(super::ledger::message_id_of(message));
             match message {
                 MessageBlock::System(_) => system_positions.push(position),
-                MessageBlock::Agent(agent) => {
-                    agent_positions.push(position);
-                    for block in &agent.content {
-                        if let AgentContentBlock::ToolCall(call) = block
+                MessageBlock::Assistant(assistant) => {
+                    assistant_positions.push(position);
+                    for block in &assistant.content {
+                        if let AssistantContentBlock::ToolCall(call) = block
                             && call_owners.insert(call.id.clone(), position).is_some()
                         {
                             return Err(StructuralError::DuplicateToolCall(call.id.clone()));
@@ -157,22 +160,22 @@ impl StructuralIndex {
             }
         }
         let mut turn_ends = BTreeMap::new();
-        for &agent_position in &agent_positions {
-            let MessageBlock::Agent(agent) = &active[agent_position] else {
-                unreachable!("agent_positions only holds agent messages");
+        for &assistant_position in &assistant_positions {
+            let MessageBlock::Assistant(assistant) = &active[assistant_position] else {
+                unreachable!("assistant_positions only holds Assistant messages");
             };
-            let mut end = agent_position;
-            for block in &agent.content {
-                if let AgentContentBlock::ToolCall(call) = block
+            let mut end = assistant_position;
+            for block in &assistant.content {
+                if let AssistantContentBlock::ToolCall(call) = block
                     && let Some(&result_position) = results.get(&call.id)
                 {
                     end = end.max(result_position);
                 }
             }
-            turn_ends.insert(agent_position, end);
+            turn_ends.insert(assistant_position, end);
         }
         Ok(Self {
-            agent_positions,
+            assistant_positions,
             call_owners,
             results,
             turn_ends,
@@ -205,10 +208,10 @@ impl StructuralIndex {
         self.ids.get(position)
     }
 
-    /// Every agent message position, in active order.
+    /// Every Assistant message position, in active order.
     #[must_use]
-    pub fn agent_positions(&self) -> &[usize] {
-        &self.agent_positions
+    pub fn assistant_positions(&self) -> &[usize] {
+        &self.assistant_positions
     }
 
     /// Every `System` message position, in active order.
@@ -217,16 +220,16 @@ impl StructuralIndex {
         &self.system_positions
     }
 
-    /// The last active position of the turn owned by the agent message at
-    /// `agent_position`: its own position, or the greatest position of its
+    /// The last active position of the turn owned by the Assistant message at
+    /// `assistant_position`: its own position, or the greatest position of its
     /// committed results.
     ///
     /// # Panics
     ///
-    /// Panics when `agent_position` is not an agent message position.
+    /// Panics when `assistant_position` is not an Assistant message position.
     #[must_use]
-    pub fn turn_end_of(&self, agent_position: usize) -> usize {
-        self.turn_ends[&agent_position]
+    pub fn turn_end_of(&self, assistant_position: usize) -> usize {
+        self.turn_ends[&assistant_position]
     }
 
     /// Validates the inclusive active span `[start ..= end]` as a
@@ -274,7 +277,7 @@ mod tests {
     use super::{StructuralError, StructuralIndex};
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority,
+        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
         SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{MessageId, ToolCallId, ToolId};
@@ -302,13 +305,13 @@ mod tests {
         })
     }
 
-    fn agent(id: &str, calls: &[&str]) -> MessageBlock {
-        MessageBlock::Agent(AgentMessageBlock {
+    fn assistant(id: &str, calls: &[&str]) -> MessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new(id),
             content: calls
                 .iter()
                 .map(|call| {
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new(*call),
                         tool_id: ToolId::new("tool-a"),
                         name: "alpha".to_owned(),
@@ -352,7 +355,7 @@ mod tests {
     /// direction.
     #[test]
     fn spans_never_split_a_tool_pair() {
-        let active = vec![user("u1"), agent("a1", &["c1"]), tool("c1"), user("u2")];
+        let active = vec![user("u1"), assistant("a1", &["c1"]), tool("c1"), user("u2")];
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert!(index.validate_span(0, 0).is_ok());
         assert!(index.validate_span(0, 2).is_ok());
@@ -378,7 +381,7 @@ mod tests {
     /// A pending call with no committed result imposes no edge.
     #[test]
     fn pending_calls_impose_no_edge() {
-        let active = vec![user("u1"), agent("a1", &["c1"])];
+        let active = vec![user("u1"), assistant("a1", &["c1"])];
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert!(index.validate_span(0, 1).is_ok());
         assert!(index.validate_span(0, 0).is_ok());
@@ -402,18 +405,18 @@ mod tests {
         assert_eq!(index.system_positions(), &[0, 2]);
     }
 
-    /// The turn end covers the agent message and all of its results.
+    /// The turn end covers the Assistant message and all of its results.
     #[test]
-    fn turn_end_covers_agent_and_results() {
+    fn turn_end_covers_assistant_and_results() {
         let active = vec![
             user("u1"),
-            agent("a1", &["c1", "c2"]),
+            assistant("a1", &["c1", "c2"]),
             tool("c1"),
             tool("c2"),
         ];
         let index = StructuralIndex::build(&active).expect("well-formed");
         assert_eq!(index.turn_end_of(1), 3);
-        assert_eq!(index.agent_positions(), &[1]);
+        assert_eq!(index.assistant_positions(), &[1]);
         assert_eq!(index.len(), 4);
     }
 }

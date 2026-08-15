@@ -69,7 +69,7 @@ pub trait AgentExecutionObserver: Sync {
     /// Observes one canonical message commit at its commit point.
     ///
     /// The loop calls this exactly once per committed canonical message
-    /// (drained inbound user messages, committed agent messages, and
+    /// (drained inbound User messages, committed Assistant messages, and
     /// committed tool messages) immediately after the message joined
     /// canonical history. The content observed here is the authoritative
     /// committed content; observers must treat it as read-only.

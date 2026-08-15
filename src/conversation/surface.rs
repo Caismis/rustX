@@ -22,6 +22,8 @@
 //! exact active ordered `MessageId` list **without touching the Ledger**.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -186,17 +188,90 @@ impl core::fmt::Display for SurfaceError {
 
 impl std::error::Error for SurfaceError {}
 
+/// Deterministic instrumentation for Conversation Surface reads.
+///
+/// Normal projection, planning, and compaction use only the current head:
+/// active identities and O(1) head metadata. Historical operation reads are
+/// counted separately so tests can prove that retired Surface history is not
+/// part of the normal cost.
+#[derive(Debug, Default)]
+pub struct SurfaceAccess {
+    current_head_reads: AtomicU64,
+    history_enumerations: AtomicU64,
+    history_steps: AtomicU64,
+}
+
+impl SurfaceAccess {
+    /// The number of current-head reads.
+    #[must_use]
+    pub fn current_head_reads(&self) -> u64 {
+        self.current_head_reads.load(Ordering::Relaxed)
+    }
+
+    /// The number of explicit historical operation-log reads.
+    #[must_use]
+    pub fn history_enumerations(&self) -> u64 {
+        self.history_enumerations.load(Ordering::Relaxed)
+    }
+
+    /// The number of historical operations visited by diagnostic reads.
+    #[must_use]
+    pub fn history_steps(&self) -> u64 {
+        self.history_steps.load(Ordering::Relaxed)
+    }
+
+    /// Resets all counters. Test/diagnostic use only.
+    pub fn reset(&self) {
+        self.current_head_reads.store(0, Ordering::Relaxed);
+        self.history_enumerations.store(0, Ordering::Relaxed);
+        self.history_steps.store(0, Ordering::Relaxed);
+    }
+
+    fn current_head_read(&self) {
+        self.current_head_reads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn history_read(&self, steps: usize) {
+        self.history_enumerations.fetch_add(1, Ordering::Relaxed);
+        self.history_steps
+            .fetch_add(steps as u64, Ordering::Relaxed);
+    }
+}
+
 /// The active model-visible order of one conversation.
 ///
 /// The Surface owns identity/order/visibility. It carries no visibility
 /// flags on Ledger records (there are none) and no message bodies.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct ConversationSurface {
     /// The current active ordered message identities.
     active: Vec<MessageId>,
+    /// The current revision, maintained as head metadata.
+    revision: SurfaceRevision,
+    /// The number of accepted replacements, maintained as head metadata.
+    compaction_generation: u64,
     /// Every accepted operation in acceptance order. Revision `n` is the
     /// state after `ops[..n]`.
     ops: Vec<SurfaceOp>,
+    /// Read instrumentation for current-head versus historical access.
+    access: Arc<SurfaceAccess>,
+}
+
+impl PartialEq for ConversationSurface {
+    fn eq(&self, other: &Self) -> bool {
+        self.active == other.active
+            && self.revision == other.revision
+            && self.compaction_generation == other.compaction_generation
+            && self.ops == other.ops
+    }
+}
+
+impl Eq for ConversationSurface {}
+
+impl ConversationSurface {
+    fn mark_current_head_read(&self) {
+        self.access.current_head_read();
+    }
 }
 
 impl ConversationSurface {
@@ -209,12 +284,20 @@ impl ConversationSurface {
     /// The current revision.
     #[must_use]
     pub fn revision(&self) -> SurfaceRevision {
-        SurfaceRevision::new(self.ops.len() as u64)
+        self.mark_current_head_read();
+        self.revision
+    }
+
+    /// The shared read instrumentation handle.
+    #[must_use]
+    pub fn access(&self) -> &Arc<SurfaceAccess> {
+        &self.access
     }
 
     /// The current active ordered message identities.
     #[must_use]
     pub fn active(&self) -> &[MessageId] {
+        self.mark_current_head_read();
         &self.active
     }
 
@@ -233,6 +316,7 @@ impl ConversationSurface {
     /// The active position of one message identity, when it is active.
     #[must_use]
     pub fn position_of(&self, message_id: &MessageId) -> Option<usize> {
+        self.mark_current_head_read();
         self.active.iter().position(|id| id == message_id)
     }
 
@@ -244,14 +328,12 @@ impl ConversationSurface {
 
     /// The number of accepted [`SurfaceOp::Replace`] operations.
     ///
-    /// This is the compaction generation: it is derived from Surface
-    /// history, never stored beside it.
+    /// This is current Surface head metadata. It is updated when a Replace
+    /// commits and never derived by scanning historical operations.
     #[must_use]
     pub fn compaction_generation(&self) -> u64 {
-        self.ops
-            .iter()
-            .filter(|op| matches!(op, SurfaceOp::Replace { .. }))
-            .count() as u64
+        self.mark_current_head_read();
+        self.compaction_generation
     }
 
     /// Appends one message identity to the active order.
@@ -264,9 +346,18 @@ impl ConversationSurface {
         if self.is_active(&message_id) {
             return Err(SurfaceError::AlreadyActive(message_id));
         }
+        Ok(self.append_after_validation(message_id))
+    }
+
+    /// Applies an append after the caller has validated the current Surface
+    /// under exclusive ownership. This is infallible so an ordinary Ledger
+    /// append cannot be followed by a recoverable Surface error.
+    pub(crate) fn append_after_validation(&mut self, message_id: MessageId) -> SurfaceRevision {
+        debug_assert!(!self.is_active(&message_id));
         self.active.push(message_id.clone());
         self.ops.push(SurfaceOp::Append { message_id });
-        Ok(self.revision())
+        self.revision = self.revision.next();
+        self.revision
     }
 
     /// Validates one replacement against the **current** revision without
@@ -317,13 +408,39 @@ impl ConversationSurface {
         replacement: MessageId,
     ) -> Result<SurfaceRevision, SurfaceError> {
         let (start, end) = self.validate_replace(span, &replacement)?;
+        Ok(self.replace_after_validation(span, replacement, start, end))
+    }
+
+    /// Applies a replacement after all recoverable validation has completed.
+    ///
+    /// This is intentionally infallible: `ConversationState` uses it only
+    /// after validating the current revision, endpoints, identity, and
+    /// active structural index. Once that validation has run under exclusive
+    /// ownership, a normal recoverable Surface error cannot occur after a
+    /// Ledger append.
+    pub(crate) fn replace_after_validation(
+        &mut self,
+        span: &SurfaceSpan,
+        replacement: MessageId,
+        start: usize,
+        end: usize,
+    ) -> SurfaceRevision {
+        debug_assert_eq!(self.active.get(start), Some(&span.start));
+        debug_assert_eq!(self.active.get(end), Some(&span.end));
+        debug_assert!(start <= end);
+        debug_assert!(!self.is_active(&replacement));
         self.active.splice(start..=end, [replacement.clone()]);
         self.ops.push(SurfaceOp::Replace {
             start: span.start.clone(),
             end: span.end.clone(),
             replacement,
         });
-        Ok(self.revision())
+        self.revision = self.revision.next();
+        self.compaction_generation = self
+            .compaction_generation
+            .checked_add(1)
+            .expect("the surface compaction generation cannot overflow");
+        self.revision
     }
 
     /// Reconstructs the exact active ordered identities of a historical
@@ -340,9 +457,10 @@ impl ConversationSurface {
     pub fn reconstruct(&self, revision: SurfaceRevision) -> Result<Vec<MessageId>, SurfaceError> {
         let upto =
             usize::try_from(revision.get()).map_err(|_| SurfaceError::UnknownRevision(revision))?;
-        if upto > self.ops.len() {
+        if revision > self.revision || upto > self.ops.len() {
             return Err(SurfaceError::UnknownRevision(revision));
         }
+        self.access.history_read(upto);
         let mut active: Vec<MessageId> = Vec::new();
         for op in &self.ops[..upto] {
             match op {
@@ -372,6 +490,7 @@ impl ConversationSurface {
     /// projection and compaction never call it.
     #[must_use]
     pub fn retired(&self) -> Vec<MessageId> {
+        self.access.history_read(self.ops.len());
         let active: BTreeSet<&MessageId> = self.active.iter().collect();
         let mut seen = BTreeSet::new();
         let mut retired = Vec::new();
@@ -396,6 +515,7 @@ impl ConversationSurface {
     /// The accepted operation log, in acceptance order.
     #[must_use]
     pub fn ops(&self) -> &[SurfaceOp] {
+        self.access.history_read(self.ops.len());
         &self.ops
     }
 }
@@ -470,7 +590,9 @@ mod tests {
     #[test]
     fn invalid_replacements_are_rejected_without_mutation() {
         let mut surface = surface(&["a", "b", "c"]);
-        let before = surface.clone();
+        let before_active = surface.active().to_vec();
+        let before_revision = surface.revision();
+        let before_ops = surface.ops().to_vec();
 
         assert_eq!(
             surface
@@ -499,7 +621,9 @@ mod tests {
                 .expect_err("replacement already active"),
             SurfaceError::AlreadyActive(id("c"))
         );
-        assert_eq!(surface, before, "a rejected replace mutates nothing");
+        assert_eq!(surface.active(), before_active.as_slice());
+        assert_eq!(surface.revision(), before_revision);
+        assert_eq!(surface.ops(), before_ops.as_slice());
     }
 
     /// A retired span can never be replaced again.
@@ -557,15 +681,21 @@ mod tests {
                 .expect("empty"),
             Vec::<MessageId>::new()
         );
+        let current_active = surface.active().to_vec();
+        let current_revision = surface.revision();
+        let current_ops = surface.ops().to_vec();
         assert_eq!(
             surface
                 .reconstruct(SurfaceRevision::new(99))
                 .expect_err("beyond history"),
             SurfaceError::UnknownRevision(SurfaceRevision::new(99))
         );
+        assert_eq!(surface.active(), current_active.as_slice());
+        assert_eq!(surface.revision(), current_revision);
+        assert_eq!(surface.ops(), current_ops.as_slice());
     }
 
-    /// The compaction generation is derived from the operation log.
+    /// The compaction generation is maintained as current-head metadata.
     #[test]
     fn compaction_generation_counts_replacements() {
         let mut surface = surface(&["a", "b", "c", "d"]);

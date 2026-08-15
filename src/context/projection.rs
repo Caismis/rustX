@@ -15,9 +15,8 @@
 //!   → ContextProjection { whole canonical messages, status, catalog }
 //! ```
 //!
-//! Every projected item is a **complete canonical message**. There is no
-//! projection-only partial agent message: the M4 `ProjectionItem::AgentSlice`
-//! and the split-turn architecture that produced it are gone.
+//! Every projected item is a **complete canonical message**. The projection
+//! never creates a partial Assistant message or a second message identity.
 //!
 //! The projected input measurement carries explicit provenance
 //! ([`TokenMeasurement`]): a provider-reported measurement applies only when

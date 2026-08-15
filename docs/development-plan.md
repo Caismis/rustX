@@ -23,7 +23,7 @@ Implement runtime-owned types for:
 
 - `SystemMessageBlock`
 - `UserMessageBlock`
-- `AgentMessageBlock`
+- `AssistantMessageBlock`
 - `ToolMessageBlock`
 - Content blocks
 - Tool definitions, calls, and results
@@ -106,16 +106,22 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 - No cuts at tool-result boundaries; no orphan tool messages
 - Recent-token retention by token target, not message count, measured over
   conversation content only (tool definitions never satisfy the target)
-- Whole-turn-before-split cut priority; split-turn prefix summarization
-  with projection-only agent slices
-- Incremental summary updates from a previous compaction checkpoint, with
-  absorbed-checkpoint summary-source suppression
-- `ContextCheckpoint` and the `ContextCheckpointStore` abstraction
-  (in-memory development/test implementation; M8 owns the durable backend)
+- Whole-message compaction only: no partial Assistant projection or split
+  Assistant/tool structural unit
+- Message Ledger + Conversation Surface architecture from Issue #54:
+  immutable canonical facts, current active identities/order/visibility, and
+  exact `SurfaceRevision` reconstruction
+- One canonical runtime User compaction summary plus one Surface Replace;
+  `ContextCheckpoint` no longer owns summary or projection truth, and no
+  separate summary authority exists
+- Actual summary-model request bounding through the shared deterministic
+  `SummaryRequest::model_input()` assembly, using the summary invocation's
+  own context window and output budget
 - Bounded compact-and-retry on `ContextWindowExceeded` (exactly one retry
   per model turn)
-- Continuation invalidation after successful compaction; explicit failure
-  when the continuation-owning turn is pinned by system context
+- Continuation invalidation after successful incompatible Surface replacement;
+  explicit failure when the continuation-owning turn cannot be retired under
+  the bounded #54 System rule
 - Mandatory Agent Status projection: explicit `FreshInboundTurn` identity
   with a mandatory canonical-order validation and an explicit
   `InitialTurnTrigger` (fresh inbound vs pure continuation), structured
@@ -154,12 +160,13 @@ Exit criteria:
 
 - A long local session can compact multiple times and continue correctly.
 - Compaction never rewrites or deletes canonical history.
-- Deterministic fixtures cover normal compaction and split-turn compaction.
+- Deterministic fixtures cover normal and repeated whole-message compaction,
+  exact historical Surface reconstruction, and equal-content identity.
 - Fresh inbound material is never compacted before a successful model
   invocation observes it; preserving it or failing explicitly with
   `CannotFit` are the only two outcomes.
 
-Deferred to later milestones: durable checkpoint/event storage (M8),
+Deferred to later milestones: durable Ledger/Surface/event storage (M8),
 conversation summarization in the CLI (M10), and any provider fallback or
 routing. Parallel tool scheduling is implemented by the M5 tool plane PR;
 the turn-boundary mailbox drain is implemented in the Issue #22 PR as a
@@ -422,8 +429,7 @@ Exit criteria:
 Implement interfaces for:
 
 - Runtime event writer
-- Message store
-- Context checkpoint store
+- Message Ledger and Conversation Surface durability
 
 Development backend:
 
@@ -481,7 +487,7 @@ The spawnable local runtime *process* and its composition ownership already
 exist (Issue #42): `LocalConversationRuntime::compose` builds one conversation
 session — session model authority, `ConversationToolRuntime`, native
 registry, `CapabilityCoordinator` (prepared and committed before serving),
-context policy/checkpoint pieces, one `RuntimeClientHost` — and serves its
+  context policy/Surface pieces, one `RuntimeClientHost` — and serves its
 endpoint over the Issue #38 stdio/JSONL transport with a protocol-only stdout.
 Model catalog and session configuration are explicit file paths.
 

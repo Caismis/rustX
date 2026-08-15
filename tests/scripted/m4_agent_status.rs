@@ -14,7 +14,8 @@
 //! - fresh inbound is protected from compaction until observed;
 //! - Agent Status participates in full token accounting and fingerprinting;
 //! - provider adapters own wire placement;
-//! - the status never enters canonical history, checkpoints, or results.
+//! - the status never enters canonical history, compaction summaries, or
+//!   results.
 
 use super::{common, support};
 
@@ -34,7 +35,7 @@ use rustx::conversation::{ConversationState, summary_message_id};
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
@@ -259,14 +260,14 @@ fn summary_user(id: &str, text: &str) -> MessageBlock {
     })
 }
 
-fn text_block(text: &str) -> AgentContentBlock {
-    AgentContentBlock::Text(TextBlock {
+fn text_block(text: &str) -> AssistantContentBlock {
+    AssistantContentBlock::Text(TextBlock {
         text: text.to_owned(),
     })
 }
 
-fn agent(id: &str, blocks: Vec<AgentContentBlock>) -> MessageBlock {
-    MessageBlock::Agent(AgentMessageBlock {
+fn assistant(id: &str, blocks: Vec<AssistantContentBlock>) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new(id),
         content: blocks,
     })
@@ -376,7 +377,7 @@ fn block_id(message: &MessageBlock) -> String {
     match message {
         MessageBlock::System(system) => system.id.as_str().to_owned(),
         MessageBlock::User(user) => user.id.as_str().to_owned(),
-        MessageBlock::Agent(agent) => agent.id.as_str().to_owned(),
+        MessageBlock::Assistant(assistant) => assistant.id.as_str().to_owned(),
         MessageBlock::Tool(tool) => tool.id.as_str().to_owned(),
     }
 }
@@ -894,7 +895,7 @@ async fn initial_human_inbound_produces_exactly_one_status() {
     assert_eq!(requests[0].messages.len(), 1);
     assert_eq!(&requests[0].messages[0], &initial);
     // The result history carries the canonical messages only (the inbound
-    // user message and the committed agent turn), never the projection-only
+    // user message and the committed Assistant turn), never the projection-only
     // status artifact.
     assert_eq!(result.messages().len(), 2);
     assert_no_status_in_history(result.messages());
@@ -1684,7 +1685,7 @@ async fn overflow_retry_composes_a_fresh_status_snapshot() {
             .expect("enqueue B");
         release.send_replace(true);
     });
-    // Window 400: the turn-2 projection (u0 + agent-1 + A + B + status =
+    // Window 400: the turn-2 projection (u0 + Assistant-1 + A + B + status =
     // 338) fits, but the provider overflows anyway; the retry compacts.
     let tool_runtime = common::tool_runtime_with_mailbox("conv-status-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
@@ -1919,11 +1920,11 @@ async fn chat_completions_continuation_without_status_has_no_footer() {
         ModelProtocol::OpenAiChatCompletions,
         vec![
             inbound_user("msg-u0", "start"),
-            agent(
+            assistant(
                 "attempt-1-agent-1",
                 vec![
                     text_block("calling"),
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-alpha"),
                         name: "alpha".to_owned(),
@@ -1970,7 +1971,7 @@ async fn responses_stored_continuation_appends_status_in_the_transmitted_tail() 
     let mut request = status_request(
         ModelProtocol::OpenAiResponses,
         vec![
-            agent("attempt-1-agent-1", vec![text_block("previous turn")]),
+            assistant("attempt-1-agent-1", vec![text_block("previous turn")]),
             inbound_user("msg-a", "deploy it"),
             inbound_user("msg-b", "actually do not deploy it"),
         ],
@@ -1986,7 +1987,7 @@ async fn responses_stored_continuation_appends_status_in_the_transmitted_tail() 
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     assert_eq!(body["previous_response_id"], "resp_prev");
     let input = body["input"].as_array().expect("input items");
-    // The stored continuation slices the canonical request: only the agent
+    // The stored continuation slices the canonical request: only the Assistant
     // boundary and the tail after it are transmitted.
     let user_texts: Vec<String> = input
         .iter()
@@ -2041,7 +2042,7 @@ async fn responses_stateless_continuation_appends_status_after_preserved_items()
     let mut request = status_request(
         ModelProtocol::OpenAiResponses,
         vec![
-            agent("attempt-1-agent-1", vec![text_block("previous turn")]),
+            assistant("attempt-1-agent-1", vec![text_block("previous turn")]),
             inbound_user("msg-b", "actually do not deploy it"),
         ],
     );
@@ -2094,11 +2095,11 @@ async fn anthropic_appends_status_without_breaking_tool_result_grouping() {
         ModelProtocol::AnthropicMessages,
         vec![
             inbound_user("msg-u0", "start"),
-            agent(
+            assistant(
                 "attempt-1-agent-1",
                 vec![
                     text_block("calling"),
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new("call-1"),
                         tool_id: ToolId::new("tool-alpha"),
                         name: "alpha".to_owned(),

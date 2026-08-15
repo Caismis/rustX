@@ -202,6 +202,10 @@ pub struct CompactionPlan {
     /// The summary output budget reserved during planning, a conservative
     /// bound for the not-yet-generated summary.
     pub summary_reservation: u64,
+    /// The exact token estimate of the assembled summary-model input,
+    /// including its instruction, serialized request, and canonical User
+    /// wrapper.
+    pub summary_input_tokens: u64,
     /// The exact Agent Status attachment of the request preparation this
     /// plan belongs to, when one exists.
     pub agent_status: Option<AgentStatusAttachment>,
@@ -428,10 +432,8 @@ impl ContextEngine {
                 continue;
             }
             let span_messages = active[first..=end].to_vec();
-            let summary_input = self
-                .estimator
-                .estimate_conversation_input(&bare_projection(state.revision(), &span_messages));
-            if summary_input > budgets.summary_input_limit {
+            let summary_input_tokens = self.estimate_summary_input(state.revision(), span_messages);
+            if summary_input_tokens > budgets.summary_input_limit {
                 // The selected span would not fit the summary model's own
                 // request budget: this candidate is impossible.
                 continue;
@@ -457,6 +459,7 @@ impl ContextEngine {
                 end,
                 retained_recent,
                 planned,
+                summary_input_tokens,
             });
         }
         if candidates.is_empty() {
@@ -513,9 +516,20 @@ impl ContextEngine {
             ),
             planned_estimate_after: chosen.planned,
             summary_reservation: reservation,
+            summary_input_tokens: chosen.summary_input_tokens,
             agent_status: current_projection.agent_status.clone(),
             skill_catalog: current_projection.skill_catalog.clone(),
         })
+    }
+
+    /// Estimates the exact provider-neutral input assembled for one summary
+    /// request. This is the planner's view of the same
+    /// [`SummaryRequest::model_input`] contract the production summarizer
+    /// sends.
+    fn estimate_summary_input(&self, revision: SurfaceRevision, retired: Vec<MessageBlock>) -> u64 {
+        let input = SummaryRequest { retired }.model_input();
+        self.estimator
+            .estimate_conversation_input(&bare_projection(revision, &input.messages))
     }
 
     /// Prepares the semantic commit of one compaction: the canonical summary
@@ -665,6 +679,7 @@ struct Candidate {
     end: usize,
     retained_recent: u64,
     planned: u64,
+    summary_input_tokens: u64,
 }
 
 /// The compactable region: the earliest contiguous run of non-`System`
@@ -710,9 +725,9 @@ fn continuation_min_end(
             "continuation-owning message {owner} is not active on the surface"
         )));
     };
-    if !index.agent_positions().contains(&owner_position) {
+    if !index.assistant_positions().contains(&owner_position) {
         return Err(malformed(&format!(
-            "continuation-owning message {owner} is not an agent message"
+            "continuation-owning message {owner} is not an Assistant message"
         )));
     }
     let turn_end = index.turn_end_of(owner_position);

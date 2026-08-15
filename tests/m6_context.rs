@@ -6,7 +6,7 @@
 
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
+    AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority, SystemMessageBlock,
     UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::types::{ModelProtocol, ModelRequest, SkillCatalogAttachment};
@@ -18,7 +18,7 @@ mod common;
 const CATALOG: &str = "## Skills\n\n- pdf: Create, edit, inspect, and transform PDF documents.\n";
 const SYSTEM_TEXT: &str = "You are a helpful agent.";
 
-/// A canonical request with trusted system content, one agent turn, and the
+/// A canonical request with trusted system content, one Assistant turn, and the
 /// Skill catalog attachment.
 fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
     ModelRequest {
@@ -31,11 +31,13 @@ fn request(protocol: ModelProtocol, with_catalog: bool) -> ModelRequest {
                     text: SYSTEM_TEXT.to_owned(),
                 }],
             }),
-            MessageBlock::Agent(AgentMessageBlock {
+            MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("msg-agent-1"),
-                content: vec![rustx::message::types::AgentContentBlock::Text(TextBlock {
-                    text: "earlier turn".to_owned(),
-                })],
+                content: vec![rustx::message::types::AssistantContentBlock::Text(
+                    TextBlock {
+                        text: "earlier turn".to_owned(),
+                    },
+                )],
             }),
             MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("msg-user-1"),

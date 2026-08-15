@@ -90,7 +90,7 @@ pub use host::{
 };
 pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
-    InFlightAgentMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
+    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
     RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
     RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSkill,
     RuntimeClientSnapshot, RuntimeClientStatusFact, RuntimeClientStatusSection, RuntimeClientTool,

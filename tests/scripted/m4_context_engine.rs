@@ -8,10 +8,9 @@
 //! recorded `RuntimeEvent` trace, the platform outcome, the committed
 //! Message Ledger, the Conversation Surface, and the recorded requests.
 //!
-//! The M4 model these tests used to protect — a checkpoint-owned summary, a
-//! projection-only `AgentSlice`, split-turn compaction, checkpoint
-//! absorption, and a last-`System` pinned prefix — is gone; nothing here
-//! asserts it.
+//! These tests protect the Issue #54 contracts: complete-message projection,
+//! canonical runtime summaries, current-Surface planning, immutable Ledger
+//! facts, exact `SurfaceRevision` reconstruction, and bounded provider input.
 
 use super::{common, support};
 
@@ -31,7 +30,7 @@ use rustx::conversation::{
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AgentContentBlock, AgentMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+    AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
     ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::event::ModelEvent;
@@ -77,14 +76,14 @@ fn system(id: &str, text: &str) -> MessageBlock {
     })
 }
 
-fn text_block(text: &str) -> AgentContentBlock {
-    AgentContentBlock::Text(TextBlock {
+fn text_block(text: &str) -> AssistantContentBlock {
+    AssistantContentBlock::Text(TextBlock {
         text: text.to_owned(),
     })
 }
 
-fn call_block(id: &str) -> AgentContentBlock {
-    AgentContentBlock::ToolCall(ToolCall {
+fn call_block(id: &str) -> AssistantContentBlock {
+    AssistantContentBlock::ToolCall(ToolCall {
         id: ToolCallId::new(id),
         tool_id: ToolId::new("tool-alpha"),
         name: "alpha".to_owned(),
@@ -92,8 +91,8 @@ fn call_block(id: &str) -> AgentContentBlock {
     })
 }
 
-fn agent(id: &str, blocks: Vec<AgentContentBlock>) -> MessageBlock {
-    MessageBlock::Agent(AgentMessageBlock {
+fn assistant(id: &str, blocks: Vec<AssistantContentBlock>) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new(id),
         content: blocks,
     })
@@ -301,7 +300,7 @@ fn request(
     }
 }
 
-fn agent_message_id(turn: u32) -> MessageId {
+fn assistant_message_id(turn: u32) -> MessageId {
     MessageId::new(format!("attempt-1-agent-{turn}"))
 }
 
@@ -459,7 +458,7 @@ fn message_id_of(message: &MessageBlock) -> String {
     match message {
         MessageBlock::System(system) => system.id.as_str().to_owned(),
         MessageBlock::User(user) => user.id.as_str().to_owned(),
-        MessageBlock::Agent(agent) => agent.id.as_str().to_owned(),
+        MessageBlock::Assistant(assistant) => assistant.id.as_str().to_owned(),
         MessageBlock::Tool(tool) => tool.id.as_str().to_owned(),
     }
 }
@@ -518,7 +517,7 @@ fn projection_is_the_current_surface_in_order() {
         vec![
             system("sys-1", "Be concise."),
             user("u1", "hi"),
-            agent("a1", vec![text_block("ok")]),
+            assistant("a1", vec![text_block("ok")]),
             user("u2", "more"),
         ],
         SurfaceSpan::new(MessageId::new("u1"), MessageId::new("a1")),
@@ -546,7 +545,7 @@ fn projection_is_the_current_surface_in_order() {
             message,
             MessageBlock::System(_)
                 | MessageBlock::User(_)
-                | MessageBlock::Agent(_)
+                | MessageBlock::Assistant(_)
                 | MessageBlock::Tool(_)
         )),
         "every projected item is a complete canonical message"
@@ -568,7 +567,10 @@ fn projection_is_the_current_surface_in_order() {
 #[test]
 fn same_context_produces_same_estimate() {
     let engine = engine(1_000, 10, 5, weighted(10, 10, 10));
-    let state = state(vec![user("u1", "hi"), agent("a1", vec![text_block("ok")])]);
+    let state = state(vec![
+        user("u1", "hi"),
+        assistant("a1", vec![text_block("ok")]),
+    ]);
     let first = engine
         .build_projection(&state, &[], None, None, None)
         .expect("projection");
@@ -608,9 +610,9 @@ fn tool_definitions_contribute_to_the_request_estimate() {
 fn tool_definitions_never_satisfy_the_recent_retention_target() {
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![text_block("x")]),
+        assistant("a1", vec![text_block("x")]),
         user("u2", ""),
-        agent("a2", vec![text_block("y")]),
+        assistant("a2", vec![text_block("y")]),
     ]);
     let tools = vec![common::model_tool("alpha", "tool-alpha")];
     // Target 20: with conversation weights of 10/10, retiring u1 and a1
@@ -899,9 +901,9 @@ fn compaction_uses_primary_budget_for_soft_limit_and_smaller_summary_reservation
     let engine = engine(40, 0, 20, weighted(10, 10, 0));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![text_block("x")]),
+        assistant("a1", vec![text_block("x")]),
         user("u2", ""),
-        agent("a2", vec![text_block("y")]),
+        assistant("a2", vec![text_block("y")]),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, None, None)
@@ -930,9 +932,9 @@ fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
     let engine = engine(40, 0, 20, weighted(10, 10, 0));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![text_block("x")]),
+        assistant("a1", vec![text_block("x")]),
         user("u2", ""),
-        agent("a2", vec![text_block("y")]),
+        assistant("a2", vec![text_block("y")]),
     ]);
     let projection = engine
         .build_projection(&history, &[], None, None, None)
@@ -1008,7 +1010,7 @@ fn simple_complete_turn_boundary() {
     let engine = engine(100, 0, 5, weighted(100, 10, 100));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
     ]);
     let projection = engine
@@ -1028,8 +1030,8 @@ fn simple_complete_turn_boundary() {
     assert_eq!(plan.retired.len(), 3, "the complete turn is retired whole");
 }
 
-/// Multiple tool calls of one agent message are never separated from their
-/// results, and the agent message is never split: a span that would retire
+/// Multiple tool calls of one Assistant message are never separated from their
+/// results, and the Assistant message is never split: a span that would retire
 /// one call without its result is structurally rejected, and the only
 /// admissible spans keep every call together with its result.
 #[test]
@@ -1037,11 +1039,11 @@ fn multiple_tool_calls_stay_with_their_results() {
     let engine = engine(10_000, 0, 0, weighted(100, 10, 100));
     let mut conversation_state = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1"), call_block("c2")]),
+        assistant("a1", vec![call_block("c1"), call_block("c2")]),
         tool_message("t1", "c1"),
         tool_message("t2", "c2"),
     ]);
-    // The agent message can never be replaced without its results.
+    // The Assistant message can never be replaced without its results.
     for end in ["a1", "t1"] {
         let error = conversation_state
             .prepare_compaction(
@@ -1118,9 +1120,9 @@ fn no_edge_crosses_the_chosen_cut() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
-        agent("a2", vec![call_block("c2")]),
+        assistant("a2", vec![call_block("c2")]),
         tool_message("t2", "c2"),
         user("u2", ""),
     ]);
@@ -1151,10 +1153,10 @@ fn candidate_selection_is_deterministic() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
         user("u2", ""),
-        agent("a2", vec![call_block("c2")]),
+        assistant("a2", vec![call_block("c2")]),
         tool_message("t2", "c2"),
     ]);
     let projection = engine
@@ -1245,7 +1247,7 @@ fn structural_rule_may_force_extra_retention() {
     let engine = engine(1_000, 0, 20, scripted(10, 10, 10, &[("t1", 100)]));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
         user("u2", ""),
     ]);
@@ -1309,7 +1311,7 @@ fn system_messages_are_never_replaced_or_summarized() {
     let mut history = state(vec![
         system_block.clone(),
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
     ]);
     let projection = engine
@@ -1360,8 +1362,7 @@ fn system_messages_are_never_replaced_or_summarized() {
 /// A later `System` message does not pin every older conversational message
 /// and never resurrects a previously retired Surface span.
 ///
-/// This is the direct regression for the removed M4 `pinned_end` /
-/// checkpoint-absorption coupling.
+/// This is the direct regression for the bounded Issue #54 System rule.
 #[test]
 fn a_later_system_message_pins_nothing_and_resurrects_nothing() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 0));
@@ -1440,7 +1441,7 @@ fn pinned_context_alone_cannot_fit_fails_explicitly() {
     let history = state(vec![
         system("sys-1", "trusted"),
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
     ]);
     let projection = engine
@@ -1470,7 +1471,7 @@ fn oversized_material_is_retired_as_complete_messages() {
     let engine = engine(60, 0, 5, scripted(10, 10, 10, &[("t1", 1_000)]));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
     ]);
     let projection = engine
@@ -1527,8 +1528,8 @@ fn a_single_oversized_message_cannot_fit_instead_of_splitting() {
     assert_eq!(error.kind, ContextErrorKind::CannotFit);
 }
 
-/// A selected span that would not fit the summary model's own input budget
-/// is never planned.
+/// The planner applies the summary-model limit to the assembled summary
+/// input, rather than to the number of retired canonical messages.
 #[test]
 fn a_span_never_exceeds_the_summary_model_input_limit() {
     let engine = engine(10_000, 0, 0, weighted(10, 10, 0));
@@ -1536,7 +1537,8 @@ fn a_span_never_exceeds_the_summary_model_input_limit() {
     let projection = engine
         .build_projection(&history, &[], None, None, None)
         .expect("projection");
-    // A 25-token summary input limit admits at most two 10-token messages.
+    // The deterministic assembly is one wrapper message, so the complete
+    // summary request weighs ten tokens under this estimator.
     let plan = engine
         .plan_compaction(
             &history,
@@ -1546,18 +1548,145 @@ fn a_span_never_exceeds_the_summary_model_input_limit() {
             &rustx::context::CompactionConstraints::default(),
         )
         .expect("plan");
-    assert_eq!(plan.span.end, MessageId::new("u2"));
+    assert_eq!(plan.span.end, MessageId::new("u3"));
+    assert_eq!(plan.summary_input_tokens, 10);
     // With no room for even one message, planning fails explicitly.
     let error = engine
         .plan_compaction(
             &history,
             &projection,
             &[],
-            CompactionBudgets::new(0, 0, 1),
+            CompactionBudgets::new(0, 0, 9),
             &rustx::context::CompactionConstraints::default(),
         )
         .expect_err("no span fits the summary model");
     assert_eq!(error.kind, ContextErrorKind::CannotFit);
+}
+
+/// The summary-model bound is measured over the exact assembled User input,
+/// not over the raw retired message serialization. Wrapper overhead can make a
+/// raw span fit while the production summary request does not.
+#[test]
+fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
+    let estimator = DefaultTokenEstimator;
+    let engine = engine(1_000_000, 0, 0, Arc::new(estimator));
+    let history = state(vec![user("u1", "raw retired content")]);
+    let request = SummaryRequest {
+        retired: vec![user("u1", "raw retired content")],
+    };
+    let raw_projection = rustx::context::ContextProjection {
+        surface_revision: history.revision(),
+        messages: request.retired.clone(),
+        agent_status: None,
+        skill_catalog: None,
+        estimated_input: TokenMeasurement {
+            input_tokens: 0,
+            source: TokenMeasurementSource::Estimated,
+        },
+    };
+    let raw_tokens = estimator.estimate_conversation_input(&raw_projection);
+    let assembled = request.model_input();
+    let assembled_projection = rustx::context::ContextProjection {
+        messages: assembled.messages.clone(),
+        ..raw_projection.clone()
+    };
+    let actual_tokens = estimator.estimate_conversation_input(&assembled_projection);
+    assert!(
+        actual_tokens > raw_tokens,
+        "the canonical wrapper must cost tokens"
+    );
+    assert!(
+        raw_tokens < actual_tokens,
+        "the raw retired span must fit the deliberately one-token-too-small limit"
+    );
+
+    let projection = engine
+        .build_projection(&history, &[], None, None, None)
+        .expect("projection");
+    let before_ids = history.active_ids().to_vec();
+    let before_revision = history.revision();
+    let before_ledger_len = history.ledger().len();
+    let rejected = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, actual_tokens - 1),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect_err("raw fit must not hide the assembled request overflow");
+    assert_eq!(rejected.kind, ContextErrorKind::CannotFit);
+    assert_eq!(history.active_ids(), before_ids.as_slice());
+    assert_eq!(history.revision(), before_revision);
+    assert_eq!(history.ledger().len(), before_ledger_len);
+
+    let accepted = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 0, actual_tokens),
+            &rustx::context::CompactionConstraints::default(),
+        )
+        .expect("the exact assembled limit accepts the candidate");
+    assert_eq!(accepted.summary_input_tokens, actual_tokens);
+    assert_eq!(accepted.summary_request().model_input(), assembled);
+}
+
+/// A summary request that cannot fit its actual model input is rejected
+/// before summary generation or retry state changes. The overflowing primary
+/// request remains the only provider request, and the conversation stays
+/// unchanged.
+#[tokio::test]
+async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
+    let model = fake_model(vec![vec![
+        FakeStep::Emit(started()),
+        FakeStep::Emit(overflow_event()),
+    ]]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+        "must not run".to_owned(),
+    )]));
+    let runtime = ContextRuntime::with_scripted_summarizer(
+        engine(500, 0, 0, weighted(10, 10, 0)),
+        summarizer.clone(),
+        rustx::context::AgentStatusComposer::default(),
+        CompactionBudgets::new(1, 1, 9),
+    );
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let result = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+    )
+    .expect("conversation identity matches the tool runtime")
+    .run()
+    .await;
+
+    assert!(
+        summarizer.requests().is_empty(),
+        "the impossible summary is never invoked"
+    );
+    assert_eq!(
+        model.requests().len(),
+        1,
+        "no overflow retry follows CannotFit"
+    );
+    assert!(result.events.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::CompactionFailed { error } if error.contains("no complete-message surface span")
+    )));
+    assert!(
+        !result
+            .events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
+    );
+    assert_no_compaction_committed(&result);
 }
 
 /// Repeated compaction operates from the **current** Surface and never
@@ -1748,7 +1877,11 @@ fn repeated_compaction_never_resurrects_retired_history() {
 ///
 /// The helper asserts the hard invariant on the way: the cycle performs zero
 /// full-Ledger enumerations.
-fn keyed_reads_for(retired: usize, engine: &ContextEngine, budgets: CompactionBudgets) -> u64 {
+fn finite_reads_for(
+    retired: usize,
+    engine: &ContextEngine,
+    budgets: CompactionBudgets,
+) -> (u64, u64, u64, u64) {
     let mut history = state(
         (0..retired + 4)
             .map(|index| user(&format!("m{index}"), ""))
@@ -1778,6 +1911,7 @@ fn keyed_reads_for(retired: usize, engine: &ContextEngine, budgets: CompactionBu
 
     // Only from here is the instrumentation meaningful.
     history.ledger_access().reset();
+    history.surface_access().reset();
     let projection = engine
         .build_projection(&history, &[], None, None, None)
         .expect("projection");
@@ -1799,22 +1933,29 @@ fn keyed_reads_for(retired: usize, engine: &ContextEngine, budgets: CompactionBu
         0,
         "normal projection and compaction must never enumerate the ledger"
     );
-    history.ledger_access().keyed_reads()
+    (
+        history.ledger_access().keyed_reads(),
+        history.surface_access().current_head_reads(),
+        history.surface_access().history_enumerations(),
+        history.surface_access().history_steps(),
+    )
 }
 
-/// Normal current-Surface projection and compaction never enumerate the
-/// Message Ledger and never depend on retired-history size.
+/// Normal current-Surface projection, planning, and preparation never
+/// enumerate the Message Ledger or Surface history and never depend on
+/// retired-history size.
 ///
 /// The proof is a deterministic instrumentation counter, not a memory
-/// measurement: `LedgerAccess::enumerations` must stay at zero and the keyed
-/// read count must be a function of the active Surface alone.
+/// measurement: `LedgerAccess::enumerations` and Surface historical reads
+/// must stay at zero, while keyed/current-head work is a function of the
+/// active Surface alone.
 #[test]
 fn normal_compaction_reads_only_the_current_surface() {
     let engine = engine(10_000_000, 0, 0, weighted(10, 10, 0));
     let budgets = CompactionBudgets::new(0, 0, 1_000_000);
 
-    let small = keyed_reads_for(20, &engine, budgets);
-    let large = keyed_reads_for(2_000, &engine, budgets);
+    let small = finite_reads_for(20, &engine, budgets);
+    let large = finite_reads_for(2_000, &engine, budgets);
     assert_eq!(
         small, large,
         "the read cost is a function of the active surface alone, not of retired history"
@@ -1833,7 +1974,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
         user("u2", ""),
     ]);
@@ -1903,7 +2044,7 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
     // Every covered original is still an immutable, addressable ledger fact.
     assert!(matches!(
         history.ledger().get(&MessageId::new("a1")),
-        Some(MessageBlock::Agent(_))
+        Some(MessageBlock::Assistant(_))
     ));
 }
 
@@ -2013,7 +2154,7 @@ fn no_progress_compaction_is_rejected() {
 #[test]
 fn progress_rule_rejects_growth_even_when_provider_reported_before_is_larger() {
     let engine = engine(1_000, 0, 0, weighted(10, 10, 0));
-    let history = state(vec![user("u1", ""), agent("a1", vec![text_block("x")])]);
+    let history = state(vec![user("u1", ""), assistant("a1", vec![text_block("x")])]);
     // Provider-reported before = 1000; the deterministic estimate of the
     // same projection is 20.
     let plain_projection = engine
@@ -2144,13 +2285,13 @@ fn empty_and_whitespace_summaries_are_rejected() {
 // ---------------------------------------------------------------------------
 
 /// The continuation constraint retires the continuation-owning turn
-/// completely; the owning agent message is never split.
+/// completely; the owning Assistant message is never split.
 #[test]
 fn continuation_constraint_covers_the_owning_turn_completely() {
     let engine = engine(200, 0, 5, weighted(100, 10, 100));
     let history = state(vec![
         user("u1", ""),
-        agent("a1", vec![call_block("c1")]),
+        assistant("a1", vec![call_block("c1")]),
         tool_message("t1", "c1"),
     ]);
     let projection = engine
@@ -2169,7 +2310,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
         )
         .expect("plan");
     assert_eq!(plan.span.end, MessageId::new("t1"));
-    // The continuation-owning agent message and its complete tool-result
+    // The continuation-owning Assistant message and its complete tool-result
     // portion are both retired into the summary input.
     let retired_ids: Vec<String> = plan.retired.iter().map(newly_retired_id).collect();
     assert!(retired_ids.contains(&"a1".to_owned()));
@@ -2182,7 +2323,7 @@ fn continuation_owner_is_never_split() {
     let engine = engine(60, 0, 5, weighted(10, 10, 10));
     let history = state(vec![
         user("u1", ""),
-        agent(
+        assistant(
             "a1",
             vec![
                 text_block("intro"),
@@ -2225,7 +2366,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
     let history = state(vec![
         user("u1", ""),
         system("sys-2", "trusted"),
-        agent("a1", vec![text_block("x")]),
+        assistant("a1", vec![text_block("x")]),
         user("u2", ""),
     ]);
     let projection = engine
@@ -2254,7 +2395,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
     // run, not to age.
     let unpinned = state(vec![
         user("u1", ""),
-        agent("a1", vec![text_block("x")]),
+        assistant("a1", vec![text_block("x")]),
         user("u2", ""),
     ]);
     let projection = engine
@@ -2274,7 +2415,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
         .expect("the continuation owner is retired");
     assert!(
         plan.retired.iter().any(
-            |message| matches!(message, MessageBlock::Agent(agent) if agent.id.as_str() == "a1")
+            |message| matches!(message, MessageBlock::Assistant(assistant) if assistant.id.as_str() == "a1")
         ),
         "the continuation-owning turn is covered by the span"
     );
@@ -2347,22 +2488,22 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
         RuntimeEvent::ToolCallStarted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: ContentBlockIndex::new(0),
             call: call_start(),
         },
         RuntimeEvent::ToolCallArgumentsDelta {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: ContentBlockIndex::new(0),
             call_id: ToolCallId::new("call-1"),
             arguments_delta: "{}".to_owned(),
         },
         RuntimeEvent::ToolCallCompleted {
-            message_id: agent_message_id(1),
+            message_id: assistant_message_id(1),
             block_index: ContentBlockIndex::new(0),
             call: call_done(),
         },
@@ -2397,11 +2538,11 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(2),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(2),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(2),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(2),
             block_index: ContentBlockIndex::new(0),
             delta: "answer".to_owned(),
         },
@@ -2442,7 +2583,7 @@ async fn proactive_compaction_before_the_next_turn() {
     assert_eq!(summary.kind, InboundKind::CompactionSummary);
     assert!(matches!(
         &requests[1].messages[1],
-        MessageBlock::Agent(agent) if agent.id.as_str() == "attempt-1-agent-1"
+        MessageBlock::Assistant(assistant) if assistant.id.as_str() == "attempt-1-agent-1"
     ));
     assert!(matches!(
         &requests[1].messages[2],
@@ -2599,11 +2740,11 @@ async fn overflow_compact_and_retry_succeeds() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantMessageStarted {
+            message_id: assistant_message_id(1),
         },
-        RuntimeEvent::AgentTextDelta {
-            message_id: agent_message_id(1),
+        RuntimeEvent::AssistantTextDelta {
+            message_id: assistant_message_id(1),
             block_index: ContentBlockIndex::new(0),
             delta: "provisional".to_owned(),
         },
@@ -2625,10 +2766,10 @@ async fn overflow_compact_and_retry_succeeds() {
         RuntimeEvent::ModelRequestStarted {
             model: "fake-model".to_owned(),
         },
-        RuntimeEvent::AgentMessageStarted {
+        RuntimeEvent::AssistantMessageStarted {
             message_id: retry_message_id(1),
         },
-        RuntimeEvent::AgentTextDelta {
+        RuntimeEvent::AssistantTextDelta {
             message_id: retry_message_id(1),
             block_index: ContentBlockIndex::new(0),
             delta: "retry ok".to_owned(),
@@ -2657,8 +2798,8 @@ async fn overflow_compact_and_retry_succeeds() {
         },
     );
 
-    // The retry request uses the smaller projection with the checkpoint
-    // summary and no continuation.
+    // The retry request uses the smaller projection with the canonical
+    // runtime summary and no continuation.
     let requests = model.requests();
     assert_eq!(requests.len(), 2);
     assert!(matches!(
@@ -2799,21 +2940,21 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     assert_eq!(
         result.messages().len(),
         3,
-        "input + the canonical compaction summary + one committed agent message"
+        "input + the canonical compaction summary + one committed Assistant message"
     );
-    let MessageBlock::Agent(agent) = &result.messages()[2] else {
-        panic!("the committed message must be the retry agent message");
+    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
+        panic!("the committed message must be the retry Assistant message");
     };
     assert_eq!(
-        agent.id,
+        assistant.id,
         retry_message_id(1),
         "the committed message carries the retry identity"
     );
-    let texts: Vec<String> = agent
+    let texts: Vec<String> = assistant
         .content
         .iter()
         .filter_map(|block| match block {
-            AgentContentBlock::Text(text) => Some(text.text.clone()),
+            AssistantContentBlock::Text(text) => Some(text.text.clone()),
             _ => None,
         })
         .collect();
@@ -2887,11 +3028,11 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
             .all(|message| !matches!(message, MessageBlock::Tool(_))),
         "no tool message is committed for the failed request's call"
     );
-    let MessageBlock::Agent(agent) = &result.messages()[2] else {
-        panic!("the committed message must be the retry agent message");
+    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
+        panic!("the committed message must be the retry Assistant message");
     };
-    assert_eq!(agent.id, retry_message_id(1));
-    assert_eq!(agent.content.len(), 1, "only the retry text block");
+    assert_eq!(assistant.id, retry_message_id(1));
+    assert_eq!(assistant.content.len(), 1, "only the retry text block");
 }
 
 /// The overflow retry budget is genuinely per model turn: both turns are
@@ -2988,7 +3129,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
 /// summarizer fails the compaction: no canonical summary is committed, no
 /// Surface rewrite happens, and no overflow retry follows.
 #[tokio::test]
-async fn invalid_summary_fails_without_checkpoint_or_retry() {
+async fn invalid_summary_fails_without_commit_or_retry() {
     for bad_summary in ["", "   "] {
         let model = fake_model(vec![vec![
             FakeStep::Emit(started()),
@@ -3033,7 +3174,7 @@ async fn invalid_summary_fails_without_checkpoint_or_retry() {
                 .events
                 .iter()
                 .all(|event| !matches!(event, RuntimeEvent::CompactionCompleted { .. })),
-            "no checkpoint may be committed"
+            "no compaction may be committed"
         );
         assert!(
             result
@@ -3680,9 +3821,9 @@ async fn continuation_is_invalidated_by_compaction() {
         assert!(
             !requests[1].messages.iter().any(|message| matches!(
                 message,
-                MessageBlock::Agent(agent) if agent.id == agent_message_id(1)
+                MessageBlock::Assistant(assistant) if assistant.id == assistant_message_id(1)
             )),
-            "the continuation-owning agent message may not remain literal"
+            "the continuation-owning Assistant message may not remain literal"
         );
     }
 }
@@ -3738,6 +3879,8 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     );
     assert_eq!(requests[0].max_output_tokens(), 128);
     assert!(requests[0].tools.is_empty());
+    assert_eq!(requests[0].agent_status, None);
+    assert_eq!(requests[0].skill_catalog, None);
     assert_eq!(requests[0].continuation, None);
     let MessageBlock::User(user) = &requests[0].messages[0] else {
         panic!("summary instruction must be a user message");
@@ -3750,6 +3893,7 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
     // The serialized input is deterministic and embedded verbatim.
     let serialized = serde_json::to_string(&request).expect("serialize");
     assert!(text.contains(&serialized));
+    assert_eq!(requests[0].messages, request.model_input().messages);
 }
 
 /// A refusal, a tool request, and a model failure are compaction failures,
@@ -4075,7 +4219,7 @@ fn block_id(block: &MessageBlock) -> String {
     match block {
         MessageBlock::System(system) => system.id.to_string(),
         MessageBlock::User(user) => user.id.to_string(),
-        MessageBlock::Agent(agent) => agent.id.to_string(),
+        MessageBlock::Assistant(assistant) => assistant.id.to_string(),
         MessageBlock::Tool(tool) => tool.id.to_string(),
     }
 }
@@ -4178,10 +4322,10 @@ async fn m4_projection_contains_drained_batch_before_request() {
         ids,
         vec![
             "msg-u0".to_owned(),
-            agent_message_id(1).to_string(),
+            assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
-            agent_message_id(2).to_string(),
+            assistant_message_id(2).to_string(),
         ]
     );
     // The captured ModelRequest of the next model turn contains A and B.
@@ -4192,7 +4336,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
         request_ids,
         vec![
             "msg-u0".to_owned(),
-            agent_message_id(1).to_string(),
+            assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
         ],
@@ -4258,11 +4402,11 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
         ids,
         vec![
             "msg-u0".to_owned(),
-            agent_message_id(1).to_string(),
+            assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
             summary_id(1).to_string(),
-            agent_message_id(2).to_string(),
+            assistant_message_id(2).to_string(),
         ],
         "the ledger preserves the drained inbound messages and gains the summary"
     );

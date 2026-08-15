@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// This is a Layer 0 value contract. The Context Engine owns the accounting
 /// behavior that decides when a measurement is valid, but the measurement
-/// itself is shared by runtime events, checkpoints, projections, and the
-/// Runtime Client read model.
+/// itself is shared by runtime events, context projections, and the Runtime
+/// Client read model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenMeasurement {
     /// The measured or estimated input token count.

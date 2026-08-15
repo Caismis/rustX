@@ -43,7 +43,7 @@ runtime/inbound.rs         ConversationInboundMailbox (per-conversation
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
-message/types.rs           MessageBlock (System/User/Agent/Tool), provenance
+message/types.rs           MessageBlock (System/User/Assistant/Tool), provenance
                            (SystemAuthority, UserSource, InboundKind),
                            UserMessageBlock.timestamp (persisted inbound
                            instant; absent for derived compaction summaries),
@@ -228,12 +228,12 @@ normalized `ModelError` without degrading it to a runtime error string.
 
 `ModelEvent` (and the corresponding `RuntimeEvent` deltas) target content
 blocks by the rustX-owned `ContentBlockIndex`: the position of the block
-within the ordered `AgentContentBlock[]` of the message being assembled.
+within the ordered `AssistantContentBlock[]` of the message being assembled.
 Interleaved text, reasoning, refusal, tool-call, and provider
 continuation-state streaming therefore assembles unambiguously without
 exposing any provider block id type. Refusal streams as refusal
-(`RefusalDelta` / `AgentRefusalDelta`) and assembles into
-`AgentContentBlock::Refusal`, never into plain text. `ToolCallStarted`
+(`RefusalDelta` / `AssistantRefusalDelta`) and assembles into
+`AssistantContentBlock::Refusal`, never into plain text. `ToolCallStarted`
 carries only the data known at start (`ToolCallStart`: call id, tool id,
 name); raw argument fragments stream via `ToolCallArgumentsDelta`, and the
 fully assembled `ToolCall` is emitted only at `ToolCallCompleted`.
@@ -251,7 +251,7 @@ the event and message boundary only.
 ### 2.5 Message content single source of truth
 
 The durable Message Ledger (M8) is the only authoritative store for canonical
-message content. `AgentMessageCommitted` and `ToolMessageCommitted` are
+message content. `AssistantMessageCommitted` and `ToolMessageCommitted` are
 execution facts that reference the committed message by its stable
 `MessageId` and never embed the message body, so the Event Journal never
 holds a competing copy.
@@ -305,7 +305,7 @@ ModelAdapter (canonical ModelRequest in, ModelEvent stream out)
         |
 ExecutionStateMachine: Idle -> RunningModel -> WaitingForTool -> RunningModel -> Completed
         |
-ModelEventAssembler: stream validation + ordered AgentMessageBlock assembly
+ModelEventAssembler: stream validation + ordered AssistantMessageBlock assembly
         |
 ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
         |
@@ -415,37 +415,51 @@ description.
 
 ### Layer 2: Context engine
 
+Issue #54 fixes the conversation boundary used by the context engine:
+
+```text
+System / User / Assistant / Tool
+        ↓ canonical roles
+Message Ledger
+  append-only immutable facts
+        ↓ current active MessageIds only
+Conversation Surface @ SurfaceRevision
+  sole authority for active identity, order, and visibility
+        ↓ keyed reads of the finite current Surface
+Context Engine
+  projection, token pressure, retention, and compaction planning
+```
+
 The context engine owns what the model sees:
 
 - Context assembly
 - Token accounting
-- Context checkpoints
 - Pi-style compaction
 - Valid compaction cut-point selection
-- Split-turn summaries
 - Provider-context compilation
 
-Compaction is a projection of durable conversation history. It must never delete or rewrite the canonical history.
+Compaction appends one canonical `User` message with
+`UserSource::Runtime` and `InboundKind::CompactionSummary`, then applies one
+complete-message Surface `Replace`. It never deletes or mutates Ledger facts.
 
-#### M4 implementation (context engine)
+#### Current context implementation
 
 The M4 implementation freezes the context-plane boundary in `src/context`
 and its integration point in `src/agent/execution.rs`:
 
 ```text
-canonical history
-    ↓
-ContextEngine (build_projection, plan_compaction, apply_compaction)
-    ↓
-ContextProjection { items, estimated_input, checkpoint_generation }
-    ↓
-compile_projection → canonical ModelRequest.messages
+ConversationState @ SurfaceRevision
+    ↓ current active identities → keyed Ledger reads
+ContextEngine (build_projection, plan_compaction, prepare_compaction)
+    ↓ complete canonical messages + ephemeral attachments
+ContextProjection → canonical ModelRequest.messages
     ↓
 ModelAdapter → provider
 ```
 
-The engine is a deterministic pure function of (canonical history, latest
-checkpoint, tool definitions, observed provider usage): the same inputs
+The engine is a deterministic pure function of the current Surface, keyed
+Ledger results, tool definitions, ephemeral attachments, and observed provider
+usage: the same inputs
 always produce the same projection, plan, and estimate. It owns no provider
 knowledge — token estimation is pluggable (`TokenEstimator`, with a default
 `ceil(bytes / 4)` formula), and the engine holds no model catalog.
@@ -458,15 +472,17 @@ attempt's compaction arithmetic and never the running one's.
 
 Key contracts:
 
-- `ContextProjection` is the model-visible projection; a projection-only
-  `AgentSlice` (split-turn content) is materialized transiently under its
-  source `MessageId` when compiled and is never persisted, never emitted as
-  `AgentMessageCommitted`, and never returned in
-  `AgentExecutionResult.messages`.
-- `SystemMessageBlock` values are pinned: everything through the last
-  system message stays literal and is outside summary coverage; summaries
-  are `UserMessageBlock` values with `UserSource::Runtime` and
-  `InboundKind::CompactionSummary` — no fifth message role exists.
+- `ContextProjection` contains only complete canonical messages in current
+  Surface order; it never creates a partial Assistant projection.
+- The canonical roles are exactly `System`, `User`, `Assistant`, and `Tool`.
+  `Assistant` owns `ToolCall` identity and arguments; `Tool` owns the result
+  and references `ToolCallId`. A runtime compaction summary remains a `User`
+  message with `UserSource::Runtime` and
+  `InboundKind::CompactionSummary`.
+- The interim system rule is bounded: a `Replace` span cannot contain
+  `System`, but a later `System` does not pin all earlier content or resurrect
+  retired Surface history. Issue #55 owns the Effective System Prompt and
+  Request Snapshot architecture.
 - Token measurements carry explicit provenance
   (`ProviderReported`/`Estimated`); provider-reported `input_tokens` apply
   only to the exact measured projection (deterministic fingerprint), and
@@ -478,15 +494,22 @@ Key contracts:
   measurement data type.
 - Cut selection is structural: a deterministic index of tool-call/result
   edges rejects orphan tool messages and never separates a call from its
-  result; whole-turn boundaries are preferred, and oversized turns are
-  split at complete content-block boundaries.
-- Checkpoints (`ContextCheckpoint`) carry stable `MessageId`-based
-  boundaries and deterministic summary ids; the `ContextCheckpointStore`
-  abstraction (with an in-memory development/test implementation) is the M4
-  persistence contract, M8 owns the durable backend.
+  result. A candidate is always a whole-message span.
+- `SurfaceRevision` is a stable reconstruction reference within one live
+  conversation lineage. Historical Surface operations are retained for exact
+  replay; later Appends and Replaces never change an earlier revision.
+- Normal projection, planning, and compaction read only current Surface
+  identities and keyed Ledger bodies. They do not enumerate the Ledger or
+  scan the historical Surface operation log; current replacement generation
+  is O(1) head metadata.
 - The `ContextSummarizer` service is provider-neutral; the production
   `ModelBackedSummarizer` issues a canonical one-off `ModelRequest` (no
   tools, no Agent Status, no Skill catalog, no continuation) through the
+  `SummaryRequest::model_input()` assembly shared with the planner. The
+  summary input limit therefore covers the fixed instruction, serialized
+  request, and canonical User wrapper, using the summary invocation's own
+  effective context window and output budget, never the primary model's
+  window, through the
   existing `ModelAdapter` boundary. It is constructed from the attempt's
   *frozen summary policy*, never from an independently injected summarizer:
   in `session` mode that is the attempt's own primary invocation, in
@@ -563,8 +586,8 @@ The Skill catalog follows the Agent Status attachment pattern:
   plane produces it from the attempt's immutable Skill snapshot;
   `ContextProjection`, `CompiledContext`, `ModelRequest`, fingerprinting,
   token accounting, and every provider adapter refer to the Layer 0 type.
-- It is projection-only capability context: never canonical history,
-  never checkpoint history, never returned in `AgentExecutionResult.messages`,
+- It is projection-only capability context: never a canonical conversation
+  fact and never returned in `AgentExecutionResult.messages`,
   and never emitted as a committed-message event. The existing
   `SystemAuthority::Skill` canonical variant does not justify durable
   Skill-catalog history and is not used for the catalog.
@@ -1137,7 +1160,7 @@ model exists.
 Canonical deltas are provisional adapter output: M2 reports what the provider
 actually streamed, including partial output that a later refusal may
 invalidate. Whether provisional content becomes a completed canonical
-`AgentMessageBlock` is owned by the future Agent Loop, never by M2, so no
+`AssistantMessageBlock` is owned by the future Agent Loop, never by M2, so no
 adapter-local terminal buffering exists for Anthropic text or thinking.
 
 #### Normalization rules
@@ -1414,7 +1437,7 @@ This layer owns execution infrastructure:
 - Cancellation hierarchy
 - Runtime event writer
 - Message store interface
-- Context checkpoint store interface
+- Conversation Ledger/Surface integration (the in-memory #54 boundary)
 - Capability revision management
 - Capability mutation guard
 - Process supervision
@@ -1540,9 +1563,9 @@ runtime_client/snapshot.rs     RuntimeClientSnapshot read model
 runtime_client/projection.rs   RuntimeClientProjection: the one
                                linearization owner (fold, cursor
                                allocation, bounded replay, subscribers)
-runtime_client/host.rs         RuntimeClientHost: conversation
-                               coordinator, canonical history between
-                               attempts, current-attempt handle,
+runtime_client/host.rs         RuntimeClientHost: ConversationState
+                               coordinator, ownership between attempts,
+                               current-attempt handle,
                                observer wiring, admission, shutdown
 runtime_client/attachment.rs   RuntimeAttachment: at-most-one attachment,
                                RAII/explicit detach, request dispatch,
@@ -1697,7 +1720,7 @@ runtime_client/transport/      byte-stream adapters beneath the semantic
   counting and final usage fold; model request mechanics and compaction
   mechanics stay internal. Internal `RuntimeEvent` evolution therefore
   cannot silently break Runtime Client Protocol v1.
-- **Streaming repair.** The snapshot carries an in-flight agent output
+- **Streaming repair.** The snapshot carries an in-flight Assistant output
   view (accumulated blocks) and foreground tool views keyed by the
   logical tool-call identity, so a client repairing after `resync`
   reconstructs every client-visible effect without duplicated or missing
@@ -1743,25 +1766,27 @@ runtime_client/transport/      byte-stream adapters beneath the semantic
   and its acceptance response is never terminal settlement (the Agent
   Loop owns settlement, observed asynchronously). The host does not own a
   second attempt state machine.
-- **Canonical history: one owner at a time.** Ownership transfers, it is
-  never shared:
+- **ConversationState: one owner at a time.** Ownership transfers by move; it
+  is never cloned or shared as a second mutable authority:
 
   ```text
-  idle        Host owns canonical history
-  admission   the history is moved into the attempt's AgentExecution,
-              which is the sole authority for committed history while the
-              attempt runs (including safe-boundary mailbox drains)
+  idle        Host owns ConversationState
+  admission   ConversationState moves into AgentExecution, which is the
+              sole authority while the attempt runs
   running     the Host never mutates a competing copy; asynchronous
               inbound stays mailbox-owned until the loop commits it, and
               RuntimeClientSnapshot.messages is projection only
-  settlement  the execution's final `AgentExecutionResult.messages`
-              becomes the Host's canonical history for the next
-              idle/admission boundary
+  settlement  AgentExecutionResult moves ConversationState back to the Host
+              for the next idle/admission boundary
   ```
 
   The `debug_assert_eq!` at settlement is a sanity assertion on the
   projection mirror, not the mechanism that keeps two authorities
   coherent — there is only ever one.
+
+  This move-based Host ↔ AgentExecution boundary is the bounded #54 design.
+  Issue #61 owns extracting the larger `ConversationRuntime`; Issue #55 owns
+  the Effective System Prompt and Request Snapshot architecture.
 - **Admission.** `submit_inbound` stamps runtime-owned metadata
   (identity, mailbox sequence, timestamp, provenance), enqueues into the
   authoritative mailbox, and starts an attempt when idle; while busy the
@@ -1994,7 +2019,7 @@ ModelCatalog + LocalSessionConfig
         +--> base ToolRegistry + register_native_tools(...)
         +--> CapabilityCoordinator    (same conversation and workspace)
         +--> prepare_candidate() -> commit()   <-- before serving
-        +--> context policy / checkpoint / status pieces
+        +--> context policy / Surface / status pieces
         |
 RuntimeClientHost -> RuntimeClientEndpoint -> stdio JSONL (Issue #38)
 ```
@@ -2005,7 +2030,7 @@ The governing invariant:
 > One local runtime process owns one conversation session. That session owns
 > one authoritative mutable session-model configuration, one
 > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one context
-> policy/checkpoint domain, and one `RuntimeClientHost`. Runtime Client
+> policy/Surface domain, and one `RuntimeClientHost`. Runtime Client
 > attachments may come and go without replacing those semantic owners.
 
 A client — including the Issue #39 TUI — owns the child-process lifecycle and
@@ -2339,12 +2364,12 @@ Agent kernel -> control-plane schema
 
 ## 4. Message model
 
-The canonical conversation model contains four message classes:
+The canonical conversation model contains four message roles:
 
 ```text
 SystemMessageBlock
 UserMessageBlock
-AgentMessageBlock
+AssistantMessageBlock
 ToolMessageBlock
 ```
 
@@ -2352,15 +2377,22 @@ Semantics:
 
 - `SystemMessageBlock`: trusted instructions or runtime context.
 - `UserMessageBlock`: inbound information supplied to the current agent. The source may be a human, another agent, the control plane, or an external system.
-- `AgentMessageBlock`: model output produced by the current agent.
+- `AssistantMessageBlock`: model output produced by the current agent.
 - `ToolMessageBlock`: result of a tool call produced by the current agent.
 
 Identity and provenance are metadata. Message role does not encode real-world identity.
 
+The Message Ledger is append-only immutable canonical fact storage. The
+Conversation Surface is the sole authority for active identity, order, and
+visibility. `SurfaceRevision` is a stable reconstruction reference within
+the single conversation lineage; later mutations never alter an earlier
+revision. Normal projection uses current Surface identities and keyed Ledger
+reads only, never full Ledger or Surface-history scans.
+
 Provenance is implemented as typed runtime-owned metadata: `UserSource`
 distinguishes human, agent, fleet, external-system, and runtime sources;
 `SystemAuthority` distinguishes platform, agent, runtime, skill, and fleet
-authority for system blocks. A future compaction summary is represented as a
+authority for system blocks. A runtime compaction summary is represented as a
 `UserMessageBlock` with runtime provenance and `InboundKind::CompactionSummary`;
 no fifth message role exists. Ordinary inbound messages carry their
 persisted UTC instant on `UserMessageBlock.timestamp` (supplied by the
@@ -2393,7 +2425,7 @@ MessageBlock = model-context fact
 
 Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
 
-Partial model deltas are execution facts. A canonical `AgentMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AgentMessageBlock` from it.
+Partial model deltas are execution facts. A canonical `AssistantMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AssistantMessageBlock` from it.
 
 Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
 
@@ -2418,7 +2450,7 @@ Recovery uses durable state:
 - committed message blocks
 - runtime events
 - capability revision
-- context checkpoints
+- Message Ledger and retained Surface history (durability is Issue #11/M8)
 - workspace state
 
 An unresolved tool call after a crash is never automatically replayed unless the tool explicitly declares an idempotent replay policy. The safe default is to commit an interrupted/unknown tool result and allow the model to decide what to do next.

@@ -4,7 +4,7 @@
 //! context runtime owns. Since M7.5 (Issue #54) the request boundary is
 //! derived directly from the **selected span of complete canonical active
 //! messages** of the current Conversation Surface. There is no separate
-//! "previous checkpoint summary" truth: when a previous compaction summary
+//! "previous summary" truth: when a previous compaction summary
 //! is still active, it is simply one canonical
 //! `User(Runtime / CompactionSummary)` message inside the selected span.
 //!
@@ -41,11 +41,49 @@ pub struct SummaryRequest {
     pub retired: Vec<MessageBlock>,
 }
 
+/// The exact provider-neutral model input assembled for one summary request.
+///
+/// Both compaction planning and [`ModelBackedSummarizer`] consume this value:
+/// the fixed instruction, deterministic `SummaryRequest` JSON, and canonical
+/// runtime User wrapper therefore cannot drift between estimation and the
+/// production invocation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SummaryModelInput {
+    /// The complete canonical messages sent to the summary model.
+    pub messages: Vec<MessageBlock>,
+}
+
 impl SummaryRequest {
     /// Whether this request covers at least one canonical message.
     #[must_use]
     pub fn advances_coverage(&self) -> bool {
         !self.retired.is_empty()
+    }
+
+    /// Serializes the request envelope deterministically.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if canonical runtime-owned data fails to serialize.
+    #[must_use]
+    pub fn serialized_input(&self) -> String {
+        serde_json::to_string(self).expect("summary request serializes")
+    }
+
+    /// Assembles the exact canonical model input used by the production
+    /// summary invocation.
+    #[must_use]
+    pub fn model_input(&self) -> SummaryModelInput {
+        let instruction = format!("{}\n\n{}", SUMMARY_INSTRUCTION, self.serialized_input());
+        SummaryModelInput {
+            messages: vec![MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("summary-request"),
+                content: vec![UserContentBlock::Text(TextBlock { text: instruction })],
+                source: UserSource::Runtime,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })],
+        }
     }
 }
 
@@ -83,6 +121,10 @@ pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
 }
 
+const SUMMARY_INSTRUCTION: &str = "Summarize the following conversation history for continuation. \
+     Preserve all decisions, tool outcomes, and open threads; produce a \
+     compact factual summary. Output only the summary text.";
+
 impl ModelBackedSummarizer {
     /// Creates a summarizer over one resolved summary invocation.
     #[must_use]
@@ -99,9 +141,7 @@ impl ModelBackedSummarizer {
     /// The deterministic summary instruction text.
     #[must_use]
     pub const fn instruction() -> &'static str {
-        "Summarize the following conversation history for continuation. \
-         Preserve all decisions, tool outcomes, and open threads; produce a \
-         compact factual summary. Output only the summary text."
+        SUMMARY_INSTRUCTION
     }
 
     /// Serializes the request input deterministically for the model.
@@ -115,7 +155,7 @@ impl ModelBackedSummarizer {
     /// is unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn serialize_input(request: &SummaryRequest) -> String {
-        serde_json::to_string(request).expect("summary request serializes")
+        request.serialized_input()
     }
 }
 
@@ -126,20 +166,12 @@ impl ContextSummarizer for ModelBackedSummarizer {
         cancellation: CancellationSignal,
     ) -> BoxFuture<'_, Result<String, ContextError>> {
         Box::pin(async move {
-            let input = ModelBackedSummarizer::serialize_input(&request);
-            let instruction = format!("{}\n\n{}", ModelBackedSummarizer::instruction(), input);
-            let messages = vec![MessageBlock::User(UserMessageBlock {
-                id: MessageId::new("summary-request"),
-                content: vec![UserContentBlock::Text(TextBlock { text: instruction })],
-                source: UserSource::Runtime,
-                kind: InboundKind::Message,
-                timestamp: None,
-            })];
+            let input = request.model_input();
             let model_request = ModelRequest {
                 invocation: self.invocation.invocation_config(),
-                messages,
+                messages: input.messages,
                 tools: Vec::new(),
-                // Summary generation is not an inbound agent turn: it never
+                // Summary generation is not an inbound Assistant turn: it never
                 // carries an Agent Status attachment and never carries the
                 // attempt's Skill catalog attachment.
                 agent_status: None,
@@ -155,7 +187,7 @@ impl ContextSummarizer for ModelBackedSummarizer {
             let mut finish_reason = None;
             while let Some(event) = stream.next().await {
                 // Malformed canonical orderings are compaction failures,
-                // never silently folded into a durable checkpoint.
+                // never silently folded into a canonical message.
                 state.accept(&event)?;
                 match event {
                     ModelEvent::Started
@@ -228,7 +260,7 @@ fn summary_failed(message: &str) -> ContextError {
 /// The canonical stream state of one summary generation.
 ///
 /// Malformed adapter streams must never become durable compaction
-/// checkpoints: the summary stream must start with `Started` (or a bare
+/// summary messages: the summary stream must start with `Started` (or a bare
 /// terminal `Failed` for a request rejected before provider execution),
 /// `Started` occurs at most once, `Completed` requires `Started`, and no
 /// event follows the terminal event. This is the same canonical contract
@@ -280,5 +312,56 @@ impl SummaryStreamState {
                 Ok(())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelBackedSummarizer, SummaryRequest};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::MessageId;
+
+    fn request() -> SummaryRequest {
+        SummaryRequest {
+            retired: vec![MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("retired-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "same payload".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })],
+        }
+    }
+
+    /// The shared assembly boundary includes the instruction, serialized
+    /// request envelope, and canonical runtime User wrapper exactly once.
+    #[test]
+    fn summary_model_input_is_deterministic_and_complete() {
+        let request = request();
+        let first = request.model_input();
+        assert_eq!(first, request.model_input());
+        assert_eq!(first.messages.len(), 1);
+        let MessageBlock::User(wrapper) = &first.messages[0] else {
+            panic!("summary input must use the canonical User role");
+        };
+        assert_eq!(wrapper.id, MessageId::new("summary-request"));
+        assert_eq!(wrapper.source, UserSource::Runtime);
+        assert_eq!(wrapper.kind, InboundKind::Message);
+        let UserContentBlock::Text(text) = &wrapper.content[0] else {
+            panic!("summary input must use a text wrapper");
+        };
+        assert_eq!(
+            text.text,
+            format!(
+                "{}\n\n{}",
+                ModelBackedSummarizer::instruction(),
+                request.serialized_input()
+            )
+        );
     }
 }

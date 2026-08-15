@@ -13,7 +13,7 @@ import { RuntimeClientConnection } from "../src/runtime/connection.ts";
 import { RuntimeClientSession, isResyncRequired } from "../src/runtime/session.ts";
 import { RuntimeRequestError } from "../src/runtime/connection.ts";
 import {
-  agentMessage,
+  assistantMessage,
   attemptModel,
   capabilities,
   sessionModel,
@@ -212,7 +212,7 @@ describe("RuntimeClientSession", () => {
       type: "snapshot",
       snapshot: snapshot({
         // Facts the client never observed incrementally.
-        messages: [userMessage("m1", "missed"), agentMessage("m2", "also missed")],
+        messages: [userMessage("m1", "missed"), assistantMessage("m2", "also missed")],
         capabilities: capabilities(11),
         model: sessionModel("beta/model-b"),
         // The attempt the client thought was running is gone.

@@ -121,12 +121,12 @@
 //!
 //! # Conversation state ownership
 //!
-//! Between attempts the host owns the canonical conversation history (the
-//! loop owns its private working copy during an attempt). At attempt
-//! settlement the host replaces its history with the authoritative
-//! `AgentExecutionResult.messages` under the one lock, and the projection
-//! read model is verified against it. The projection mirror is never an
-//! independent mutable history.
+//! Between attempts the host owns the live `ConversationState`. Admission
+//! moves that value into `AgentExecution`; while the attempt runs the host
+//! holds no competing conversation authority. Settlement moves the same
+//! value back from `AgentExecutionResult`, and the projection read model is
+//! verified against it. The projection mirror is never an independent
+//! mutable history.
 //!
 //! # Detach is not cancellation
 //!
@@ -277,9 +277,9 @@ fn invalid_model(error: &ModelInvocationError) -> RuntimeClientError {
 /// keep-recent target, summary output cap). They persist across attempts,
 /// and the model path and the Runtime Client projection share one composer.
 ///
-/// There is deliberately no checkpoint store: compaction lineage is derived
-/// from Conversation Surface history, which the one `ConversationState`
-/// owns, so no second store can drift from the authoritative state.
+/// There is deliberately no separate summary store: compaction lineage is
+/// derived from Conversation Surface history, which the one `ConversationState`
+/// owns, so no second authority can drift from the authoritative state.
 ///
 /// The context *window* is deliberately absent: it belongs to the model, so
 /// each attempt derives its [`ContextRuntime`] from this policy plus that
@@ -2268,7 +2268,11 @@ mod tests {
         // The snapshot carries the committed canonical history and the
         // settled attempt.
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
-        assert_eq!(snapshot.messages.len(), 2, "user message + agent message");
+        assert_eq!(
+            snapshot.messages.len(),
+            2,
+            "user message + Assistant message"
+        );
         assert!(matches!(
             snapshot.attempt.expect("attempt view").phase,
             RuntimeClientAttemptPhase::Settled { .. }
@@ -2721,7 +2725,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn canonical_history_has_one_owner_at_a_time() {
         // Turn 1 calls a tool that parks. The loop therefore commits the
-        // agent message (the model stream ended) and then blocks in tool
+        // Assistant message (the model stream ended) and then blocks in tool
         // execution: exactly the "running, history already grown" window.
         let (tool, mut tool_started, release) = ParkingBackgroundTool::new();
         let definition = ToolDefinition {
@@ -2798,14 +2802,14 @@ mod tests {
             content: submit_content("first"),
         });
 
-        // Running: the loop committed the agent message (observable on the
+        // Running: the loop committed the Assistant message (observable on the
         // stream) and is now parked inside tool execution, so the attempt
         // provably has not settled.
         receive_until(&subscription, |event| {
             matches!(
                 &event.event,
                 RuntimeClientEvent::MessageCommitted { message, .. }
-                    if matches!(message, MessageBlock::Agent(_))
+                    if matches!(message, MessageBlock::Assistant(_))
             )
         })
         .await;
@@ -2906,21 +2910,30 @@ mod tests {
         // the tool turn, the safe-boundary drain, and both attempts. The
         // `debug_assert_eq!` in `finish_attempt` additionally verified, at
         // each of the two settlements above, that the projection mirror
-        // equals the authoritative `AgentExecutionResult.messages`.
+        // equals the authoritative Ledger records carried by the moved
+        // `AgentExecutionResult.conversation`.
         let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
         let roles: Vec<&str> = final_snapshot
             .messages
             .iter()
             .map(|message| match message {
                 MessageBlock::User(_) => "user",
-                MessageBlock::Agent(_) => "agent",
+                MessageBlock::Assistant(_) => "assistant",
                 MessageBlock::Tool(_) => "tool",
                 MessageBlock::System(_) => "system",
             })
             .collect();
         assert_eq!(
             roles,
-            vec!["user", "agent", "tool", "user", "agent", "user", "agent"],
+            vec![
+                "user",
+                "assistant",
+                "tool",
+                "user",
+                "assistant",
+                "user",
+                "assistant",
+            ],
             "one authoritative history, extended across the tool turn, the \
              safe-boundary drain, and both attempts"
         );

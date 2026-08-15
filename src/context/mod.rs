@@ -51,7 +51,7 @@ pub use status::{
     AgentStatusFact, AgentStatusRenderContext, AgentStatusSection, AgentStatusSectionData,
     AgentStatusSectionId, AgentStatusSectionProvider, SystemClock, render_agent_status,
 };
-pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryRequest};
+pub use summarizer::{ContextSummarizer, ModelBackedSummarizer, SummaryModelInput, SummaryRequest};
 pub use tokens::{
     ClosureTokenEstimator, DefaultTokenEstimator, ProviderObservedInput, TokenEstimator,
     bytes_to_tokens,
@@ -62,8 +62,9 @@ pub use tokens::{
 /// The bundle owns the deterministic engine, the summary service, and the
 /// Agent Status composer; `AgentExecution` owns the integration point and
 /// the attempt's [`ConversationState`](crate::conversation::ConversationState).
-/// There is deliberately no checkpoint store: compaction lineage is derived
-/// from Conversation Surface history, so no second store can drift from it.
+/// There is deliberately no separate summary store: compaction lineage is
+/// derived from Conversation Surface history, so no second authority can
+/// drift from it.
 pub struct ContextRuntime {
     /// The deterministic context engine, configured for this attempt's
     /// model context window.

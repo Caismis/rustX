@@ -209,16 +209,16 @@ describe("real rustx child integration", { skip: SKIP }, () => {
       () =>
         (session.state?.transcript ?? []).some(
           (entry) =>
-            entry.kind === "committed" && entry.message.role === "agent",
+            entry.kind === "committed" && entry.message.role === "assistant",
         ),
       "the assistant message committed",
     );
 
     const committed = session.state?.transcript.find(
-      (entry) => entry.kind === "committed" && entry.message.role === "agent",
+      (entry) => entry.kind === "committed" && entry.message.role === "assistant",
     );
     assert.ok(committed?.kind === "committed");
-    assert.ok(committed.message.role === "agent");
+    assert.ok(committed.message.role === "assistant");
     const text = committed.message.content
       .filter((block) => block.type === "text")
       .map((block) => (block.type === "text" ? block.text : ""))
@@ -291,7 +291,7 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     assert.equal(session.resyncCount, 1);
     assert.ok(
       (session.state?.transcript ?? []).some(
-        (entry) => entry.kind === "committed" && entry.message.role === "agent",
+        (entry) => entry.kind === "committed" && entry.message.role === "assistant",
       ),
       "the repaired projection carries the committed history",
     );

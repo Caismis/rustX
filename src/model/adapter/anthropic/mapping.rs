@@ -3,7 +3,7 @@
 
 use reqwest::{StatusCode, header::HeaderMap};
 
-use crate::message::types::{AgentContentBlock, MessageBlock, UserContentBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock, UserContentBlock};
 use crate::model::adapter::validation::ValidatedTools;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::finish::ModelFinishReason;
@@ -329,12 +329,13 @@ fn translate_messages(
                     content,
                 });
             }
-            MessageBlock::Agent(agent) => {
+            MessageBlock::Assistant(assistant) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
-                let is_last_agent = request.messages[position + 1..]
+                let is_last_assistant = request.messages[position + 1..]
                     .iter()
-                    .all(|later| !matches!(later, MessageBlock::Agent(_)));
-                let content = translate_agent_content(agent, tools, continuation, is_last_agent)?;
+                    .all(|later| !matches!(later, MessageBlock::Assistant(_)));
+                let content =
+                    translate_assistant_content(assistant, tools, continuation, is_last_assistant)?;
                 messages.push(WireRequestMessage {
                     role: "assistant",
                     content,
@@ -370,34 +371,35 @@ fn translate_messages(
     Ok((system, messages))
 }
 
-/// Translates one agent message into Anthropic assistant content blocks.
+/// Translates one canonical Assistant message into Anthropic assistant
+/// content blocks.
 ///
 /// Previous thinking blocks are replayed from their rustX-owned opaque
 /// provider state; a signed thinking block is never reconstructed from
 /// canonical text alone and no signature is ever fabricated.
-fn translate_agent_content(
-    agent: &crate::message::types::AgentMessageBlock,
+fn translate_assistant_content(
+    assistant: &crate::message::types::AssistantMessageBlock,
     tools: &ValidatedTools,
     continuation: Option<&AnthropicContinuation>,
-    is_last_agent: bool,
+    is_last_assistant: bool,
 ) -> Result<Vec<serde_json::Value>, ModelError> {
     let mut content = Vec::new();
     let mut reasoning_seen = false;
-    let last_reasoning_position = agent
+    let last_reasoning_position = assistant
         .content
         .iter()
-        .rposition(|block| matches!(block, AgentContentBlock::Reasoning(_)));
-    for (position, block) in agent.content.iter().enumerate() {
+        .rposition(|block| matches!(block, AssistantContentBlock::Reasoning(_)));
+    for (position, block) in assistant.content.iter().enumerate() {
         match block {
-            AgentContentBlock::Text(text) => {
+            AssistantContentBlock::Text(text) => {
                 content.push(serde_json::json!({
                     "type": "text",
                     "text": text.text,
                 }));
             }
-            AgentContentBlock::Reasoning(reasoning) => {
+            AssistantContentBlock::Reasoning(reasoning) => {
                 reasoning_seen = true;
-                let is_boundary = is_last_agent && Some(position) == last_reasoning_position;
+                let is_boundary = is_last_assistant && Some(position) == last_reasoning_position;
                 let state = match &reasoning.provider_state {
                     Some(ProviderContinuationState::Anthropic(state)) => {
                         if is_boundary
@@ -441,7 +443,7 @@ fn translate_agent_content(
                 };
                 content.push(state.opaque.clone());
             }
-            AgentContentBlock::ToolCall(call) => {
+            AssistantContentBlock::ToolCall(call) => {
                 let _ = resolve_tool(tools, &call.name)?;
                 content.push(serde_json::json!({
                     "type": "tool_use",
@@ -450,22 +452,22 @@ fn translate_agent_content(
                     "input": call.arguments,
                 }));
             }
-            AgentContentBlock::Refusal(_) => {
+            AssistantContentBlock::Refusal(_) => {
                 return Err(unsupported(
                     "Anthropic cannot represent a previous refusal block; refusing to flatten \
                      refusal into text",
                 ));
             }
-            AgentContentBlock::Image(_) => {
+            AssistantContentBlock::Image(_) => {
                 return Err(unsupported(
                     "Anthropic cannot represent generated image references",
                 ));
             }
         }
     }
-    if continuation.is_some() && !reasoning_seen && is_last_agent {
+    if continuation.is_some() && !reasoning_seen && is_last_assistant {
         return Err(invalid_request(
-            "continuation state has no coherent preceding agent reasoning boundary",
+            "continuation state has no coherent preceding Assistant reasoning boundary",
         ));
     }
     Ok(content)

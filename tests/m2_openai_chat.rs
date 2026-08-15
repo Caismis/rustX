@@ -607,7 +607,7 @@ async fn chat_refusal_snapshots_are_consistent() {
     ));
 }
 
-/// Stream shapes with output semantics that cannot fit one canonical agent
+/// Stream shapes with output semantics that cannot fit one canonical Assistant
 /// turn fail explicitly instead of being partially consumed.
 #[tokio::test]
 async fn unsupported_chat_stream_shapes_fail_explicitly() {
@@ -1011,13 +1011,13 @@ async fn lifecycle_has_one_terminal_event() {
     assert_eq!(terminals.len(), 1);
 }
 
-/// `Agent tool call → Tool result → User A → User B` stays representable as
+/// `Assistant tool call → Tool result → User A → User B` stays representable as
 /// ordered Chat Completions messages: assistant(tool call), tool, user A,
 /// user B — no provider-side merging.
 #[tokio::test]
 async fn tool_then_consecutive_inbound_users_translate_in_order() {
     use rustx::message::types::{
-        AgentMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
+        AssistantMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock,
     };
     use rustx::runtime::identity::MessageId;
     let server = common::FixtureServer::start(|_attempt, _head| {
@@ -1037,9 +1037,9 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         })
     };
     request.messages = vec![
-        MessageBlock::Agent(AgentMessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-a1"),
-            content: vec![rustx::message::types::AgentContentBlock::ToolCall(
+            content: vec![rustx::message::types::AssistantContentBlock::ToolCall(
                 rustx::tools::types::ToolCall {
                     id: rustx::runtime::identity::ToolCallId::new("call_1"),
                     tool_id: rustx::runtime::identity::ToolId::new("tool-list"),

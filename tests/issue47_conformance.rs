@@ -251,19 +251,21 @@ impl Driver {
         }
     }
 
-    /// The committed agent text of the conversation, concatenated.
-    fn committed_agent_text(&self) -> String {
+    /// The committed Assistant text of the conversation, concatenated.
+    fn committed_assistant_text(&self) -> String {
         let (snapshot, _) = self.host().snapshot().expect("snapshot");
         snapshot
             .messages
             .iter()
             .filter_map(|message| match message {
-                MessageBlock::Agent(agent) => Some(agent),
+                MessageBlock::Assistant(assistant) => Some(assistant),
                 _ => None,
             })
-            .flat_map(|agent| agent.content.iter())
+            .flat_map(|assistant| assistant.content.iter())
             .filter_map(|block| match block {
-                rustx::message::types::AgentContentBlock::Text(text) => Some(text.text.as_str()),
+                rustx::message::types::AssistantContentBlock::Text(text) => {
+                    Some(text.text.as_str())
+                }
                 _ => None,
             })
             .collect()
@@ -391,7 +393,7 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "{scenario}: {outcome:?}"
         );
         assert_eq!(
-            driver.committed_agent_text(),
+            driver.committed_assistant_text(),
             "Hello world",
             "{scenario}: the streamed deltas commit as one canonical message"
         );
@@ -482,7 +484,7 @@ async fn a_tool_call_runs_the_real_tool_and_continues() {
             .any(|event| matches!(event, RuntimeClientEvent::ToolExecutionSettled { .. })),
         "the real tool plane executed the call: {events:?}"
     );
-    assert!(driver.committed_agent_text().contains(NOTE_MARKER));
+    assert!(driver.committed_assistant_text().contains(NOTE_MARKER));
 
     let requests = emulator.requests().await;
     assert_eq!(
@@ -597,7 +599,7 @@ async fn a_provider_failure_settles_once_without_a_retry() {
             .count(),
         1
     );
-    assert!(driver.committed_agent_text().is_empty());
+    assert!(driver.committed_assistant_text().is_empty());
     assert_eq!(
         emulator.requests().await.len(),
         1,
@@ -660,7 +662,7 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     );
     assert!(
         !driver
-            .committed_agent_text()
+            .committed_assistant_text()
             .contains("remainder that cancellation must prevent"),
         "content the gate held back can never be committed"
     );
@@ -694,8 +696,8 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
 /// reserve, the output budget, and the emulator's scripted reply size fix
 /// the threshold crossing exactly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-// The composed compaction proof is one scenario observed end to end; splitting
-// it would lose the ordering that is the whole point.
+// The composed compaction proof is one scenario observed end to end; keeping
+// it together preserves the request ordering that is the whole point.
 #[allow(clippy::too_many_lines)]
 async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
     for (scenario, summary_model, expected_summary_model) in [
@@ -735,7 +737,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             events
                 .iter()
                 .any(|event| matches!(event, RuntimeClientEvent::ContextCompacted { .. })),
-            "{scenario}: the runtime committed a checkpoint: {events:?}"
+            "{scenario}: the runtime committed the canonical compaction: {events:?}"
         );
 
         let (snapshot, _) = driver.host().snapshot().expect("snapshot");
@@ -755,7 +757,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
 
         // The runtime compaction summary is a canonical Message Ledger fact,
         // externally visible like any other committed message — not a
-        // checkpoint-private value.
+        // private context value.
         let summary_message = snapshot
             .messages
             .iter()
@@ -780,9 +782,9 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         assert!(
             snapshot.messages.iter().any(|message| matches!(
                 message,
-                MessageBlock::Agent(agent)
-                    if serde_json::to_string(agent)
-                        .expect("serialize the retired agent message")
+                MessageBlock::Assistant(assistant)
+                    if serde_json::to_string(assistant)
+                        .expect("serialize the retired Assistant message")
                         .contains(COMPACTION_MARKER)
             )),
             "{scenario}: the retired original stays an immutable ledger fact"

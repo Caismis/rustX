@@ -806,7 +806,7 @@ async fn missing_model_selectable_field_is_rejected_without_executor() {
 }
 
 /// An identity mismatch in the model stream is a structural contract
-/// failure: the attempt fails and the agent tool-call message is never
+/// failure: the attempt fails and the Assistant tool-call message is never
 /// committed.
 #[tokio::test]
 async fn identity_mismatch_is_a_structural_contract_failure() {
@@ -835,6 +835,6 @@ async fn identity_mismatch_is_a_structural_contract_failure() {
     assert_eq!(
         result.messages().len(),
         1,
-        "the agent tool-call message is never committed for a structurally unresolvable call"
+        "the Assistant tool-call message is never committed for a structurally unresolvable call"
     );
 }

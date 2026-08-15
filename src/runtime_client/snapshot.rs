@@ -122,8 +122,8 @@ pub struct RuntimeClientContextView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientCompactionView {
-    /// The compaction generation, derived from Conversation Surface
-    /// history.
+    /// The compaction generation maintained in the current Conversation
+    /// Surface head.
     pub generation: u64,
     /// The identity of the committed canonical compaction summary message.
     pub summary_message_id: MessageId,
@@ -151,10 +151,10 @@ pub struct RuntimeClientAttempt {
     /// The latest normalized usage of a completed model request, when any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_usage: Option<ModelUsage>,
-    /// The in-flight agent output, when a message is streaming: enough
+    /// The in-flight Assistant output, when a message is streaming: enough
     /// accumulated state to repair every client-visible streaming effect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_flight: Option<InFlightAgentMessage>,
+    pub in_flight: Option<InFlightAssistantMessage>,
     /// The foreground tool executions of the attempt in call-assembly
     /// order.
     #[serde(default)]
@@ -182,7 +182,7 @@ pub enum RuntimeClientAttemptPhase {
     },
 }
 
-/// The accumulated in-flight output of one streaming agent message.
+/// The accumulated in-flight output of one streaming Assistant message.
 ///
 /// This is the repair state of streaming: a snapshot taken mid-stream
 /// carries every accumulated delta through its cursor, so a client
@@ -190,7 +190,7 @@ pub enum RuntimeClientAttemptPhase {
 /// observed incrementally.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct InFlightAgentMessage {
+pub struct InFlightAssistantMessage {
     /// The provisional message identity.
     pub message_id: MessageId,
     /// The ordered content blocks assembled so far.
@@ -198,7 +198,7 @@ pub struct InFlightAgentMessage {
     pub blocks: Vec<InFlightBlock>,
 }
 
-/// One ordered block of an in-flight agent message.
+/// One ordered block of an in-flight Assistant message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InFlightBlock {

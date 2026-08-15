@@ -1,7 +1,6 @@
 //! The provider-independent conversation domain (M7.5, Issue #54).
 //!
-//! This module owns the canonical conversation model that supersedes the M4
-//! `Vec<MessageBlock>` + checkpoint-summary + projection-only-slice design:
+//! This module owns the canonical conversation model for Issue #54:
 //!
 //! ```text
 //! ConversationState
@@ -10,7 +9,7 @@
 //!                          at a stable SurfaceRevision
 //! ```
 //!
-//! The split is strict:
+//! The ownership split is strict:
 //!
 //! - the Ledger is append-only and carries **no** visibility flags;
 //! - the Surface is the **sole** authority for what is currently active and
@@ -41,7 +40,9 @@ pub mod surface;
 
 pub use ledger::{LedgerAccess, LedgerError, MessageLedger, message_id_of};
 pub use structure::{StructuralError, StructuralIndex};
-pub use surface::{ConversationSurface, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan};
+pub use surface::{
+    ConversationSurface, SurfaceAccess, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan,
+};
 
 use std::sync::Arc;
 
@@ -127,7 +128,7 @@ pub struct CompactionRecord {
     pub replaced: SurfaceSpan,
     /// The Surface revision established by the rewrite.
     pub surface_revision: SurfaceRevision,
-    /// The monotonic compaction generation, derived from Surface history.
+    /// The monotonic compaction generation maintained in the Surface head.
     pub generation: u64,
 }
 
@@ -135,19 +136,17 @@ pub struct CompactionRecord {
 ///
 /// This is the single mutable conversation authority. The Runtime Client is
 /// a read model over it and never mutates it.
+///
+/// ```compile_fail
+/// use rustx::conversation::ConversationState;
+///
+/// let state = ConversationState::new();
+/// let _competing_authority = state.clone();
+/// ```
 #[derive(Debug, Default)]
 pub struct ConversationState {
     ledger: MessageLedger,
     surface: ConversationSurface,
-}
-
-impl Clone for ConversationState {
-    fn clone(&self) -> Self {
-        Self {
-            ledger: self.ledger.clone(),
-            surface: self.surface.clone(),
-        }
-    }
 }
 
 impl PartialEq for ConversationState {
@@ -206,6 +205,12 @@ impl ConversationState {
         self.ledger.access()
     }
 
+    /// The shared Surface read instrumentation handle.
+    #[must_use]
+    pub fn surface_access(&self) -> &Arc<SurfaceAccess> {
+        self.surface.access()
+    }
+
     /// The current active ordered message identities.
     #[must_use]
     pub fn active_ids(&self) -> &[MessageId] {
@@ -228,7 +233,7 @@ impl ConversationState {
             return Err(ConversationError::Surface(SurfaceError::AlreadyActive(id)));
         }
         let id = self.ledger.append(message)?;
-        self.surface.append(id.clone())?;
+        self.surface.append_after_validation(id.clone());
         Ok(id)
     }
 
@@ -311,19 +316,28 @@ impl ConversationState {
         span: SurfaceSpan,
     ) -> Result<CompactionCommit, ConversationError> {
         let replacement = summary.id.clone();
-        if self.ledger.contains(&replacement) {
-            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
-                replacement,
-            )));
-        }
-        let (start, end) = self.surface.validate_replace(&span, &replacement)?;
-        let (_, index) = self.structure()?;
-        index.validate_span(start, end)?;
+        self.validate_compaction_span(&replacement, &span)?;
         Ok(CompactionCommit {
             summary,
             span,
             expected_revision: self.surface.revision(),
         })
+    }
+
+    fn validate_compaction_span(
+        &self,
+        replacement: &MessageId,
+        span: &SurfaceSpan,
+    ) -> Result<(usize, usize), ConversationError> {
+        if self.ledger.contains(replacement) {
+            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                replacement.clone(),
+            )));
+        }
+        let (start, end) = self.surface.validate_replace(span, replacement)?;
+        let (_, index) = self.structure()?;
+        index.validate_span(start, end)?;
+        Ok((start, end))
     }
 
     /// The single semantic commit/linearization point of compaction:
@@ -357,14 +371,17 @@ impl ConversationState {
                 actual: current,
             }));
         }
-        // Full re-validation before any mutation: the append and the rewrite
-        // either both happen or neither does.
-        let revalidated = self.prepare_compaction(commit.summary.clone(), commit.span.clone())?;
-        debug_assert_eq!(revalidated.expected_revision, current);
+        // Full re-validation before any mutation. The returned active range
+        // is the proof used by the infallible Surface mutation below; no
+        // ordinary recoverable Surface error remains after the append.
+        let (start, end) = self.validate_compaction_span(&commit.summary.id, &commit.span)?;
         let summary_message_id = self.ledger.append(MessageBlock::User(commit.summary))?;
-        let surface_revision = self
-            .surface
-            .replace(&commit.span, summary_message_id.clone())?;
+        let surface_revision = self.surface.replace_after_validation(
+            &commit.span,
+            summary_message_id.clone(),
+            start,
+            end,
+        );
         Ok(CompactionRecord {
             summary_message_id,
             replaced: commit.span,
@@ -389,23 +406,27 @@ pub fn summary_message_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        ConversationError, ConversationState, LedgerError, SurfaceError, SurfaceRevision,
-        SurfaceSpan, summary_message_id,
+        CompactionCommit, ConversationError, ConversationState, LedgerError, SurfaceError,
+        SurfaceRevision, SurfaceSpan, message_id_of, summary_message_id,
     };
     use crate::conversation::structure::StructuralError;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentContentBlock, AgentMessageBlock, InboundKind, MessageBlock, SystemAuthority,
+        AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, SystemAuthority,
         SystemMessageBlock, ToolMessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
     use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 
     fn user(id: &str) -> MessageBlock {
+        user_with_text(id, &format!("content {id}"))
+    }
+
+    fn user_with_text(id: &str, text: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {
             id: MessageId::new(id),
             content: vec![UserContentBlock::Text(TextBlock {
-                text: format!("content {id}"),
+                text: text.to_owned(),
             })],
             source: UserSource::Human,
             kind: InboundKind::Message,
@@ -423,13 +444,13 @@ mod tests {
         })
     }
 
-    fn agent(id: &str, calls: &[&str]) -> MessageBlock {
-        MessageBlock::Agent(AgentMessageBlock {
+    fn assistant(id: &str, calls: &[&str]) -> MessageBlock {
+        MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new(id),
             content: calls
                 .iter()
                 .map(|call| {
-                    AgentContentBlock::ToolCall(ToolCall {
+                    AssistantContentBlock::ToolCall(ToolCall {
                         id: ToolCallId::new(*call),
                         tool_id: ToolId::new("tool-a"),
                         name: "alpha".to_owned(),
@@ -613,6 +634,103 @@ mod tests {
         );
     }
 
+    /// Every accepted append and replacement creates a stable reconstruction
+    /// boundary, including the intermediate revision between two compactions.
+    #[test]
+    fn intermediate_compaction_revisions_remain_exact_after_later_mutations() {
+        let mut state =
+            ConversationState::from_messages([user("a"), user("b"), user("c"), user("d")])
+                .expect("bootstrap");
+        let initial = state.revision();
+
+        let first = state
+            .prepare_compaction(
+                summary("s1", "first"),
+                SurfaceSpan::new(MessageId::new("a"), MessageId::new("c")),
+            )
+            .expect("prepare first");
+        let first_record = state.commit_compaction(first).expect("commit first");
+        let first_revision = first_record.surface_revision;
+
+        state.commit(user("e")).expect("commit e");
+        state.commit(user("f")).expect("commit f");
+        let after_append = state.revision();
+
+        let second = state
+            .prepare_compaction(
+                summary("s2", "second"),
+                SurfaceSpan::new(MessageId::new("s1"), MessageId::new("e")),
+            )
+            .expect("prepare second");
+        let second_record = state.commit_compaction(second).expect("commit second");
+        let second_revision = second_record.surface_revision;
+        state.commit(user("g")).expect("commit later append");
+
+        assert_eq!(
+            state.reconstruct(initial).expect("initial revision"),
+            vec![
+                MessageId::new("a"),
+                MessageId::new("b"),
+                MessageId::new("c"),
+                MessageId::new("d")
+            ]
+        );
+        assert_eq!(
+            state.reconstruct(first_revision).expect("first revision"),
+            vec![MessageId::new("s1"), MessageId::new("d")]
+        );
+        assert_eq!(
+            state.reconstruct(after_append).expect("append revision"),
+            vec![
+                MessageId::new("s1"),
+                MessageId::new("d"),
+                MessageId::new("e"),
+                MessageId::new("f")
+            ]
+        );
+        assert_eq!(
+            state.reconstruct(second_revision).expect("second revision"),
+            vec![MessageId::new("s2"), MessageId::new("f")]
+        );
+    }
+
+    /// Equal content never aliases canonical identity: Surface spans and
+    /// historical reconstruction operate on `MessageId`, not message bytes.
+    #[test]
+    fn equal_content_messages_remain_distinct_identities() {
+        let first = user_with_text("same-a", "identical");
+        let second = user_with_text("same-b", "identical");
+        let mut state =
+            ConversationState::from_messages([first.clone(), second.clone()]).expect("bootstrap");
+        let before = state.revision();
+
+        assert_ne!(message_id_of(&first), message_id_of(&second));
+        assert_eq!(
+            state.active_ids(),
+            &[MessageId::new("same-a"), MessageId::new("same-b")]
+        );
+        assert_eq!(state.ledger().get(&MessageId::new("same-a")), Some(&first));
+        assert_eq!(state.ledger().get(&MessageId::new("same-b")), Some(&second));
+
+        let commit = state
+            .prepare_compaction(
+                summary("same-summary", "summary"),
+                SurfaceSpan::new(MessageId::new("same-b"), MessageId::new("same-b")),
+            )
+            .expect("select the second equal-content message by id");
+        state.commit_compaction(commit).expect("commit");
+        assert_eq!(
+            state.active_ids(),
+            &[MessageId::new("same-a"), MessageId::new("same-summary")]
+        );
+        assert_eq!(
+            state.reconstruct(before).expect("historical identities"),
+            vec![MessageId::new("same-a"), MessageId::new("same-b")]
+        );
+        assert_eq!(state.ledger().get(&MessageId::new("same-a")), Some(&first));
+        assert_eq!(state.ledger().get(&MessageId::new("same-b")), Some(&second));
+    }
+
     /// Invalid replacements are rejected at preparation and never mutate.
     #[test]
     fn invalid_replacements_are_rejected() {
@@ -691,13 +809,49 @@ mod tests {
         assert_eq!(ids(&state), vec!["a", "b", "c", "d"]);
     }
 
+    /// A duplicate summary identity and an invalid prepared span are rejected
+    /// before the Ledger append, leaving both authorities unchanged.
+    #[test]
+    fn invalid_prepared_compactions_are_atomic() {
+        let mut state =
+            ConversationState::from_messages([user("a"), user("b"), user("c")]).expect("bootstrap");
+        let before_ids = state.active_ids().to_vec();
+        let before_revision = state.revision();
+        let before_ledger_len = state.ledger().len();
+
+        let duplicate = CompactionCommit {
+            summary: summary("a", "duplicate"),
+            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("b")),
+            expected_revision: before_revision,
+        };
+        assert!(matches!(
+            state.commit_compaction(duplicate),
+            Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(id)))
+                if id == MessageId::new("a")
+        ));
+
+        let invalid_span = CompactionCommit {
+            summary: summary("s1", "invalid"),
+            span: SurfaceSpan::new(MessageId::new("ghost"), MessageId::new("b")),
+            expected_revision: before_revision,
+        };
+        assert!(matches!(
+            state.commit_compaction(invalid_span),
+            Err(ConversationError::Surface(SurfaceError::NotActive(id)))
+                if id == MessageId::new("ghost")
+        ));
+        assert_eq!(state.active_ids(), before_ids.as_slice());
+        assert_eq!(state.revision(), before_revision);
+        assert_eq!(state.ledger().len(), before_ledger_len);
+    }
+
     /// A replacement can never separate a tool result from its active
     /// owning tool call.
     #[test]
     fn a_replacement_never_splits_a_tool_pair() {
         let state = ConversationState::from_messages([
             user("u1"),
-            agent("a1", &["c1"]),
+            assistant("a1", &["c1"]),
             tool("c1"),
             user("u2"),
         ])
@@ -761,6 +915,25 @@ mod tests {
         assert_eq!(active.len(), 3);
         assert_eq!(state.ledger_access().enumerations(), 0);
         assert_eq!(state.ledger_access().keyed_reads(), 3);
+    }
+
+    /// Current compaction generation is maintained as head metadata and does
+    /// not inspect the retained historical operation log.
+    #[test]
+    fn compaction_generation_is_current_head_work_only() {
+        let mut state =
+            ConversationState::from_messages([user("a"), user("b"), user("c")]).expect("bootstrap");
+        let command = state
+            .prepare_compaction(
+                summary("s1", "summary"),
+                SurfaceSpan::new(MessageId::new("a"), MessageId::new("b")),
+            )
+            .expect("prepare");
+        state.commit_compaction(command).expect("commit");
+        state.surface_access().reset();
+        assert_eq!(state.surface().compaction_generation(), 1);
+        assert_eq!(state.surface_access().history_enumerations(), 0);
+        assert_eq!(state.surface_access().history_steps(), 0);
     }
 
     /// Summary identities are deterministic and namespaced by conversation.

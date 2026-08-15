@@ -30,10 +30,10 @@ use crate::tools::types::ModelToolDefinition;
 /// depend only on runtime-owned data and never on context implementation
 /// modules. The attachment exists only for a pending fresh inbound turn,
 /// targets the final fresh inbound message, and is projection-only: it is
-/// never canonical history, never checkpoint history, never returned in
-/// `AgentExecutionResult.messages`, and never emitted as a committed-message
-/// event. It participates in the projection fingerprint and the full request
-/// token estimate.
+/// never canonical conversation history, never a compaction summary, never
+/// returned in `AgentExecutionResult.messages`, and never emitted as a
+/// committed-message event. It participates in the projection fingerprint
+/// and the full request token estimate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStatusAttachment {
     /// The identity of the final fresh inbound message the status
@@ -50,8 +50,8 @@ pub struct AgentStatusAttachment {
 /// the attempt's immutable Skill snapshot but owned here, so `ModelRequest`
 /// and every provider adapter depend only on runtime-owned data and never
 /// on context or capability implementation modules. The attachment is
-/// projection-only capability context — it is never canonical history,
-/// never checkpoint history, never returned in
+/// projection-only capability context — it is never canonical history and is
+/// never returned in
 /// `AgentExecutionResult.messages`, and never emitted as a committed-message
 /// event — and provider adapters place it in **trusted system context**
 /// (`instructions` for `OpenAI` Responses, the top-level `system` content for

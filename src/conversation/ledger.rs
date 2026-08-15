@@ -94,18 +94,6 @@ pub struct MessageLedger {
     access: Arc<LedgerAccess>,
 }
 
-impl Clone for MessageLedger {
-    /// Cloning a Ledger produces an independent Ledger with its own fresh
-    /// access instrumentation; committed facts are copied verbatim.
-    fn clone(&self) -> Self {
-        Self {
-            records: self.records.clone(),
-            index: self.index.clone(),
-            access: Arc::new(LedgerAccess::default()),
-        }
-    }
-}
-
 impl PartialEq for MessageLedger {
     /// Two Ledgers are equal when they hold the same committed facts in the
     /// same commit order; read instrumentation is not part of identity.
@@ -194,7 +182,7 @@ pub fn message_id_of(message: &MessageBlock) -> MessageId {
     match message {
         MessageBlock::System(system) => system.id.clone(),
         MessageBlock::User(user) => user.id.clone(),
-        MessageBlock::Agent(agent) => agent.id.clone(),
+        MessageBlock::Assistant(assistant) => assistant.id.clone(),
         MessageBlock::Tool(tool) => tool.id.clone(),
     }
 }

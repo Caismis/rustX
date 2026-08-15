@@ -146,9 +146,9 @@ export function runtimeInbound(id: string, text: string) {
   };
 }
 
-export function agentMessage(id: string, text: string) {
+export function assistantMessage(id: string, text: string) {
   return {
-    role: "agent" as const,
+    role: "assistant" as const,
     id,
     content: [{ type: "text" as const, text }],
   };

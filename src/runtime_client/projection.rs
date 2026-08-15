@@ -91,7 +91,7 @@ use tokio::sync::Notify;
 use super::event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 use super::snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
-    InFlightAgentMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
+    InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,
     RuntimeClientAttempt, RuntimeClientAttemptPhase, RuntimeClientBackgroundExecution,
     RuntimeClientCompactionView, RuntimeClientContextView, RuntimeClientSnapshot,
     RuntimeClientStatusFact, RuntimeClientStatusSection,
@@ -315,7 +315,7 @@ impl RuntimeClientProjection {
         match observation {
             Observation::Event { attempt_id, event } => self.fold_event(&attempt_id, &event),
             Observation::Committed { attempt_id, block } => {
-                if matches!(block, MessageBlock::Agent(_))
+                if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
                     attempt.in_flight = None;
@@ -422,7 +422,7 @@ impl RuntimeClientProjection {
     /// - INTERNAL: model request mechanics (`ModelRequestStarted`,
     ///   `ModelRequestFailed`, `ModelRetryScheduled`) and compaction start /
     ///   failure (`CompactionStarted/Failed`);
-    /// - PROJECT: committed compaction completion, carrying only checkpoint
+    /// - PROJECT: committed compaction completion, carrying only context
     ///   metadata from `CompactionCompleted`.
     // The mapping table is one explicit classification policy; identical
     // `Vec::new()` bodies mark intentionally distinct classes (the remaining
@@ -509,13 +509,13 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            RuntimeEvent::AgentMessageStarted { message_id } => {
+            RuntimeEvent::AssistantMessageStarted { message_id } => {
                 self.ensure_attempt(attempt_id);
                 self.snapshot
                     .attempt
                     .as_mut()
                     .expect("attempt view exists")
-                    .in_flight = Some(InFlightAgentMessage {
+                    .in_flight = Some(InFlightAssistantMessage {
                     message_id: message_id.clone(),
                     blocks: Vec::new(),
                 });
@@ -524,7 +524,7 @@ impl RuntimeClientProjection {
                     message_id: message_id.clone(),
                 }]
             }
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id,
                 block_index,
                 delta,
@@ -538,7 +538,7 @@ impl RuntimeClientProjection {
                     delta: delta.clone(),
                 }]
             }
-            RuntimeEvent::AgentReasoningDelta {
+            RuntimeEvent::AssistantReasoningDelta {
                 message_id,
                 block_index,
                 delta,
@@ -552,7 +552,7 @@ impl RuntimeClientProjection {
                     delta: delta.clone(),
                 }]
             }
-            RuntimeEvent::AgentRefusalDelta {
+            RuntimeEvent::AssistantRefusalDelta {
                 message_id,
                 block_index,
                 delta,
@@ -629,7 +629,7 @@ impl RuntimeClientProjection {
             // The loop does not emit identity-only committed-message
             // events yet (M8 owns the durable ledger); if one ever
             // arrives it folds identity only and publishes nothing.
-            RuntimeEvent::AgentMessageCommitted { .. }
+            RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. } => Vec::new(),
             RuntimeEvent::ToolExecutionStarted {
                 tool_call_id,
@@ -1147,7 +1147,7 @@ fn block_index_of(block: &InFlightBlock) -> ContentBlockIndex {
 }
 
 /// Appends one in-flight block maintaining block-index order.
-fn push_in_flight_block(in_flight: &mut Option<InFlightAgentMessage>, block: InFlightBlock) {
+fn push_in_flight_block(in_flight: &mut Option<InFlightAssistantMessage>, block: InFlightBlock) {
     let Some(message) = in_flight.as_mut() else {
         return;
     };
@@ -1327,7 +1327,7 @@ mod tests {
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{
-        AgentContentBlock, AgentMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
+        AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, InboundKind, MessageBlock,
         UserContentBlock, UserMessageBlock, UserSource,
     };
     use crate::model::adapter::ModelAdapter;
@@ -1802,15 +1802,15 @@ mod tests {
             RuntimeEvent::ModelRequestStarted {
                 model: "scripted".to_owned(),
             },
-            RuntimeEvent::AgentMessageStarted {
+            RuntimeEvent::AssistantMessageStarted {
                 message_id: MessageId::new("msg-1"),
             },
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id: MessageId::new("msg-1"),
                 block_index: ContentBlockIndex::new(0),
                 delta: "hello ".to_owned(),
             },
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id: MessageId::new("msg-1"),
                 block_index: ContentBlockIndex::new(0),
                 delta: "world".to_owned(),
@@ -2120,13 +2120,13 @@ mod tests {
         );
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentMessageStarted {
+            RuntimeEvent::AssistantMessageStarted {
                 message_id: MessageId::new("msg-1"),
             },
         );
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id: MessageId::new("msg-1"),
                 block_index: ContentBlockIndex::new(0),
                 delta: "hello ".to_owned(),
@@ -2149,7 +2149,7 @@ mod tests {
         // duplicate of the accumulated text.
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id: MessageId::new("msg-1"),
                 block_index: ContentBlockIndex::new(0),
                 delta: "world".to_owned(),
@@ -2162,9 +2162,9 @@ mod tests {
             RuntimeClientEvent::AssistantTextDelta { delta, .. } if delta == "world"
         ));
         // The canonical commit clears the in-flight repair state.
-        let committed = MessageBlock::Agent(AgentMessageBlock {
+        let committed = MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("msg-1"),
-            content: vec![AgentContentBlock::Text(TextBlock {
+            content: vec![AssistantContentBlock::Text(TextBlock {
                 text: "hello world".to_owned(),
             })],
         });
@@ -2275,7 +2275,7 @@ mod tests {
         for index in 0..10 {
             apply_event(
                 &mut projection,
-                RuntimeEvent::AgentTextDelta {
+                RuntimeEvent::AssistantTextDelta {
                     message_id: MessageId::new("msg-1"),
                     block_index: ContentBlockIndex::new(0),
                     delta: format!("{index}"),
@@ -2312,14 +2312,14 @@ mod tests {
         );
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentMessageStarted {
+            RuntimeEvent::AssistantMessageStarted {
                 message_id: MessageId::new("msg-1"),
             },
         );
         for index in 0..20 {
             apply_event(
                 &mut projection,
-                RuntimeEvent::AgentTextDelta {
+                RuntimeEvent::AssistantTextDelta {
                     message_id: MessageId::new("msg-1"),
                     block_index: ContentBlockIndex::new(0),
                     delta: format!("{index}"),
@@ -2381,7 +2381,7 @@ mod tests {
         );
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentMessageStarted {
+            RuntimeEvent::AssistantMessageStarted {
                 message_id: MessageId::new("msg-1"),
             },
         );
@@ -2393,7 +2393,7 @@ mod tests {
         for index in 0..200 {
             apply_event(
                 &mut projection,
-                RuntimeEvent::AgentTextDelta {
+                RuntimeEvent::AssistantTextDelta {
                     message_id: MessageId::new("msg-1"),
                     block_index: ContentBlockIndex::new(0),
                     delta: format!("{index}"),
@@ -2438,7 +2438,7 @@ mod tests {
         for step in 1..=3 {
             apply_event(
                 &mut projection,
-                RuntimeEvent::AgentTextDelta {
+                RuntimeEvent::AssistantTextDelta {
                     message_id: MessageId::new("msg-1"),
                     block_index: ContentBlockIndex::new(0),
                     delta: "x".to_owned(),
@@ -2474,7 +2474,7 @@ mod tests {
         apply_event(&mut projection, RuntimeEvent::TurnStarted);
         apply_event(
             &mut projection,
-            RuntimeEvent::AgentTextDelta {
+            RuntimeEvent::AssistantTextDelta {
                 message_id: MessageId::new("msg-1"),
                 block_index: ContentBlockIndex::new(0),
                 delta: "x".to_owned(),

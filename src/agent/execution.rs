@@ -55,7 +55,7 @@ use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
 use crate::conversation::{CompactionRecord, ConversationError, ConversationState};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
-use crate::message::types::{AgentMessageBlock, MessageBlock, ToolMessageBlock};
+use crate::message::types::{AssistantMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::ModelEventStream;
 use crate::model::error::{ModelError, ModelErrorKind};
 use crate::model::event::ModelEvent;
@@ -94,7 +94,7 @@ use chrono_tz::Tz;
 pub const MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN: u32 = 1;
 
 /// Everything the loop needs to know about one attempt.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct AgentExecutionRequest {
     /// The agent being executed.
     pub agent_id: AgentId,
@@ -145,10 +145,10 @@ pub struct AgentExecutionRequest {
 ///
 /// `conversation` is the authoritative conversation state handed back to
 /// the host: the Message Ledger holding every committed fact of the attempt
-/// (drained inbound user messages, committed agent messages, committed tool
+/// (drained inbound User messages, committed Assistant messages, committed Tool
 /// messages, and any committed runtime compaction summary) plus the
 /// Conversation Surface at its final revision.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct AgentExecutionResult {
     /// The executed attempt.
     pub attempt_id: AttemptId,
@@ -205,7 +205,7 @@ pub struct AgentExecution<'a> {
     conversation: ConversationState,
     events: Vec<RuntimeEvent>,
     pending_continuation: Option<ProviderContinuationState>,
-    /// The committed agent message that established the pending
+    /// The committed Assistant message that established the pending
     /// continuation, when one is pending.
     continuation_owner: Option<MessageId>,
     /// The pending fresh inbound turn: `Some` until a successful model
@@ -476,7 +476,7 @@ impl<'a> AgentExecution<'a> {
     /// results. Returns the terminal outcome when the attempt settled.
     async fn run_turn(&mut self) -> Option<Terminal> {
         self.turn += 1;
-        let agent_message_id =
+        let assistant_message_id =
             MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
         self.emit(RuntimeEvent::TurnStarted);
 
@@ -487,7 +487,10 @@ impl<'a> AgentExecution<'a> {
         self.emit(RuntimeEvent::ModelRequestStarted {
             model: request.model().to_owned(),
         });
-        let mut invocation = match self.consume_invocation(request, &agent_message_id).await {
+        let mut invocation = match self
+            .consume_invocation(request, &assistant_message_id)
+            .await
+        {
             Ok(invocation) => invocation,
             Err(terminal) => return Some(terminal),
         };
@@ -550,7 +553,7 @@ impl<'a> AgentExecution<'a> {
     /// settled.
     async fn complete_turn(
         &mut self,
-        agent_message_id: MessageId,
+        assistant_message_id: MessageId,
         finish_reason: ModelFinishReason,
         usage: Option<ModelUsage>,
         assembler: ModelEventAssembler,
@@ -589,7 +592,7 @@ impl<'a> AgentExecution<'a> {
         }
         self.pending_continuation = turn_assembly.continuation;
         if self.pending_continuation.is_some() {
-            self.continuation_owner = Some(agent_message_id.clone());
+            self.continuation_owner = Some(assistant_message_id.clone());
         } else {
             self.continuation_owner = None;
         }
@@ -602,9 +605,9 @@ impl<'a> AgentExecution<'a> {
         // M5 preflight boundary: every model-issued tool call of the turn
         // must resolve structurally (registry identity, execution-policy
         // resolution, runtime metadata extraction, business argument
-        // validation) before the agent message is committed. An impossible
+        // validation) before the Assistant message is committed. An impossible
         // canonical identity mismatch or unregistered tool is a
-        // runtime/model-stream contract failure and the agent message is
+        // runtime/model-stream contract failure and the Assistant message is
         // never committed. Business JSON Schema validation failures are
         // normal rejected result slots and do not fail the attempt.
         let preflight = match self.preflight_tool_calls(&turn_assembly.tool_calls) {
@@ -615,12 +618,14 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
-        if let Err(error) = self.commit_agent_message(&agent_message_id, &turn_assembly.content) {
+        if let Err(error) =
+            self.commit_assistant_message(&assistant_message_id, &turn_assembly.content)
+        {
             return Some(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
                     error: RuntimeError::ContractViolation {
                         message: format!(
-                            "the assembled agent message cannot be committed: {error}"
+                            "the assembled Assistant message cannot be committed: {error}"
                         ),
                     },
                 },
@@ -770,9 +775,9 @@ impl<'a> AgentExecution<'a> {
     /// Builds the canonical request of the next model invocation.
     ///
     /// This is the integration point immediately before every agent
-    /// `ModelRequest`: canonical history plus the latest checkpoint flow
-    /// through the context engine into a projection, and the projection is
-    /// compiled into the request messages. The pending fresh inbound turn
+    /// `ModelRequest`: the current Surface flows through the context engine
+    /// into a projection, and the projection is compiled into the request
+    /// messages. The pending fresh inbound turn
     /// (when one exists) is composed into exactly one Agent Status snapshot
     /// for this request preparation, and that exact snapshot is reused
     /// throughout proactive compaction planning and application. Proactive
@@ -885,8 +890,8 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Builds the model request from the current projection of the latest
-    /// checkpoint.
+    /// Builds the model request from the current Conversation Surface
+    /// projection.
     fn context_model_request(
         &mut self,
         status: Option<&AgentStatusAttachment>,
@@ -1288,7 +1293,7 @@ impl<'a> AgentExecution<'a> {
     async fn consume_model_stream(
         &mut self,
         assembler: &mut ModelEventAssembler,
-        agent_message_id: &MessageId,
+        assistant_message_id: &MessageId,
         stream: &mut ModelEventStream,
     ) -> Result<StreamTerminal, Terminal> {
         let mut stream_terminal = None;
@@ -1323,7 +1328,7 @@ impl<'a> AgentExecution<'a> {
                 }
                 _ => {
                     if stream_terminal.is_none() {
-                        self.emit_model_event(&event, agent_message_id);
+                        self.emit_model_event(&event, assistant_message_id);
                     }
                 }
             }
@@ -1351,7 +1356,7 @@ impl<'a> AgentExecution<'a> {
     /// terminates, so a sequential background call blocks later scheduling
     /// only through its dispatch-acceptance point.
     ///
-    /// The structural invariant: once the valid agent tool-call message is
+    /// The structural invariant: once the valid Assistant tool-call message is
     /// committed, its entire tool-result batch is settled exactly once.
     /// Every call slot receives exactly one attempt-facing result
     /// (success/failure/cancellation/timeout/validation rejection/accepted
@@ -1651,13 +1656,13 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Commits the assembled agent message into the conversation state.
-    fn commit_agent_message(
+    /// Commits the assembled Assistant message into the conversation state.
+    fn commit_assistant_message(
         &mut self,
         message_id: &MessageId,
-        content: &[crate::message::types::AgentContentBlock],
+        content: &[crate::message::types::AssistantContentBlock],
     ) -> Result<(), ConversationError> {
-        self.commit_canonical(&MessageBlock::Agent(AgentMessageBlock {
+        self.commit_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
             content: content.to_vec(),
         }))?;
@@ -1669,7 +1674,7 @@ impl<'a> AgentExecution<'a> {
     /// observation at that same linearization point.
     ///
     /// Every canonical commit of the attempt — drained inbound user
-    /// messages, committed agent messages, committed tool messages — goes
+    /// messages, committed Assistant messages, committed Tool messages — goes
     /// through here. Independent ledger/surface mutations do not exist in
     /// this module.
     fn commit_canonical(&mut self, block: &MessageBlock) -> Result<MessageId, ConversationError> {
@@ -1684,26 +1689,26 @@ impl<'a> AgentExecution<'a> {
     fn emit_model_event(&mut self, event: &ModelEvent, message_id: &MessageId) {
         match event {
             ModelEvent::Started => {
-                self.emit(RuntimeEvent::AgentMessageStarted {
+                self.emit(RuntimeEvent::AssistantMessageStarted {
                     message_id: message_id.clone(),
                 });
             }
             ModelEvent::TextDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AgentTextDelta {
+                self.emit(RuntimeEvent::AssistantTextDelta {
                     message_id: message_id.clone(),
                     block_index: *block_index,
                     delta: text.clone(),
                 });
             }
             ModelEvent::ReasoningDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AgentReasoningDelta {
+                self.emit(RuntimeEvent::AssistantReasoningDelta {
                     message_id: message_id.clone(),
                     block_index: *block_index,
                     delta: text.clone(),
                 });
             }
             ModelEvent::RefusalDelta { block_index, text } => {
-                self.emit(RuntimeEvent::AgentRefusalDelta {
+                self.emit(RuntimeEvent::AssistantRefusalDelta {
                     message_id: message_id.clone(),
                     block_index: *block_index,
                     delta: text.clone(),
@@ -2180,7 +2185,7 @@ mod tests {
             RuntimeEvent::ModelRequestStarted {
                 model: "scripted".to_owned(),
             },
-            RuntimeEvent::AgentMessageStarted {
+            RuntimeEvent::AssistantMessageStarted {
                 message_id: MessageId::new("attempt-1-agent-1"),
             },
             RuntimeEvent::ToolCallStarted {

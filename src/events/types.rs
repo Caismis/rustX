@@ -31,7 +31,7 @@
 //!
 //! ## Committed messages
 //!
-//! [`RuntimeEvent::AgentMessageCommitted`] and
+//! [`RuntimeEvent::AssistantMessageCommitted`] and
 //! [`RuntimeEvent::ToolMessageCommitted`] reference the committed message by
 //! its stable [`MessageId`] and never embed the message content. Canonical
 //! message content lives only in the durable Message Ledger (M8); the Event
@@ -174,13 +174,13 @@ pub enum RuntimeEvent {
         retry_delay_ms: Option<u64>,
     },
 
-    /// Assembly of a canonical agent message started.
-    AgentMessageStarted {
+    /// Assembly of a canonical Assistant message started.
+    AssistantMessageStarted {
         /// The message identity being assembled.
         message_id: MessageId,
     },
-    /// A text delta of one output block of the in-flight agent message.
-    AgentTextDelta {
+    /// A text delta of one output block of the in-flight Assistant message.
+    AssistantTextDelta {
         /// The message identity being assembled.
         message_id: MessageId,
         /// The output block the delta belongs to.
@@ -188,8 +188,8 @@ pub enum RuntimeEvent {
         /// The incremental text.
         delta: String,
     },
-    /// A reasoning delta of one output block of the in-flight agent message.
-    AgentReasoningDelta {
+    /// A reasoning delta of one output block of the in-flight Assistant message.
+    AssistantReasoningDelta {
         /// The message identity being assembled.
         message_id: MessageId,
         /// The reasoning block the delta belongs to.
@@ -197,11 +197,11 @@ pub enum RuntimeEvent {
         /// The incremental reasoning text.
         delta: String,
     },
-    /// A refusal delta of one output block of the in-flight agent message.
+    /// A refusal delta of one output block of the in-flight Assistant message.
     ///
     /// Refusal is preserved as refusal, never flattened into text, so the
     /// completed message assembles a `RefusalBlock`.
-    AgentRefusalDelta {
+    AssistantRefusalDelta {
         /// The message identity being assembled.
         message_id: MessageId,
         /// The refusal block the delta belongs to.
@@ -209,7 +209,7 @@ pub enum RuntimeEvent {
         /// The incremental refusal text.
         delta: String,
     },
-    /// A tool call within the in-flight agent message started.
+    /// A tool call within the in-flight Assistant message started.
     ToolCallStarted {
         /// The message identity being assembled.
         message_id: MessageId,
@@ -229,7 +229,7 @@ pub enum RuntimeEvent {
         /// The incremental JSON argument fragment.
         arguments_delta: String,
     },
-    /// A tool call within the in-flight agent message completed.
+    /// A tool call within the in-flight Assistant message completed.
     ToolCallCompleted {
         /// The message identity being assembled.
         message_id: MessageId,
@@ -238,10 +238,10 @@ pub enum RuntimeEvent {
         /// The fully assembled tool call.
         call: ToolCall,
     },
-    /// A complete canonical agent message was committed to the Message
+    /// A complete canonical Assistant message was committed to the Message
     /// Ledger. The event references the message by identity only; message
     /// content is never duplicated into the Event Journal.
-    AgentMessageCommitted {
+    AssistantMessageCommitted {
         /// Identity of the committed message block.
         message_id: MessageId,
     },
@@ -606,7 +606,7 @@ mod tests {
                 attempt_id: AttemptId::new("attempt-1"),
             },
             RuntimeEvent::TurnStarted,
-            RuntimeEvent::AgentMessageCommitted {
+            RuntimeEvent::AssistantMessageCommitted {
                 message_id: crate::runtime::identity::MessageId::new("msg-1"),
             },
             RuntimeEvent::CompactionCompleted {

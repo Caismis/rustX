@@ -162,8 +162,8 @@ impl CapabilitySnapshot {
 
     /// The Layer-0 Skill catalog attachment, when any Skill is active.
     ///
-    /// The attachment is projection-only: it is never canonical history,
-    /// never checkpoint history, never returned in
+    /// The attachment is projection-only: it is never a canonical
+    /// conversation fact and is never returned in
     /// `AgentExecutionResult.messages`, and never emitted as a
     /// committed-message event.
     #[must_use]
