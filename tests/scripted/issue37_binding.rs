@@ -25,9 +25,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rustx::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-use rustx::context::{
-    AgentStatusComposer, DefaultTokenEstimator, InMemoryCheckpointStore, TokenEstimator,
-};
+use rustx::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
 use rustx::model::event::ModelEvent;
 use rustx::model::finish::ModelFinishReason;
 
@@ -95,7 +93,6 @@ fn config(
                 summary_output_cap: None,
             },
             estimator,
-            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
             status_composer: AgentStatusComposer::default(),
         },
         tool_runtime: runtime,

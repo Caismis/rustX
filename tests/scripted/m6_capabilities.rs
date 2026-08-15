@@ -1476,7 +1476,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         agent_id: rustx::runtime::identity::AgentId::new("agent-1"),
         conversation_id: rustx::runtime::identity::ConversationId::new("conv-m6"),
         attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
-        initial_messages: vec![],
+        conversation: rustx::conversation::ConversationState::new(),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -1488,7 +1488,6 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             summary_output_cap: None,
         },
         Arc::new(rustx::context::DefaultTokenEstimator),
-        Arc::new(rustx::context::InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &request.model,
     )
@@ -1517,7 +1516,7 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     // The catalog is never canonical history, never returned in the result
     // messages, and never a committed-message event.
     assert!(
-        result.messages.iter().all(|message| {
+        result.messages().iter().all(|message| {
             !serde_json::to_string(message)
                 .expect("serialize")
                 .contains("## Skills")

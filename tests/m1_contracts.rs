@@ -415,6 +415,8 @@ fn additional_event_variants_round_trip() {
 
     let compaction = RuntimeEvent::CompactionCompleted {
         generation: 3,
+        summary_message_id: MessageId::new("conv-1-summary-3"),
+        surface_revision: rustx::conversation::SurfaceRevision::new(12),
         tokens_before: TokenMeasurement {
             input_tokens: 4800,
             source: TokenMeasurementSource::ProviderReported,

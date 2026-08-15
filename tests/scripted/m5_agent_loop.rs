@@ -37,15 +37,18 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
         attempt_id: AttemptId::new("attempt-1"),
-        initial_messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                text: "go".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            timestamp: None,
-        })],
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "go".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -53,9 +56,7 @@ fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
 }
 
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{
-        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    };
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
     ContextRuntime::for_attempt(
@@ -65,7 +66,6 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )
@@ -146,7 +146,7 @@ fn scripted(id: &str, tool_id: &str, name: &str, arguments: serde_json::Value) -
 /// Tool messages committed to canonical history in order.
 fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
     result
-        .messages
+        .messages()
         .iter()
         .filter_map(|message| match message {
             MessageBlock::Tool(tool) => Some(tool),
@@ -833,7 +833,7 @@ async fn identity_mismatch_is_a_structural_contract_failure() {
     let (result, _capability) = run(&model, tools, &cancellation, None).await;
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "the agent tool-call message is never committed for a structurally unresolvable call"
     );

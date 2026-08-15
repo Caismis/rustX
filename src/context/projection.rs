@@ -1,96 +1,87 @@
 //! The explicit context projection boundary.
 //!
-//! Canonical history ([`MessageBlock`] values committed to the conversation)
-//! is durable truth and never changes. What the model sees is a
-//! deterministic *projection* of that truth: the pinned system prefix, the
-//! latest compaction checkpoint summary, and the retained literal suffix.
+//! Since M7.5 (Issue #54) the canonical conversation model is
+//! [`MessageLedger`] + [`ConversationSurface`]: the Ledger holds immutable
+//! committed facts and the Surface is the sole authority for what is
+//! currently active and in what order.
 //!
-//! [`ContextProjection`] is that model-visible projection. It is clearly
-//! distinguishable from canonical history and is never stored as history:
+//! [`ContextProjection`] is the finite request-preparation value derived
+//! from one exact Surface state:
 //!
-//! - a projection item may be a whole canonical [`MessageBlock`] or a
-//!   projection-only slice of an `AgentMessageBlock`
-//!   ([`ProjectionItem::AgentSlice`]);
-//! - a projection-only `AgentSlice` is never persisted, never emitted as
-//!   `AgentMessageCommitted`, and never placed into
-//!   `AgentExecutionResult.messages`; when the projection is compiled into
-//!   the current `ModelRequest.messages` boundary it is materialized
-//!   transiently under the original source `MessageId` as a model-context
-//!   view only;
-//! - the projected input measurement carries explicit provenance
-//!   ([`TokenMeasurement`]).
+//! ```text
+//! Surface @ SurfaceRevision
+//!   → finite active MessageIds
+//!   → keyed Ledger hydration
+//!   → ContextProjection { whole canonical messages, status, catalog }
+//! ```
 //!
+//! Every projected item is a **complete canonical message**. There is no
+//! projection-only partial agent message: the M4 `ProjectionItem::AgentSlice`
+//! and the split-turn architecture that produced it are gone.
+//!
+//! The projected input measurement carries explicit provenance
+//! ([`TokenMeasurement`]): a provider-reported measurement applies only when
+//! the request context it measured — the exact Surface revision, the exact
+//! hydrated messages, and the exact Agent Status / Skill catalog attachments
+//! — is identical.
+//!
+//! [`MessageLedger`]: crate::conversation::MessageLedger
+//! [`ConversationSurface`]: crate::conversation::ConversationSurface
 //! [`TokenMeasurement`]: crate::runtime::types::TokenMeasurement
 
 use serde::{Deserialize, Serialize};
 
-use crate::message::types::{AgentContentBlock, MessageBlock};
+use crate::conversation::SurfaceRevision;
+use crate::message::types::MessageBlock;
 use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
-use crate::runtime::identity::MessageId;
 use crate::runtime::types::TokenMeasurement;
 
-/// One ordered model-visible projection item.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProjectionItem {
-    /// A whole canonical message, retained literally.
-    Message(MessageBlock),
-    /// A projection-only slice of one canonical `AgentMessageBlock`.
-    ///
-    /// This is a model-context view only: it is never persisted into
-    /// canonical history, never emitted as `AgentMessageCommitted`, and
-    /// never returned inside `AgentExecutionResult.messages`.
-    AgentSlice {
-        /// The identity of the source canonical agent message.
-        source_message_id: MessageId,
-        /// The retained content blocks, in original block order.
-        content: Vec<AgentContentBlock>,
-    },
-}
-
-/// The deterministic model-visible projection of one canonical history.
+/// The deterministic model-visible projection of one Conversation Surface
+/// revision.
 ///
-/// The projection is a pure function of (canonical history, latest context
-/// checkpoint, tool definitions, observed provider usage, the pending fresh
-/// inbound Agent Status attachment): identical inputs produce an identical
-/// projection, including its estimated input measurement.
+/// The projection is a pure function of (Surface revision, hydrated active
+/// messages, tool definitions, observed provider usage, Agent Status
+/// attachment, Skill catalog attachment): identical inputs produce an
+/// identical projection, including its estimated input measurement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextProjection {
-    /// The ordered model-visible items: pinned system prefix, checkpoint
-    /// summary (if one exists), then the retained literal suffix.
-    pub items: Vec<ProjectionItem>,
+    /// The exact Surface revision this projection was built from.
+    ///
+    /// This is the seam Issue #55's `RequestSnapshot` consumes: a request's
+    /// visible-conversation identity is `ConversationSurface @ revision`,
+    /// never "whatever messages happened to exist around that time".
+    pub surface_revision: SurfaceRevision,
+    /// The ordered model-visible **complete canonical** messages of the
+    /// current Surface.
+    pub messages: Vec<MessageBlock>,
     /// The ephemeral Agent Status attachment of a pending fresh inbound
     /// turn, when one exists. The attachment is projection-only: it is never
-    /// canonical history, never checkpoint history, and never returned in
-    /// `AgentExecutionResult.messages`.
+    /// a Ledger fact and never appears on the Surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_status: Option<AgentStatusAttachment>,
     /// The ephemeral Skill catalog attachment of the attempt's immutable
     /// Skill snapshot, when any Skill is active. The attachment is
-    /// projection-only capability context: it is never canonical history,
-    /// never checkpoint history, and never returned in
-    /// `AgentExecutionResult.messages`.
+    /// projection-only capability context: it is never a Ledger fact and
+    /// never appears on the Surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_catalog: Option<SkillCatalogAttachment>,
     /// The deterministic planned input measurement of the full model
     /// request, including non-compacted contributors such as tool
     /// definitions, the Agent Status attachment, and the Skill catalog.
     pub estimated_input: TokenMeasurement,
-    /// The checkpoint generation that contributed to this projection, if
-    /// one did.
-    pub checkpoint_generation: Option<u64>,
 }
 
 impl ContextProjection {
-    /// A deterministic fingerprint of this projection.
+    /// A deterministic fingerprint of this request context.
     ///
     /// The fingerprint is a FNV-1a hash over the canonical JSON of the
-    /// projection items, the checkpoint generation, and the exact Agent
-    /// Status attachment. It is used to decide whether a provider-reported
-    /// input measurement applies to exactly this projection: a reported
-    /// measurement is authoritative only when the projection being measured
-    /// is byte-for-byte identical. Changing the sampled status (for example
-    /// a new `current_time`) therefore changes the fingerprint.
+    /// Surface revision, the hydrated active messages, the exact Agent
+    /// Status attachment, and the exact Skill catalog attachment. It decides
+    /// whether a provider-reported input measurement applies to exactly this
+    /// request context: a reported measurement is authoritative only when
+    /// the context being measured is byte-for-byte identical. A Surface
+    /// rewrite, an append, a changed status snapshot, or a changed catalog
+    /// therefore all invalidate a stale measurement.
     ///
     /// # Panics
     ///
@@ -98,13 +89,10 @@ impl ContextProjection {
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
-        let bytes = serde_json::to_vec(&self.items)
-            .expect("canonical projection serializes")
+        let bytes = serde_json::to_vec(&self.surface_revision)
+            .expect("surface revision serializes")
             .into_iter()
-            .chain(
-                serde_json::to_vec(&self.checkpoint_generation)
-                    .expect("checkpoint generation serializes"),
-            )
+            .chain(serde_json::to_vec(&self.messages).expect("canonical messages serialize"))
             .chain(
                 serde_json::to_vec(&self.agent_status).expect("agent status attachment serializes"),
             )
@@ -121,106 +109,56 @@ impl ContextProjection {
     }
 }
 
-/// The compiled provider-neutral model context of one projection.
-///
-/// This is the explicit M4 "provider context compiler" boundary: the compiled
-/// canonical messages plus the ephemeral Agent Status attachment travel
-/// together into the `ModelRequest`. Agent Status is never encoded as a fake
-/// canonical `MessageBlock`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompiledContext {
-    /// The compiled canonical messages of the projection.
-    pub messages: Vec<MessageBlock>,
-    /// The ephemeral Agent Status attachment, when the projection carries
-    /// one.
-    pub agent_status: Option<AgentStatusAttachment>,
-    /// The ephemeral Skill catalog attachment, when the projection carries
-    /// one.
-    pub skill_catalog: Option<SkillCatalogAttachment>,
-}
-
-/// Compiles a projection into a [`CompiledContext`].
-///
-/// A [`ProjectionItem::AgentSlice`] is materialized transiently as a
-/// canonical `AgentMessageBlock` under its original source `MessageId`.
-/// This is explicitly a model-context view: the resulting message is never
-/// authoritative ledger content, is never committed, and never appears in
-/// `AgentExecutionResult.messages`. The ephemeral Agent Status attachment
-/// travels alongside and is never inserted into the canonical message list.
-///
-/// # Panics
-///
-/// Panics only if the canonical projection fails to serialize, which is
-/// unreachable for the canonical runtime-owned types.
-#[must_use]
-pub fn compile_projection(projection: &ContextProjection) -> CompiledContext {
-    CompiledContext {
-        messages: projection
-            .items
-            .iter()
-            .map(compile_item)
-            .collect::<Vec<_>>(),
-        agent_status: projection.agent_status.clone(),
-        skill_catalog: projection.skill_catalog.clone(),
-    }
-}
-
-fn compile_item(item: &ProjectionItem) -> MessageBlock {
-    match item {
-        ProjectionItem::Message(message) => message.clone(),
-        ProjectionItem::AgentSlice {
-            source_message_id,
-            content,
-        } => MessageBlock::Agent(crate::message::types::AgentMessageBlock {
-            id: source_message_id.clone(),
-            content: content.clone(),
-        }),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{CompiledContext, ContextProjection, ProjectionItem, compile_projection};
+    use super::ContextProjection;
     use crate::context::status::{AgentStatusFact, AgentStatusSectionData, AgentStatusSectionId};
+    use crate::conversation::SurfaceRevision;
     use crate::message::content::TextBlock;
-    use crate::message::types::{MessageBlock, UserContentBlock, UserMessageBlock, UserSource};
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
     use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
     use crate::runtime::identity::MessageId;
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 
     fn projection() -> ContextProjection {
         ContextProjection {
-            items: vec![ProjectionItem::Message(MessageBlock::User(
-                UserMessageBlock {
-                    id: MessageId::new("msg-1"),
-                    content: vec![UserContentBlock::Text(TextBlock {
-                        text: "hello".to_owned(),
-                    })],
-                    source: UserSource::Human,
-                    kind: crate::message::types::InboundKind::Message,
-                    timestamp: None,
-                },
-            ))],
+            surface_revision: SurfaceRevision::new(1),
+            messages: vec![MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-1"),
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "hello".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            })],
             agent_status: None,
             skill_catalog: None,
             estimated_input: TokenMeasurement {
                 input_tokens: 7,
                 source: TokenMeasurementSource::Estimated,
             },
-            checkpoint_generation: Some(1),
         }
     }
 
-    /// Identical projections produce identical fingerprints; different
-    /// projections do not.
+    /// Identical request contexts produce identical fingerprints; a
+    /// different Surface revision does not.
     #[test]
     fn fingerprints_are_deterministic_and_discriminating() {
         let projection = projection();
-        let clone = projection.clone();
-        assert_eq!(projection.fingerprint(), clone.fingerprint());
-        let mut different = projection.clone();
-        different.checkpoint_generation = Some(2);
-        assert_ne!(projection.fingerprint(), different.fingerprint());
+        assert_eq!(projection.fingerprint(), projection.clone().fingerprint());
+        let mut other_revision = projection.clone();
+        other_revision.surface_revision = SurfaceRevision::new(2);
+        assert_ne!(
+            projection.fingerprint(),
+            other_revision.fingerprint(),
+            "a surface revision change must invalidate a stale measurement"
+        );
+        let mut other_messages = projection.clone();
+        other_messages.messages.clear();
+        assert_ne!(projection.fingerprint(), other_messages.fingerprint());
     }
 
     /// The exact Skill catalog attachment participates in the fingerprint.
@@ -238,16 +176,10 @@ mod tests {
             .expect("catalog present")
             .rendered = "## Skills\n\n- pdf: ...changed...".to_owned();
         assert_ne!(projection.fingerprint(), with_catalog.fingerprint());
-        assert_ne!(
-            with_catalog.fingerprint(),
-            other_catalog.fingerprint(),
-            "a different catalog snapshot must invalidate the old projection fingerprint"
-        );
+        assert_ne!(with_catalog.fingerprint(), other_catalog.fingerprint());
     }
 
-    /// The exact Agent Status attachment participates in the fingerprint: a
-    /// different status snapshot (for example a new `current_time`) changes
-    /// the fingerprint even when every projection item is identical.
+    /// The exact Agent Status attachment participates in the fingerprint.
     #[test]
     fn agent_status_changes_the_fingerprint() {
         let projection = projection();
@@ -267,76 +199,7 @@ mod tests {
             "<system-reminder>\nCurrent time: 2026-08-08T16:32:00+08:00\n</system-reminder>"
                 .to_owned();
         assert_ne!(projection.fingerprint(), with_status.fingerprint());
-        assert_ne!(
-            with_status.fingerprint(),
-            other_snapshot.fingerprint(),
-            "a different status snapshot must invalidate the old projection fingerprint"
-        );
-    }
-
-    /// Compiling a projection preserves whole messages, materializes agent
-    /// slices under their original source message id, and carries the
-    /// ephemeral status attachment separately — never as a fake message.
-    #[test]
-    fn compile_materializes_slices_under_source_identity() {
-        let projection = ContextProjection {
-            items: vec![
-                ProjectionItem::Message(MessageBlock::User(UserMessageBlock {
-                    id: MessageId::new("msg-user"),
-                    content: vec![UserContentBlock::Text(TextBlock {
-                        text: "hi".to_owned(),
-                    })],
-                    source: UserSource::Human,
-                    kind: crate::message::types::InboundKind::Message,
-                    timestamp: None,
-                })),
-                ProjectionItem::AgentSlice {
-                    source_message_id: MessageId::new("msg-agent"),
-                    content: vec![crate::message::types::AgentContentBlock::Text(TextBlock {
-                        text: "tail".to_owned(),
-                    })],
-                },
-            ],
-            agent_status: Some(AgentStatusAttachment {
-                target_message_id: MessageId::new("msg-user"),
-                rendered: "status footer".to_owned(),
-            }),
-            skill_catalog: Some(SkillCatalogAttachment {
-                rendered: "## Skills\n".to_owned(),
-            }),
-            estimated_input: TokenMeasurement {
-                input_tokens: 4,
-                source: TokenMeasurementSource::Estimated,
-            },
-            checkpoint_generation: None,
-        };
-        let CompiledContext {
-            messages,
-            agent_status,
-            skill_catalog,
-        } = compile_projection(&projection);
-        assert_eq!(messages.len(), 2);
-        let ProjectionItem::Message(first) = &projection.items[0] else {
-            panic!("first item must be a message");
-        };
-        assert_eq!(&messages[0], first);
-        let MessageBlock::Agent(agent) = &messages[1] else {
-            panic!("slice must compile into an agent message");
-        };
-        assert_eq!(agent.id.as_str(), "msg-agent");
-        assert_eq!(agent.content.len(), 1);
-        let attachment = agent_status.expect("status attachment compiled");
-        assert_eq!(attachment.target_message_id, MessageId::new("msg-user"));
-        let catalog = skill_catalog.expect("skill catalog attachment compiled");
-        assert_eq!(catalog.rendered, "## Skills\n");
-        assert!(
-            messages.iter().all(|message| {
-                !matches!(message, MessageBlock::User(user) if user.content.iter().any(|block| {
-                    matches!(block, UserContentBlock::Text(text) if text.text == "status footer")
-                }))
-            }),
-            "the status attachment must never be compiled as a canonical message"
-        );
+        assert_ne!(with_status.fingerprint(), other_snapshot.fingerprint());
     }
 
     /// Reserved section ids are recognized by the status subsystem.
@@ -347,10 +210,8 @@ mod tests {
             AgentStatusSectionId::BACKGROUND_EXECUTION,
             "background_execution"
         );
-        let temporal = AgentStatusSectionId::new("temporal");
-        assert!(temporal.is_reserved());
-        let custom = AgentStatusSectionId::new("custom");
-        assert!(!custom.is_reserved());
+        assert!(AgentStatusSectionId::new("temporal").is_reserved());
+        assert!(!AgentStatusSectionId::new("custom").is_reserved());
         assert_eq!(
             AgentStatusSectionData::Facts {
                 facts: vec![AgentStatusFact {

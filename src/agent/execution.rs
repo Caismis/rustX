@@ -6,7 +6,8 @@
 //! ```text
 //! input
 //!  ↓
-//! canonical history + latest context checkpoint + pending FreshInboundTurn
+//! ConversationState (Message Ledger + Conversation Surface) + pending
+//! FreshInboundTurn
 //!  ↓
 //! ContextEngine → ContextProjection (+ ephemeral Agent Status attachment)
 //!  ↓
@@ -47,12 +48,12 @@
 use futures_util::StreamExt;
 
 use crate::capabilities::AttemptCapabilityLease;
-use crate::context::checkpoint::ContextCheckpoint;
+use crate::context::ContextRuntime;
 use crate::context::engine::CompactionConstraints;
 use crate::context::error::{ContextError, ContextErrorKind};
 use crate::context::projection::ContextProjection;
 use crate::context::tokens::ProviderObservedInput;
-use crate::context::{ContextRuntime, compile_projection};
+use crate::conversation::{CompactionRecord, ConversationError, ConversationState};
 use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use crate::message::types::{AgentMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::ModelEventStream;
@@ -101,9 +102,15 @@ pub struct AgentExecutionRequest {
     pub conversation_id: ConversationId,
     /// The attempt identity reported by attempt-level events.
     pub attempt_id: AttemptId,
-    /// The conversation/input state the attempt starts from. The loop owns
-    /// the committed history and appends agent and tool messages to it.
-    pub initial_messages: Vec<MessageBlock>,
+    /// The one canonical conversation state the attempt takes ownership of.
+    ///
+    /// Ownership transfers into the attempt: while the attempt runs it is
+    /// the single mutable conversation authority, and settlement transfers
+    /// the state back to the host through
+    /// [`AgentExecutionResult::conversation`]. There is deliberately no
+    /// clone-based `initial_messages` API, so two independently mutable
+    /// conversation copies are not representable.
+    pub conversation: ConversationState,
     /// The explicit execution trigger of the attempt's first model turn.
     ///
     /// Fresh inbound identity is explicit execution state, never inferred
@@ -136,10 +143,11 @@ pub struct AgentExecutionRequest {
 /// settlement that produced the terminal event: they always represent the
 /// same settlement boundary.
 ///
-/// `messages` is canonical history only: the initial canonical messages
-/// plus every committed agent message, tool message, and drained inbound
-/// user message of the attempt. No compaction summary and no projection-only
-/// agent slice ever appears here.
+/// `conversation` is the authoritative conversation state handed back to
+/// the host: the Message Ledger holding every committed fact of the attempt
+/// (drained inbound user messages, committed agent messages, committed tool
+/// messages, and any committed runtime compaction summary) plus the
+/// Conversation Surface at its final revision.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentExecutionResult {
     /// The executed attempt.
@@ -153,11 +161,29 @@ pub struct AgentExecutionResult {
     /// The ordered runtime event trace, ending with exactly one terminal
     /// event.
     pub events: Vec<RuntimeEvent>,
-    /// The committed conversation state: the initial messages plus every
-    /// committed agent message, tool message, and drained inbound user
-    /// message of the attempt. This is canonical history, never a
-    /// projection.
-    pub messages: Vec<MessageBlock>,
+    /// The authoritative conversation state, transferred back to the host.
+    pub conversation: ConversationState,
+}
+
+impl AgentExecutionResult {
+    /// The committed Message Ledger records of the settled attempt, in
+    /// commit order.
+    ///
+    /// This is the explicit audit/read path of the settled conversation: it
+    /// enumerates the Ledger for a caller that actually asked for the
+    /// complete committed history. The engine's normal projection and
+    /// compaction paths never enumerate it.
+    #[must_use]
+    pub fn messages(&self) -> &[MessageBlock] {
+        self.conversation.ledger().audit_records()
+    }
+
+    /// The active ordered message identities of the settled Conversation
+    /// Surface.
+    #[must_use]
+    pub fn active_ids(&self) -> &[MessageId] {
+        self.conversation.active_ids()
+    }
 }
 
 /// One agent attempt execution.
@@ -174,7 +200,9 @@ pub struct AgentExecution<'a> {
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
     state: ExecutionStateMachine,
-    history: Vec<MessageBlock>,
+    /// The attempt's owned conversation state: the single mutable
+    /// conversation authority for the attempt's lifetime.
+    conversation: ConversationState,
     events: Vec<RuntimeEvent>,
     pending_continuation: Option<ProviderContinuationState>,
     /// The committed agent message that established the pending
@@ -228,6 +256,17 @@ struct ModelInvocation {
     message_id: MessageId,
     assembler: ModelEventAssembler,
     terminal: StreamTerminal,
+}
+
+/// The committed result of one successful compaction: the derived record
+/// plus the measurements the completion event reports.
+struct CompletedCompaction {
+    /// The derived record of the applied compaction.
+    record: CompactionRecord,
+    /// The pre-compaction measurement, preserving its provenance.
+    tokens_before: crate::runtime::types::TokenMeasurement,
+    /// The deterministic estimate of the rebuilt request context.
+    estimated_tokens_after: u64,
 }
 
 /// The terminal outcome of the whole attempt.
@@ -295,8 +334,10 @@ impl<'a> AgentExecution<'a> {
                 runtime_workspace: tool_runtime.workspace().root().to_path_buf(),
             });
         }
+        let mut request = request;
+        let conversation = core::mem::take(&mut request.conversation);
         Ok(Self {
-            history: request.initial_messages.clone(),
+            conversation,
             request,
             capability,
             cancellation,
@@ -417,7 +458,7 @@ impl<'a> AgentExecution<'a> {
             outcome,
             terminal_state: self.state.state(),
             events: self.events,
-            messages: self.history,
+            conversation: self.conversation,
         }
     }
 
@@ -574,7 +615,17 @@ impl<'a> AgentExecution<'a> {
                 });
             }
         };
-        self.commit_agent_message(&agent_message_id, &turn_assembly.content);
+        if let Err(error) = self.commit_agent_message(&agent_message_id, &turn_assembly.content) {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: format!(
+                            "the assembled agent message cannot be committed: {error}"
+                        ),
+                    },
+                },
+            });
+        }
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
             // Safe boundary for a completed no-tool turn: the attempt may
@@ -687,9 +738,21 @@ impl<'a> AgentExecution<'a> {
         };
         let mut message_ids = Vec::with_capacity(batch.items().len());
         for item in batch.into_items() {
-            message_ids.push(item.message().id.clone());
-            self.history.push(MessageBlock::User(item.into_message()));
-            self.observe_committed_last();
+            let block = MessageBlock::User(item.into_message());
+            match self.commit_canonical(&block) {
+                Ok(message_id) => message_ids.push(message_id),
+                Err(error) => {
+                    return Err(Terminal::Failed {
+                        failure: AttemptFailure::Runtime {
+                            error: RuntimeError::ContractViolation {
+                                message: format!(
+                                    "a drained inbound message cannot be committed: {error}"
+                                ),
+                            },
+                        },
+                    });
+                }
+            }
         }
         let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
             failure: AttemptFailure::Runtime {
@@ -742,9 +805,11 @@ impl<'a> AgentExecution<'a> {
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
         if should_compact {
-            // Successful compaction invalidates any pending continuation.
             let must_cover = self.continuation_owner.clone();
             let fresh = self.pending_fresh_inbound.clone();
+            // `perform_compaction` owns the post-surface-rewrite
+            // invalidation of the opaque provider continuation; no caller
+            // clears it a second time.
             match self
                 .perform_compaction(must_cover.as_ref(), fresh.as_ref(), status.as_ref(), None)
                 .await
@@ -752,9 +817,6 @@ impl<'a> AgentExecution<'a> {
                 Ok(()) => {}
                 Err(terminal) => return Err(terminal),
             }
-            self.pending_continuation = None;
-            self.continuation_owner = None;
-            self.observed = None;
         }
         self.context_model_request(status.as_ref())
     }
@@ -777,7 +839,10 @@ impl<'a> AgentExecution<'a> {
         let Some(fresh) = &self.pending_fresh_inbound else {
             return Ok(None);
         };
-        fresh.validate_against(&self.history).map_err(|error| {
+        let active = self.conversation.active_messages().map_err(|error| {
+            ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
+        })?;
+        fresh.validate_against(&active).map_err(|error| {
             ContextError::new(
                 ContextErrorKind::MalformedHistory,
                 format!("pending fresh inbound turn is inconsistent: {error}"),
@@ -814,10 +879,10 @@ impl<'a> AgentExecution<'a> {
 
     /// The persisted timestamp of one committed inbound message.
     fn inbound_time_of(&self, message_id: &MessageId) -> Option<DateTime<Utc>> {
-        self.history.iter().find_map(|message| match message {
-            MessageBlock::User(user) if &user.id == message_id => user.timestamp,
+        match self.conversation.ledger().get(message_id) {
+            Some(MessageBlock::User(user)) => user.timestamp,
             _ => None,
-        })
+        }
     }
 
     /// Builds the model request from the current projection of the latest
@@ -831,22 +896,16 @@ impl<'a> AgentExecution<'a> {
         Ok(self.model_request_from_projection(&projection))
     }
 
-    /// The current projection of the latest checkpoint, or the terminal the
-    /// attempt must settle with when the context plane failed.
+    /// The current finite projection of the Conversation Surface, or the
+    /// terminal the attempt must settle with when the context plane failed.
     fn current_projection(
         &self,
         agent_status: Option<&AgentStatusAttachment>,
     ) -> Result<ContextProjection, Terminal> {
-        let checkpoint = self
-            .context_runtime
-            .checkpoint_store
-            .load(&self.request.conversation_id)
-            .map_err(|error| Self::context_failure_terminal(&error))?;
         self.context_runtime
             .engine
             .build_projection(
-                &self.history,
-                checkpoint.as_ref(),
+                &self.conversation,
                 &self.tool_registry().model_definitions(),
                 self.observed.as_ref(),
                 agent_status,
@@ -890,8 +949,8 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Runs one compaction: plan, summarize, verify progress, commit the
-    /// checkpoint, and rebuild the projection.
+    /// Runs one compaction: plan, summarize, verify progress and fit, and
+    /// commit the canonical summary plus the Surface rewrite.
     ///
     /// `overflow` distinguishes the two callers: a proactive compaction
     /// failure settles as `AttemptFailed(Runtime(ContextCompactionFailed))`,
@@ -905,10 +964,16 @@ impl<'a> AgentExecution<'a> {
     /// include the status itself).
     ///
     /// Cancellation is observed before the compaction, raced (biased)
-    /// against the pending summary, checked again before the checkpoint
+    /// against the pending summary, checked again before the semantic
     /// commit, and checked again before any retry by the callers: once
-    /// cancellation is observable, no summary, no checkpoint, and no retry
-    /// progress may begin, and the pending summary future is dropped.
+    /// cancellation is observable, no summary, no Ledger append, no Surface
+    /// rewrite, and no retry progress may begin, and the pending summary
+    /// future is dropped.
+    ///
+    /// This is also the **one** ownership path that invalidates the opaque
+    /// provider continuation: a successful incompatible Surface rewrite
+    /// invalidates it exactly once, immediately after the semantic commit.
+    /// A failed or cancelled compaction never clears it.
     async fn perform_compaction(
         &mut self,
         must_cover_through: Option<&MessageId>,
@@ -926,11 +991,22 @@ impl<'a> AgentExecution<'a> {
             .run_compaction(must_cover_through, fresh_inbound, agent_status)
             .await
         {
-            Ok(checkpoint) => {
+            Ok(completed) => {
+                // The semantic commit already happened: the summary is a
+                // Ledger fact and the new Surface revision exists. The
+                // opaque provider continuation is now known to be
+                // incompatible, and this is the single place that discards
+                // it. The observed provider measurement belonged to the old
+                // request context and is dropped with it.
+                self.pending_continuation = None;
+                self.continuation_owner = None;
+                self.observed = None;
                 self.emit(RuntimeEvent::CompactionCompleted {
-                    generation: checkpoint.generation,
-                    tokens_before: checkpoint.tokens_before,
-                    estimated_tokens_after: checkpoint.estimated_tokens_after,
+                    generation: completed.record.generation,
+                    summary_message_id: completed.record.summary_message_id.clone(),
+                    surface_revision: completed.record.surface_revision,
+                    tokens_before: completed.tokens_before,
+                    estimated_tokens_after: completed.estimated_tokens_after,
                 });
             }
             // Cancellation never becomes a compaction failure: no
@@ -947,19 +1023,29 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// The cancellation-aware compaction pipeline: plan, summarize, verify
-    /// progress, apply, fit-check, and persist.
+    /// progress, fit-check, and commit.
+    ///
+    /// The **semantic commit / linearization point** of compaction is the
+    /// single call to `ConversationState::commit_compaction`. Before it the
+    /// old Ledger, the old Surface, and the old continuation semantics are
+    /// authoritative; after it the canonical
+    /// `User(Runtime / CompactionSummary)` message exists in the Ledger, a
+    /// new Surface revision exists in which that summary replaces the
+    /// selected active span, every covered Ledger fact remains intact and
+    /// addressable, and the provider continuation is known to be
+    /// incompatible.
     ///
     /// Cancellation is observed before the compaction, raced (biased)
-    /// against the pending summary, and checked again before the checkpoint
-    /// commit: once cancellation is observable, no summary, no checkpoint,
-    /// and no retry progress may begin, and the pending summary future is
-    /// dropped.
+    /// against the pending summary, and checked again immediately before the
+    /// semantic commit: once cancellation is observable, no summary, no
+    /// canonical summary append, and no Surface rewrite happen, so no
+    /// half-committed state can exist.
     async fn run_compaction(
-        &self,
+        &mut self,
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         agent_status: Option<&AgentStatusAttachment>,
-    ) -> Result<ContextCheckpoint, ContextError> {
+    ) -> Result<CompletedCompaction, ContextError> {
         if self.cancellation.is_cancelled() {
             return Err(ContextError::new(
                 ContextErrorKind::Cancelled,
@@ -967,13 +1053,8 @@ impl<'a> AgentExecution<'a> {
             ));
         }
         let tools = self.tool_registry().model_definitions();
-        let checkpoint = self
-            .context_runtime
-            .checkpoint_store
-            .load(&self.request.conversation_id)?;
         let projection = self.context_runtime.engine.build_projection(
-            &self.history,
-            checkpoint.as_ref(),
+            &self.conversation,
             &tools,
             self.observed.as_ref(),
             agent_status,
@@ -981,8 +1062,7 @@ impl<'a> AgentExecution<'a> {
         )?;
         let budgets = self.compaction_budgets();
         let plan = self.context_runtime.engine.plan_compaction(
-            &self.history,
-            checkpoint.as_ref(),
+            &self.conversation,
             &projection,
             &tools,
             budgets,
@@ -991,11 +1071,7 @@ impl<'a> AgentExecution<'a> {
                 fresh_inbound,
             },
         )?;
-        let summary_request = self.context_runtime.engine.summary_request(
-            &self.history,
-            checkpoint.as_ref(),
-            &plan,
-        )?;
+        let summary_request = plan.summary_request();
         let summary = tokio::select! {
             biased;
             () = self.cancellation.cancelled() => {
@@ -1010,24 +1086,25 @@ impl<'a> AgentExecution<'a> {
                 .summarize(summary_request, self.cancellation.model_cancellation()) => result,
         };
         let summary_text = summary?;
-        // Cancellation after the summary returned but before the checkpoint
-        // commit: no checkpoint is saved, no completion is emitted.
+        // Cancellation after the summary returned but before the semantic
+        // commit: nothing is appended, nothing is rewritten, no completion
+        // is emitted, and the old state stays authoritative.
         if self.cancellation.is_cancelled() {
             return Err(ContextError::new(
                 ContextErrorKind::Cancelled,
-                "compaction cancelled before the checkpoint commit",
+                "compaction cancelled before the semantic commit",
             ));
         }
-        let (checkpoint, projection) = self.context_runtime.engine.apply_compaction(
+        let (commit, projection) = self.context_runtime.engine.prepare_compaction(
+            &self.conversation,
             &self.request.conversation_id,
-            &self.history,
-            checkpoint.as_ref(),
             &plan,
             &summary_text,
             &tools,
         )?;
         // The rebuilt projection must fit under the soft input limit; if
-        // pinned context and the actual summary cannot fit, fail explicitly.
+        // retained context and the actual summary cannot fit, fail
+        // explicitly before anything is committed.
         match self
             .context_runtime
             .engine
@@ -1037,16 +1114,27 @@ impl<'a> AgentExecution<'a> {
             Ok(false) => {
                 return Err(ContextError::new(
                     ContextErrorKind::CannotFit,
-                    "compacted projection still exceeds the soft input limit",
+                    "the compacted surface still exceeds the soft input limit",
                 ));
             }
             Err(error) => return Err(error),
         }
-        // The checkpoint commit point: save before emitting
-        // CompactionCompleted, so the event means the new checkpoint is
-        // committed to the M4 checkpoint store.
-        self.context_runtime.checkpoint_store.save(&checkpoint)?;
-        Ok(checkpoint)
+        // The semantic commit point.
+        let summary_block = MessageBlock::User(commit.summary.clone());
+        let record = self
+            .conversation
+            .commit_compaction(commit)
+            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+        // The committed runtime summary is a canonical Ledger fact, observed
+        // at exactly the commit linearization point like every other commit.
+        if let Some(observer) = self.observer {
+            observer.observe_committed(&self.request.attempt_id, &summary_block);
+        }
+        Ok(CompletedCompaction {
+            record,
+            tokens_before: plan.estimated_before,
+            estimated_tokens_after: projection.estimated_input.input_tokens,
+        })
     }
 
     /// Emits `CompactionFailed` with the diagnostic and returns the
@@ -1172,12 +1260,9 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
-        // A successful compaction establishes a new context boundary: the
-        // old opaque provider continuation must never pair with the new
-        // projection, and it is never inspected or transformed.
-        self.pending_continuation = None;
-        self.continuation_owner = None;
-        self.observed = None;
+        // The successful compaction already invalidated the incompatible
+        // opaque provider continuation exactly once, inside
+        // `perform_compaction`; this path never clears it a second time.
         self.emit(RuntimeEvent::ModelRetryScheduled {
             attempt_number: retry_number,
             retry_delay_ms: None,
@@ -1419,7 +1504,7 @@ impl<'a> AgentExecution<'a> {
                     result: result.clone(),
                 });
             }
-            self.history.push(MessageBlock::Tool(ToolMessageBlock {
+            let block = MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!(
                     "{}-tool-{}-{}",
                     self.request.attempt_id, self.turn, slot.call.id
@@ -1427,8 +1512,9 @@ impl<'a> AgentExecution<'a> {
                 tool_call_id: slot.call.id.clone(),
                 tool_id: slot.tool_id(),
                 result,
-            }));
-            self.observe_committed_last();
+            });
+            self.commit_canonical(&block)
+                .expect("a tool result identity is unique within one attempt");
         }
         self.emit(RuntimeEvent::TurnCompleted);
     }
@@ -1538,15 +1624,14 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Builds the canonical request from a compiled context projection.
+    /// Builds the canonical request from one finite context projection.
     ///
-    /// Projection-only agent slices are materialized transiently under their
-    /// original source `MessageId` as a model-context view; they are never
-    /// authoritative ledger content. The ephemeral Agent Status attachment
-    /// of the projection travels alongside the compiled messages; it is
-    /// never encoded as a fake canonical message.
+    /// Every projected item is already a complete canonical message, so
+    /// there is nothing to materialize: the projection's messages *are* the
+    /// request messages. The ephemeral Agent Status and Skill catalog
+    /// attachments travel alongside; neither is ever encoded as a fake
+    /// canonical message.
     fn model_request_from_projection(&self, projection: &ContextProjection) -> ModelRequest {
-        let compiled = compile_projection(projection);
         let primary = self.request.model.primary();
         // Tool definitions are compiled only for a model whose effective
         // capabilities include tool calls: a text-only model is usable, it
@@ -1558,10 +1643,10 @@ impl<'a> AgentExecution<'a> {
         };
         ModelRequest {
             invocation: primary.invocation_config(),
-            messages: compiled.messages,
+            messages: projection.messages.clone(),
             tools,
-            agent_status: compiled.agent_status,
-            skill_catalog: compiled.skill_catalog,
+            agent_status: projection.agent_status.clone(),
+            skill_catalog: projection.skill_catalog.clone(),
             continuation: self.pending_continuation.clone(),
         }
     }
@@ -1571,22 +1656,28 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         message_id: &MessageId,
         content: &[crate::message::types::AgentContentBlock],
-    ) {
-        self.history.push(MessageBlock::Agent(AgentMessageBlock {
+    ) -> Result<(), ConversationError> {
+        self.commit_canonical(&MessageBlock::Agent(AgentMessageBlock {
             id: message_id.clone(),
             content: content.to_vec(),
-        }));
-        self.observe_committed_last();
+        }))?;
+        Ok(())
     }
 
-    /// Observes the most recently committed canonical message at its
-    /// commit point. The observer observes content, never influences it.
-    fn observe_committed_last(&self) {
-        if let Some(observer) = self.observer
-            && let Some(block) = self.history.last()
-        {
+    /// The one canonical commit path of the loop: one Message Ledger append
+    /// plus one Conversation Surface append, followed by the commit
+    /// observation at that same linearization point.
+    ///
+    /// Every canonical commit of the attempt — drained inbound user
+    /// messages, committed agent messages, committed tool messages — goes
+    /// through here. Independent ledger/surface mutations do not exist in
+    /// this module.
+    fn commit_canonical(&mut self, block: &MessageBlock) -> Result<MessageId, ConversationError> {
+        let message_id = self.conversation.commit(block.clone())?;
+        if let Some(observer) = self.observer {
             observer.observe_committed(&self.request.attempt_id, block);
         }
+        Ok(message_id)
     }
 
     /// Emits the runtime events for one non-terminal model event.
@@ -1857,6 +1948,7 @@ mod test_sync {
 
 #[cfg(test)]
 mod tests {
+    use crate::conversation::ConversationState;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -1980,7 +2072,7 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             conversation_id: ConversationId::new("conv-1"),
             attempt_id: AttemptId::new("attempt-1"),
-            initial_messages: Vec::new(),
+            conversation: ConversationState::new(),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
             timezone: None,
             model: scripted_session_model(adapter).snapshot(),
@@ -2025,7 +2117,6 @@ mod tests {
                 summary_output_cap: None,
             },
             Arc::new(crate::context::DefaultTokenEstimator),
-            Arc::new(crate::context::InMemoryCheckpointStore::new()),
             crate::context::AgentStatusComposer::default(),
             &request(adapter).model,
         )
@@ -2442,7 +2533,7 @@ mod tests {
             }
         );
         let committed: Vec<&MessageBlock> = result
-            .messages
+            .messages()
             .iter()
             .filter(|block| {
                 matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-a"))

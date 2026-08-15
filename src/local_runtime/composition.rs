@@ -12,7 +12,7 @@
 //!         +--> ConversationToolRuntime
 //!         +--> native base ToolRegistry
 //!         +--> CapabilityCoordinator
-//!         +--> context/checkpoint/status pieces
+//!         +--> context policy/estimator/status pieces
 //!         |
 //!         v
 //! RuntimeClientHost
@@ -29,7 +29,7 @@
 //! > One local runtime process owns one conversation session. That session
 //! > owns one authoritative mutable session-model configuration, one
 //! > `ConversationToolRuntime` identity, one `CapabilityCoordinator`, one
-//! > context policy/checkpoint domain, and one `RuntimeClientHost`. Runtime
+//! > context policy domain, and one `RuntimeClientHost`. Runtime
 //! > Client attachments may come and go without replacing those semantic
 //! > owners.
 //!
@@ -50,9 +50,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
-use crate::context::{
-    ContextCheckpointStore, DefaultTokenEstimator, InMemoryCheckpointStore, TokenEstimator,
-};
+use crate::context::{DefaultTokenEstimator, TokenEstimator};
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
@@ -109,8 +107,6 @@ pub struct LocalRuntimeDependencies {
     pub credentials: Arc<dyn CredentialEnvironment>,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
-    /// The context checkpoint store.
-    pub checkpoint_store: Arc<dyn ContextCheckpointStore>,
 }
 
 impl Default for LocalRuntimeDependencies {
@@ -118,7 +114,6 @@ impl Default for LocalRuntimeDependencies {
         Self {
             credentials: Arc::new(ProcessCredentialEnvironment),
             estimator: Arc::new(DefaultTokenEstimator),
-            checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
         }
     }
 }
@@ -237,7 +232,7 @@ impl LocalConversationRuntime {
                 detail: format!("{error:?}"),
             })?;
 
-        // 12-13. The context policy/checkpoint/status pieces and the one
+        // 12-13. The context policy/estimator/status pieces and the one
         // authoritative Runtime Client host.
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
             agent_id: session.agent_id.clone(),
@@ -246,7 +241,6 @@ impl LocalConversationRuntime {
             context: RuntimeClientContextConfig {
                 policy: session.context_policy(),
                 estimator: Arc::clone(&dependencies.estimator),
-                checkpoint_store: Arc::clone(&dependencies.checkpoint_store),
                 status_composer: crate::context::AgentStatusComposer::default(),
             },
             tool_runtime: tool_runtime.clone(),

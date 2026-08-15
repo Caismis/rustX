@@ -712,11 +712,15 @@ impl RuntimeClientProjection {
             }
             RuntimeEvent::CompactionCompleted {
                 generation,
+                summary_message_id,
+                surface_revision,
                 tokens_before,
                 estimated_tokens_after,
             } => {
                 let compaction = RuntimeClientCompactionView {
                     generation: *generation,
+                    summary_message_id: summary_message_id.clone(),
+                    surface_revision: *surface_revision,
                     tokens_before: *tokens_before,
                     estimated_tokens_after: *estimated_tokens_after,
                 };
@@ -1316,9 +1320,10 @@ mod tests {
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
     use crate::context::{
-        AgentStatusComposer, CompactionBudgets, ContextCheckpoint, ContextCheckpointStore,
-        ContextEngine, ContextError, ContextErrorKind, ContextRuntime,
+        AgentStatusComposer, CompactionBudgets, ContextEngine, ContextError, ContextErrorKind,
+        ContextRuntime,
     };
+    use crate::conversation::ConversationState;
     use crate::events::types::RuntimeEvent;
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1402,45 +1407,12 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum CompactionOrderFact {
-        CheckpointSaveAttempted,
-        CheckpointSaved,
+        /// The canonical runtime compaction summary joined the Message
+        /// Ledger (observed at its commit linearization point).
+        SummaryLedgerCommitted,
         RuntimeCompactionCompleted,
         ClientContextCompacted,
         ClientAttemptSettled,
-    }
-
-    struct RecordingCheckpointStore {
-        checkpoint: Mutex<Option<ContextCheckpoint>>,
-        facts: Arc<Mutex<Vec<CompactionOrderFact>>>,
-        fail_save: bool,
-    }
-
-    impl ContextCheckpointStore for RecordingCheckpointStore {
-        fn load(
-            &self,
-            _conversation_id: &ConversationId,
-        ) -> Result<Option<ContextCheckpoint>, ContextError> {
-            Ok(self.checkpoint.lock().expect("checkpoint lock").clone())
-        }
-
-        fn save(&self, checkpoint: &ContextCheckpoint) -> Result<(), ContextError> {
-            self.facts
-                .lock()
-                .expect("order facts lock")
-                .push(CompactionOrderFact::CheckpointSaveAttempted);
-            if self.fail_save {
-                return Err(ContextError::new(
-                    ContextErrorKind::CheckpointSaveFailed,
-                    "scripted checkpoint save failure",
-                ));
-            }
-            *self.checkpoint.lock().expect("checkpoint lock") = Some(checkpoint.clone());
-            self.facts
-                .lock()
-                .expect("order facts lock")
-                .push(CompactionOrderFact::CheckpointSaved);
-            Ok(())
-        }
     }
 
     struct EventPathObserver {
@@ -1524,6 +1496,15 @@ mod tests {
         }
 
         fn observe_committed(&self, attempt_id: &AttemptId, block: &MessageBlock) {
+            if matches!(
+                block,
+                MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+            ) {
+                self.facts
+                    .lock()
+                    .expect("order facts lock")
+                    .push(CompactionOrderFact::SummaryLedgerCommitted);
+            }
             let mut projection = self.projection.lock().expect("projection lock");
             projection.apply(Observation::Committed {
                 attempt_id: Some(attempt_id.clone()),
@@ -1552,19 +1533,13 @@ mod tests {
     }
 
     async fn run_compaction_order_case(
-        fail_save: bool,
+        fail_summary: bool,
     ) -> (
         crate::agent::AgentExecutionResult,
-        Arc<RecordingCheckpointStore>,
         Arc<EventPathObserver>,
         Arc<Mutex<Vec<CompactionOrderFact>>>,
     ) {
         let facts = Arc::new(Mutex::new(Vec::new()));
-        let store = Arc::new(RecordingCheckpointStore {
-            checkpoint: Mutex::new(None),
-            facts: facts.clone(),
-            fail_save,
-        });
         let model = Arc::new(FakeModel::new(vec![vec![
             FakeStep::Emit(ModelEvent::Started),
             FakeStep::Emit(ModelEvent::TextDelta {
@@ -1593,14 +1568,19 @@ mod tests {
             Arc::new(ScriptedEstimator::new(120, 0, 0)),
         )
         .expect("valid test context engine");
+        let summary_step = if fail_summary {
+            FakeSummaryStep::Fail(ContextError::new(
+                ContextErrorKind::SummaryFailed,
+                "scripted summary failure",
+            ))
+        } else {
+            FakeSummaryStep::Return("summary".to_owned())
+        };
         let runtime = ContextRuntime::with_scripted_summarizer(
             engine,
-            Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
-                "summary".to_owned(),
-            )])),
-            store.clone(),
+            Arc::new(FakeContextSummarizer::new(vec![summary_step])),
             AgentStatusComposer::default(),
-            CompactionBudgets::new(1, 1),
+            CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
         let capability =
@@ -1610,7 +1590,8 @@ mod tests {
             agent_id: AgentId::new("agent-a"),
             conversation_id: ConversationId::new("projection-order"),
             attempt_id: AttemptId::new("attempt-order"),
-            initial_messages: initial_messages.clone(),
+            conversation: ConversationState::from_messages(initial_messages.clone())
+                .expect("bootstrap conversation"),
             initial_turn_trigger: InitialTurnTrigger::Continuation,
             timezone: None,
             model: model_snapshot,
@@ -1627,20 +1608,23 @@ mod tests {
         .expect("conversation identity matches the tool runtime");
         execution.observe(observer.as_ref());
         let result = execution.run().await;
-        (result, store, observer, facts)
+        (result, observer, facts)
     }
 
     /// A successful committed compaction has one ordered fact path: the
-    /// checkpoint save, canonical completion event, Runtime Client event,
-    /// and terminal settlement.
+    /// canonical summary Ledger commit, the canonical completion event, the
+    /// Runtime Client event, and terminal settlement.
+    ///
+    /// The ordering is the client-visible invariant: no `ContextCompacted`
+    /// may imply success before the summary Ledger record and the new
+    /// Surface revision exist.
     #[tokio::test]
     async fn committed_compaction_order_is_canonical_and_terminal_last() {
-        let (result, store, observer, facts) = run_compaction_order_case(false).await;
+        let (result, observer, facts) = run_compaction_order_case(false).await;
         assert_eq!(
             *facts.lock().expect("order facts lock"),
             vec![
-                CompactionOrderFact::CheckpointSaveAttempted,
-                CompactionOrderFact::CheckpointSaved,
+                CompactionOrderFact::SummaryLedgerCommitted,
                 CompactionOrderFact::RuntimeCompactionCompleted,
                 CompactionOrderFact::ClientContextCompacted,
                 CompactionOrderFact::ClientAttemptSettled,
@@ -1650,34 +1634,48 @@ mod tests {
             result.events.last(),
             Some(RuntimeEvent::AttemptCompleted { .. })
         ));
-        let checkpoint = store
-            .load(&ConversationId::new("projection-order"))
-            .expect("load checkpoint")
-            .expect("checkpoint committed");
-        assert_eq!(checkpoint.generation, 1);
+        assert_eq!(result.conversation.surface().compaction_generation(), 1);
         let snapshot = observer.snapshot();
         assert_eq!(snapshot.context.compaction_count, 1);
+        let latest = snapshot
+            .context
+            .latest_compaction
+            .expect("latest compaction");
+        assert_eq!(latest.generation, 1);
         assert_eq!(
-            snapshot
-                .context
-                .latest_compaction
-                .expect("latest compaction")
-                .generation,
-            checkpoint.generation
+            latest.surface_revision,
+            result
+                .events
+                .iter()
+                .find_map(|event| match event {
+                    RuntimeEvent::CompactionCompleted {
+                        surface_revision, ..
+                    } => Some(*surface_revision),
+                    _ => None,
+                })
+                .expect("one compaction completion"),
+            "the client view carries the revision the rewrite established"
+        );
+        assert!(
+            snapshot.messages.iter().any(|message| matches!(
+                message,
+                MessageBlock::User(user)
+                    if user.id == latest.summary_message_id
+                        && user.kind == InboundKind::CompactionSummary
+            )),
+            "the committed runtime summary is an ordinary canonical ledger fact"
         );
     }
 
-    /// A checkpoint save failure emits the existing compaction failure and
-    /// terminal settlement, but never emits canonical or client completion.
+    /// A failed compaction emits the existing compaction failure and
+    /// terminal settlement, but never commits a canonical summary and never
+    /// emits canonical or client completion.
     #[tokio::test]
-    async fn failed_checkpoint_save_has_no_completion_fact_or_client_event() {
-        let (result, store, observer, facts) = run_compaction_order_case(true).await;
+    async fn failed_compaction_has_no_summary_commit_or_client_event() {
+        let (result, observer, facts) = run_compaction_order_case(true).await;
         assert_eq!(
             *facts.lock().expect("order facts lock"),
-            vec![
-                CompactionOrderFact::CheckpointSaveAttempted,
-                CompactionOrderFact::ClientAttemptSettled,
-            ]
+            vec![CompactionOrderFact::ClientAttemptSettled]
         );
         assert!(
             result
@@ -1701,11 +1699,16 @@ mod tests {
             result.events.last(),
             Some(RuntimeEvent::AttemptFailed { .. })
         ));
+        assert_eq!(result.conversation.surface().compaction_generation(), 0);
         assert!(
-            store
-                .load(&ConversationId::new("projection-order"))
-                .expect("load checkpoint")
-                .is_none()
+            result
+                .conversation
+                .ledger()
+                .audit_records()
+                .iter()
+                .all(|message| !matches!(message, MessageBlock::User(user)
+                    if user.kind == InboundKind::CompactionSummary)),
+            "a failed compaction never commits a canonical summary"
         );
         let snapshot = observer.snapshot();
         assert_eq!(snapshot.context.compaction_count, 0);
@@ -1722,6 +1725,8 @@ mod tests {
             &mut projection,
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
+                summary_message_id: MessageId::new("conv-1-summary-1"),
+                surface_revision: crate::conversation::SurfaceRevision::new(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4800,
                     source: TokenMeasurementSource::ProviderReported,
@@ -1733,6 +1738,8 @@ mod tests {
             &mut projection,
             RuntimeEvent::CompactionCompleted {
                 generation: 2,
+                summary_message_id: MessageId::new("conv-1-summary-2"),
+                surface_revision: crate::conversation::SurfaceRevision::new(6),
                 tokens_before: TokenMeasurement {
                     input_tokens: 4700,
                     source: TokenMeasurementSource::Estimated,
@@ -1911,6 +1918,8 @@ mod tests {
             RuntimeEvent::CompactionStarted,
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
+                summary_message_id: MessageId::new("conv-1-summary-1"),
+                surface_revision: crate::conversation::SurfaceRevision::new(3),
                 tokens_before: TokenMeasurement {
                     input_tokens: 1,
                     source: TokenMeasurementSource::Estimated,

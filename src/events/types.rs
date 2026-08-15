@@ -55,6 +55,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::conversation::SurfaceRevision;
 use crate::message::types::ContentBlockIndex;
 use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
@@ -292,15 +293,27 @@ pub enum RuntimeEvent {
         tool_call_id: ToolCallId,
     },
 
-    /// Context compaction started (compaction itself is a later milestone).
+    /// Context compaction started.
     CompactionStarted,
-    /// Context compaction completed and its checkpoint is committed.
+    /// Context compaction completed: the canonical runtime compaction
+    /// summary is committed to the Message Ledger and the new Conversation
+    /// Surface revision is established.
+    ///
+    /// The event is emitted strictly **after** that semantic commit, so it
+    /// can never imply success before the state exists.
     CompactionCompleted {
-        /// The committed checkpoint generation.
+        /// The compaction generation, derived from Conversation Surface
+        /// history.
         generation: u64,
+        /// The identity of the committed canonical summary message. The
+        /// event references it by identity only; summary content lives in
+        /// the Message Ledger.
+        summary_message_id: MessageId,
+        /// The Conversation Surface revision established by the rewrite.
+        surface_revision: SurfaceRevision,
         /// The pre-compaction measurement, preserving its provenance.
         tokens_before: TokenMeasurement,
-        /// The deterministic estimate of the rebuilt projection.
+        /// The deterministic estimate of the rebuilt request context.
         estimated_tokens_after: u64,
     },
     /// Context compaction failed.
@@ -598,6 +611,8 @@ mod tests {
             },
             RuntimeEvent::CompactionCompleted {
                 generation: 1,
+                summary_message_id: crate::runtime::identity::MessageId::new("conv-summary-1"),
+                surface_revision: crate::conversation::SurfaceRevision::new(4),
                 tokens_before: TokenMeasurement {
                     input_tokens: 100,
                     source: TokenMeasurementSource::Estimated,

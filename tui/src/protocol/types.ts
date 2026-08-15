@@ -539,7 +539,15 @@ export interface TokenMeasurement {
 }
 
 export interface RuntimeClientCompactionView {
+  /** The compaction generation, derived from Conversation Surface history. */
   generation: number;
+  /**
+   * The identity of the committed canonical compaction summary. Its content
+   * is an ordinary Message Ledger fact in `RuntimeClientSnapshot.messages`.
+   */
+  summary_message_id: MessageId;
+  /** The Conversation Surface revision the rewrite established. */
+  surface_revision: number;
   tokens_before: TokenMeasurement;
   estimated_tokens_after: number;
 }

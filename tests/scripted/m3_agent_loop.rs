@@ -47,18 +47,21 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
         agent_id: AgentId::new("agent-a"),
         conversation_id: ConversationId::new("conv-1"),
         attempt_id: AttemptId::new(attempt),
-        initial_messages: vec![MessageBlock::User(UserMessageBlock {
-            id: MessageId::new("msg-user-1"),
-            content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
-                text: "What is 2+2?".to_owned(),
-            })],
-            source: UserSource::Human,
-            kind: rustx::message::types::InboundKind::Message,
-            // A historical (non-fresh) inbound message: the M3 loop
-            // invariants are exercised without Agent Status, expressed as an
-            // explicit pure-continuation trigger.
-            timestamp: None,
-        })],
+        conversation: rustx::conversation::ConversationState::from_messages(vec![
+            MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("msg-user-1"),
+                content: vec![UserContentBlock::Text(rustx::message::content::TextBlock {
+                    text: "What is 2+2?".to_owned(),
+                })],
+                source: UserSource::Human,
+                kind: rustx::message::types::InboundKind::Message,
+                // A historical (non-fresh) inbound message: the M3 loop
+                // invariants are exercised without Agent Status, expressed as an
+                // explicit pure-continuation trigger.
+                timestamp: None,
+            }),
+        ])
+        .expect("bootstrap conversation"),
         initial_turn_trigger: rustx::agent::InitialTurnTrigger::Continuation,
         timezone: None,
         model: support::attempt_model(model.clone(), "fake-model"),
@@ -69,9 +72,7 @@ fn request(attempt: &str, model: &std::sync::Arc<FakeModel>) -> AgentExecutionRe
 /// scripted request: the mandatory M4 path is active, but no compaction or
 /// summary activity can ever trigger in these loop-contract tests.
 fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime {
-    use rustx::context::{
-        ContextRuntime, DefaultTokenEstimator, InMemoryCheckpointStore, SessionContextPolicy,
-    };
+    use rustx::context::{ContextRuntime, DefaultTokenEstimator, SessionContextPolicy};
     let estimator: std::sync::Arc<dyn rustx::context::TokenEstimator> =
         std::sync::Arc::new(DefaultTokenEstimator);
     let snapshot = support::attempt_model(model.clone(), "fake-model");
@@ -82,7 +83,6 @@ fn runtime(model: &std::sync::Arc<FakeModel>) -> rustx::context::ContextRuntime 
             summary_output_cap: None,
         },
         estimator,
-        std::sync::Arc::new(InMemoryCheckpointStore::new()),
         rustx::context::AgentStatusComposer::default(),
         &snapshot,
     )
@@ -274,7 +274,7 @@ async fn text_execution_completes_with_exact_trace() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
+    let MessageBlock::Agent(agent) = result.messages().last().expect("agent message") else {
         panic!("final message must be an agent message");
     };
     let AgentContentBlock::Text(block) = &agent.content[0] else {
@@ -306,7 +306,7 @@ async fn several_deltas_assemble_in_stream_order() {
         })
         .collect();
     assert_eq!(deltas, vec!["a", "b", "c"], "delta order preserved");
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
+    let MessageBlock::Agent(agent) = result.messages().last().expect("agent message") else {
         panic!("final message must be an agent message");
     };
     let texts: Vec<&str> = agent
@@ -370,7 +370,7 @@ async fn model_failure_before_content_fails_attempt() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "no agent message is committed from a failed turn"
     );
@@ -406,7 +406,7 @@ async fn model_failure_after_partial_content_commits_nothing() {
             error: AttemptFailure::Model { .. }
         }
     ));
-    assert_eq!(result.messages.len(), 1, "nothing committed");
+    assert_eq!(result.messages().len(), 1, "nothing committed");
 }
 
 /// Every scenario ends with exactly one terminal event.
@@ -710,13 +710,13 @@ async fn single_tool_call_then_continuation() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         4,
         "input + two agent messages + tool message"
     );
-    assert!(matches!(result.messages[1], MessageBlock::Agent(_)));
-    assert!(matches!(result.messages[2], MessageBlock::Tool(_)));
-    assert!(matches!(result.messages[3], MessageBlock::Agent(_)));
+    assert!(matches!(result.messages()[1], MessageBlock::Agent(_)));
+    assert!(matches!(result.messages()[2], MessageBlock::Tool(_)));
+    assert!(matches!(result.messages()[3], MessageBlock::Agent(_)));
 }
 
 /// The tool receives the exact canonical arguments.
@@ -911,7 +911,7 @@ async fn unknown_tool_fails_deterministically() {
         "no continuation is attempted after an unknown tool"
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "the agent tool-call message is never committed: preflight rejects          the structurally unresolvable call before the message commit"
     );
@@ -1130,7 +1130,7 @@ async fn cancellation_during_generation_after_partial_text() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "no message committed on cancellation"
     );
@@ -1222,7 +1222,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
         "no continuation starts after cancellation"
     );
     let tool_messages: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|message| matches!(message, MessageBlock::Tool(_)))
         .collect();
@@ -1341,7 +1341,7 @@ async fn cancellation_interrupts_later_tool_call() {
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     let tool_messages: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|message| matches!(message, MessageBlock::Tool(_)))
         .collect();
@@ -1526,7 +1526,7 @@ async fn continuation_state_propagates_losslessly() {
         Some(state.clone()),
         "the boundary continuation state is propagated losslessly"
     );
-    let MessageBlock::Agent(agent) = &result.messages[1] else {
+    let MessageBlock::Agent(agent) = &result.messages()[1] else {
         panic!("first committed message must be the agent message");
     };
     let AgentContentBlock::Reasoning(reasoning) = &agent.content[0] else {
@@ -1678,7 +1678,7 @@ async fn no_reasoning_state_is_fabricated() {
         None,
         "no continuation state exists to propagate"
     );
-    let MessageBlock::Agent(agent) = &result.messages[1] else {
+    let MessageBlock::Agent(agent) = &result.messages()[1] else {
         panic!("first committed message must be the agent message");
     };
     let AgentContentBlock::Reasoning(reasoning) = &agent.content[0] else {
@@ -1715,7 +1715,7 @@ async fn unsupported_capability_stays_terminal_failure() {
         },
     );
     assert_eq!(
-        result.messages.len(),
+        result.messages().len(),
         1,
         "the failure never becomes a committed message"
     );
@@ -1821,7 +1821,7 @@ async fn refusal_semantics_preserved() {
             finish_reason: ModelFinishReason::Refusal,
         },
     );
-    let MessageBlock::Agent(agent) = result.messages.last().expect("agent message") else {
+    let MessageBlock::Agent(agent) = result.messages().last().expect("agent message") else {
         panic!("final message must be an agent message");
     };
     assert_eq!(agent.content.len(), 1, "provisional content rolled back");
@@ -1970,7 +1970,7 @@ async fn identical_inputs_produce_identical_traces() {
     let result_first = run(&first, tools_first, &cancellation).await;
     let result_second = run(&second, tools_second, &cancellation).await;
     assert_eq!(result_first.events, result_second.events);
-    assert_eq!(result_first.messages, result_second.messages);
+    assert_eq!(result_first.messages(), result_second.messages());
     assert_eq!(result_first.outcome, result_second.outcome);
     assert_eq!(result_first.terminal_state, result_second.terminal_state);
 }
@@ -2561,7 +2561,7 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
         },
     );
     let user_blocks: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|block| matches!(block, MessageBlock::User(_)))
         .collect();
@@ -2650,7 +2650,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     // result, then the distinct timestamped inbound messages in sequence
     // order, followed by the final agent message. The drain never splits
     // the tool-result batch.
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![
@@ -2823,7 +2823,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             finish_reason: ModelFinishReason::Stop,
         },
     );
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![
@@ -2932,7 +2932,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     );
     assert!(
         !result
-            .messages
+            .messages()
             .iter()
             .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-cancel-a"))),
         "the pending message is not appended to attempt history"
@@ -3021,7 +3021,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
         },
     );
     let committed: Vec<&MessageBlock> = result
-        .messages
+        .messages()
         .iter()
         .filter(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-commit-a")))
         .collect();
@@ -3082,7 +3082,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     ));
     assert!(
         !result
-            .messages
+            .messages()
             .iter()
             .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-fail-a"))),
         "no post-failure drain appends the pending message"
@@ -3287,7 +3287,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
         3,
         "turn 3 settles only after both boundaries drained their batches"
     );
-    let ids: Vec<String> = result.messages.iter().map(block_id).collect();
+    let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
         vec![

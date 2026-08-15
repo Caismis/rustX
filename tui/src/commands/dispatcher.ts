@@ -465,7 +465,7 @@ function contextDiagnosticsLines(state: PresentationState): string[] {
     return [`- context compactions: ${context.compaction_count}`];
   }
   return [
-    `- context compactions: ${context.compaction_count} (latest checkpoint generation ${latest.generation})`,
+    `- context compactions: ${context.compaction_count} (latest generation ${latest.generation}, surface revision ${latest.surface_revision})`,
     `- latest context measurement: ${latest.tokens_before.input_tokens} tokens before (${latest.tokens_before.source}), ${latest.estimated_tokens_after} estimated after`,
   ];
 }

@@ -119,7 +119,7 @@
 //! admitted attempt must reach settlement, and the task releases the host
 //! when it does.
 //!
-//! # Canonical history ownership
+//! # Conversation state ownership
 //!
 //! Between attempts the host owns the canonical conversation history (the
 //! loop owns its private working copy during an attempt). At attempt
@@ -153,9 +153,9 @@ use crate::agent::cancellation::AgentCancellation;
 use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
 use crate::agent::{AgentExecution, AgentExecutionRequest};
 use crate::capabilities::{CapabilityCoordinator, CapabilityObserver};
-use crate::context::checkpoint::ContextCheckpointStore;
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
+use crate::conversation::ConversationState;
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -184,6 +184,9 @@ pub enum HostConstructionError {
     },
     /// The context engine configuration is impossible.
     Context(String),
+    /// The initial canonical messages do not form a valid conversation
+    /// state (for example a duplicate `MessageId`).
+    InvalidInitialConversation(String),
     /// The conversation tool runtime identity (or the capability
     /// coordinator identity) is already bound to a Runtime Client host.
     ///
@@ -209,6 +212,10 @@ impl core::fmt::Display for HostConstructionError {
                 "capability owner {capability_conversation} does not match tool runtime owner {runtime_conversation}"
             ),
             Self::Context(message) => write!(f, "context configuration failed: {message}"),
+            Self::InvalidInitialConversation(message) => write!(
+                f,
+                "the initial canonical conversation is invalid: {message}"
+            ),
             Self::RuntimeClientAlreadyBound { conversation_id } => write!(
                 f,
                 "the runtime identity of conversation {conversation_id} is already bound to a Runtime Client host"
@@ -266,10 +273,13 @@ fn invalid_model(error: &ModelInvocationError) -> RuntimeClientError {
 /// The shared context-plane pieces of the host.
 ///
 /// These are the **session-owned static** pieces: the token estimator, the
-/// checkpoint store, the Agent Status composer, and the context policy
-/// (reserve tokens, keep-recent target, summary output cap). They persist
-/// across attempts, and the model path and the Runtime Client projection
-/// share one composer.
+/// Agent Status composer, and the context policy (reserve tokens,
+/// keep-recent target, summary output cap). They persist across attempts,
+/// and the model path and the Runtime Client projection share one composer.
+///
+/// There is deliberately no checkpoint store: compaction lineage is derived
+/// from Conversation Surface history, which the one `ConversationState`
+/// owns, so no second store can drift from the authoritative state.
 ///
 /// The context *window* is deliberately absent: it belongs to the model, so
 /// each attempt derives its [`ContextRuntime`] from this policy plus that
@@ -281,8 +291,6 @@ pub struct RuntimeClientContextConfig {
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
-    /// The checkpoint store.
-    pub checkpoint_store: Arc<dyn ContextCheckpointStore>,
     /// The Agent Status composer shared by the model path and the Runtime
     /// Client projection.
     pub status_composer: AgentStatusComposer,
@@ -355,10 +363,14 @@ struct HostState {
     /// can never interleave ambiguously: whichever acquires the lock first
     /// linearizes first.
     model: SessionModelState,
-    /// The canonical conversation history between attempts. During an
-    /// attempt the loop owns its working copy; at settlement the host
-    /// replaces this value with the authoritative result messages.
-    canonical_history: Vec<MessageBlock>,
+    /// The one canonical conversation state, owned by the host **only
+    /// between attempts**.
+    ///
+    /// Ownership is structural, not conventional: admission moves the state
+    /// out (`take`), so while an attempt runs this slot is `None` and the
+    /// host physically cannot mutate a competing copy. Settlement moves the
+    /// authoritative state back in.
+    conversation: Option<ConversationState>,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     /// The at-most-one active attachment of Protocol v1.
@@ -557,7 +569,6 @@ impl HostInner {
         ContextRuntime::for_attempt(
             self.context.policy,
             Arc::clone(&self.context.estimator),
-            Arc::clone(&self.context.checkpoint_store),
             self.context.status_composer.clone(),
             model,
         )
@@ -623,7 +634,7 @@ impl HostInner {
     async fn run_attempt(
         self: &Arc<Self>,
         attempt_id: AttemptId,
-        initial_messages: Vec<MessageBlock>,
+        conversation: ConversationState,
         fresh: Option<FreshInboundTurn>,
         cancellation: &AgentCancellation,
         model: AttemptModelSnapshot,
@@ -640,7 +651,7 @@ impl HostInner {
             agent_id: self.agent_id.clone(),
             conversation_id: self.conversation_id.clone(),
             attempt_id,
-            initial_messages,
+            conversation,
             initial_turn_trigger: match fresh {
                 Some(fresh) => InitialTurnTrigger::FreshInbound(fresh),
                 None => InitialTurnTrigger::Continuation,
@@ -664,12 +675,12 @@ impl HostInner {
         execution.run().await
     }
 
-    /// The settlement path of one attempt: commit the authoritative
-    /// history, clear the current-attempt slot, then admit the next
-    /// attempt when the mailbox holds pending work.
+    /// The settlement path of one attempt: transfer the authoritative
+    /// conversation state back to the host, clear the current-attempt slot,
+    /// then admit the next attempt when the mailbox holds pending work.
     ///
-    /// The result is consumed by value: its `messages` become the
-    /// authoritative canonical history.
+    /// The result is consumed by value: its `conversation` becomes the
+    /// host's authoritative conversation state again.
     #[allow(clippy::needless_pass_by_value)]
     fn finish_attempt(
         self: &Arc<Self>,
@@ -680,10 +691,10 @@ impl HostInner {
             let mut state = self.lock_state();
             debug_assert_eq!(
                 state.projection.snapshot_ref().messages,
-                result.messages,
-                "the projection read model must mirror the authoritative attempt history"
+                result.conversation.ledger().audit_records(),
+                "the projection read model must mirror the authoritative message ledger"
             );
-            state.canonical_history = result.messages;
+            state.conversation = Some(result.conversation);
             if state
                 .current_attempt
                 .as_ref()
@@ -715,11 +726,19 @@ impl HostInner {
         // drained messages so the client observes the drain fact before
         // the commit facts.
         state.apply_pending(&self.pending);
+        // Ownership transfer: the host hands its conversation state to the
+        // attempt. From here until settlement the host holds `None` and the
+        // attempt is the single mutable conversation authority.
+        let mut conversation = state
+            .conversation
+            .take()
+            .expect("the host owns the conversation state while idle");
         let mut fresh_ids = Vec::with_capacity(batch.items().len());
         for item in batch.into_items() {
-            let message_id = item.message().id.clone();
             let block = MessageBlock::User(item.into_message());
-            state.canonical_history.push(block.clone());
+            let message_id = conversation
+                .commit(block.clone())
+                .expect("a mailbox-assigned inbound identity is unique");
             state.projection.apply(Observation::Committed {
                 attempt_id: None,
                 block,
@@ -745,7 +764,6 @@ impl HostInner {
         state.projection.apply(Observation::AttemptAdmitted {
             attempt_id: attempt_id.clone(),
         });
-        let initial_messages = state.canonical_history.clone();
         // The attempt model snapshot is taken at exactly this admission
         // linearization boundary, under the same lock that publishes the
         // attempt. A `model_set` that linearizes before this point is
@@ -762,7 +780,7 @@ impl HostInner {
             let result = inner
                 .run_attempt(
                     attempt_id.clone(),
-                    initial_messages,
+                    conversation,
                     Some(fresh),
                     &cancellation,
                     model,
@@ -866,6 +884,12 @@ impl RuntimeClientHost {
         // admission, where there is no caller left to report to.
         validate_context_policy(&config.context.policy, &config.model.snapshot())
             .map_err(|error| HostConstructionError::Context(error.message))?;
+        // The bootstrap conversation state is built here, in the fallible
+        // section: a rejected bootstrap leaves no claimed runtime behind.
+        let conversation = ConversationState::from_messages(config.initial_messages.clone())
+            .map_err(|error| {
+                HostConstructionError::InvalidInitialConversation(error.to_string())
+            })?;
 
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -913,7 +937,7 @@ impl RuntimeClientHost {
             state: Mutex::new(HostState {
                 projection,
                 model: config.model,
-                canonical_history: config.initial_messages,
+                conversation: Some(conversation),
                 current_attempt: None,
                 attachment: None,
                 shutting_down: false,
@@ -1634,16 +1658,31 @@ impl EventSubscription {
     }
 }
 
-/// Convenience for tests: the host's canonical history accessor.
+/// Convenience for tests: the host's conversation-state accessors.
 #[cfg(test)]
 impl RuntimeClientHost {
-    pub(crate) fn canonical_history(&self) -> Vec<MessageBlock> {
+    /// The host-owned Message Ledger records, or `None` while an attempt
+    /// owns the conversation state.
+    pub(crate) fn host_ledger(&self) -> Option<Vec<MessageBlock>> {
         self.inner
             .state
             .lock()
             .expect("host lock")
-            .canonical_history
-            .clone()
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.ledger().audit_records().to_vec())
+    }
+
+    /// The host-owned active Surface identities, or `None` while an attempt
+    /// owns the conversation state.
+    pub(crate) fn host_active_ids(&self) -> Option<Vec<crate::runtime::identity::MessageId>> {
+        self.inner
+            .state
+            .lock()
+            .expect("host lock")
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.active_ids().to_vec())
     }
 
     #[allow(dead_code)] // used by the race regression tests
@@ -1682,7 +1721,7 @@ mod tests {
     use crate::context::{
         AgentStatusClock, AgentStatusComposer, AgentStatusFact, AgentStatusRenderContext,
         AgentStatusSectionId, AgentStatusSectionProvider, ContextError, DefaultTokenEstimator,
-        InMemoryCheckpointStore, TokenEstimator,
+        TokenEstimator,
     };
     use crate::message::content::TextBlock;
     use crate::message::types::{
@@ -1958,7 +1997,6 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: composer,
             },
             tool_runtime,
@@ -2242,18 +2280,18 @@ mod tests {
         await_canonical_history(&fixture.host, &snapshot.messages).await;
     }
 
-    /// Waits until the host's authoritative canonical history equals the
-    /// expected value.
+    /// Waits until the host owns the conversation state again and its
+    /// Message Ledger equals the expected records.
     ///
-    /// The host commits it in `finish_attempt`, just after the Agent Loop
-    /// emitted the attempt's terminal event, so a test that synchronized on
-    /// the terminal event may still observe the previous value once. This
-    /// yields to the runtime until the commit is visible; the outer timeout
-    /// only bounds a pathological stall.
+    /// The host takes ownership back in `finish_attempt`, just after the
+    /// Agent Loop emitted the attempt's terminal event, so a test that
+    /// synchronized on the terminal event may still observe the attempt
+    /// owning it once. This yields to the runtime until the transfer is
+    /// visible; the outer timeout only bounds a pathological stall.
     async fn await_canonical_history(host: &RuntimeClientHost, expected: &[MessageBlock]) {
         tokio::time::timeout(std::time::Duration::from_secs(120), async {
             loop {
-                if host.canonical_history() == expected {
+                if host.host_ledger().as_deref() == Some(expected) {
                     return;
                 }
                 tokio::task::yield_now().await;
@@ -2663,23 +2701,20 @@ mod tests {
         ));
     }
 
-    /// There is exactly one authoritative mutable canonical history owner
+    /// There is exactly one authoritative mutable conversation-state owner
     /// at a time, and ownership transfers at the attempt boundaries.
     ///
-    /// This test inspects the host's own `canonical_history` — the thing
-    /// that would be the second authority if one existed — at each phase:
+    /// Since Issue #54 the ownership is *structural*: admission moves the
+    /// one `ConversationState` out of the host, so while an attempt runs the
+    /// host holds nothing at all and physically cannot mutate a competing
+    /// copy.
     ///
     /// ```text
-    /// idle        host history == []                     (host owns)
-    /// admission   host history == [user]  -> moved into AgentExecution
-    /// running     host history UNCHANGED  while the loop commits more
-    /// settlement  host history == the execution's final messages
+    /// idle        host owns the state, ledger == []
+    /// admission   state MOVED into AgentExecution
+    /// running     host owns nothing (None) while the loop commits more
+    /// settlement  state MOVED back, ledger == the attempt's final ledger
     /// ```
-    ///
-    /// The "running" step is the load-bearing one: the loop commits an
-    /// agent message and the projection mirrors it, while the host's copy
-    /// provably does not move. The host is therefore not a competing
-    /// mutable authority whose agreement happens to be checked at the end.
     // One ownership lifecycle observed end to end: splitting it would lose
     // the phase-to-phase continuity that is the whole point.
     #[allow(clippy::too_many_lines)]
@@ -2741,9 +2776,13 @@ mod tests {
             .subscribe_events(RuntimeClientCursor::new(0))
             .expect("subscribe");
 
-        // Idle: the host owns canonical history, and it is the projection's
-        // only source.
-        assert!(fixture.host.canonical_history().is_empty());
+        // Idle: the host owns the conversation state, and it is the
+        // projection's only source.
+        assert_eq!(
+            fixture.host.host_ledger(),
+            Some(Vec::new()),
+            "an idle host owns an empty conversation state"
+        );
         assert!(
             fixture
                 .host
@@ -2774,13 +2813,14 @@ mod tests {
             .wait_for(|started| *started)
             .await
             .expect("the parking tool started");
-        let during = fixture.host.canonical_history();
-        assert_eq!(
-            during.len(),
-            1,
-            "the host's history holds only the admitted turn: the attempt owns the rest"
+        assert!(
+            fixture.host.host_ledger().is_none(),
+            "the attempt owns the conversation state; the host holds nothing"
         );
-        assert!(matches!(during[0], MessageBlock::User(_)));
+        assert!(
+            fixture.host.host_active_ids().is_none(),
+            "there is no host-side surface to compete with the attempt's"
+        );
         let (mirror, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(
             mirror.messages.len(),
@@ -2795,10 +2835,9 @@ mod tests {
             id: crate::runtime_client::RequestId::new(2),
             content: submit_content("second"),
         });
-        assert_eq!(
-            fixture.host.canonical_history().len(),
-            1,
-            "a busy-path submission never mutates canonical history"
+        assert!(
+            fixture.host.host_ledger().is_none(),
+            "a busy-path submission never gives the host a competing conversation state"
         );
 
         // Releasing the tool lets the attempt finish its tool turn and then
@@ -2835,9 +2874,9 @@ mod tests {
         // that the host never mutated a competing copy during the attempt.)
 
         // A third submission while idle: its admission is the deterministic
-        // proof that settlement transferred the execution's final history
-        // back to the host — admission only happens once `finish_attempt`
-        // cleared the attempt slot, and it starts from `canonical_history`.
+        // proof that settlement transferred the execution's final
+        // conversation state back to the host — admission only happens once
+        // `finish_attempt` restored the state and cleared the attempt slot.
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(3),
             content: submit_content("third"),
@@ -3934,7 +3973,6 @@ mod tests {
                     summary_output_cap: None,
                 },
                 estimator,
-                checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                 status_composer: composer(),
             },
             tool_runtime: other_runtime,
@@ -3994,7 +4032,6 @@ mod tests {
                         summary_output_cap: None,
                     },
                     estimator,
-                    checkpoint_store: Arc::new(InMemoryCheckpointStore::new()),
                     status_composer: composer(),
                 },
                 tool_runtime,

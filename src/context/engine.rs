@@ -1,13 +1,27 @@
 //! The deterministic context engine.
 //!
-//! The engine projects immutable canonical history into bounded model
-//! context: it builds [`ContextProjection`] values, plans and applies
-//! compaction, and enforces the context-window threshold. Compaction changes
-//! the projection, never canonical history.
+//! Since M7.5 (Issue #54) the engine plans from the **current Conversation
+//! Surface**, never from append-origin history:
 //!
-//! All decisions are deterministic pure functions of (canonical history,
-//! latest checkpoint, tool definitions, observed provider usage): the same
-//! inputs always produce the same projection, plan, and estimate.
+//! ```text
+//! Surface @ revision
+//!   → finite active MessageIds
+//!   → keyed Ledger hydration
+//!   → ContextProjection (finite, complete canonical messages only)
+//!   → token pressure / retention / compaction planning
+//! ```
+//!
+//! The engine owns token pressure, the soft-limit decision, the retention
+//! target, structural compaction planning, summary planning, the fit and
+//! progress checks, and the provider-neutral projection. It does **not** own
+//! Ledger mutation, Surface authority, attempt cancellation, provider
+//! continuation storage, or Runtime Client state: the semantic commit of a
+//! compaction is applied by [`ConversationState::commit_compaction`].
+//!
+//! All decisions are deterministic pure functions of (Surface revision,
+//! hydrated active messages, tool definitions, observed provider usage,
+//! status/catalog attachments): the same inputs always produce the same
+//! projection, plan, and estimate.
 //!
 //! The engine owns no provider knowledge: the window/reserve/recent-token
 //! configuration is runtime-owned, token estimation is pluggable, and no
@@ -17,18 +31,20 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::context::checkpoint::{ContextBoundary, ContextCheckpoint, summary_message_id};
 use crate::context::error::{ContextError, ContextErrorKind};
-use crate::context::projection::{ContextProjection, ProjectionItem};
-use crate::context::structure::StructuralIndex;
-use crate::context::summarizer::{SplitTurnSummaryInput, SummaryInputItem, SummaryRequest};
+use crate::context::projection::ContextProjection;
+use crate::context::summarizer::SummaryRequest;
 use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
+use crate::conversation::{
+    CompactionCommit, ConversationError, ConversationState, StructuralIndex, SurfaceRevision,
+    SurfaceSpan, summary_message_id,
+};
 use crate::message::content::TextBlock;
 use crate::message::types::{
-    ContentBlockIndex, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::types::{AgentStatusAttachment, SkillCatalogAttachment};
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId};
+use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::inbound::FreshInboundTurn;
 use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
 use crate::tools::types::ModelToolDefinition;
@@ -41,23 +57,15 @@ use crate::tools::types::ModelToolDefinition;
 /// belongs to the model, and the session model may change between attempts,
 /// so the effective [`ContextConfig`] of an attempt is derived from this
 /// policy plus that attempt's immutable model snapshot.
-///
-/// An attempt using model B therefore never makes compaction decisions with
-/// model A's window, and no context window captured at process start
-/// survives a model change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionContextPolicy {
     /// Tokens permanently reserved out of whichever model context window is
     /// in force.
     pub reserve_tokens: u64,
-    /// Tokens of recent conversation history kept uncompressed. This is a
+    /// Tokens of recent conversation content kept uncompressed. This is a
     /// token target, never a message count target.
     pub keep_recent_tokens: u64,
     /// The context plane's summary/output safety cap, when it imposes one.
-    ///
-    /// The cap is applied through the runtime-owned protected max-output
-    /// field of the summary invocation; it never mutates a reasoning profile
-    /// or a request-parameter object.
     pub summary_output_cap: Option<u32>,
 }
 
@@ -83,47 +91,51 @@ impl SessionContextPolicy {
 /// ```
 ///
 /// Automatic compaction triggers at `estimated_input >= soft_input_limit`
-/// (equality compacts), `max_output_tokens` is the runtime-resolved
-/// generation budget, and `reserve_tokens` is an additional safety reserve.
-/// Impossible configurations are rejected; no fallback constant is hidden.
+/// (equality compacts). Impossible configurations are rejected; no fallback
+/// constant is hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextConfig {
     /// The model context window in tokens.
     pub context_window_tokens: u64,
     /// Tokens permanently reserved out of the model context window.
     pub reserve_tokens: u64,
-    /// Tokens of recent conversation history kept uncompressed. This is a
+    /// Tokens of recent conversation content kept uncompressed. This is a
     /// token target, never a message count target.
     pub keep_recent_tokens: u64,
 }
 
-/// The two output budgets that compaction planning must keep distinct.
+/// The budgets compaction planning must keep distinct.
 ///
-/// The primary model's budget determines how much input the next primary
-/// request may carry. The frozen summary invocation's effective budget is a
-/// reservation for the summary that will be generated while applying the
-/// plan. Keeping the values named prevents a summary-model override or a
-/// context summary cap from accidentally changing the primary soft limit.
-///
-/// There is deliberately no conversion from a single number: the two
-/// budgets are two concepts even when their current numeric values happen to
-/// be equal, and a call site that means "both budgets are this value" must
-/// say so with [`CompactionBudgets::new(value, value)`](CompactionBudgets::new).
+/// The primary model's output budget determines how much input the next
+/// primary request may carry. The frozen summary invocation's output budget
+/// is a reservation for the summary that will be generated while applying
+/// the plan, and its **input** limit bounds how large a Surface span may be
+/// serialized into one summary request: an arbitrarily large span can never
+/// become an impossible summary-model request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionBudgets {
     /// The primary invocation's effective maximum output tokens.
     pub primary_output_budget: u32,
-    /// The frozen/capped summary invocation's effective maximum output tokens.
+    /// The frozen/capped summary invocation's effective maximum output
+    /// tokens.
     pub summary_output_budget: u32,
+    /// The frozen summary invocation's effective input limit: the largest
+    /// selected span estimate one summary request may carry.
+    pub summary_input_limit: u64,
 }
 
 impl CompactionBudgets {
     /// Creates the budgets for one admitted attempt.
     #[must_use]
-    pub const fn new(primary_output_budget: u32, summary_output_budget: u32) -> Self {
+    pub const fn new(
+        primary_output_budget: u32,
+        summary_output_budget: u32,
+        summary_input_limit: u64,
+    ) -> Self {
         Self {
             primary_output_budget,
             summary_output_budget,
+            summary_input_limit,
         }
     }
 }
@@ -135,8 +147,7 @@ impl ContextConfig {
     /// # Errors
     ///
     /// Returns [`ContextErrorKind::InvalidConfiguration`] when the window
-    /// leaves no positive effective input budget: `context_window_tokens`
-    /// must exceed `reserve_tokens + max_output_tokens`.
+    /// leaves no positive effective input budget.
     pub fn soft_input_limit(&self, max_output_tokens: u32) -> Result<u64, ContextError> {
         let output = u64::from(max_output_tokens);
         if self.context_window_tokens <= self.reserve_tokens {
@@ -162,66 +173,51 @@ impl ContextConfig {
     }
 }
 
-/// One ordered item of the uncompressed compactable suffix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SuffixItem {
-    /// A whole canonical message at this history position.
-    Whole(usize),
-    /// The retained content slice of the agent message at this history
-    /// position, starting at `first_retained_block`.
-    RetainedSlice(usize, usize),
-}
-
-impl SuffixItem {
-    fn position(self) -> usize {
-        match self {
-            Self::Whole(position) | Self::RetainedSlice(position, _) => position,
-        }
-    }
-}
-
 /// The deterministic plan of one compaction.
 ///
-/// A plan is a pure function of the current state; applying it with a
-/// summary produces the next checkpoint ([`ContextEngine::apply_compaction`]).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A plan is a pure function of the current Surface state; it names the
+/// exact inclusive active span to replace and carries the complete canonical
+/// messages of that span for summarization. Applying it produces the one
+/// [`CompactionCommit`] the conversation state linearizes.
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompactionPlan {
-    /// The new coverage boundary.
-    pub boundary: ContextBoundary,
-    /// The canonical material newly retired since the previous checkpoint:
-    /// whole messages, or residual content slices of a previously split
-    /// agent message that is now fully retired.
-    pub newly_retired: Vec<SummaryInputItem>,
-    /// The retired prefix of a split turn, when this compaction splits one.
-    pub split_turn_prefix: Option<SplitTurnSummaryInput>,
-    /// The measured input of the pre-compaction projection, with its
-    /// provenance. Preserved for diagnostics and checkpoint metadata; the
-    /// anti-loop progress rule never compares measurements of different
-    /// provenance.
+    /// The Surface revision this plan was made against. A commit against a
+    /// different revision is rejected as stale.
+    pub surface_revision: SurfaceRevision,
+    /// The inclusive active span to replace with the summary.
+    pub span: SurfaceSpan,
+    /// The complete canonical messages of the span, in Surface order.
+    pub retired: Vec<MessageBlock>,
+    /// The measured input of the pre-compaction request context, with its
+    /// provenance. Preserved for diagnostics; the anti-loop progress rule
+    /// never compares measurements of different provenance.
     pub estimated_before: TokenMeasurement,
-    /// The deterministic estimated input of the pre-compaction projection,
-    /// computed with the same estimator on both sides of the progress rule.
-    /// The anti-loop invariant compares this to the deterministic estimate
-    /// of the post-compaction projection.
+    /// The deterministic estimate of the pre-compaction request context,
+    /// computed with the same estimator and attachments used on the other
+    /// side of the progress rule.
     pub estimated_before_tokens: u64,
-    /// The planned post-compaction estimate: pinned context plus the
-    /// retained suffix plus the summary reservation.
+    /// The planned post-compaction estimate: retained context plus the
+    /// summary reservation.
     pub planned_estimate_after: u64,
-    /// The summary output budget reserved during planning (the runtime
-    /// maximum output tokens), a conservative bound for the unknown summary.
+    /// The summary output budget reserved during planning, a conservative
+    /// bound for the not-yet-generated summary.
     pub summary_reservation: u64,
     /// The exact Agent Status attachment of the request preparation this
-    /// plan belongs to, when one exists. The plan is bound to one status
-    /// snapshot: hard-fit estimates and the application progress rule use
-    /// this same snapshot on both sides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// plan belongs to, when one exists.
     pub agent_status: Option<AgentStatusAttachment>,
     /// The exact Skill catalog attachment of the attempt's capability
-    /// snapshot, when one exists. The plan is bound to one catalog
-    /// snapshot: hard-fit estimates and the application progress rule use
-    /// this same snapshot on both sides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// snapshot, when one exists.
     pub skill_catalog: Option<SkillCatalogAttachment>,
+}
+
+impl CompactionPlan {
+    /// The summary request this plan implies.
+    #[must_use]
+    pub fn summary_request(&self) -> SummaryRequest {
+        SummaryRequest {
+            retired: self.retired.clone(),
+        }
+    }
 }
 
 /// The structural constraints one compaction plan must satisfy.
@@ -236,24 +232,12 @@ pub struct CompactionPlan {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CompactionConstraints<'a> {
-    /// The continuation constraint: the boundary must retire the
+    /// The continuation constraint: the span must retire the
     /// continuation-owning turn completely.
     pub must_cover_through: Option<&'a MessageId>,
     /// The fresh-inbound retention constraint: unobserved fresh inbound
-    /// material must remain literal.
+    /// material must remain active.
     pub fresh_inbound: Option<&'a FreshInboundTurn>,
-}
-
-/// The chosen boundary shape of a plan.
-#[derive(Debug, Clone, Copy)]
-enum Chosen {
-    /// A whole-message cut retiring suffix items `[0..count)`.
-    Whole { count: usize },
-    /// A split of the agent message at `agent_position` at block `first`.
-    Split {
-        agent_position: usize,
-        first_retained_block: usize,
-    },
 }
 
 /// The deterministic context engine.
@@ -344,68 +328,321 @@ impl ContextEngine {
         Ok(projection.estimated_input.input_tokens < self.soft_input_limit(max_output_tokens)?)
     }
 
-    /// Builds the current projection of one canonical history.
+    /// Builds the current projection of one conversation state.
     ///
-    /// The projection is deterministic: pinned system prefix, then the
-    /// checkpoint summary (when a checkpoint exists and is not absorbed by
-    /// the pinned prefix), then the retained literal suffix. A checkpoint
-    /// whose coverage lies fully inside the current pinned system prefix is
-    /// *absorbed*: its covered history is literal again, so its summary must
-    /// not be injected (that would duplicate covered history next to its
-    /// summary). The estimated input is `ProviderReported` only when an
-    /// observed provider measurement applies to exactly this projection
-    /// (identical fingerprint, including the exact Agent Status attachment);
-    /// otherwise it is a deterministic estimate that includes the Agent
-    /// Status attachment and the tool definitions. Estimates never become
-    /// provider usage.
+    /// The read path is finite by construction: the Surface answers *which*
+    /// identities are active, and only those bodies are hydrated by keyed
+    /// Ledger lookup. Retired Ledger history is never iterated and never
+    /// hydrated, so the cost is a function of the active Surface alone.
     ///
-    /// `agent_status` is the one status snapshot sampled for this request
-    /// preparation: exactly one snapshot per preparation, reused throughout
-    /// its proactive compaction planning and application.
+    /// The estimated input is `ProviderReported` only when an observed
+    /// provider measurement applies to exactly this request context
+    /// (identical fingerprint, including the Surface revision and the exact
+    /// Agent Status attachment); otherwise it is a deterministic estimate
+    /// that includes the attachments and the tool definitions. Estimates
+    /// never become provider usage.
     ///
     /// # Errors
     ///
-    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
-    /// invalid canonical history or an inconsistent checkpoint.
+    /// Returns [`ContextErrorKind::MalformedHistory`] for a structurally
+    /// invalid active conversation or a dangling Surface identity.
     pub fn build_projection(
         &self,
-        history: &[MessageBlock],
-        checkpoint: Option<&ContextCheckpoint>,
+        state: &ConversationState,
         tool_definitions: &[ModelToolDefinition],
         observed: Option<&ProviderObservedInput>,
         agent_status: Option<&AgentStatusAttachment>,
         skill_catalog: Option<&SkillCatalogAttachment>,
     ) -> Result<ContextProjection, ContextError> {
-        let index = StructuralIndex::build(history)?;
-        let mut items: Vec<ProjectionItem> = history[..index.pinned_end]
-            .iter()
-            .cloned()
-            .map(ProjectionItem::Message)
-            .collect();
-        let active_checkpoint =
-            checkpoint.filter(|checkpoint| !Self::checkpoint_is_absorbed(&index, checkpoint));
-        if let Some(checkpoint) = active_checkpoint {
-            items.push(ProjectionItem::Message(MessageBlock::User(
-                checkpoint.summary.clone(),
-            )));
-            items.extend(Self::retained_items(history, checkpoint, &index)?);
-        } else {
-            items.extend(
-                history[index.pinned_end..]
-                    .iter()
-                    .cloned()
-                    .map(ProjectionItem::Message),
-            );
+        let (messages, _) = state
+            .structure()
+            .map_err(|error| conversation_failed(&error))?;
+        Ok(self.measured_projection(
+            state.revision(),
+            messages,
+            agent_status,
+            skill_catalog,
+            tool_definitions,
+            observed,
+        ))
+    }
+
+    /// Plans one compaction of the current Surface.
+    ///
+    /// The compactable region is the earliest contiguous run of non-`System`
+    /// active messages. Candidate spans are the inclusive prefixes of that
+    /// run; every candidate must contain complete canonical messages only,
+    /// must never separate a tool call from its result, must satisfy the
+    /// continuation and fresh-inbound constraints, and must fit the summary
+    /// model's input limit.
+    ///
+    /// The deterministic priority is frozen:
+    ///
+    /// 1. the largest candidate whose retained recent conversation content
+    ///    still meets `keep_recent_tokens`, when the resulting request fits;
+    /// 2. otherwise the most-retaining candidate that fits the hard limit.
+    ///
+    /// The recent-token target is measured over conversation content only:
+    /// tool definitions and attachments never count toward satisfying
+    /// `keep_recent_tokens`, though they still affect the full request
+    /// estimate, the threshold, and the hard fit. A single oversized message
+    /// never produces a half-message Surface node: if no complete-message
+    /// span fits, planning fails with [`ContextErrorKind::CannotFit`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
+    /// invalid active conversation, [`ContextErrorKind::NoProgress`] when
+    /// nothing can be retired or the continuation constraint is
+    /// unsatisfiable, and [`ContextErrorKind::CannotFit`] when no complete
+    /// message span produces a fitting request.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the chosen span indices fall outside the Surface the
+    /// candidates were derived from, which is unreachable by construction.
+    pub fn plan_compaction(
+        &self,
+        state: &ConversationState,
+        current_projection: &ContextProjection,
+        tool_definitions: &[ModelToolDefinition],
+        budgets: CompactionBudgets,
+        constraints: &CompactionConstraints<'_>,
+    ) -> Result<CompactionPlan, ContextError> {
+        let soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
+        let (active, index) = state
+            .structure()
+            .map_err(|error| conversation_failed(&error))?;
+        let reservation = u64::from(budgets.summary_output_budget);
+        let (first, run_end) = compactable_run(&index)?;
+        let min_end = continuation_min_end(&index, constraints.must_cover_through, first, run_end)?;
+        let Some(max_end) = fresh_retention_max_end(&index, constraints.fresh_inbound)? else {
+            return Err(no_progress(
+                "unobserved fresh inbound material must stay active, so nothing can be retired",
+            ));
+        };
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for end in first..=run_end {
+            if end < min_end || end > max_end || index.validate_span(first, end).is_err() {
+                continue;
+            }
+            let span_messages = active[first..=end].to_vec();
+            let summary_input = self
+                .estimator
+                .estimate_conversation_input(&bare_projection(state.revision(), &span_messages));
+            if summary_input > budgets.summary_input_limit {
+                // The selected span would not fit the summary model's own
+                // request budget: this candidate is impossible.
+                continue;
+            }
+            let retained_recent = self.estimator.estimate_conversation_input(&bare_projection(
+                state.revision(),
+                &active[end + 1..],
+            ));
+            let planned_items = retained_items(&active, first, end);
+            let planned = self
+                .estimator
+                .estimate_input(
+                    &projection_of(
+                        state.revision(),
+                        &planned_items,
+                        agent_status_of(current_projection),
+                        skill_catalog_of(current_projection),
+                    ),
+                    tool_definitions,
+                )
+                .saturating_add(reservation);
+            candidates.push(Candidate {
+                end,
+                retained_recent,
+                planned,
+            });
         }
+        if candidates.is_empty() {
+            if min_end > max_end || min_end > run_end {
+                return Err(no_progress(
+                    "the compaction constraints leave no retirable surface span",
+                ));
+            }
+            return Err(cannot_fit(&self.config));
+        }
+
+        let target = self.config.keep_recent_tokens;
+        let chosen = candidates
+            .iter()
+            .filter(|candidate| candidate.retained_recent >= target)
+            .max_by_key(|candidate| candidate.end)
+            .filter(|candidate| candidate.planned <= soft_limit)
+            .or_else(|| {
+                candidates
+                    .iter()
+                    .filter(|candidate| candidate.planned <= soft_limit)
+                    .min_by_key(|candidate| candidate.end)
+            })
+            .ok_or_else(|| cannot_fit(&self.config))?;
+
+        let span = SurfaceSpan::new(
+            index
+                .id_at(first)
+                .expect("the compactable run starts inside the surface")
+                .clone(),
+            index
+                .id_at(chosen.end)
+                .expect("the chosen span end is inside the surface")
+                .clone(),
+        );
+        Ok(CompactionPlan {
+            surface_revision: state.revision(),
+            span,
+            retired: active[first..=chosen.end].to_vec(),
+            estimated_before: current_projection.estimated_input,
+            // The deterministic estimate of the pre-compaction request
+            // context, provenance-free and including the same attachments:
+            // the anti-loop progress rule compares this to the deterministic
+            // estimate of the post-compaction context and never mixes a
+            // provider-reported measurement with an estimate.
+            estimated_before_tokens: self.estimator.estimate_input(
+                &projection_of(
+                    current_projection.surface_revision,
+                    &current_projection.messages,
+                    agent_status_of(current_projection),
+                    skill_catalog_of(current_projection),
+                ),
+                tool_definitions,
+            ),
+            planned_estimate_after: chosen.planned,
+            summary_reservation: reservation,
+            agent_status: current_projection.agent_status.clone(),
+            skill_catalog: current_projection.skill_catalog.clone(),
+        })
+    }
+
+    /// Prepares the semantic commit of one compaction: the canonical summary
+    /// message, the validated Surface replacement, and the projection the
+    /// commit will establish.
+    ///
+    /// Nothing is mutated here. The mandatory progress rule is enforced at
+    /// this boundary: the plan must retire at least one canonical message,
+    /// the summary must carry textual content, and the deterministic
+    /// post-compaction estimate must strictly decrease below the
+    /// deterministic pre-compaction estimate. Both sides of the comparison
+    /// come from the same estimator over the actual request context —
+    /// including the plan's exact attachments — so the decision never
+    /// depends on incomparable token provenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContextErrorKind::NoProgress`] when the plan or the summary
+    /// makes no measurable progress, [`ContextErrorKind::SummaryFailed`] for
+    /// an empty/whitespace-only summary, and
+    /// [`ContextErrorKind::MalformedHistory`] when the Surface rejects the
+    /// replacement.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the compaction generation overflows `u64`, which is
+    /// unreachable for an in-process conversation.
+    pub fn prepare_compaction(
+        &self,
+        state: &ConversationState,
+        conversation_id: &ConversationId,
+        plan: &CompactionPlan,
+        summary_text: &str,
+        tool_definitions: &[ModelToolDefinition],
+    ) -> Result<(CompactionCommit, ContextProjection), ContextError> {
+        if plan.retired.is_empty() {
+            return Err(no_progress("the plan retires no canonical message"));
+        }
+        if plan.surface_revision != state.revision() {
+            return Err(no_progress(&format!(
+                "the plan was made against surface revision {} but the current revision is {}",
+                plan.surface_revision,
+                state.revision()
+            )));
+        }
+        if summary_text.trim().is_empty() {
+            return Err(ContextError::new(
+                ContextErrorKind::SummaryFailed,
+                "summary generation produced no content",
+            ));
+        }
+        let generation = state
+            .surface()
+            .compaction_generation()
+            .checked_add(1)
+            .expect("the compaction generation cannot overflow");
+        let summary = UserMessageBlock {
+            id: summary_message_id(conversation_id, generation),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: summary_text.to_owned(),
+            })],
+            source: UserSource::Runtime,
+            kind: InboundKind::CompactionSummary,
+            timestamp: None,
+        };
+        let commit = state
+            .prepare_compaction(summary.clone(), plan.span.clone())
+            .map_err(|error| conversation_failed(&error))?;
+        let projected_messages = Self::projected_after(state, plan, &summary)?;
+        let projection = self.measured_projection(
+            state.revision().next(),
+            projected_messages,
+            plan.agent_status.as_ref(),
+            plan.skill_catalog.as_ref(),
+            tool_definitions,
+            None,
+        );
+        let estimated_after = projection.estimated_input.input_tokens;
+        if estimated_after >= plan.estimated_before_tokens {
+            return Err(no_progress(&format!(
+                "projected estimate {} does not strictly decrease from the deterministic estimate {}",
+                estimated_after, plan.estimated_before_tokens
+            )));
+        }
+        Ok((commit, projection))
+    }
+
+    /// The active messages the commit of `plan` will establish.
+    fn projected_after(
+        state: &ConversationState,
+        plan: &CompactionPlan,
+        summary: &UserMessageBlock,
+    ) -> Result<Vec<MessageBlock>, ContextError> {
+        let (active, index) = state
+            .structure()
+            .map_err(|error| conversation_failed(&error))?;
+        let start = index
+            .position_of(&plan.span.start)
+            .ok_or_else(|| malformed("the plan's span start is not active"))?;
+        let end = index
+            .position_of(&plan.span.end)
+            .ok_or_else(|| malformed("the plan's span end is not active"))?;
+        let mut messages = active[..start].to_vec();
+        messages.push(MessageBlock::User(summary.clone()));
+        messages.extend_from_slice(&active[end + 1..]);
+        Ok(messages)
+    }
+
+    /// Wraps hydrated messages into a measured projection.
+    fn measured_projection(
+        &self,
+        surface_revision: SurfaceRevision,
+        messages: Vec<MessageBlock>,
+        agent_status: Option<&AgentStatusAttachment>,
+        skill_catalog: Option<&SkillCatalogAttachment>,
+        tool_definitions: &[ModelToolDefinition],
+        observed: Option<&ProviderObservedInput>,
+    ) -> ContextProjection {
         let mut projection = ContextProjection {
-            items,
+            surface_revision,
+            messages,
             agent_status: agent_status.cloned(),
             skill_catalog: skill_catalog.cloned(),
             estimated_input: TokenMeasurement {
                 input_tokens: 0,
                 source: TokenMeasurementSource::Estimated,
             },
-            checkpoint_generation: active_checkpoint.map(|checkpoint| checkpoint.generation),
         };
         projection.estimated_input = match observed {
             Some(observed) if observed.fingerprint == projection.fingerprint() => {
@@ -419,652 +656,58 @@ impl ContextEngine {
                 source: TokenMeasurementSource::Estimated,
             },
         };
-        Ok(projection)
-    }
-
-    /// Whether a checkpoint's coverage is fully absorbed by the pinned
-    /// system prefix.
-    ///
-    /// When the current pinned prefix covers the checkpoint boundary (the
-    /// boundary message lies inside the pinned region), the checkpoint's
-    /// covered history is rendered literally again and the checkpoint must
-    /// not contribute its summary to the projection. The checkpoint itself
-    /// is untouched; a later compaction establishes a fresh checkpoint.
-    fn checkpoint_is_absorbed(index: &StructuralIndex, checkpoint: &ContextCheckpoint) -> bool {
-        match &checkpoint.boundary {
-            ContextBoundary::AfterMessage { message_id } => index
-                .position_of(message_id)
-                .is_some_and(|position| position < index.pinned_end),
-            ContextBoundary::InsideAgent { message_id, .. } => index
-                .position_of(message_id)
-                .is_some_and(|position| position < index.pinned_end),
-        }
-    }
-
-    /// Plans one compaction of the current state.
-    ///
-    /// The algorithm is deterministic and freezes this priority:
-    ///
-    /// 1. a whole-turn boundary that satisfies the recent-token target and
-    ///    the hard fit;
-    /// 2. if no such boundary exists, a hard-fitting whole-turn boundary
-    ///    that retains as much useful recent complete-turn context as
-    ///    possible (the most-retaining whole cut under the hard fit);
-    /// 3. split a turn only when a single oversized turn prevents a viable
-    ///    complete-turn projection (no whole cut retains any recent context
-    ///    within the hard fit).
-    ///
-    /// The recent-token target is measured over conversation content only:
-    /// tool definitions never count toward satisfying `keep_recent_tokens`,
-    /// though they still affect the full request estimate, the threshold,
-    /// and the hard fit.
-    ///
-    /// `must_cover_through` enforces the continuation constraint: the new
-    /// boundary must retire the continuation-owning turn completely and may
-    /// never split it. When the continuation-owning turn has become part of
-    /// the pinned system prefix, no compaction can retire it, and the plan
-    /// fails explicitly instead of clearing the continuation while leaving
-    /// its boundary literal.
-    ///
-    /// `fresh_inbound` enforces the fresh-inbound retention constraint: a
-    /// fresh inbound turn that has not yet been observed by a successful
-    /// model invocation must remain literal in the projection. The planned
-    /// boundary must never retire the earliest fresh inbound message or
-    /// anything after it. The two constraints serve opposite purposes and
-    /// are kept separate:
-    ///
-    /// ```text
-    /// continuation owner   → successful compaction must retire through this
-    /// fresh inbound        → successful compaction must not retire this or
-    ///                        anything after it
-    /// ```
-    ///
-    /// The planner always uses the exact Agent Status attachment of the
-    /// current request preparation (carried by `current_projection`) for its
-    /// hard-fit estimates, so the status snapshot itself can change the
-    /// compaction decision. If no valid projection can fit while preserving
-    /// pinned context, the fresh inbound material, the Agent Status
-    /// attachment, the tool definitions, and the required output/reserve
-    /// budget, planning fails explicitly with
-    /// [`ContextErrorKind::CannotFit`]. The current unobserved user
-    /// instruction is never summarized merely to make the request fit.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
-    /// invalid history, [`ContextErrorKind::NoProgress`] when nothing new
-    /// can be retired or the continuation constraint is unsatisfiable, and
-    /// [`ContextErrorKind::CannotFit`] when even full compaction cannot fit
-    /// pinned context, the fresh inbound material, and the summary
-    /// reservation.
-    pub fn plan_compaction(
-        &self,
-        history: &[MessageBlock],
-        checkpoint: Option<&ContextCheckpoint>,
-        current_projection: &ContextProjection,
-        tool_definitions: &[ModelToolDefinition],
-        budgets: CompactionBudgets,
-        constraints: &CompactionConstraints<'_>,
-    ) -> Result<CompactionPlan, ContextError> {
-        let soft_limit = self.soft_input_limit(budgets.primary_output_budget)?;
-        let index = StructuralIndex::build(history)?;
-        let suffix = Self::suffix_items(history, checkpoint, &index)?;
-        if suffix.is_empty() {
-            return Err(no_progress("the compactable suffix is empty"));
-        }
-        let reservation = u64::from(budgets.summary_output_budget);
-        let min_cut = continuation_min_cut(&index, constraints.must_cover_through)?;
-        let fresh_cut = fresh_retention_cut(&index, constraints.fresh_inbound)?;
-        let scope = PlanScope {
-            history,
-            suffix: &suffix,
-            index: &index,
-            tool_definitions,
-            estimator: self.estimator.as_ref(),
-            soft_limit,
-            reservation,
-            agent_status: current_projection.agent_status.as_ref(),
-            skill_catalog: current_projection.skill_catalog.as_ref(),
-        };
-
-        let mut whole_candidates: Vec<(usize, u64, u64)> = Vec::new();
-        for count in 1..=suffix.len() {
-            let cut = suffix[count - 1].position() + 1;
-            if !index.whole_cut_is_valid(cut) || cut < min_cut || cut > fresh_cut {
-                continue;
-            }
-            // The recent-suffix estimate measures conversation content only:
-            // tool definitions never satisfy the retention target.
-            let retained = scope.estimator.estimate_conversation_input(&projection_of(
-                &retained_items_of(&scope, count),
-                None,
-                None,
-            ));
-            let planned = estimate_input_of(
-                &scope,
-                &projection_of(
-                    &projection_items_for(&scope, count),
-                    scope.agent_status,
-                    scope.skill_catalog,
-                ),
-            )
-            .saturating_add(reservation);
-            whole_candidates.push((count, retained, planned));
-        }
-
-        let target = self.config.keep_recent_tokens;
-        let target_cut = whole_candidates
-            .iter()
-            .filter(|(_, retained, _)| *retained >= target)
-            .max_by_key(|(count, _, _)| *count)
-            .copied();
-
-        let chosen = match target_cut {
-            // Priority 1: the target-satisfying boundary that retires the
-            // most, when it fits.
-            Some((count, _, planned)) if planned <= soft_limit => Chosen::Whole { count },
-            _ => {
-                // Priority 2: a hard-fitting whole-turn boundary retaining
-                // as much useful recent complete-turn context as possible —
-                // the most-retaining whole cut under the hard fit. This must
-                // win over splitting whenever it retains any recent context.
-                let best_fitting = whole_candidates
-                    .iter()
-                    .filter(|(_, _, planned)| *planned <= soft_limit)
-                    .min_by_key(|(count, _, _)| *count)
-                    .copied();
-                match best_fitting {
-                    Some((count, _, _)) if count < scope.suffix.len() => Chosen::Whole { count },
-                    _ => {
-                        // Priority 3: no whole cut retains useful recent
-                        // context within the hard fit — a single oversized
-                        // turn prevents a viable complete-turn projection —
-                        // so split the latest turn.
-                        match best_split(&scope, min_cut, fresh_cut) {
-                            Some((agent_position, first)) => Chosen::Split {
-                                agent_position,
-                                first_retained_block: first,
-                            },
-                            None => smallest_fitting_whole(&whole_candidates, soft_limit)
-                                .ok_or_else(|| cannot_fit(&self.config))?,
-                        }
-                    }
-                }
-            }
-        };
-
-        self.build_plan(&scope, chosen, current_projection, budgets)
-    }
-
-    /// The `SummaryRequest` a plan implies, given the previous checkpoint
-    /// and the current canonical history.
-    ///
-    /// The stored checkpoint keeps the generation lineage (the next
-    /// checkpoint generation is `previous.generation + 1`), but it is the
-    /// active incremental summary source only when it is not absorbed by the
-    /// current pinned system prefix. An absorbed checkpoint's coverage is
-    /// pinned-literal again, so its old summary must never be fed into the
-    /// next summarization: `previous_summary` is `None`, and the newly
-    /// retired material starts strictly from the currently compactable
-    /// region after the pinned prefix.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::MalformedHistory`] for structurally
-    /// invalid history.
-    pub fn summary_request(
-        &self,
-        history: &[MessageBlock],
-        checkpoint: Option<&ContextCheckpoint>,
-        plan: &CompactionPlan,
-    ) -> Result<SummaryRequest, ContextError> {
-        let active_previous = match checkpoint {
-            Some(checkpoint) => {
-                let index = StructuralIndex::build(history)?;
-                if Self::checkpoint_is_absorbed(&index, checkpoint) {
-                    None
-                } else {
-                    Some(checkpoint)
-                }
-            }
-            None => None,
-        };
-        Ok(SummaryRequest {
-            previous_summary: active_previous.map(summary_text),
-            newly_retired: plan.newly_retired.clone(),
-            split_turn_prefix: plan.split_turn_prefix.clone(),
-        })
-    }
-
-    /// Applies a plan with the generated summary text, producing the next
-    /// checkpoint and its projection.
-    ///
-    /// The mandatory progress rule is enforced here: the new checkpoint must
-    /// retire at least one additional compactable canonical unit, and the
-    /// deterministic projected estimate must strictly decrease below the
-    /// deterministic pre-compaction estimate. Both sides of the comparison
-    /// come from the same estimator over the actual projection content —
-    /// including the plan's exact Agent Status attachment on both sides — so
-    /// the decision never depends on incomparable token provenance; the
-    /// provider-reported measurement is preserved only as checkpoint
-    /// metadata. If either condition fails the operation errors with
-    /// [`ContextErrorKind::NoProgress`] and no checkpoint is produced, so no
-    /// retry may follow.
-    ///
-    /// A summary with no textual content (empty or whitespace-only) is
-    /// rejected at this application boundary so no summarizer — including a
-    /// custom or scripted one — can erase history through an empty summary.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ContextErrorKind::NoProgress`] when the plan or the summary
-    /// makes no measurable progress, [`ContextErrorKind::SummaryFailed`] for
-    /// an empty/whitespace-only summary, and
-    /// [`ContextErrorKind::MalformedHistory`] for invalid history.
-    pub fn apply_compaction(
-        &self,
-        conversation_id: &ConversationId,
-        history: &[MessageBlock],
-        previous: Option<&ContextCheckpoint>,
-        plan: &CompactionPlan,
-        summary_text: &str,
-        tool_definitions: &[ModelToolDefinition],
-    ) -> Result<(ContextCheckpoint, ContextProjection), ContextError> {
-        if !self
-            .summary_request(history, previous, plan)?
-            .advances_coverage()
-        {
-            return Err(no_progress(
-                "the plan retires no additional compactable unit",
-            ));
-        }
-        if summary_text.trim().is_empty() {
-            return Err(ContextError::new(
-                ContextErrorKind::SummaryFailed,
-                "summary generation produced no content",
-            ));
-        }
-        let generation = previous.map_or(1, |checkpoint| checkpoint.generation + 1);
-        let mut checkpoint = ContextCheckpoint {
-            conversation_id: conversation_id.clone(),
-            generation,
-            summary: UserMessageBlock {
-                id: summary_message_id(conversation_id, generation),
-                content: vec![UserContentBlock::Text(TextBlock {
-                    text: summary_text.to_owned(),
-                })],
-                source: UserSource::Runtime,
-                kind: InboundKind::CompactionSummary,
-                timestamp: None,
-            },
-            boundary: plan.boundary.clone(),
-            tokens_before: plan.estimated_before,
-            estimated_tokens_after: 0,
-        };
-        let projection = self.build_projection(
-            history,
-            Some(&checkpoint),
-            tool_definitions,
-            None,
-            plan.agent_status.as_ref(),
-            plan.skill_catalog.as_ref(),
-        )?;
-        let estimated_after = projection.estimated_input.input_tokens;
-        if estimated_after >= plan.estimated_before_tokens {
-            return Err(no_progress(&format!(
-                "projected estimate {} does not strictly decrease from the deterministic estimate {}",
-                estimated_after, plan.estimated_before_tokens
-            )));
-        }
-        checkpoint.estimated_tokens_after = estimated_after;
-        Ok((checkpoint, projection))
-    }
-
-    /// The retained literal items of one checkpoint boundary.
-    fn retained_items(
-        history: &[MessageBlock],
-        checkpoint: &ContextCheckpoint,
-        index: &StructuralIndex,
-    ) -> Result<Vec<ProjectionItem>, ContextError> {
-        match &checkpoint.boundary {
-            ContextBoundary::AfterMessage { message_id } => {
-                let position = index.position_of(message_id).ok_or_else(|| {
-                    malformed(&format!(
-                        "checkpoint boundary references unknown message {message_id}"
-                    ))
-                })?;
-                let covered_end = index.pinned_end.max(position + 1);
-                Ok(history[covered_end..]
-                    .iter()
-                    .cloned()
-                    .map(ProjectionItem::Message)
-                    .collect())
-            }
-            ContextBoundary::InsideAgent {
-                message_id,
-                first_retained_block,
-            } => {
-                let position = index.position_of(message_id).ok_or_else(|| {
-                    malformed(&format!(
-                        "checkpoint boundary references unknown message {message_id}"
-                    ))
-                })?;
-                if position < index.pinned_end {
-                    return Ok(history[index.pinned_end..]
-                        .iter()
-                        .cloned()
-                        .map(ProjectionItem::Message)
-                        .collect());
-                }
-                let MessageBlock::Agent(agent) = &history[position] else {
-                    return Err(malformed(
-                        "checkpoint split boundary is not an agent message",
-                    ));
-                };
-                let first = first_retained_block.get() as usize;
-                if first > agent.content.len() {
-                    return Err(malformed(&format!(
-                        "checkpoint split block {first_retained_block} out of range for message {message_id}"
-                    )));
-                }
-                let retired_calls = retired_calls(index, position, first);
-                let mut items = vec![ProjectionItem::AgentSlice {
-                    source_message_id: agent.id.clone(),
-                    content: agent.content[first..].to_vec(),
-                }];
-                for message in &history[position + 1..] {
-                    if let MessageBlock::Tool(tool) = message
-                        && retired_calls.contains(&tool.tool_call_id)
-                    {
-                        continue;
-                    }
-                    items.push(ProjectionItem::Message(message.clone()));
-                }
-                Ok(items)
-            }
-        }
-    }
-
-    /// The uncompressed compactable suffix as an ordered virtual item list.
-    fn suffix_items(
-        history: &[MessageBlock],
-        checkpoint: Option<&ContextCheckpoint>,
-        index: &StructuralIndex,
-    ) -> Result<Vec<SuffixItem>, ContextError> {
-        // An absorbed checkpoint contributes nothing to the compactable
-        // suffix: its covered history is pinned-literal again.
-        let Some(checkpoint) =
-            checkpoint.filter(|checkpoint| !Self::checkpoint_is_absorbed(index, checkpoint))
-        else {
-            return Ok((index.pinned_end..history.len())
-                .map(SuffixItem::Whole)
-                .collect());
-        };
-        match &checkpoint.boundary {
-            ContextBoundary::AfterMessage { message_id } => {
-                let position = index.position_of(message_id).ok_or_else(|| {
-                    malformed(&format!(
-                        "checkpoint boundary references unknown message {message_id}"
-                    ))
-                })?;
-                let covered_end = index.pinned_end.max(position + 1);
-                Ok((covered_end..history.len())
-                    .map(SuffixItem::Whole)
-                    .collect())
-            }
-            ContextBoundary::InsideAgent {
-                message_id,
-                first_retained_block,
-            } => {
-                let position = index.position_of(message_id).ok_or_else(|| {
-                    malformed(&format!(
-                        "checkpoint boundary references unknown message {message_id}"
-                    ))
-                })?;
-                if position < index.pinned_end {
-                    return Ok((index.pinned_end..history.len())
-                        .map(SuffixItem::Whole)
-                        .collect());
-                }
-                let first = first_retained_block.get() as usize;
-                let Some(content_len) = index.content_len_of(position) else {
-                    return Err(malformed(
-                        "checkpoint split boundary is not an agent message",
-                    ));
-                };
-                if first > content_len {
-                    return Err(malformed(&format!(
-                        "checkpoint split block {first_retained_block} out of range"
-                    )));
-                }
-                let retired_calls = retired_calls(index, position, first);
-                let mut items = vec![SuffixItem::RetainedSlice(position, first)];
-                for (p, message) in history.iter().enumerate().skip(position + 1) {
-                    if let MessageBlock::Tool(tool) = message
-                        && retired_calls.contains(&tool.tool_call_id)
-                    {
-                        continue;
-                    }
-                    items.push(SuffixItem::Whole(p));
-                }
-                Ok(items)
-            }
-        }
-    }
-
-    fn estimate_items(
-        &self,
-        items: &[ProjectionItem],
-        tools: &[ModelToolDefinition],
-        agent_status: Option<&AgentStatusAttachment>,
-        skill_catalog: Option<&SkillCatalogAttachment>,
-    ) -> u64 {
-        let projection = ContextProjection {
-            items: items.to_vec(),
-            agent_status: agent_status.cloned(),
-            skill_catalog: skill_catalog.cloned(),
-            estimated_input: TokenMeasurement {
-                input_tokens: 0,
-                source: TokenMeasurementSource::Estimated,
-            },
-            checkpoint_generation: None,
-        };
-        self.estimator.estimate_input(&projection, tools)
-    }
-
-    /// Assembles the plan for one chosen boundary.
-    fn build_plan(
-        &self,
-        scope: &PlanScope<'_>,
-        chosen: Chosen,
-        current_projection: &ContextProjection,
-        budgets: CompactionBudgets,
-    ) -> Result<CompactionPlan, ContextError> {
-        let (shape, split_turn_prefix) = match chosen {
-            Chosen::Whole { count } => (whole_plan_shape(scope, count), None),
-            Chosen::Split {
-                agent_position,
-                first_retained_block,
-            } => {
-                let shape = split_plan_shape(scope, agent_position, first_retained_block)?;
-                let split = shape.split_turn_prefix.clone();
-                (shape, split)
-            }
-        };
-        let planned_estimate_after = self
-            .estimate_items(
-                &shape.planned_items,
-                scope.tool_definitions,
-                scope.agent_status,
-                scope.skill_catalog,
-            )
-            .saturating_add(scope.reservation);
-        if planned_estimate_after > self.soft_input_limit(budgets.primary_output_budget)? {
-            return Err(cannot_fit(&self.config));
-        }
-        Ok(CompactionPlan {
-            boundary: shape.boundary,
-            newly_retired: shape.newly_retired,
-            split_turn_prefix,
-            estimated_before: current_projection.estimated_input,
-            // The deterministic estimate of the pre-compaction projection,
-            // provenance-free and including the same exact Agent Status
-            // attachment: the anti-loop progress rule compares this to the
-            // deterministic estimate of the post-compaction projection (also
-            // computed with the plan's attachment) and never mixes a
-            // provider-reported measurement with an estimate.
-            estimated_before_tokens: estimate_input_of(
-                scope,
-                &projection_of(
-                    &current_projection.items,
-                    scope.agent_status,
-                    scope.skill_catalog,
-                ),
-            ),
-            planned_estimate_after,
-            summary_reservation: scope.reservation,
-            agent_status: scope.agent_status.cloned(),
-            skill_catalog: scope.skill_catalog.cloned(),
-        })
+        projection
     }
 }
 
-/// The deterministic planning scope of one compaction.
-struct PlanScope<'a> {
-    history: &'a [MessageBlock],
-    suffix: &'a [SuffixItem],
-    index: &'a StructuralIndex,
-    tool_definitions: &'a [ModelToolDefinition],
-    estimator: &'a dyn TokenEstimator,
-    soft_limit: u64,
-    reservation: u64,
-    /// The exact Agent Status attachment of the current request preparation;
-    /// hard-fit estimates include it so the status itself can change the
-    /// compaction decision.
-    agent_status: Option<&'a AgentStatusAttachment>,
-    /// The exact Skill catalog attachment of the attempt's capability
-    /// snapshot; hard-fit estimates include it so a large catalog can
-    /// contribute to `CannotFit`.
-    skill_catalog: Option<&'a SkillCatalogAttachment>,
+/// One evaluated candidate span `[first ..= end]`.
+struct Candidate {
+    end: usize,
+    retained_recent: u64,
+    planned: u64,
 }
 
-/// The assembled shape of one chosen boundary.
-struct PlanShape {
-    boundary: ContextBoundary,
-    newly_retired: Vec<SummaryInputItem>,
-    split_turn_prefix: Option<SplitTurnSummaryInput>,
-    planned_items: Vec<ProjectionItem>,
-}
-
-/// The tool calls of the agent message at `agent_position` whose content
-/// blocks lie strictly before `first_retained_block`.
-fn retired_calls(
-    index: &StructuralIndex,
-    agent_position: usize,
-    first_retained_block: usize,
-) -> Vec<ToolCallId> {
-    index
-        .calls_of(agent_position)
-        .iter()
-        .filter(|(block, _)| *block < first_retained_block)
-        .map(|(_, call)| call.clone())
-        .collect()
-}
-
-/// The projection item of one suffix item.
-fn suffix_item_projection(item: SuffixItem, history: &[MessageBlock]) -> ProjectionItem {
-    match item {
-        SuffixItem::Whole(position) => ProjectionItem::Message(history[position].clone()),
-        SuffixItem::RetainedSlice(position, first) => {
-            let MessageBlock::Agent(agent) = &history[position] else {
-                unreachable!("retained slices only reference agent messages");
-            };
-            ProjectionItem::AgentSlice {
-                source_message_id: agent.id.clone(),
-                content: agent.content[first..].to_vec(),
-            }
-        }
-    }
-}
-
-/// The retained literal items of a suffix starting at item `from`.
-fn retained_items_of(scope: &PlanScope<'_>, from: usize) -> Vec<ProjectionItem> {
-    scope.suffix[from..]
-        .iter()
-        .map(|item| suffix_item_projection(*item, scope.history))
-        .collect()
-}
-
-/// The projection items of a whole cut retiring `[0..count)` suffix items:
-/// pinned prefix plus retained suffix.
-fn projection_items_for(scope: &PlanScope<'_>, count: usize) -> Vec<ProjectionItem> {
-    let mut items: Vec<ProjectionItem> = scope.history[..scope.index.pinned_end]
-        .iter()
-        .cloned()
-        .map(ProjectionItem::Message)
-        .collect();
-    items.extend(retained_items_of(scope, count));
-    items
-}
-
-/// The projection items of a split boundary: pinned prefix plus the retained
-/// slice and the retained suffix after the split.
-fn split_projection_items(
-    scope: &PlanScope<'_>,
-    agent_position: usize,
-    first_retained_block: usize,
-) -> Vec<ProjectionItem> {
-    let mut items: Vec<ProjectionItem> = scope.history[..scope.index.pinned_end]
-        .iter()
-        .cloned()
-        .map(ProjectionItem::Message)
-        .collect();
-    let Some(agent_item_index) = scope
-        .suffix
-        .iter()
-        .position(|item| item.position() == agent_position)
-    else {
-        return items;
-    };
-    items.push(suffix_item_projection(
-        SuffixItem::RetainedSlice(agent_position, first_retained_block),
-        scope.history,
-    ));
-    let retired_calls = retired_calls(scope.index, agent_position, first_retained_block);
-    for item in &scope.suffix[agent_item_index + 1..] {
-        match *item {
-            SuffixItem::Whole(position) => {
-                if let MessageBlock::Tool(tool) = &scope.history[position]
-                    && retired_calls.contains(&tool.tool_call_id)
-                {
-                    continue;
-                }
-            }
-            SuffixItem::RetainedSlice(_, _) => {}
-        }
-        items.push(suffix_item_projection(*item, scope.history));
-    }
-    items
-}
-
-/// The history cut the continuation constraint requires, or 0 when no
-/// constraint applies.
+/// The compactable region: the earliest contiguous run of non-`System`
+/// active messages, as an inclusive `(first, last)` index pair.
 ///
-/// A continuation can be retired only by actually covering its owning turn.
-/// When a new `SystemMessage` has pinned the continuation-owning message
-/// into the literal prefix, no compaction can retire it; the constraint is
-/// unsatisfiable and the plan fails explicitly rather than clearing the
-/// continuation while leaving its boundary literal.
-fn continuation_min_cut(
+/// The narrow interim rule of Issue #54 is that trusted `System` content is
+/// never replaced by a runtime summary. A later `System` message therefore
+/// bounds the *current* compactable run at that point, but it never pins
+/// older conversational messages (they are compactable in the run before it)
+/// and it never resurrects retired Surface history. The complete Effective
+/// System Prompt architecture belongs to Issue #55.
+fn compactable_run(index: &StructuralIndex) -> Result<(usize, usize), ContextError> {
+    let systems = index.system_positions();
+    let first = (0..index.len())
+        .find(|position| !systems.contains(position))
+        .ok_or_else(|| no_progress("the active surface holds no compactable message"))?;
+    let run_end = systems
+        .iter()
+        .copied()
+        .find(|position| *position > first)
+        .map_or(index.len() - 1, |position| position - 1);
+    Ok((first, run_end))
+}
+
+/// The smallest span end the continuation constraint requires.
+///
+/// A continuation can be retired only by actually covering its owning turn
+/// completely. When the continuation-owning turn lies outside the current
+/// compactable run, the constraint is unsatisfiable and planning fails
+/// explicitly rather than clearing the continuation while leaving its
+/// message active.
+fn continuation_min_end(
     index: &StructuralIndex,
     must_cover_through: Option<&MessageId>,
+    first: usize,
+    run_end: usize,
 ) -> Result<usize, ContextError> {
     let Some(owner) = must_cover_through else {
-        return Ok(0);
+        return Ok(first);
     };
     let Some(owner_position) = index.position_of(owner) else {
         return Err(malformed(&format!(
-            "continuation-owning message {owner} is not in canonical history"
+            "continuation-owning message {owner} is not active on the surface"
         )));
     };
     if !index.agent_positions().contains(&owner_position) {
@@ -1072,36 +715,34 @@ fn continuation_min_cut(
             "continuation-owning message {owner} is not an agent message"
         )));
     }
-    if owner_position < index.pinned_end {
+    let turn_end = index.turn_end_of(owner_position);
+    if owner_position < first || turn_end > run_end {
         return Err(no_progress(
-            "the continuation-owning turn is pinned by system context and \
-             cannot be retired by compaction",
+            "the continuation-owning turn lies outside the compactable region \
+             and cannot be retired by compaction",
         ));
     }
-    Ok(index.turn_end_of(owner_position) + 1)
+    Ok(turn_end)
 }
 
-/// The maximum history cut the fresh-inbound retention constraint permits,
-/// or the full history length when no fresh inbound turn is pending.
+/// The largest span end the fresh-inbound retention constraint permits, or
+/// `None` when nothing at all may be retired.
 ///
 /// A fresh inbound turn that has not yet been observed by a successfully
-/// completed model invocation must remain literal in the projection, so the
-/// retirement boundary must never pass the earliest fresh inbound message:
-/// `cut <= p` for the earliest fresh message position `p`. When the fresh
-/// message lies inside the pinned system prefix it is literal regardless,
-/// and the constraint is vacuous.
+/// completed model invocation must remain active, so the span must end
+/// strictly before the earliest fresh inbound message.
 ///
 /// # Errors
 ///
 /// Returns [`ContextErrorKind::MalformedHistory`] when a fresh inbound
-/// message is not present in canonical history; a pending fresh trigger must
-/// always reference committed messages.
-fn fresh_retention_cut(
+/// message is not active; a pending fresh trigger always references active
+/// messages.
+fn fresh_retention_max_end(
     index: &StructuralIndex,
     fresh_inbound: Option<&FreshInboundTurn>,
-) -> Result<usize, ContextError> {
+) -> Result<Option<usize>, ContextError> {
     let Some(fresh) = fresh_inbound else {
-        return Ok(index.len());
+        return Ok(Some(index.len().saturating_sub(1)));
     };
     let earliest = fresh
         .message_ids()
@@ -1109,7 +750,7 @@ fn fresh_retention_cut(
         .map(|id| {
             index.position_of(id).ok_or_else(|| {
                 malformed(&format!(
-                    "fresh inbound message {id} is not in canonical history"
+                    "fresh inbound message {id} is not active on the surface"
                 ))
             })
         })
@@ -1117,207 +758,48 @@ fn fresh_retention_cut(
         .into_iter()
         .min()
         .expect("a fresh inbound turn is never empty");
-    if earliest < index.pinned_end {
-        return Ok(index.len());
-    }
-    Ok(earliest)
+    Ok(earliest.checked_sub(1))
 }
 
-/// The smallest split of the latest turn that fits, preserving as much of
-/// the turn's tail as possible.
-///
-/// The split is additionally subject to the fresh-inbound retention
-/// constraint: the boundary may not retire the earliest fresh inbound
-/// message, so the split agent message must lie strictly before it.
-fn best_split(scope: &PlanScope<'_>, min_cut: usize, fresh_cut: usize) -> Option<(usize, usize)> {
-    let (agent_position, current_first) = last_agent_item(scope)?;
-    if min_cut > agent_position {
-        // The continuation constraint cannot be satisfied by a split of this
-        // turn: its message may not remain partly literal.
-        return None;
-    }
-    if agent_position + 1 > fresh_cut {
-        // The fresh-inbound retention constraint cannot be satisfied by a
-        // split of this turn: retiring it would also retire the earliest
-        // fresh inbound message.
-        return None;
-    }
-    let content_len = scope.index.content_len_of(agent_position)?;
-    for first in (current_first + 1)..content_len {
-        let items = split_projection_items(scope, agent_position, first);
-        let planned = estimate_input_of(
-            scope,
-            &projection_of(&items, scope.agent_status, scope.skill_catalog),
-        )
-        .saturating_add(scope.reservation);
-        if planned <= scope.soft_limit {
-            return Some((agent_position, first));
-        }
-    }
-    None
+/// The retained active messages of a span `[first ..= end]` replacement,
+/// excluding the not-yet-generated summary.
+fn retained_items(active: &[MessageBlock], first: usize, end: usize) -> Vec<MessageBlock> {
+    let mut items = active[..first].to_vec();
+    items.extend_from_slice(&active[end + 1..]);
+    items
 }
 
-/// The last agent-message suffix item: its history position and its current
-/// first retained block (0 when the message is a whole item).
-fn last_agent_item(scope: &PlanScope<'_>) -> Option<(usize, usize)> {
-    let mut last = None;
-    for item in scope.suffix {
-        let position = item.position();
-        if scope.index.agent_positions().contains(&position) {
-            let current_first = match item {
-                SuffixItem::Whole(_) => 0,
-                SuffixItem::RetainedSlice(_, first) => *first,
-            };
-            last = Some((position, current_first));
-        }
-    }
-    last
+/// Wraps a message list into an attachment-free projection for the
+/// conversation-content estimate.
+fn bare_projection(revision: SurfaceRevision, messages: &[MessageBlock]) -> ContextProjection {
+    projection_of(revision, messages, None, None)
 }
 
-/// Wraps one item list into a projection for estimation.
+/// Wraps a message list into a projection for estimation.
 fn projection_of(
-    items: &[ProjectionItem],
+    revision: SurfaceRevision,
+    messages: &[MessageBlock],
     agent_status: Option<&AgentStatusAttachment>,
     skill_catalog: Option<&SkillCatalogAttachment>,
 ) -> ContextProjection {
     ContextProjection {
-        items: items.to_vec(),
+        surface_revision: revision,
+        messages: messages.to_vec(),
         agent_status: agent_status.cloned(),
         skill_catalog: skill_catalog.cloned(),
         estimated_input: TokenMeasurement {
             input_tokens: 0,
             source: TokenMeasurementSource::Estimated,
         },
-        checkpoint_generation: None,
     }
 }
 
-/// The estimate of one projection under the scope's estimator.
-fn estimate_input_of(scope: &PlanScope<'_>, projection: &ContextProjection) -> u64 {
-    scope
-        .estimator
-        .estimate_input(projection, scope.tool_definitions)
-}
-/// The smallest whole cut that fits, retaining the most content while
-/// respecting the hard fit.
-fn smallest_fitting_whole(candidates: &[(usize, u64, u64)], soft_limit: u64) -> Option<Chosen> {
-    candidates
-        .iter()
-        .filter(|(_, _, planned)| *planned <= soft_limit)
-        .min_by_key(|(count, _, _)| *count)
-        .map(|(count, _, _)| Chosen::Whole { count: *count })
+fn agent_status_of(projection: &ContextProjection) -> Option<&AgentStatusAttachment> {
+    projection.agent_status.as_ref()
 }
 
-/// The whole-cut shape of one chosen boundary: the retired items and the
-/// planned projection items.
-fn whole_plan_shape(scope: &PlanScope<'_>, count: usize) -> PlanShape {
-    let mut newly_retired = Vec::new();
-    for item in &scope.suffix[..count] {
-        match *item {
-            SuffixItem::Whole(position) => {
-                newly_retired.push(SummaryInputItem::Message(scope.history[position].clone()));
-            }
-            SuffixItem::RetainedSlice(position, first) => {
-                let MessageBlock::Agent(agent) = &scope.history[position] else {
-                    unreachable!("retained slices only reference agent messages");
-                };
-                newly_retired.push(SummaryInputItem::AgentSlice {
-                    message_id: agent.id.clone(),
-                    content: agent.content[first..].to_vec(),
-                });
-            }
-        }
-    }
-    let boundary_message_id =
-        crate::context::structure::message_id(&scope.history[scope.suffix[count - 1].position()]);
-    PlanShape {
-        boundary: ContextBoundary::AfterMessage {
-            message_id: boundary_message_id,
-        },
-        newly_retired,
-        split_turn_prefix: None,
-        planned_items: projection_items_for(scope, count),
-    }
-}
-
-/// The split shape of one chosen boundary.
-fn split_plan_shape(
-    scope: &PlanScope<'_>,
-    agent_position: usize,
-    first_retained_block: usize,
-) -> Result<PlanShape, ContextError> {
-    let MessageBlock::Agent(agent) = &scope.history[agent_position] else {
-        return Err(malformed("split boundary is not an agent message"));
-    };
-    let current_first = scope
-        .suffix
-        .iter()
-        .find(|item| item.position() == agent_position)
-        .map_or(0, |item| match item {
-            SuffixItem::Whole(_) => 0,
-            SuffixItem::RetainedSlice(_, first) => *first,
-        });
-    let newly_retired_calls: Vec<ToolCallId> = scope
-        .index
-        .calls_of(agent_position)
-        .iter()
-        .filter(|(block, _)| *block >= current_first && *block < first_retained_block)
-        .map(|(_, call)| call.clone())
-        .collect();
-    let mut newly_retired = Vec::new();
-    let mut split = SplitTurnSummaryInput {
-        message_id: agent.id.clone(),
-        retired_prefix: agent.content[current_first..first_retained_block].to_vec(),
-        retired_tool_messages: Vec::new(),
-    };
-    for item in scope.suffix {
-        match *item {
-            SuffixItem::Whole(position) if position < agent_position => {
-                newly_retired.push(SummaryInputItem::Message(scope.history[position].clone()));
-            }
-            SuffixItem::RetainedSlice(position, first) if position < agent_position => {
-                let MessageBlock::Agent(previous) = &scope.history[position] else {
-                    unreachable!("retained slices only reference agent messages");
-                };
-                newly_retired.push(SummaryInputItem::AgentSlice {
-                    message_id: previous.id.clone(),
-                    content: previous.content[first..].to_vec(),
-                });
-            }
-            SuffixItem::Whole(position) if position > agent_position => {
-                if let MessageBlock::Tool(tool) = &scope.history[position]
-                    && newly_retired_calls.contains(&tool.tool_call_id)
-                {
-                    split.retired_tool_messages.push(tool.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-    let first =
-        u32::try_from(first_retained_block).expect("content block indices always fit a u32");
-    Ok(PlanShape {
-        boundary: ContextBoundary::InsideAgent {
-            message_id: agent.id.clone(),
-            first_retained_block: ContentBlockIndex::new(first),
-        },
-        newly_retired,
-        split_turn_prefix: Some(split),
-        planned_items: split_projection_items(scope, agent_position, first_retained_block),
-    })
-}
-
-fn summary_text(checkpoint: &ContextCheckpoint) -> String {
-    checkpoint
-        .summary
-        .content
-        .iter()
-        .filter_map(|block| match block {
-            UserContentBlock::Text(text) => Some(text.text.clone()),
-            UserContentBlock::Image(_) | UserContentBlock::File(_) => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+fn skill_catalog_of(projection: &ContextProjection) -> Option<&SkillCatalogAttachment> {
+    projection.skill_catalog.as_ref()
 }
 
 fn no_progress(message: &str) -> ContextError {
@@ -1328,11 +810,16 @@ fn malformed(message: &str) -> ContextError {
     ContextError::new(ContextErrorKind::MalformedHistory, message)
 }
 
+/// Projects a conversation-domain failure into the context error model.
+fn conversation_failed(error: &ConversationError) -> ContextError {
+    ContextError::new(ContextErrorKind::MalformedHistory, error.to_string())
+}
+
 fn cannot_fit(config: &ContextConfig) -> ContextError {
     ContextError::new(
         ContextErrorKind::CannotFit,
         format!(
-            "pinned context, summary, and retained suffix cannot fit under window {} with reserve {}",
+            "no complete-message surface span fits under window {} with reserve {}",
             config.context_window_tokens, config.reserve_tokens
         ),
     )

@@ -83,6 +83,8 @@ describe("presentation projection", () => {
           compaction_count: 2,
           latest_compaction: {
             generation: 2,
+            summary_message_id: "conv-1-summary-2",
+            surface_revision: 7,
             tokens_before: { input_tokens: 4_700, source: "estimated" },
             estimated_tokens_after: 1_800,
           },
