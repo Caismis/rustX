@@ -44,9 +44,9 @@ GATE_RELEASED = "released"
 # Step states. Request matching and response completion are deliberately two
 # separate facts:
 #
-#   pending -> matched -> settled
-#                 |
-#                 +----> failed
+#   pending --match--> matched --settle--> settled   (terminal)
+#      |                  |
+#      +------ fail ------+-------------> failed     (terminal)
 #
 # A step becomes `matched` when its request arrived and satisfied the
 # expectation. It becomes `settled` only when the scripted response reached
@@ -57,6 +57,17 @@ STEP_PENDING = "pending"
 STEP_MATCHED = "matched"
 STEP_SETTLED = "settled"
 STEP_FAILED = "failed"
+
+#: The legal outgoing transitions of each step state. `settled` and `failed`
+#: have none, which is what makes them terminal by construction rather than
+#: by convention: nothing can revive, re-settle, or re-fail a step whose
+#: outcome is already decided.
+_STEP_TRANSITIONS: dict[str, frozenset[str]] = {
+    STEP_PENDING: frozenset({STEP_MATCHED, STEP_FAILED}),
+    STEP_MATCHED: frozenset({STEP_SETTLED, STEP_FAILED}),
+    STEP_SETTLED: frozenset(),
+    STEP_FAILED: frozenset(),
+}
 
 # Why a response reached its terminal state. Recorded on the settlement
 # observation so a driver can tell "the script ran out" from "the client
@@ -202,22 +213,59 @@ class ScenarioRun:
 
     # -- step progression -------------------------------------------------
 
+    def _transition_step(self, index: int, target: str) -> None:
+        """Applies one step transition, rejecting what the lifecycle forbids.
+
+        An illegal transition is a bug in the harness itself — a mis-ordered
+        server call site or a mis-programmed fixture — never a provider-side
+        scenario mismatch, so it raises instead of being recorded as a
+        scenario failure. The check runs before any mutation, so a rejected
+        transition leaves the step exactly as it was.
+
+        Raises:
+            IndexError: when `index` names no step. Python's negative
+                indexing would otherwise silently mutate a different step.
+            RuntimeError: when the lifecycle forbids the transition.
+        """
+        if not 0 <= index < len(self.step_states):
+            raise IndexError(
+                f"step index {index} is out of range for the "
+                f"{len(self.step_states)}-step scenario {self.scenario.name!r}"
+            )
+        current = self.step_states[index]
+        if target not in _STEP_TRANSITIONS[current]:
+            raise RuntimeError(
+                f"illegal step transition in scenario {self.scenario.name!r}: "
+                f"step {index} is {current!r} and cannot become {target!r}"
+            )
+        self.step_states[index] = target
+
     def match_step(self, index: int) -> None:
         """Records that step `index`'s request arrived and matched.
 
         Matching is progression, never completion: the scripted response has
-        not run yet.
+        not run yet. It is also one-shot — a step cannot match twice.
         """
-        self.step_states[index] = STEP_MATCHED
+        self._transition_step(index, STEP_MATCHED)
 
     async def settle_step(self, index: int, terminal: str) -> None:
-        """Records that step `index`'s scripted response reached `terminal`."""
-        self.step_states[index] = STEP_SETTLED
+        """Records that step `index`'s scripted response reached `terminal`.
+
+        Only a `matched` step can settle. The state changes before the
+        observation is published, so anything waiting on
+        `response_completed` can rely on the step already being settled.
+        """
+        self._transition_step(index, STEP_SETTLED)
         await self.observe(RESPONSE_COMPLETED, request_index=index, terminal=terminal)
 
     def fail_step(self, index: int) -> None:
-        """Records that step `index` can no longer settle."""
-        self.step_states[index] = STEP_FAILED
+        """Records that step `index` can no longer settle.
+
+        Legal from `pending` (the request did not match) and from `matched`
+        (the response could not finish). Callers publish the corresponding
+        assertion-failure observation after this returns.
+        """
+        self._transition_step(index, STEP_FAILED)
 
     @property
     def steps_matched(self) -> int:

@@ -157,15 +157,115 @@ def test_a_matched_step_is_not_a_settled_step():
     asyncio.run(_run_states())
 
 
-def test_a_failed_step_can_never_settle():
-    scenario = Scenario(
-        "one-step",
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("x"), Finish())),
+def one_step_run(name: str = "one-step") -> ScenarioRun:
+    return ScenarioRun(
+        Scenario(
+            name,
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("x"), Finish())),
+        )
     )
-    run = ScenarioRun(scenario)
+
+
+async def _failed_is_terminal() -> None:
+    """A failed step cannot settle — proven by attempting it."""
+    run = one_step_run()
     run.fail_step(0)
+    assert run.step_states == ["failed"]
+
+    with pytest.raises(RuntimeError) as rejected:
+        await run.settle_step(0, "script_complete")
+    message = str(rejected.value)
+    assert "step 0" in message
+    assert "'failed'" in message and "'settled'" in message
+
+    # The rejection changed nothing: not the state, not the report, and not
+    # the observation stream a driver waits on.
+    assert run.step_states == ["failed"]
     assert not run.ok
     assert run.report()["unsettledSteps"] == [{"index": 0, "state": "failed"}]
+    assert [observation.kind for observation in run.observations] == []
+
+
+def test_a_failed_step_can_never_settle():
+    asyncio.run(_failed_is_terminal())
+
+
+async def _settled_is_terminal() -> None:
+    """Every transition out of `settled` is refused."""
+    run = one_step_run()
+    run.match_step(0)
+    await run.settle_step(0, "script_complete")
+    assert run.step_states == ["settled"]
+    settlements = len(run.observations)
+
+    with pytest.raises(RuntimeError):
+        await run.settle_step(0, "script_complete")
+    with pytest.raises(RuntimeError):
+        run.match_step(0)
+    with pytest.raises(RuntimeError):
+        run.fail_step(0)
+
+    assert run.step_states == ["settled"]
+    assert run.ok, "a rejected transition cannot unsettle a settled step"
+    assert len(run.observations) == settlements, "no second response_completed"
+
+
+def test_a_settled_step_is_terminal():
+    asyncio.run(_settled_is_terminal())
+
+
+async def _settlement_requires_a_match() -> None:
+    """Settling is only ever the completion of a matched request."""
+    run = one_step_run()
+    with pytest.raises(RuntimeError) as rejected:
+        await run.settle_step(0, "script_complete")
+    assert "'pending'" in str(rejected.value)
+    assert run.step_states == ["pending"]
+    assert [observation.kind for observation in run.observations] == []
+
+
+def test_a_pending_step_cannot_settle():
+    asyncio.run(_settlement_requires_a_match())
+
+
+def test_matching_is_one_shot():
+    run = one_step_run()
+    run.match_step(0)
+    with pytest.raises(RuntimeError) as rejected:
+        run.match_step(0)
+    assert "'matched'" in str(rejected.value)
+    assert run.step_states == ["matched"]
+
+
+def test_both_failure_paths_stay_legal():
+    """`fail_step` is legal from either non-terminal state.
+
+    These are the emulator's two real failure call sites: a request that did
+    not match its step, and a response that could not finish.
+    """
+    unmatched = one_step_run()
+    unmatched.fail_step(0)
+    assert unmatched.step_states == ["failed"]
+
+    abandoned = one_step_run()
+    abandoned.match_step(0)
+    abandoned.fail_step(0)
+    assert abandoned.step_states == ["failed"]
+
+
+def test_an_out_of_range_step_index_is_rejected():
+    """A negative index must not silently mutate a different step."""
+    run = ScenarioRun(
+        Scenario(
+            "two-step",
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("x"), Finish())),
+            Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS), Stream(Text("y"), Finish())),
+        )
+    )
+    for index in (-1, 2):
+        with pytest.raises(IndexError):
+            run.match_step(index)
+    assert run.step_states == ["pending", "pending"]
 
 
 def test_every_registered_scenario_builds():
