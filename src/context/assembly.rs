@@ -861,17 +861,22 @@ impl ContextAssembly {
                 .then_with(|| left.phase.cmp(&right.phase))
                 .then_with(|| left.sequence.cmp(&right.sequence))
         });
-        // `sort_by` is stable, so deferred sections keep their staged order
-        // ahead of the same owner's request-time sections in one lane.
+        // Request-time system sections only: deferred post-tool proposals are
+        // `UserMessageProposal` facts, so a section can never reach this path.
+        // Sections sort by lane, native slots first, then certified-extension
+        // lanes; within a lane the stable sort keeps each contributor's own
+        // contributed order.
         native_sections.sort_by(|left, right| {
             left.lane
                 .cmp(&right.lane)
                 .then_with(|| left.contributor.cmp(&right.contributor))
         });
-        // One logical owner appears exactly once in the accepted generation,
-        // even when it contributed both deferred and request-time proposals.
-        // The registered attestation wins over the deferred entry's absent
-        // one, so the generation still explains the exact package.
+        // One semantic owner appears exactly once in the accepted generation:
+        // deferred and request-time participation of the same registered
+        // extension collapse to one authoritative generation, because the
+        // deferred path resolves through this same registration and its
+        // generations already carry the registered attestation. No extension
+        // generation is synthesized.
         generations.sort_by(|left, right| {
             left.identity
                 .cmp(&right.identity)
