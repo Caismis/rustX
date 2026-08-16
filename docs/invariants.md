@@ -1516,9 +1516,14 @@ The frozen invariants:
   activation; and the capability snapshot is captured *at* `R`.
   Each authority installs its observer in the same lock section that
   captures its seed, so no transition is both seeded and queued, and none
-  is neither. Because an inactive runtime publishes nothing, `R` coincides
-  with activation and the live stream carries every observation the
-  runtime ever emits.
+  is neither. The bootstrap cut `R` **precedes** the activation
+  transition: the handshake completes over the inert runtime and the
+  shared `ConversationLifecycle` `Inactive -> Active` CAS happens
+  afterwards. Because the runtime remains semantically inert from `R`
+  until that transition — mailbox, background, capability, and
+  coordinator mutations are all inactive-gated — no projected semantic
+  fact can appear in the interval `[R, activation)`, so the live stream
+  carries every observation the runtime ever emits.
 
   If the bridge step fails, the claim is released and the failure is a
   typed error: a failed host construction never leaves a

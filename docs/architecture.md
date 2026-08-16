@@ -1938,9 +1938,14 @@ Runtime Client is a projection/control/attachment adapter over it.
   no `RuntimeClientCursor`: `{ snapshot, cursor 0 }` is the state at `R`,
   and the first cursor belongs to a real post-activation transition (the
   background seed is provably empty by the ownership-transfer invariant).
-  Since an inactive runtime publishes nothing, `R` coincides with
-  activation and the live stream carries every observation the runtime
-  ever emits.
+  The bootstrap cut `R` **precedes** the activation transition: the
+  handshake completes over the inert runtime and the shared
+  `ConversationLifecycle` `Inactive -> Active` CAS happens afterwards.
+  Because the runtime remains semantically inert from `R` until that
+  transition — mailbox, background, capability, and coordinator mutations
+  are all inactive-gated — no projected semantic fact can appear in the
+  interval `[R, activation)`, so the live stream carries every
+  observation the runtime ever emits.
 
   There is deliberately **no** runtime-side mirror of the client attempt
   view. The runtime does not fold `ConversationObservation` a second

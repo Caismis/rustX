@@ -224,12 +224,18 @@
 //! section with its own seed capture, no transition can be both seeded and
 //! queued, and none can be neither.
 //!
-//! Activation is what actually opens the stream: since an inactive runtime
-//! publishes nothing, `R` coincides with the activation point and the live
-//! stream carries *every* observation the runtime ever emits. The first
-//! allocated `RuntimeClientCursor` is therefore always a real
-//! post-activation semantic transition — bootstrap state never fabricates
-//! a live event.
+//! The bootstrap cut `R` **precedes** the activation transition: the
+//! handshake completes over the inert runtime, and activation (the shared
+//! `ConversationLifecycle` `Inactive -> Active` CAS) happens afterwards.
+//! Because the runtime remains semantically inert from `R` until that
+//! transition — the mailbox refuses `enqueue`, the background registry
+//! refuses `commit_dispatch`, the capability coordinator refuses a
+//! runtime-owned `commit`, and the coordinator mutators are inactive-gated —
+//! no projected semantic fact can appear in the interval `[R, activation)`.
+//! The live stream therefore carries *every* observation the runtime ever
+//! emits, and the first allocated `RuntimeClientCursor` always belongs to a
+//! real post-activation semantic transition — bootstrap state never
+//! fabricates a live event.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
