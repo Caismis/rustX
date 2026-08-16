@@ -37,6 +37,40 @@
 //! There is no unchecked window between the deciding observations and the
 //! prepared→owned registry transition.
 //!
+//! # Conversation runtime ownership transfer
+//!
+//! A standalone `ConversationToolRuntime` may be claimed by a
+//! `ConversationRuntime` only while its background plane is **pristine**,
+//! and the claim shares the one registry synchronization boundary with
+//! `commit_dispatch` (see
+//! [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
+//!
+//! ```text
+//! standalone ConversationToolRuntime
+//!         |
+//!         |  conversation-runtime ownership transfer
+//!         |  (one registry critical section)
+//!         |    1. require no prepared dispatch and no committed record
+//!         |    2. claim the coordinator binding
+//!         |    3. bind the mailbox BoundInactive
+//!         v
+//! ConversationRuntime-owned / inactive
+//!         |
+//!         |  from this point:
+//!         |    background commit -> BackgroundDispatchError::ConversationInactive
+//!         v
+//! ConversationRuntime::activate()
+//! ```
+//!
+//! Either a standalone background commit wins the section first (the claim
+//! is then refused typed because the registry is no longer pristine), or
+//! the transfer wins first (a later commit is refused
+//! `ConversationInactive`). A `ConversationRuntime` can therefore never
+//! adopt committed or staged background work, and the inactive phase can
+//! never inherit a detached semantic transition. There is no adoption
+//! protocol: a tool runtime that already owns background work simply
+//! cannot become the inactive semantic base of a conversation runtime.
+//!
 //! # Cancellation-vs-completion race
 //!
 //! The first registry transition that commits either terminal completion or
@@ -64,6 +98,7 @@
 //! reported without rolling the execution back.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
@@ -280,6 +315,19 @@ impl Drop for PreparedBackgroundDispatch {
     }
 }
 
+/// A failure of the `ConversationToolRuntime -> ConversationRuntime`
+/// ownership transfer.
+///
+/// See [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackgroundOwnershipClaimError {
+    /// The identity is already bound to a conversation runtime.
+    AlreadyClaimed,
+    /// The background plane is not pristine: it already holds a prepared
+    /// dispatch or a committed execution record.
+    NotQuiescent,
+}
+
 /// The execution resources of the conversation background registry.
 #[derive(Clone)]
 pub struct BackgroundResources {
@@ -430,6 +478,81 @@ impl ConversationBackgroundRegistry {
         let mut state = self.state();
         state.observer = Some(observer);
         state.records.iter().map(snapshot_of).collect()
+    }
+
+    /// The one `ConversationToolRuntime -> ConversationRuntime` ownership
+    /// transfer, linearized against [`ConversationBackgroundRegistry::commit_dispatch`].
+    ///
+    /// Under one registry critical section — the same synchronization
+    /// boundary `commit_dispatch` uses for its deciding mailbox-lifecycle
+    /// observation — this method:
+    ///
+    /// ```text
+    /// 1. requires a pristine background plane: no prepared dispatch and
+    ///    no committed execution record;
+    /// 2. claims the coordinator binding of the runtime identity;
+    /// 3. binds the canonical mailbox inactive (`BoundInactive`).
+    /// ```
+    ///
+    /// The three steps share the registry lock with the dispatch ownership
+    /// commit, so they serialize: either a standalone background commit
+    /// linearizes first (its record is then visible here, and the claim is
+    /// refused [`BackgroundOwnershipClaimError::NotQuiescent`]), or this
+    /// transfer linearizes first (the mailbox becomes `BoundInactive`
+    /// before this section ends, and a later `commit_dispatch` observes it
+    /// and is refused with
+    /// [`BackgroundDispatchError::ConversationInactive`]). A conversation
+    /// runtime can therefore never be constructed over a tool runtime that
+    /// already contains staged or committed background ownership state, and
+    /// a standalone commit can never cross the transfer.
+    ///
+    /// The mailbox lifecycle bind nests the mailbox lock inside the held
+    /// registry lock, the same order `commit_dispatch` uses; no mailbox ->
+    /// registry edge exists anywhere, so the lock graph stays acyclic.
+    ///
+    /// The `coordinator_claimed` atomic is the one-time binding of the
+    /// tool-runtime identity ([`ConversationToolRuntime`](crate::tools::runtime::ConversationToolRuntime));
+    /// the claim commits under this registry section, so a concurrent
+    /// second transfer cannot interleave with the quiescence check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackgroundOwnershipClaimError::AlreadyClaimed`] when the
+    /// identity is already bound to a conversation runtime and
+    /// [`BackgroundOwnershipClaimError::NotQuiescent`] when the background
+    /// plane is not pristine. On either failure nothing is consumed: no
+    /// claim, no mailbox transition, no rollback residue.
+    pub(crate) fn claim_conversation_runtime_inactive(
+        &self,
+        coordinator_claimed: &AtomicBool,
+    ) -> Result<(), BackgroundOwnershipClaimError> {
+        let state = self.state();
+        if !state.prepared.is_empty() || !state.records.is_empty() {
+            return Err(BackgroundOwnershipClaimError::NotQuiescent);
+        }
+        if coordinator_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Err(BackgroundOwnershipClaimError::AlreadyClaimed);
+        }
+        self.resources.mailbox.bind_inactive();
+        Ok(())
+    }
+
+    /// Reverts a claim taken by [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]
+    /// that a `ConversationRuntime` construction then failed after.
+    ///
+    /// Under the registry synchronization boundary the mailbox is restored
+    /// to its exact previous standalone unbound state and the coordinator
+    /// claim is cleared, so a rejected construction leaves no residue and a
+    /// fresh claim of the same identity may be attempted again. This is
+    /// never called on runtime drop: a successfully constructed
+    /// `ConversationRuntime` owns its identity for its lifetime.
+    pub(crate) fn release_conversation_runtime_claim(&self, coordinator_claimed: &AtomicBool) {
+        let _state = self.state();
+        self.resources.mailbox.unbind();
+        coordinator_claimed.store(false, Ordering::Release);
     }
 
     /// Fires the installed observer for one record snapshot while the

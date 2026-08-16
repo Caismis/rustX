@@ -569,8 +569,17 @@ Implemented in the current architecture:
   every later projected fact or fails explicitly with `resync_required`
   (Issue #37 invariant preserved across the split).
 - Runtime lifecycle: `ConversationRuntime::new` constructs the runtime
-  **inactive** and the inactive phase is structurally inert, not merely
-  documented: the mailbox refuses inbound, `model_set` fails typed with
+  **inactive** through one `ConversationToolRuntime -> ConversationRuntime`
+  ownership transfer: under the background registry lock it requires a
+  pristine background plane (no prepared dispatch, no committed record),
+  claims the one-time coordinator binding, and binds the canonical mailbox
+  inactive at one linearization point — so a standalone background commit
+  either wins first (construction fails typed with
+  `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
+  nothing) or loses to the transfer (a later commit fails
+  `BackgroundDispatchError::ConversationInactive`). The inactive phase is
+  then structurally inert, not merely documented: the mailbox refuses
+  inbound, `model_set` fails typed with
   `ModelUpdateError::Inactive`, `shutdown` fails typed with
   `ShutdownError::Inactive`, the background registry refuses
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
@@ -589,8 +598,9 @@ Implemented in the current architecture:
   installing the queue and every subsystem seam and capturing the seed as
   `coordinator facts → background → mailbox → capability (= the cut R)`.
   Every earlier authority is provably frozen across `[T0, R]` — coordinator
-  facts by the held lock, background because the registry refuses
-  `commit_dispatch` while its mailbox is bound inactive, the mailbox
+  facts by the held lock, background because the ownership transfer
+  requires a pristine plane and the registry refuses `commit_dispatch`
+  while its mailbox is bound inactive, the mailbox
   because an inactive conversation refuses `enqueue`, and capability
   because a runtime-owned `commit` is refused before activation — so the
   combined seed is one real global state, not four independent cuts. The
@@ -601,7 +611,8 @@ Implemented in the current architecture:
   fallible work before/at the binding claim, releases the claim if the
   handshake fails, and never leaves a claimed-but-invalid binding.
 - Identity claims: one conversation runtime coordinator per
-  `ConversationToolRuntime` identity (claim at coordinator construction) and
+  `ConversationToolRuntime` identity — claimed by the ownership transfer
+  at coordinator construction, transactional on failure — and
   one Runtime Client host per coordinator (claim at host construction);
   both are one-time lifetime bindings with typed already-bound rejections.
 - Two-layer production composition: `LocalConversationCore` assembles the
@@ -624,7 +635,15 @@ Implemented in the current architecture:
   regressions (model_set, shutdown, background dispatch commit, and
   capability commit while inactive are all refused typed and consume
   nothing; cursor 0 stays stable until activation; the first cursor
-  belongs to a real post-activation transition), production-composition
+  belongs to a real post-activation transition), ownership-transfer
+  regressions (a tool runtime with a committed background record or a
+  prepared dispatch is rejected typed `ToolRuntimeNotQuiescent` with no
+  claim consumed, the mailbox left standalone, and the staged/committed
+  work keeping its standalone semantics; both race interleavings of the
+  transfer against `commit_dispatch` at the commit boundary hook —
+  background wins and the construction fails typed, transfer wins and the
+  commit fails `ConversationInactive`; a failed capability claim rolls the
+  transfer back to the exact standalone state), production-composition
   regressions (interactive and headless resolve the same semantic
   composition; a real headless turn runs with no host; the interactive
   path still runs over the same composition), and

@@ -83,6 +83,21 @@
 //! ConversationRuntime::activate()       -> active: semantic execution may begin
 //! ```
 //!
+//! Construction performs one **tool-runtime ownership transfer** over the
+//! `ConversationToolRuntime` it claims (Issue #61): under the background
+//! registry synchronization boundary it requires a pristine background
+//! plane (no prepared dispatch, no committed record), claims the one-time
+//! coordinator binding, and binds the canonical mailbox inactive — all at
+//! one linearization point. Either a standalone background commit wins
+//! first (construction fails typed with
+//! [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] and nothing is
+//! consumed) or the transfer wins first (a later background commit is
+//! refused with
+//! [`BackgroundDispatchError::ConversationInactive`](crate::tools::background::BackgroundDispatchError::ConversationInactive)).
+//! A runtime is therefore constructed only over a pristine background
+//! plane, and the inactive phase can never inherit a detached semantic
+//! transition.
+//!
 //! An **inactive** runtime is inert, and this is enforced, not merely
 //! documented. Once a `ConversationRuntime` owns its semantic subsystems,
 //! the inactive phase admits no conversation-semantic mutation at all:
@@ -105,14 +120,15 @@
 //! ```
 //!
 //! The lifecycle gates are small shared pieces of state, never coordinator
-//! callbacks: the mailbox's own admission flag (set by `bind_inactive` at
-//! construction and `activate` at activation), and the capability
-//! coordinator's runtime-owned activation flag. The background registry
-//! reads the mailbox admission flag of its own resources under its own
-//! lock section. `activate` flips them all under the one coordinator lock,
-//! so a subsystem commit and an activation always linearize: a commit that
-//! observes the pre-activation state is refused, one that observes the
-//! post-activation state is a real post-activation transition.
+//! callbacks: the mailbox's own admission flag (set by the ownership
+//! transfer at construction — `bind_inactive` — and `activate` at
+//! activation), and the capability coordinator's runtime-owned activation
+//! flag. The background registry reads the mailbox admission flag of its
+//! own resources under its own lock section. `activate` flips them all
+//! under the one coordinator lock, so a subsystem commit and an activation
+//! always linearize: a commit that observes the pre-activation state is
+//! refused, one that observes the post-activation state is a real
+//! post-activation transition.
 //!
 //! Binding a Runtime Client host is a **pre-activation** composition
 //! decision, not a hot operation: a host bind after activation is refused
@@ -165,9 +181,10 @@
 //! - the coordinator-owned facts cannot move — every mutator
 //!   (`model_set`, `shutdown`, `submit_inbound`, admission, settlement)
 //!   takes the coordinator lock, which is held across `[T0, R]`;
-//! - the background registry refuses `commit_dispatch` while its mailbox is
-//!   bound inactive, so no background record exists across `[T0, R]` and
-//!   none can be created;
+//! - the background registry is pristine by construction — the ownership
+//!   transfer requires no committed record and no prepared dispatch, and
+//!   `commit_dispatch` refuses its mailbox while it is bound inactive — so
+//!   no background record exists across `[T0, R]` and none can be created;
 //! - the mailbox refuses `enqueue` while its bound runtime is inactive, so
 //!   the pending queue is frozen across `[T0, R]`;
 //! - the capability coordinator refuses a runtime-owned `commit` before
@@ -241,6 +258,23 @@ pub enum ConversationRuntimeError {
         /// The conversation whose runtime identity is already bound.
         conversation_id: ConversationId,
     },
+    /// The conversation tool runtime is not pristine: its background plane
+    /// already holds a prepared dispatch or a committed execution record,
+    /// so it cannot become the inactive semantic base of a new
+    /// `ConversationRuntime`.
+    ///
+    /// The ownership transfer linearizes against the background dispatch
+    /// ownership commit at the registry synchronization boundary: either a
+    /// standalone background commit wins first (this failure) or the
+    /// transfer wins first and a later commit is refused with
+    /// [`BackgroundDispatchError::ConversationInactive`](crate::tools::background::BackgroundDispatchError::ConversationInactive).
+    /// The claim is never consumed by this failure: once the background
+    /// plane is pristine again, a fresh construction of the same identity
+    /// may succeed.
+    ToolRuntimeNotQuiescent {
+        /// The conversation whose tool runtime is not pristine.
+        conversation_id: ConversationId,
+    },
     /// No Tokio execution runtime is current at construction.
     ///
     /// The admission worker must exist before the runtime is usable:
@@ -269,6 +303,10 @@ impl core::fmt::Display for ConversationRuntimeError {
             Self::RuntimeAlreadyBound { conversation_id } => write!(
                 f,
                 "the conversation runtime identity of {conversation_id} is already bound to a conversation runtime"
+            ),
+            Self::ToolRuntimeNotQuiescent { conversation_id } => write!(
+                f,
+                "the conversation tool runtime of {conversation_id} is not pristine: it already contains prepared or committed background work and cannot become the inactive semantic base of a new conversation runtime"
             ),
             Self::NoExecutionRuntime => write!(
                 f,
@@ -1037,9 +1075,15 @@ impl ConversationRuntime {
     /// capability coordinator and the conversation tool runtime do not
     /// share the same conversation/workspace ownership domain,
     /// [`ConversationRuntimeError::Context`] when the context engine
-    /// configuration is impossible, and
+    /// configuration is impossible,
     /// [`ConversationRuntimeError::InvalidInitialConversation`] when the
-    /// initial canonical messages are invalid.
+    /// initial canonical messages are invalid,
+    /// [`ConversationRuntimeError::RuntimeAlreadyBound`] when the tool
+    /// runtime or the capability coordinator identity is already bound to a
+    /// conversation runtime, and
+    /// [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] when the tool
+    /// runtime's background plane already holds prepared or committed
+    /// background work.
     pub fn new(config: RuntimeConversationConfig) -> Result<Self, ConversationRuntimeError> {
         // The one conversation authority at this boundary: every identity
         // this runtime publishes or derives comes from the tool runtime it
@@ -1080,27 +1124,44 @@ impl ConversationRuntime {
             return Err(ConversationRuntimeError::NoExecutionRuntime);
         };
 
-        // ---- Ownership commit: the one-time coordinator binding claim. ----
+        // ---- Ownership commit: the one tool-runtime ownership transfer. ----
         //
-        // The runtime identity is claimed first because it is the canonical
-        // mailbox/background identity this runtime coordinates. If the
-        // coordinator is already bound, the runtime claim is released again:
-        // a rejected construction must leave no trace, and this is the only
-        // place a claim is ever released.
-        if !config.tool_runtime.claim_conversation_runtime() {
-            return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
+        // The conversation runtime claims the tool runtime through one
+        // ownership-transfer contract (Issue #61): the transfer runs under
+        // the background registry synchronization boundary, requires a
+        // pristine background plane (no prepared dispatch, no committed
+        // record), claims the one-time coordinator binding, and binds the
+        // canonical mailbox inactive at the same linearization point. A
+        // standalone background commit therefore either wins first (this
+        // construction fails typed with `ToolRuntimeNotQuiescent`, and the
+        // claim is never consumed) or this transfer wins first (a later
+        // commit observes the `BoundInactive` mailbox and is refused with
+        // `BackgroundDispatchError::ConversationInactive`). An inactive
+        // runtime can never inherit detached background work.
+        match config.tool_runtime.claim_conversation_runtime_inactive() {
+            Ok(()) => {}
+            Err(crate::tools::runtime::ConversationRuntimeClaimError::AlreadyBound) => {
+                return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
+            }
+            Err(crate::tools::runtime::ConversationRuntimeClaimError::NotQuiescent) => {
+                return Err(ConversationRuntimeError::ToolRuntimeNotQuiescent { conversation_id });
+            }
         }
         if !config.capability.claim_conversation_runtime() {
+            // Transactional construction: the tool-runtime ownership
+            // transfer is rolled back to its exact previous standalone
+            // state — mailbox unbound, coordinator claim released — so a
+            // rejected construction leaves no trace.
             config.tool_runtime.release_conversation_runtime_claim();
             return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
         }
 
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
-        // The conversation is inert until `activate`: its mailbox refuses
-        // inbound, so nothing can be admitted and nothing can be observed
-        // while the optional Runtime Client host binds.
-        mailbox.bind_inactive();
+        // The conversation is inert until `activate`: the ownership
+        // transfer already bound its mailbox inactive, so nothing can be
+        // admitted and nothing can be observed while the optional Runtime
+        // Client host binds.
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -1194,9 +1255,9 @@ impl ConversationRuntime {
     /// for the cut contract: every authority contributes its seed under
     /// its own lock in the same section that installs its observation
     /// seam, and the queue is installed under the same section that
-    /// captures the coordinator-owned facts and the runtime semantic
-    /// record, so a transition can never be lost between a seed and the
-    /// live observation stream and can never be applied twice.
+    /// captures the coordinator-owned facts, so a transition can never be
+    /// lost between a seed and the live observation stream and can never
+    /// be applied twice.
     ///
     /// # Errors
     ///
@@ -1621,12 +1682,14 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub inbound_pending: Vec<InboundItem>,
     /// The authoritative background execution records at the cut.
     ///
-    /// Provably empty under the Issue #61 lifecycle: the background
-    /// registry refuses `commit_dispatch` while its mailbox is bound
-    /// inactive, so no record can exist when the bridge is installed. The
-    /// seed is captured anyway, in the same registry section that installs
-    /// the observer, so the handshake is one coherent cut for whatever
-    /// state exists.
+    /// Provably empty: a `ConversationRuntime` is constructed only over a
+    /// pristine tool-runtime background plane — the ownership transfer
+    /// requires no prepared dispatch and no committed record and then
+    /// refuses `commit_dispatch` while the mailbox is bound inactive — so
+    /// no record can exist when the bridge is installed. The seed is
+    /// captured anyway, in the same registry section that installs the
+    /// observer, so the handshake is one coherent cut for whatever state
+    /// exists.
     pub background: Vec<BackgroundExecutionSnapshot>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,

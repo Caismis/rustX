@@ -838,9 +838,10 @@ impl RuntimeClientHost {
         // routed through `RuntimeClientProjection::apply`, so bootstrap
         // allocates no cursor and publishes no event: the first cursor
         // belongs to a real post-activation transition. (The background
-        // seed is provably empty under the Issue #61 lifecycle: the
-        // registry refuses dispatch commits while its mailbox is bound
-        // inactive.)
+        // seed is provably empty by the ownership-transfer invariant: a
+        // `ConversationRuntime` is constructed only over a pristine
+        // tool-runtime background plane, and the transfer then refuses
+        // dispatch commits while its mailbox is bound inactive.)
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
             seed.messages.clone(),
@@ -1313,8 +1314,8 @@ mod tests {
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, InboundAdmissionError,
-        ModelUpdateError, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRuntime, ConversationRuntimeError, CoordinatorProbe,
+        InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::types::RuntimeClock;
@@ -1326,7 +1327,9 @@ mod tests {
         RuntimeClientResult,
     };
     use crate::scripted_suites::support::model::scripted_session_model;
-    use crate::tools::background::{BackgroundDispatchOutcome, BackgroundLifecycle};
+    use crate::tools::background::{
+        BackgroundDispatchError, BackgroundDispatchOutcome, BackgroundLifecycle,
+    };
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -4863,12 +4866,15 @@ mod tests {
     /// bootstrap while the runtime is inactive, so cursor 0 is genuinely
     /// stable until `activate()`.
     ///
-    /// With the host bound over the inert runtime: an inbound submit, a
-    /// background dispatch commit, and a capability commit are all refused
-    /// typed and consume nothing; the snapshot stays at cursor 0 with the
-    /// startup capability revision seeded, and a subscription from cursor 0
-    /// stays `Pending`. After `activate()` the first real transition
-    /// receives cursor 1.
+    /// The host binds over an inert runtime whose tool-runtime background
+    /// plane is pristine by the ownership-transfer invariant (construction
+    /// requires no prepared dispatch and no committed record, and the
+    /// transfer then refuses dispatch commits while the mailbox is bound
+    /// inactive): an inbound submit, a background dispatch commit, and a
+    /// capability commit are all refused typed and consume nothing; the
+    /// snapshot stays at cursor 0 with the startup capability revision
+    /// seeded, and a subscription from cursor 0 stays `Pending`. After
+    /// `activate()` the first real transition receives cursor 1.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pre_activation_semantic_commits_cannot_cross_the_bootstrap() {
@@ -5050,6 +5056,440 @@ mod tests {
             .wait_until_terminal(&execution_id)
             .await
             .expect("terminal");
+    }
+
+    /// The standalone pre-runtime pieces of one ownership-transfer test:
+    /// the tool runtime and the capability coordinator exist over one
+    /// conversation, but no `ConversationRuntime` owns them yet.
+    struct OwnershipFixture {
+        _dir: tempfile::TempDir,
+        adapter: Arc<GatedAdapter>,
+        tool_runtime: crate::tools::runtime::ConversationToolRuntime,
+        coordinator: crate::capabilities::CapabilityCoordinator,
+    }
+
+    /// Builds the standalone pieces exactly like the runtime fixtures, but
+    /// stops before the `ConversationRuntime` construction.
+    async fn ownership_fixture(
+        scripts: Vec<Vec<GatedStep>>,
+        tools: ToolRegistry,
+    ) -> OwnershipFixture {
+        let adapter = Arc::new(GatedAdapter::new(scripts));
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-claim");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(tools),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        OwnershipFixture {
+            _dir: dir,
+            adapter,
+            tool_runtime,
+            coordinator,
+        }
+    }
+
+    /// The `RuntimeConversationConfig` over one ownership fixture.
+    fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
+        RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-claim"),
+            model: scripted_session_model(fixture.adapter.clone()),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(DefaultTokenEstimator),
+                status_composer: composer(),
+            },
+            tool_runtime: fixture.tool_runtime.clone(),
+            capability: fixture.coordinator.clone(),
+            clock: Some(Arc::new(FixedRuntimeClock)),
+            initial_messages: Vec::new(),
+        }
+    }
+
+    /// A background invocation for the ownership-transfer tests.
+    fn claim_background_invocation(call_id: &str) -> ToolInvocation {
+        ToolInvocation {
+            call_id: ToolCallId::new(call_id),
+            tool_id: ToolId::new("tool-bg"),
+            tool_name: "bg".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        }
+    }
+
+    /// The ownership transfer rejects a tool runtime whose background plane
+    /// already holds a **committed** standalone execution: typed
+    /// `ToolRuntimeNotQuiescent`, no coordinator claim consumed, no
+    /// capability claim consumed, the mailbox stays standalone/unbound, and
+    /// the detached execution continues under standalone semantics.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn conversation_runtime_claim_rejects_committed_standalone_background_work() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        let registry = fixture.tool_runtime.background().clone();
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-committed"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("a standalone commit succeeds");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the standalone runner starts");
+        assert_eq!(
+            registry.all_snapshots().len(),
+            1,
+            "the standalone execution is committed and running"
+        );
+
+        // The ownership transfer is refused typed...
+        let refused = ConversationRuntime::new(claim_config(&fixture))
+            .expect_err("a tool runtime with committed background work is not claimable");
+        assert_eq!(
+            refused,
+            ConversationRuntimeError::ToolRuntimeNotQuiescent {
+                conversation_id: ConversationId::new("conv-claim"),
+            }
+        );
+
+        // ...and consumed nothing: no coordinator claim, no capability
+        // claim, and the mailbox remains standalone.
+        assert!(
+            !fixture.tool_runtime.is_conversation_runtime_bound(),
+            "the failed claim consumed no tool-runtime ownership"
+        );
+        assert!(
+            !fixture.coordinator.is_conversation_runtime_bound(),
+            "the failed claim consumed no capability ownership"
+        );
+        fixture
+            .tool_runtime
+            .mailbox()
+            .enqueue(inbound_text("standalone-1", "still standalone"))
+            .expect("the mailbox remains standalone/unbound");
+
+        // The detached execution keeps its standalone semantics and
+        // settles normally.
+        release.notify_waiters();
+        let terminal = registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the standalone execution settles normally"
+        );
+    }
+
+    /// The ownership transfer rejects a tool runtime with a **prepared but
+    /// not committed** dispatch: typed `ToolRuntimeNotQuiescent`, no claim
+    /// consumed, the mailbox stays standalone, and the prepared handle
+    /// keeps its standalone semantics — dropping it rolls the dispatch back
+    /// with no fabricated record. Once the background plane is pristine
+    /// again, a fresh construction of the same identity succeeds, proving
+    /// the failed claim did not consume the one-time ownership.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn conversation_runtime_claim_rejects_a_prepared_standalone_dispatch() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        let registry = fixture.tool_runtime.background().clone();
+        let (tool, started, _release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-prepared"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        assert!(
+            registry.all_snapshots().is_empty(),
+            "preparation publishes no record"
+        );
+
+        // The ownership transfer is refused typed and consumes nothing.
+        let refused = ConversationRuntime::new(claim_config(&fixture))
+            .expect_err("a staged dispatch makes the background plane non-quiescent");
+        assert_eq!(
+            refused,
+            ConversationRuntimeError::ToolRuntimeNotQuiescent {
+                conversation_id: ConversationId::new("conv-claim"),
+            }
+        );
+        assert!(!fixture.tool_runtime.is_conversation_runtime_bound());
+        assert!(!fixture.coordinator.is_conversation_runtime_bound());
+        fixture
+            .tool_runtime
+            .mailbox()
+            .enqueue(inbound_text("standalone-2", "still standalone"))
+            .expect("the mailbox remains standalone/unbound");
+
+        // The prepared handle stays valid under standalone semantics:
+        // dropping it rolls the dispatch back and fabricates no record.
+        drop(prepared);
+        assert!(
+            registry.all_snapshots().is_empty(),
+            "the rolled-back dispatch published no record"
+        );
+        assert!(!*started.borrow(), "the rolled-back runner never begins");
+
+        // The one-time claim was not consumed by the failed construction:
+        // a fresh claim of the same identity succeeds once the background
+        // plane is pristine again.
+        let runtime = ConversationRuntime::new(claim_config(&fixture))
+            .expect("a fresh claim succeeds after the prepared dispatch rolled back");
+        assert!(
+            fixture.tool_runtime.is_conversation_runtime_bound(),
+            "the retried construction owns the identity"
+        );
+        assert!(!runtime.is_activated(), "the runtime is still inactive");
+        runtime.activate();
+    }
+
+    /// Interleaving A of the ownership-transfer race: a standalone
+    /// background commit parked exactly at its ownership-commit boundary
+    /// (holding the registry synchronization lock) beats the racing
+    /// `ConversationRuntime::new`. The claim provably linearizes after the
+    /// committed record, fails typed `ToolRuntimeNotQuiescent`, and
+    /// consumes nothing — the mailbox stays standalone and the detached
+    /// execution stays valid.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_commit_racing_the_runtime_claim_wins_and_construction_fails_typed() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        let registry = fixture.tool_runtime.background().clone();
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-race-a"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        registry.install_commit_boundary_hook(hook.clone());
+
+        // The commit enters its critical section and parks there, holding
+        // the registry lock at the ownership-commit boundary.
+        let commit_registry = registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            commit_registry.commit_dispatch(prepared, &CancellationSignal::new())
+        });
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.wait_entered())
+                .await
+                .expect("the commit entered the ownership boundary");
+        }
+
+        // Race the runtime claim: the rendezvous marker proves the claim
+        // thread is in flight while the commit is parked, and because the
+        // commit holds the registry lock, the claim's quiescence
+        // observation necessarily linearizes *after* the commit's record
+        // publication.
+        let (marker_tx, marker_rx) = std::sync::mpsc::sync_channel(0);
+        let claim_config = claim_config(&fixture);
+        let claim_task = tokio::task::spawn_blocking(move || {
+            marker_tx.send(()).expect("the claim is in flight");
+            ConversationRuntime::new(claim_config)
+        });
+        marker_rx
+            .recv()
+            .expect("the claim thread started while the commit was parked");
+
+        // Release the boundary: the commit wins, publishes the record, and
+        // only then may the claim acquire the registry lock.
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.proceed())
+                .await
+                .expect("the commit boundary was released");
+        }
+        let outcome = commit_task
+            .await
+            .expect("commit outcome")
+            .expect("the standalone commit succeeds");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the standalone runner starts");
+
+        let refused = claim_task
+            .await
+            .expect("claim outcome")
+            .expect_err("the claim linearizes after the committed background record");
+        assert_eq!(
+            refused,
+            ConversationRuntimeError::ToolRuntimeNotQuiescent {
+                conversation_id: ConversationId::new("conv-claim"),
+            }
+        );
+        assert!(!fixture.tool_runtime.is_conversation_runtime_bound());
+        assert!(!fixture.coordinator.is_conversation_runtime_bound());
+        fixture
+            .tool_runtime
+            .mailbox()
+            .enqueue(inbound_text("standalone-3", "still standalone"))
+            .expect("the mailbox remains standalone/unbound");
+
+        release.notify_waiters();
+        let terminal = registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the racing standalone execution settles normally"
+        );
+    }
+
+    /// Interleaving B of the ownership-transfer race: the runtime ownership
+    /// transfer linearizes first, and a background commit that arrives
+    /// afterwards fails typed `ConversationInactive` — no record published,
+    /// the prepared runner rolls back, and the runtime remains inert until
+    /// `activate()`, after which a fresh dispatch commits normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_claim_racing_the_background_commit_wins_and_commit_fails_inactive() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        let registry = fixture.tool_runtime.background().clone();
+
+        // The ownership transfer completes first: the runtime exists,
+        // inactive, with its mailbox bound inactive.
+        let runtime = ConversationRuntime::new(claim_config(&fixture))
+            .expect("the ownership transfer wins the race");
+        assert!(
+            fixture.tool_runtime.is_conversation_runtime_bound(),
+            "the runtime owns the tool runtime identity"
+        );
+        assert!(
+            fixture.coordinator.is_conversation_runtime_bound(),
+            "the runtime owns the capability identity"
+        );
+        assert!(!runtime.is_activated(), "the runtime is still inactive");
+
+        // A background commit that linearizes after the transfer is refused
+        // typed: no record, no runner start, the prepared dispatch rolls
+        // back completely.
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-race-b"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("preparation is still allowed");
+        let refused = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect_err("a commit after the transfer observes the inactive runtime");
+        assert_eq!(
+            refused,
+            BackgroundDispatchError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-claim"),
+            }
+        );
+        assert!(
+            registry.all_snapshots().is_empty(),
+            "the refused commit published no record"
+        );
+        assert!(!*started.borrow(), "the rolled-back runner never begins");
+
+        // Activation is the single semantic-open boundary: a fresh dispatch
+        // commits normally afterwards.
+        runtime.activate();
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-race-b-2"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare after activation");
+        let outcome = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("a post-activation commit succeeds");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the post-activation runner starts");
+        release.notify_waiters();
+        let terminal = registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the post-activation execution settles normally"
+        );
+    }
+
+    /// Transactional construction: when the capability claim fails after
+    /// the tool-runtime ownership transfer, the transfer is rolled back to
+    /// its exact previous standalone state — the coordinator claim is
+    /// cleared and the mailbox is unbound again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn failed_capability_claim_rolls_back_the_tool_runtime_ownership_transfer() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        // Consume the capability identity's one-time claim *before*
+        // construction, so the capability claim inside `new` fails after
+        // the tool-runtime transfer already succeeded.
+        assert!(fixture.coordinator.claim_conversation_runtime());
+
+        let refused = ConversationRuntime::new(claim_config(&fixture))
+            .expect_err("a claimed capability identity rejects construction");
+        assert_eq!(
+            refused,
+            ConversationRuntimeError::RuntimeAlreadyBound {
+                conversation_id: ConversationId::new("conv-claim"),
+            }
+        );
+        assert!(
+            !fixture.tool_runtime.is_conversation_runtime_bound(),
+            "the failed construction released the tool-runtime claim"
+        );
+        fixture
+            .tool_runtime
+            .mailbox()
+            .enqueue(inbound_text("standalone-4", "still standalone"))
+            .expect("the rolled-back mailbox accepts standalone inbound");
     }
 
     /// Test A — a model mutation while the runtime is inactive is rejected

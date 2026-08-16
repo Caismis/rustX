@@ -1433,6 +1433,34 @@ The frozen invariants:
   identity is rejected with a typed already-bound error and has no
   semantic side effect. The Runtime Client binding (one host per
   coordinator) is a second, independent claim taken by host construction.
+- **A `ConversationRuntime` is constructed only over a pristine
+  tool-runtime background plane.** The `ConversationToolRuntime ->
+  ConversationRuntime` ownership transfer is one synchronization
+  contract, not three independent steps: under the background registry
+  lock — the same boundary the dispatch ownership commit linearizes at —
+  it requires no prepared dispatch and no committed record, claims the
+  one-time coordinator binding, and binds the canonical mailbox
+  `BoundInactive`, all at one point. Either a standalone background
+  commit wins that section first (construction fails typed with
+  `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
+  nothing — no coordinator claim, no capability claim, the mailbox stays
+  standalone, and the staged/committed work keeps its standalone
+  semantics), or the transfer wins first and every later background
+  commit fails `BackgroundDispatchError::ConversationInactive`. There is
+  no adoption protocol: committed or staged background work is rejected,
+  never inherited. Construction is transactional: if the capability claim
+  fails after the transfer, the mailbox is unbound and the coordinator
+  claim released, restoring the exact previous standalone state, so a
+  fresh construction of the same identity may be attempted once the
+  background plane is pristine again.
+- **An inactive runtime cannot receive a background semantic transition
+  inherited from before construction.** Because the ownership transfer
+  requires a pristine background plane and then refuses dispatch commits
+  while the mailbox is bound inactive, the first `Runtime Client` event
+  and the first `RuntimeClientCursor` after bootstrap belong to a real
+  post-activation transition — cursor 0 stays stable until `activate()`
+  is the ownership-transfer invariant, not an assumption about production
+  construction order.
 - **The adapter bootstrap is one global cut, not four independent ones.**
   `RuntimeClientHost::new` claims the one-time client binding, then
   performs exactly one fallible step —
@@ -1458,11 +1486,13 @@ The frozen invariants:
   This is proven by synchronization, not asserted. At `R` every captured
   value is still its authority's live value: coordinator facts cannot
   move because every mutator takes the lock held across `[T0, R]`; the
-  background registry refuses `commit_dispatch` while its mailbox is bound
-  inactive, so no background record exists across `[T0, R]` and none can
-  be created; the mailbox refuses `enqueue` while its bound runtime is
-  inactive; the capability coordinator refuses a runtime-owned `commit`
-  before activation; and the capability snapshot is captured *at* `R`.
+  background plane is pristine by construction — the ownership transfer
+  requires no prepared dispatch and no committed record, and the registry
+  refuses `commit_dispatch` while its mailbox is bound inactive, so no
+  background record exists across `[T0, R]` and none can be created; the
+  mailbox refuses `enqueue` while its bound runtime is inactive; the
+  capability coordinator refuses a runtime-owned `commit` before
+  activation; and the capability snapshot is captured *at* `R`.
   Each authority installs its observer in the same lock section that
   captures its seed, so no transition is both seeded and queued, and none
   is neither. Because an inactive runtime publishes nothing, `R` coincides
@@ -1480,9 +1510,9 @@ The frozen invariants:
   publishes no `RuntimeClientEvent` and allocates no
   `RuntimeClientCursor`. `{ snapshot, cursor 0 }` is the state at `R`, and
   the first allocated cursor always belongs to a real post-activation
-  semantic transition: the background seed is provably empty under the
-  lifecycle rule, and every other authority's semantic commit is
-  lifecycle-gated until activation.
+  semantic transition: the background seed is provably empty by the
+  ownership-transfer invariant, and every other authority's semantic
+  commit is lifecycle-gated until activation.
 - **The runtime keeps no mirrored client read model.** The runtime folds
   `ConversationObservation` exactly zero times: `src/runtime/observation.rs`
   owns the vocabulary and the leaf queue, and the Runtime Client

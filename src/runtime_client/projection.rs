@@ -250,9 +250,11 @@ impl RuntimeClientProjection {
     /// installed as snapshot state rather than replayed through
     /// [`RuntimeClientProjection::apply`], so state that existed before
     /// the bootstrap cut can never fabricate a live event. The background
-    /// seed is provably empty under the Issue #61 lifecycle (the registry
-    /// refuses dispatch commits while its mailbox is bound inactive) and
-    /// is still installed from the same seed for one coherent cut. Every
+    /// seed is provably empty by the ownership-transfer invariant (a
+    /// `ConversationRuntime` is constructed only over a pristine
+    /// tool-runtime background plane, and the transfer then refuses
+    /// dispatch commits while its mailbox is bound inactive) and is still
+    /// installed from the same seed for one coherent cut. Every
     /// transition after `R` arrives through the live observation stream
     /// and gets the first real cursor.
     pub(crate) fn bootstrap(

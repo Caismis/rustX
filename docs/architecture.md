@@ -1904,9 +1904,12 @@ Runtime Client is a projection/control/attachment adapter over it.
   - coordinator facts cannot move — every mutator (`model_set`,
     `shutdown`, `submit_inbound`, admission, settlement) takes the
     coordinator lock, held across `[T0, R]`;
-  - the background registry refuses `commit_dispatch` while its mailbox
-    is bound inactive, so no background record exists across `[T0, R]`
-    and none can be created;
+  - the background plane is pristine by construction — the
+    `ConversationToolRuntime -> ConversationRuntime` ownership transfer
+    requires no prepared dispatch and no committed record, and the
+    registry then refuses `commit_dispatch` while its mailbox is bound
+    inactive — so no background record exists across `[T0, R]` and none
+    can be created;
   - the mailbox refuses `enqueue` while its bound runtime is inactive,
     so the pending queue is frozen across `[T0, R]`;
   - the capability coordinator refuses a runtime-owned `commit` before
@@ -1923,7 +1926,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   `apply`, so bootstrap publishes no `RuntimeClientEvent` and allocates
   no `RuntimeClientCursor`: `{ snapshot, cursor 0 }` is the state at `R`,
   and the first cursor belongs to a real post-activation transition (the
-  background seed is provably empty under the lifecycle rule).
+  background seed is provably empty by the ownership-transfer invariant).
   Since an inactive runtime publishes nothing, `R` coincides with
   activation and the live stream carries every observation the runtime
   ever emits.
@@ -1934,14 +1937,49 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **One conversation runtime per identity, one host per runtime.** One
   `ConversationToolRuntime` identity is bound to at most one
   `ConversationRuntime` and at most one `RuntimeClientHost` for that
-  identity's lifetime. `ConversationRuntime::new` claims a one-time
-  coordinator binding on the tool runtime and on the capability
-  coordinator, and `RuntimeClientHost::new` claims a second, client
+  identity's lifetime. `ConversationRuntime::new` performs one
+  **tool-runtime ownership transfer** and claims the capability
+  coordinator binding; `RuntimeClientHost::new` claims a second, client
   binding on the same handles; both are `Clone` and every clone shares one
   binding, so a cloned runtime bundle is not a second bindable identity. A
   second coordinator is rejected with
   `ConversationRuntimeError::RuntimeAlreadyBound` and a second host with
   `HostConstructionError::RuntimeClientAlreadyBound`.
+
+  The ownership transfer is one real synchronization contract, not three
+  independent steps. Under the background registry lock — the same
+  boundary the dispatch ownership commit linearizes at — it requires a
+  pristine background plane (no prepared dispatch, no committed record),
+  claims the coordinator binding, and binds the canonical mailbox
+  inactive, all at one point:
+
+  ```text
+  standalone ConversationToolRuntime
+      |
+      |  ownership transfer (one registry critical section)
+      |    1. require pristine background (no prepared, no committed)
+      |    2. claim the coordinator binding
+      |    3. bind the mailbox BoundInactive
+      v
+  ConversationRuntime-owned / inactive
+      |
+      |  background commit -> BackgroundDispatchError::ConversationInactive
+      v
+  ConversationRuntime::activate()
+  ```
+
+  Either a standalone background commit wins the section first — the
+  transfer is refused typed with
+  `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
+  nothing — or the transfer wins first and every later background commit
+  fails `ConversationInactive`. A `ConversationRuntime` can therefore
+  never be constructed over a tool runtime that already contains staged
+  or committed background work, and the inactive phase can never inherit
+  a detached semantic transition that would later advance the Runtime
+  Client cursor before activation. Construction is transactional: if the
+  capability claim fails after the transfer, the mailbox is unbound and
+  the coordinator claim released again, restoring the exact previous
+  standalone state.
 
   This is a runtime ownership invariant, not a caller convention. Two
   coordinators over one authoritative runtime would each admit attempts
@@ -2084,13 +2122,14 @@ Runtime Client is a projection/control/attachment adapter over it.
 - **Snapshot/cursor invariant.** `snapshot_get` returns `{ snapshot,
   cursor }` where the snapshot describes all Runtime Client state through
   cursor C, and a subscription after C observes every subsequently
-  published event or fails explicitly with `resync_required`. This holds
+  published event or fails explicitly with `resync_required`.   This holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
   never replayed through `apply`, so no pre-existing runtime fact
-  allocates a cursor or publishes an event — and, under the Issue #61
-  lifecycle, no background execution can even exist at bootstrap (the
-  registry refuses dispatch commits while its mailbox is bound inactive).
+  allocates a cursor or publishes an event — and, by the ownership-transfer
+  invariant, no background execution can even exist at bootstrap (the
+  registry is pristine at construction and refuses dispatch commits while
+  its mailbox is bound inactive).
 - **RuntimeEvent mapping policy.** Every internal event is classified
   PROJECT / FOLD INTO CLIENT STATE ONLY / INTERNAL in the projection
   owner: attempt lifecycle/settlement, streaming output, tool-call

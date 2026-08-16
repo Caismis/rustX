@@ -611,6 +611,27 @@ impl ConversationInboundMailbox {
             .admission = MailboxAdmission::BoundInactive;
     }
 
+    /// Reverts [`ConversationInboundMailbox::bind_inactive`] back to the
+    /// standalone unbound state.
+    ///
+    /// This exists only for the transactional rollback of a failed
+    /// [`ConversationRuntime::new`](crate::runtime::conversation_runtime::ConversationRuntime::new):
+    /// the tool-runtime ownership transfer is one unit, so a construction
+    /// that fails *after* the transfer (for example on the capability
+    /// claim) restores the mailbox to its exact previous standalone state.
+    /// It is never called on runtime drop, and a successfully constructed
+    /// runtime never unbinds its mailbox.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn unbind(&self) {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .admission = MailboxAdmission::Unbound;
+    }
+
     /// Opens inbound admission: the owning conversation runtime is
     /// activated and semantic execution may begin.
     ///
