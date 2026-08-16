@@ -1317,7 +1317,7 @@ mod tests {
         ConversationContextConfig, ConversationRuntime, ConversationRuntimeError, CoordinatorProbe,
         InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
-    use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
+    use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::types::RuntimeClock;
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::HostConstructionError;
@@ -1328,7 +1328,8 @@ mod tests {
     };
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::background::{
-        BackgroundDispatchError, BackgroundDispatchOutcome, BackgroundLifecycle,
+        BackgroundDispatchError, BackgroundDispatchOutcome, BackgroundExecutionSnapshot,
+        BackgroundLifecycle, ConversationBackgroundRegistry,
     };
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
     use crate::tools::types::{
@@ -1421,19 +1422,40 @@ mod tests {
         watch::channel(false)
     }
 
-    /// A parking background executor: starts, waits for the release
-    /// notify, then settles with a fixed result.
+    /// A parking background executor: its returned future reports entry,
+    /// waits on a durable release state, then settles with a fixed result.
     struct ParkingBackgroundTool {
         #[allow(dead_code)] // the definition documents the tool identity
         definition: ToolDefinition,
         started: watch::Sender<bool>,
-        release: Arc<tokio::sync::Notify>,
+        release: watch::Sender<bool>,
+        execution_gate: Option<watch::Receiver<bool>>,
     }
 
     impl ParkingBackgroundTool {
-        fn new() -> (Self, watch::Receiver<bool>, Arc<tokio::sync::Notify>) {
+        fn new() -> (Self, watch::Receiver<bool>, watch::Sender<bool>) {
+            Self::build(None)
+        }
+
+        /// Builds a fixture whose returned future waits at an explicit gate
+        /// before it observes `release`. This is used by the lost-wakeup
+        /// regression to force release-before-wait ordering.
+        fn new_with_execution_gate() -> (
+            Self,
+            watch::Receiver<bool>,
+            watch::Sender<bool>,
+            watch::Sender<bool>,
+        ) {
+            let (execution_gate, execution_gate_rx) = watch::channel(false);
+            let (tool, started, release) = Self::build(Some(execution_gate_rx));
+            (tool, started, release, execution_gate)
+        }
+
+        fn build(
+            execution_gate: Option<watch::Receiver<bool>>,
+        ) -> (Self, watch::Receiver<bool>, watch::Sender<bool>) {
             let (started, started_rx) = watch::channel(false);
-            let release = Arc::new(tokio::sync::Notify::new());
+            let (release, _release_rx) = watch::channel(false);
             (
                 Self {
                     definition: ToolDefinition {
@@ -1448,6 +1470,7 @@ mod tests {
                     },
                     started,
                     release: release.clone(),
+                    execution_gate,
                 },
                 started_rx,
                 release,
@@ -1461,10 +1484,25 @@ mod tests {
             _invocation: ToolInvocation,
             _context: ToolExecutionContext<'a>,
         ) -> BoxFuture<'a, ToolExecutionResult> {
-            self.started.send_replace(true);
-            let release = self.release.clone();
+            let started = self.started.clone();
+            let mut execution_gate = self.execution_gate.clone();
+            let mut release = self.release.subscribe();
             Box::pin(async move {
-                release.notified().await;
+                // This signal is published by the returned future, so
+                // observing it means the deterministic execution gate has
+                // actually been entered rather than merely returned by
+                // `execute`.
+                started.send_replace(true);
+                if let Some(execution_gate) = execution_gate.as_mut() {
+                    execution_gate
+                        .wait_for(|entered| *entered)
+                        .await
+                        .expect("execution gate stays open");
+                }
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
                 ToolExecutionResult {
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
@@ -1475,6 +1513,39 @@ mod tests {
                 }
             })
         }
+    }
+
+    /// Bounds only the terminal wait in background-runtime tests. The
+    /// release and start orderings are established by watch state; this is
+    /// fail-fast containment for a broken fixture or registry invariant, not
+    /// a synchronization primitive.
+    const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
+    async fn await_background_started(
+        started: &mut watch::Receiver<bool>,
+        description: &'static str,
+    ) {
+        tokio::time::timeout(
+            BACKGROUND_LIVENESS_GUARD,
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{description}: start wait exceeded liveness guard"))
+        .expect("start channel stays open");
+    }
+
+    async fn await_background_terminal(
+        registry: &ConversationBackgroundRegistry,
+        execution_id: &ToolExecutionId,
+        description: &'static str,
+    ) -> BackgroundExecutionSnapshot {
+        tokio::time::timeout(
+            BACKGROUND_LIVENESS_GUARD,
+            registry.wait_until_terminal(execution_id),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{description}: terminal wait exceeded liveness guard"))
+        .unwrap_or_else(|| panic!("{description}: execution disappeared before terminal state"))
     }
 
     /// A fixed deterministic status clock.
@@ -2475,10 +2546,7 @@ mod tests {
         else {
             panic!("accepted dispatch");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("background runner started");
+        await_background_started(&mut started, "background runner started").await;
         // One mailbox item admitted by the runtime's idle wakeup: the first
         // attempt starts and parks in its model stream.
         fixture
@@ -2552,14 +2620,13 @@ mod tests {
         );
 
         // The background execution settles normally after release.
-        release.notify_one();
-        fixture
-            .runtime
-            .tool_runtime()
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        await_background_terminal(
+            fixture.runtime.tool_runtime().background(),
+            &execution_id,
+            "detach background execution",
+        )
+        .await;
         let (final_snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(matches!(
             final_snapshot.background[0].state,
@@ -2726,10 +2793,7 @@ mod tests {
             )
         })
         .await;
-        tool_started
-            .wait_for(|started| *started)
-            .await
-            .expect("the parking tool started");
+        await_background_started(&mut tool_started, "the parking tool started").await;
         assert!(
             fixture.host.host_ledger().is_none(),
             "the attempt owns the conversation state; the runtime holds nothing"
@@ -2761,7 +2825,7 @@ mod tests {
         // drain the mailbox at its safe boundary. The drained message joins
         // the *execution's* history — the loop commits it — and the attempt
         // continues rather than settling.
-        release.notify_one();
+        release.send_replace(true);
         let settlement = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
@@ -2929,17 +2993,14 @@ mod tests {
         else {
             panic!("accepted dispatch");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("background runner started");
-        release.notify_one();
-        runtime
-            .tool_runtime()
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        await_background_started(&mut started, "background runner started").await;
+        release.send_replace(true);
+        await_background_terminal(
+            runtime.tool_runtime().background(),
+            &execution_id,
+            "host lifetime background execution",
+        )
+        .await;
         // The registry publishes its terminal notification into the
         // authoritative mailbox; the runtime wake gate admits it into a
         // second attempt, which settles immediately (no scripts). Waiting
@@ -3060,15 +3121,14 @@ mod tests {
         else {
             panic!("accepted dispatch");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("background runner started");
-        release.notify_one();
-        registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("the registry still settles executions");
+        await_background_started(&mut started, "background runner started").await;
+        release.send_replace(true);
+        await_background_terminal(
+            &registry,
+            &execution_id,
+            "surviving registry background execution",
+        )
+        .await;
 
         // Authoritative capability transition: same.
         write_probe_skill(&dir.path().join("workspace"), "after-skill");
@@ -3171,10 +3231,7 @@ mod tests {
         else {
             panic!("accepted dispatch");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("background runner started");
+        await_background_started(&mut started, "background runner started").await;
 
         // T1 takes the host lock and parks inside it.
         probe.arm_snapshot();
@@ -3209,14 +3266,13 @@ mod tests {
 
         // The observation was not lost by being enqueued: the next host
         // lock acquisition folds it.
-        release.notify_one();
-        fixture
-            .runtime
-            .tool_runtime()
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        await_background_terminal(
+            fixture.runtime.tool_runtime().background(),
+            &execution_id,
+            "snapshot-fold background execution",
+        )
+        .await;
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.background.len(), 1);
         assert_eq!(snapshot.background[0].execution_id, execution_id);
@@ -3558,10 +3614,7 @@ mod tests {
         else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("runner started");
+        await_background_started(&mut started, "runner started").await;
 
         let (attachment, _) = fixture
             .host
@@ -3599,14 +3652,13 @@ mod tests {
 
         // Settlement: the cancellation winner canonicalizes the terminal
         // result to Cancelled.
-        release.notify_one();
-        let terminal = fixture
-            .runtime
-            .tool_runtime()
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            fixture.runtime.tool_runtime().background(),
+            &execution_id,
+            "cancelled background execution",
+        )
+        .await;
         assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert_eq!(snapshot.background[0].state, BackgroundLifecycle::Cancelled);
@@ -3646,10 +3698,7 @@ mod tests {
         else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("runner started");
+        await_background_started(&mut started, "runner started").await;
 
         // Run one attempt to completion.
         let (attachment, _) = fixture
@@ -3680,14 +3729,13 @@ mod tests {
             snapshot.background[0].state,
             BackgroundLifecycle::Running
         ));
-        release.notify_one();
-        let terminal = fixture
-            .runtime
-            .tool_runtime()
-            .background()
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            fixture.runtime.tool_runtime().background(),
+            &execution_id,
+            "detached background execution",
+        )
+        .await;
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     }
 
@@ -4146,14 +4194,8 @@ mod tests {
         });
         // Both sibling tool calls start (the loop executes the batch); A
         // parks.
-        a_started
-            .wait_for(|started| *started)
-            .await
-            .expect("tool A started");
-        b_started
-            .wait_for(|started| *started)
-            .await
-            .expect("tool B started");
+        await_background_started(&mut a_started, "tool A started").await;
+        await_background_started(&mut b_started, "tool B started").await;
 
         // An async inbound arrives while the sibling batch is in flight.
         fixture
@@ -4165,8 +4207,8 @@ mod tests {
 
         // Release both tools; the batch settles structurally, the safe
         // boundary drains the inbound into the next turn.
-        a_release.notify_one();
-        b_release.notify_one();
+        a_release.send_replace(true);
+        b_release.send_replace(true);
         receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
@@ -4883,7 +4925,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pre_activation_semantic_commits_cannot_cross_the_bootstrap() {
-        let (_adapter, fixture) =
+        let (adapter, fixture) =
             runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
 
         // Bind the host over the inert runtime. The startup capability
@@ -4905,7 +4947,8 @@ mod tests {
 
         // A background dispatch can prepare (that is pure preparation) but
         // its ownership commit is refused: no record, no runner start.
-        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let (tool, mut started, release, execution_gate) =
+            ParkingBackgroundTool::new_with_execution_gate();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let registry = fixture.runtime.tool_runtime().background().clone();
         let prepared = registry
@@ -5051,16 +5094,71 @@ mod tests {
             "the post-activation background commit is published exactly once, never seeded"
         );
         // The conversation-owned runner really starts and settles after
-        // activation.
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the post-activation runner starts");
-        release.notify_waiters();
-        registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        // activation. The explicit execution gate deliberately keeps the
+        // returned future before its release wait: the release state is
+        // published first, then the future is allowed to observe it. An
+        // edge-triggered `Notify::notify_waiters()` fixture would lose this
+        // signal and hang at terminal settlement.
+        await_background_started(&mut started, "the post-activation runner starts").await;
+        release.send_replace(true);
+        execution_gate.send_replace(true);
+        await_background_terminal(&registry, &execution_id, "activated background execution").await;
+        assert_eq!(
+            registry.all_snapshots().len(),
+            1,
+            "one background record settles once"
+        );
+        assert_eq!(
+            adapter.requests().len(),
+            1,
+            "the one admitted inbound runs once"
+        );
+    }
+
+    /// Regression for the PR #70 test-fixture lost wakeup: release the
+    /// background execution while its returned future is intentionally held
+    /// before the old `Notify::notified()` wait point. Durable release state
+    /// must still settle the one committed record exactly once, without a
+    /// second registry record or an invented admission.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_release_before_future_wait_cannot_be_lost() {
+        let fixture = ownership_fixture(Vec::new(), ToolRegistry::new()).await;
+        let registry = fixture.tool_runtime.background().clone();
+        let (tool, mut started, release, execution_gate) =
+            ParkingBackgroundTool::new_with_execution_gate();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-lost-wakeup"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted dispatch");
+        };
+
+        await_background_started(&mut started, "lost-wakeup regression runner").await;
+        // This is the critical ordering: release is durable before the
+        // returned future is allowed to reach its wait point.
+        release.send_replace(true);
+        execution_gate.send_replace(true);
+
+        let terminal =
+            await_background_terminal(&registry, &execution_id, "lost-wakeup regression").await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        assert_eq!(
+            registry.all_snapshots().len(),
+            1,
+            "no duplicate background record"
+        );
+        assert!(
+            terminal.result.is_some(),
+            "the single execution has one result"
+        );
     }
 
     /// The standalone pre-runtime pieces of one ownership-transfer test:
@@ -5168,10 +5266,7 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the standalone runner starts");
+        await_background_started(&mut started, "the standalone runner starts").await;
         assert_eq!(
             registry.all_snapshots().len(),
             1,
@@ -5206,11 +5301,10 @@ mod tests {
 
         // The detached execution keeps its standalone semantics and
         // settles normally.
-        release.notify_waiters();
-        let terminal = registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal =
+            await_background_terminal(&registry, &execution_id, "standalone background execution")
+                .await;
         assert_eq!(
             terminal.state,
             BackgroundLifecycle::Succeeded,
@@ -5348,10 +5442,7 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the standalone runner starts");
+        await_background_started(&mut started, "the standalone runner starts").await;
 
         let refused = claim_task
             .await
@@ -5371,11 +5462,13 @@ mod tests {
             .enqueue(inbound_text("standalone-3", "still standalone"))
             .expect("the mailbox remains standalone/unbound");
 
-        release.notify_waiters();
-        let terminal = registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            &registry,
+            &execution_id,
+            "racing standalone background execution",
+        )
+        .await;
         assert_eq!(
             terminal.state,
             BackgroundLifecycle::Succeeded,
@@ -5450,15 +5543,14 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the post-activation runner starts");
-        release.notify_waiters();
-        let terminal = registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        await_background_started(&mut started, "the post-activation runner starts").await;
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            &registry,
+            &execution_id,
+            "post-activation background execution",
+        )
+        .await;
         assert_eq!(
             terminal.state,
             BackgroundLifecycle::Succeeded,
@@ -5611,10 +5703,7 @@ mod tests {
         else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the post-transition runner starts");
+        await_background_started(&mut started, "the post-transition runner starts").await;
 
         let committed = coordinator
             .commit(coordinator.prepare_candidate().await.expect("prepare"))
@@ -5632,11 +5721,13 @@ mod tests {
         fixture.runtime.settlement_signal().notified().await;
 
         // Settle the background execution cleanly.
-        release.notify_waiters();
-        let terminal = registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            &registry,
+            &execution_id,
+            "cross-subsystem background execution",
+        )
+        .await;
         assert_eq!(
             terminal.state,
             BackgroundLifecycle::Succeeded,
@@ -5720,10 +5811,7 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the runner starts");
+        await_background_started(&mut started, "the runner starts").await;
 
         // The old contradiction shape: B completed successfully, then C
         // begins — C must still observe Active, never a stale Inactive.
@@ -5734,11 +5822,13 @@ mod tests {
         assert_eq!(committed.revision().get(), 2);
 
         // Settle the background execution cleanly.
-        release.notify_waiters();
-        let terminal = registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+        release.send_replace(true);
+        let terminal = await_background_terminal(
+            &registry,
+            &execution_id,
+            "activation-order background execution",
+        )
+        .await;
         assert_eq!(
             terminal.state,
             BackgroundLifecycle::Succeeded,

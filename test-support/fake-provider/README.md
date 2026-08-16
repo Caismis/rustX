@@ -264,7 +264,8 @@ tests/common/mod.rs FixtureServer   raw Rust HTTP fixture. One adapter in
 
 test-support/fake-provider          this project. Composed Agent Loop
                                     conformance across the real runtime and
-                                    a real external provider boundary.
+                                    the real HTTP/SSE boundary to this local
+                                    scripted provider process.
 ```
 
 A test that exercises the Agent Loop, the context engine, the tool runtime,
@@ -273,7 +274,7 @@ translation belongs in the Rust fixture.
 
 ## Out of scope
 
-The M9 cancellation redesign (#12), M10 durability/recovery (#13), and the
-live real-provider multi-compaction validation (#27) are owned by their own
-issues. This harness gives them deterministic provider gates to build on; it
-does not pre-empt their semantics.
+The M9 cancellation redesign (#12) and M10 durability/recovery (#13) remain
+out of scope. Issue #27's deterministic fake-provider multi-compaction
+validation uses this harness and intentionally requires no external model
+credentials or public-network access.

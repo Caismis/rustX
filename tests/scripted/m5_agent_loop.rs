@@ -29,7 +29,8 @@ use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
 use support::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, fake_model, success_result, tool_call_events,
+    FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, fake_model, success_result,
+    tool_call_events,
 };
 
 fn request(model: &std::sync::Arc<FakeModel>) -> AgentExecutionRequest {
@@ -206,20 +207,14 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
 
     // Both calls start concurrently; B completes first; then A.
     let controller = tokio::spawn(async move {
-        started_a
-            .wait_for(|started| *started)
-            .await
-            .expect("A started");
-        started_b
-            .wait_for(|started| *started)
-            .await
-            .expect("B started");
-        release_b.notify_one();
+        await_started(&mut started_a, "A started").await;
+        await_started(&mut started_b, "B started").await;
+        release_b.send_replace(true);
         controller_completed_b
             .wait_for(|order| order.iter().any(|name| name == "beta"))
             .await
             .expect("B completed physically first");
-        release_a.notify_one();
+        release_a.send_replace(true);
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -302,20 +297,14 @@ async fn sequential_barrier_blocks_later_calls() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
     let controller = tokio::spawn(async move {
-        started_a
-            .wait_for(|started| *started)
-            .await
-            .expect("A started");
+        await_started(&mut started_a, "A started").await;
         // A is still parked: B must not have started.
         assert!(
             !*started_b.borrow(),
             "B cannot start while the sequential barrier A is pending"
         );
-        release_a.notify_one();
-        started_b
-            .wait_for(|started| *started)
-            .await
-            .expect("B started after A's result existed");
+        release_a.send_replace(true);
+        await_started(&mut started_b, "B started after A's result existed").await;
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -380,20 +369,14 @@ async fn parallel_group_then_sequential_barrier() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
     let controller = tokio::spawn(async move {
-        started_p1
-            .wait_for(|started| *started)
-            .await
-            .expect("P1 started");
-        started_p2
-            .wait_for(|started| *started)
-            .await
-            .expect("P2 started");
+        await_started(&mut started_p1, "P1 started").await;
+        await_started(&mut started_p2, "P2 started").await;
         assert!(
             !*started_s.borrow(),
             "the sequential call cannot start before its barrier"
         );
-        release_p1.notify_one();
-        release_p2.notify_one();
+        release_p1.send_replace(true);
+        release_p2.send_replace(true);
         completed_p1
             .wait_for(|order| order.iter().any(|name| name == "p1"))
             .await
@@ -402,10 +385,11 @@ async fn parallel_group_then_sequential_barrier() {
             .wait_for(|order| order.iter().any(|name| name == "p2"))
             .await
             .expect("P2 completed");
-        started_s
-            .wait_for(|started| *started)
-            .await
-            .expect("S started only after both attempt-facing results");
+        await_started(
+            &mut started_s,
+            "S started only after both attempt-facing results",
+        )
+        .await;
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -474,12 +458,13 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
     let controller = tokio::spawn(async move {
-        started_b
-            .wait_for(|started| *started)
-            .await
-            .expect("the detached runner started after the dispatch commit");
-        release_a.notify_one();
-        release_c.notify_one();
+        await_started(
+            &mut started_b,
+            "the detached runner started after the dispatch commit",
+        )
+        .await;
+        release_a.send_replace(true);
+        release_c.send_replace(true);
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -607,18 +592,9 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     let controller = tokio::spawn(async move {
         // The parallel group started: A and C are parked, B's detached
         // runner started after its dispatch commit.
-        started_a
-            .wait_for(|started| *started)
-            .await
-            .expect("A started");
-        started_c
-            .wait_for(|started| *started)
-            .await
-            .expect("C started");
-        started_b
-            .wait_for(|started| *started)
-            .await
-            .expect("detached B started");
+        await_started(&mut started_a, "A started").await;
+        await_started(&mut started_c, "C started").await;
+        await_started(&mut started_b, "detached B started").await;
         // Attempt cancellation wins while the foreground work is in flight.
         controller_cancellation.cancel();
         // The committed background dispatch must remain running: it never

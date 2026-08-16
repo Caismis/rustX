@@ -33,8 +33,8 @@ use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionStatus};
 use support::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, failed_result, model_release, success_result,
-    tool_call_events,
+    FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, failed_result, model_release,
+    success_result, tool_call_events,
 };
 
 /// A scripted model handle shared with its attempt model snapshot.
@@ -1170,10 +1170,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        tool_started
-            .wait_for(|running| *running)
-            .await
-            .expect("tool started");
+        await_started(&mut tool_started, "tool started").await;
         controller_cancellation.cancel();
     });
     let result = tokio::time::timeout(
@@ -1290,10 +1287,7 @@ async fn cancellation_interrupts_later_tool_call() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        second_started
-            .wait_for(|running| *running)
-            .await
-            .expect("second tool started");
+        await_started(&mut second_started, "second tool started").await;
         controller_cancellation.cancel();
     });
     let result = tokio::time::timeout(
@@ -2099,10 +2093,7 @@ async fn cancellation_from_waiting_for_tool_settles_the_machine_to_failed() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        tool_started
-            .wait_for(|running| *running)
-            .await
-            .expect("tool started");
+        await_started(&mut tool_started, "tool started").await;
         controller_cancellation.cancel();
     });
     let result = tokio::time::timeout(
@@ -2645,10 +2636,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
-        tool_started
-            .wait_for(|running| *running)
-            .await
-            .expect("tool started");
+        await_started(&mut tool_started, "tool started").await;
         let sequence_a = controller_mailbox
             .enqueue(inbound_user("msg-inbound-a", "human A", UserSource::Human))
             .expect("enqueue human A");
@@ -2663,7 +2651,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
             sequence_a < sequence_b,
             "Human and Runtime share one sequence domain"
         );
-        release.notify_waiters();
+        release.send_replace(true);
     });
     let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
@@ -2754,10 +2742,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
-        tool_started
-            .wait_for(|running| *running)
-            .await
-            .expect("tool started");
+        await_started(&mut tool_started, "tool started").await;
         controller_mailbox
             .enqueue(inbound_user("msg-corr-1", "deploy it", UserSource::Human))
             .expect("enqueue correction A");
@@ -2768,7 +2753,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
                 UserSource::Human,
             ))
             .expect("enqueue correction B");
-        release.notify_waiters();
+        release.send_replace(true);
     });
     let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");
@@ -3044,21 +3029,15 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     let controller_mailbox = mailbox.clone();
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
-        first_started
-            .wait_for(|running| *running)
-            .await
-            .expect("first tool started");
+        await_started(&mut first_started, "first tool started").await;
         controller_mailbox
             .enqueue(inbound_user("msg-commit-a", "committed", UserSource::Human))
             .expect("enqueue before the first safe boundary");
-        first_release.notify_waiters();
+        first_release.send_replace(true);
         // Turn 2 begins only after the first safe boundary drained and
         // appended the batch; cancellation is observed during turn 2's tool
         // wait, after the batch commit point.
-        second_started
-            .wait_for(|running| *running)
-            .await
-            .expect("second tool started");
+        await_started(&mut second_started, "second tool started").await;
         controller_cancellation.cancel();
     });
     let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
@@ -3306,22 +3285,16 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
-        first_started
-            .wait_for(|running| *running)
-            .await
-            .expect("first tool started");
+        await_started(&mut first_started, "first tool started").await;
         controller_mailbox
             .enqueue(inbound_user("msg-batch-a", "A", UserSource::Human))
             .expect("enqueue A before boundary 1");
-        first_release.notify_waiters();
-        second_started
-            .wait_for(|running| *running)
-            .await
-            .expect("second tool started");
+        first_release.send_replace(true);
+        await_started(&mut second_started, "second tool started").await;
         controller_mailbox
             .enqueue(inbound_user("msg-batch-c", "C", UserSource::Human))
             .expect("enqueue C before boundary 2");
-        second_release.notify_waiters();
+        second_release.send_replace(true);
     });
     let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
     controller.await.expect("controller task");

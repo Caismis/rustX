@@ -27,7 +27,7 @@ use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
 };
 use support::fake::{
-    FakeModel, FakeStep, FakeTool, ScriptedCall, success_result, tool_call_events,
+    FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result, tool_call_events,
 };
 
 /// A fixed deterministic status clock.
@@ -455,20 +455,14 @@ async fn foreground_tools_project_with_stable_identities() {
         .expect("subscribe");
 
     let controller = tokio::spawn(async move {
-        started_a
-            .wait_for(|started| *started)
-            .await
-            .expect("A started");
-        started_b
-            .wait_for(|started| *started)
-            .await
-            .expect("B started");
-        release_b.notify_one();
+        await_started(&mut started_a, "A started").await;
+        await_started(&mut started_b, "B started").await;
+        release_b.send_replace(true);
         controller_completed_b
             .wait_for(|order| order.iter().any(|name| name == "beta"))
             .await
             .expect("B completed physically first");
-        release_a.notify_one();
+        release_a.send_replace(true);
     });
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {

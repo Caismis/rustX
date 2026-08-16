@@ -136,13 +136,16 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 - Agent Status integration with Issue #22 inbound batching: one drained
   batch becomes one fresh inbound turn with exactly one admitted status fact
   targeting the final message
-- Opt-in live repeated-compaction validation (`tests/m4_live.rs`)
+- Deterministic Issue #27 repeated-compaction validation through the final
+  runtime path, the real provider adapter/HTTP-SSE boundary, and the real
+  rustx child/stdio composition against the local fake provider
 
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
 Issue #7 (M4: context engine and Agent Status) is **completed**; Issue #27
-owns the deferred live multi-compaction/TUI verification, and Issue #8 (M5)
+owns the deterministic multi-compaction/TUI verification against the local
+fake provider, and Issue #8 (M5)
 owns the background-execution Agent Status integration, which is implemented
 by the M5 tool plane PR as a runtime-owned built-in section.
 

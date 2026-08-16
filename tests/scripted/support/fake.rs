@@ -12,6 +12,7 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use futures_util::stream::unfold;
@@ -24,7 +25,7 @@ use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolCall, ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
 };
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 /// One scripted step of a fake model invocation.
 #[derive(Debug, Clone)]
@@ -205,10 +206,23 @@ impl ModelAdapter for FakeModel {
 pub struct FakeTool {
     definition: ToolDefinition,
     result: ToolExecutionResult,
-    release: Option<Arc<Notify>>,
+    release: Option<watch::Sender<bool>>,
     calls: watch::Sender<Vec<ToolInvocation>>,
     started: watch::Sender<bool>,
     completed: watch::Sender<Vec<String>>,
+}
+
+/// Waits for a parking [`FakeTool`] to enter its returned execution future.
+/// The watch state is the ordering proof; this bound only contains a broken
+/// fixture so a test binary cannot wait forever.
+pub async fn await_started(started: &mut watch::Receiver<bool>, description: &'static str) {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        started.wait_for(|is_started| *is_started),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{description}: tool start wait exceeded liveness guard"))
+    .expect("fake tool start channel stays open");
 }
 
 impl FakeTool {
@@ -225,10 +239,15 @@ impl FakeTool {
         }
     }
 
-    /// Creates a parking fake tool; the returned notify releases the tool.
+    /// Creates a parking fake tool; the returned watch sender releases the
+    /// tool durably, even when the signal precedes the execution future's
+    /// first poll.
     #[must_use]
-    pub fn parking(definition: ToolDefinition, result: ToolExecutionResult) -> (Self, Arc<Notify>) {
-        let release = Arc::new(Notify::new());
+    pub fn parking(
+        definition: ToolDefinition,
+        result: ToolExecutionResult,
+    ) -> (Self, watch::Sender<bool>) {
+        let (release, _receiver) = watch::channel(false);
         (
             Self {
                 definition,
@@ -284,14 +303,15 @@ impl ToolExecutor for FakeTool {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
-        self.started.send_replace(true);
         self.calls
             .send_modify(|calls| calls.push(invocation.clone()));
-        let release = self.release.clone();
+        let started = self.started.clone();
+        let mut release = self.release.as_ref().map(watch::Sender::subscribe);
         let result = self.result.clone();
         let completed = self.completed.clone();
         Box::pin(async move {
-            let outcome = if let Some(release) = release {
+            started.send_replace(true);
+            let outcome = if let Some(release) = release.as_mut() {
                 tokio::select! {
                     biased;
                     () = context.cancellation.cancelled() => {
@@ -306,7 +326,10 @@ impl ToolExecutor for FakeTool {
                             truncation: None,
                         }
                     }
-                    () = release.notified() => result,
+                    released = release.wait_for(|released| *released) => {
+                        released.expect("fake tool release channel stays open");
+                        result
+                    },
                 }
             } else {
                 result

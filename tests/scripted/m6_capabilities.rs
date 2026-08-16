@@ -1182,17 +1182,17 @@ async fn failed_preparation_leaves_revision_authoritative() {
 struct RecordingParkingExecutor {
     environment: Arc<Mutex<Option<ToolEnvironment>>>,
     seen: tokio::sync::watch::Sender<bool>,
-    release: Arc<tokio::sync::Notify>,
+    release: tokio::sync::watch::Sender<bool>,
 }
 
 impl RecordingParkingExecutor {
     fn new() -> (
         Self,
         tokio::sync::watch::Receiver<bool>,
-        Arc<tokio::sync::Notify>,
+        tokio::sync::watch::Sender<bool>,
     ) {
         let (seen, seen_rx) = tokio::sync::watch::channel(false);
-        let release = Arc::new(tokio::sync::Notify::new());
+        let (release, _release_rx) = tokio::sync::watch::channel(false);
         (
             Self {
                 environment: Arc::new(Mutex::new(None)),
@@ -1216,10 +1216,14 @@ impl ToolExecutor for RecordingParkingExecutor {
         context: ToolExecutionContext<'a>,
     ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
         *self.environment.lock().expect("env lock") = Some(context.environment.clone());
-        let _ = self.seen.send(true);
-        let release = self.release.clone();
+        let started = self.seen.clone();
+        let mut release = self.release.subscribe();
         Box::pin(async move {
-            release.notified().await;
+            started.send_replace(true);
+            release
+                .wait_for(|released| *released)
+                .await
+                .expect("background release channel stays open");
             ToolExecutionResult {
                 status: ToolExecutionStatus::Success,
                 content: Vec::new(),
@@ -1279,10 +1283,7 @@ async fn background_execution_retains_its_dispatching_environment() {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("background execution started under revision N");
+    await_background_started(&mut started, "background execution under revision N").await;
     assert_eq!(
         executor
             .recorded_environment()
@@ -1352,10 +1353,7 @@ async fn background_execution_retains_its_dispatching_environment() {
     else {
         panic!("accepted");
     };
-    started2
-        .wait_for(|started| *started)
-        .await
-        .expect("second background execution started");
+    await_background_started(&mut started2, "second background execution").await;
     assert_eq!(
         executor2
             .recorded_environment()
@@ -1365,19 +1363,34 @@ async fn background_execution_retains_its_dispatching_environment() {
     );
 
     // Release both executions; each settles.
-    release.notify_one();
-    release2.notify_one();
+    release.send_replace(true);
+    release2.send_replace(true);
     wait_for_terminal(&conversation, &execution_id).await;
     wait_for_terminal(&conversation, &id2).await;
     drop(lease_n1);
 }
 
 async fn wait_for_terminal(conversation: &Conversation, execution_id: &ToolExecutionId) {
-    conversation
-        .background
-        .wait_until_terminal(execution_id)
-        .await
-        .expect("background execution must remain registered");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        conversation.background.wait_until_terminal(execution_id),
+    )
+    .await
+    .expect("background terminal wait exceeded liveness guard")
+    .expect("background execution must remain registered");
+}
+
+async fn await_background_started(
+    started: &mut tokio::sync::watch::Receiver<bool>,
+    description: &'static str,
+) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        started.wait_for(|is_started| *is_started),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{description}: start wait exceeded liveness guard"))
+    .expect("background start channel stays open");
 }
 
 // ---------------------------------------------------------------------------

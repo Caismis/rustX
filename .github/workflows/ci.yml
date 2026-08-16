@@ -13,6 +13,7 @@ jobs:
   quality:
     name: Format, lint, and test
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -70,6 +71,7 @@ jobs:
   tui:
     name: TUI typecheck and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout

@@ -63,7 +63,7 @@ use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
-use super::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, success_result};
+use super::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result};
 use crate::scripted_suites::common;
 
 /// The outer liveness guard of one whole wait.
@@ -1177,14 +1177,14 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
 
     // Deterministic reversal: B is released and physically completes first.
     let controller = tokio::spawn(async move {
-        started_a.wait_for(|started| *started).await.expect("A ran");
-        started_b.wait_for(|started| *started).await.expect("B ran");
-        release_b.notify_one();
+        await_started(&mut started_a, "A ran").await;
+        await_started(&mut started_b, "B ran").await;
+        release_b.send_replace(true);
         completed_b
             .wait_for(|order| order.iter().any(|name| name == "beta"))
             .await
             .expect("B completed first");
-        release_a.notify_one();
+        release_a.send_replace(true);
     });
 
     let mut driver = connect(&fixture, factory);
