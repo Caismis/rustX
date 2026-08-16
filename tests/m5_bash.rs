@@ -814,3 +814,78 @@ async fn wait_for_lifecycle(
     let snapshot = registry.snapshot(execution_id).expect("snapshot");
     panic!("state {state:?} never reached; last snapshot: {snapshot:?}");
 }
+
+/// The macOS Bash EXIT `wait` is a best-effort convenience, not an
+/// ownership or terminality primitive. Replacing it (`trap ':' EXIT`) must
+/// not fabricate terminality: the shell exits immediately, the background
+/// job outlives it, and the macOS fallback containment (anchored `SIGKILL`
+/// + `killpg(pgid, 0)` absence probe) must actually terminate that job
+/// before the tool settles.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn bash_replaced_exit_trap_does_not_fabricate_terminality() {
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let pid_file = workspace.join("bg.pid");
+    let command = format!("trap ':' EXIT; sleep 30 & echo $! > {}", pid_file.display());
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_tool(&fixture, "bash", serde_json::json!({"command": command})),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .expect("background pid file")
+        .trim()
+        .parse()
+        .expect("background pid");
+    assert!(
+        wait_for_process_absence_macos(pid),
+        "the replaced EXIT trap must not let a live background job be falsely settled"
+    );
+}
+
+/// The macOS Bash EXIT `wait` may also be cleared entirely (`trap - EXIT`).
+/// Clearing it must not fabricate terminality either: the background job is
+/// still terminated by the fallback containment before the tool settles.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn bash_cleared_exit_trap_does_not_fabricate_terminality() {
+    let fixture = native_fixture();
+    let workspace = fixture.runtime.workspace().root().to_path_buf();
+    let pid_file = workspace.join("bg.pid");
+    let command = format!("trap - EXIT; sleep 30 & echo $! > {}", pid_file.display());
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        run_tool(&fixture, "bash", serde_json::json!({"command": command})),
+    )
+    .await
+    .expect("the invocation settles exactly once");
+    assert_eq!(result.status, ToolExecutionStatus::Success);
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .expect("background pid file")
+        .trim()
+        .parse()
+        .expect("background pid");
+    assert!(
+        wait_for_process_absence_macos(pid),
+        "the cleared EXIT trap must not let a live background job be falsely settled"
+    );
+}
+
+/// Polls a specific process with the signal-0 probe until it is provably
+/// gone (`ESRCH`), with a strict deadlock guard. Test-only; `/proc`-free so
+/// it works on macOS, where `kill(pid, 0)` is the same existence probe.
+#[cfg(target_os = "macos")]
+fn wait_for_process_absence_macos(pid: i32) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    for _ in 0..1000 {
+        if let Err(nix::errno::Errno::ESRCH) = kill(Pid::from_raw(pid), None) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    false
+}

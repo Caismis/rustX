@@ -239,8 +239,12 @@
 //!   signal while the anchor was retained and then released the anchor.
 //!   This proves the group was actively terminated, not that every member
 //!   was reaped — the claim rustX cannot make on macOS;
-//! - a containment signal that fails (for example `EPERM`) is an explicit
-//!   containment failure, never a terminal result;
+//! - a containment signal whose result is `EPERM` is never itself a
+//!   terminal result. `EPERM` proves only that the signal operation was not
+//!   authorized (the kernel also reports a zombie-only group as `EPERM`, so
+//!   the two cases are indistinguishable); on Linux it is an explicit
+//!   containment failure, while on macOS the `killpg(pgid, 0)` absence probe
+//!   after the anchor release — never `EPERM` — is the terminal authority;
 //! - a macOS supervisor-loss path that cannot retain a waitable anchor is
 //!   reported as unproven rather than converted into terminality.
 //!
@@ -260,11 +264,11 @@ use crate::runtime::process_wait::{Id, waitid};
 #[cfg(target_os = "macos")]
 use crate::runtime::supervised_unit::prove_group_absent;
 use crate::runtime::supervised_unit::{
-    FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
-    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
-    MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
-    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper, contain_group,
-    enforce_fixed_group_membership, ignore_group_term,
+    ContainmentOutcome, FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL,
+    MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED,
+    MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
+    MSG_TERMINATE, POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
+    contain_group, enforce_fixed_group_membership, ignore_group_term,
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
@@ -453,23 +457,17 @@ fn run_outer() -> i32 {
                     #[cfg(target_os = "linux")]
                     Ok(WaitStatus::PtraceEvent(..) | WaitStatus::PtraceSyscall(_)) => {}
                     Ok(WaitStatus::Exited(_, code)) => {
-                        anchor = InnerAnchor::TerminalRetained;
-                        if code != INNER_EXIT_NORMAL {
+                        anchor = if code == INNER_EXIT_NORMAL {
+                            InnerAnchor::TerminalRetained
+                        } else {
                             // Abnormal termination with possibly-live owned
                             // work: active containment while the anchor is
                             // still held (it is observed but un-reaped).
-                            if let Err(error) = containment_signal(&mut stream, inner_pid) {
-                                let _ = stream.write_failure(&error);
-                                anchor = InnerAnchor::ContainmentFailed;
-                            }
-                        }
+                            contain_after_abnormal_exit(&mut stream, inner_pid)
+                        };
                     }
                     Ok(WaitStatus::Signaled(..)) => {
-                        anchor = InnerAnchor::TerminalRetained;
-                        if let Err(error) = containment_signal(&mut stream, inner_pid) {
-                            let _ = stream.write_failure(&error);
-                            anchor = InnerAnchor::ContainmentFailed;
-                        }
+                        anchor = contain_after_abnormal_exit(&mut stream, inner_pid);
                     }
                     Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
@@ -637,10 +635,11 @@ fn await_terminal_ack() {
 /// anchor is held — the inner supervisor is still un-reaped, so the group
 /// id is provably allocated to this invocation — and never afterwards.
 ///
-/// A failed signal (for example `EPERM` when the signal was not authorized
-/// for some target) is returned as an explicit containment failure: the
-/// caller must never convert it into a terminal result.
-fn containment_signal(stream: &mut ControlStream, pgid: i32) -> Result<(), String> {
+/// The raw result is classified into
+/// [`ContainmentOutcome`](crate::runtime::supervised_unit::ContainmentOutcome):
+/// `Contained` (`Ok` or `ESRCH`) versus `Unproven` (`EPERM` and every other
+/// error).
+fn containment_signal(stream: &mut ControlStream, pgid: i32) -> ContainmentOutcome {
     stream
         .write_frame(
             MSG_SIGNAL_ATTEMPT,
@@ -650,17 +649,38 @@ fn containment_signal(stream: &mut ControlStream, pgid: i32) -> Result<(), Strin
     if std::env::var(FAIL_CONTAINMENT_ENV).is_ok() {
         // Test-only seam: the deterministic stand-in for `killpg` returning
         // `EPERM` — the signal operation was attempted but not authorized.
-        return Err("injected containment signal failure (killpg EPERM)".to_owned());
+        return ContainmentOutcome::Unproven(
+            "injected containment signal failure (killpg EPERM)".to_owned(),
+        );
     }
-    match contain_group(pgid) {
-        crate::runtime::supervised_unit::ContainmentOutcome::Failed(error) => Err(error),
-        // `Contained` (live member signaled, or the group is already gone)
-        // and, on macOS, `NothingLive` (only zombies remain) both proceed:
-        // the group-scoped gate and the macOS absence probe — never this
-        // signal's result alone — decide terminality.
-        crate::runtime::supervised_unit::ContainmentOutcome::Contained => Ok(()),
-        #[cfg(target_os = "macos")]
-        crate::runtime::supervised_unit::ContainmentOutcome::NothingLive => Ok(()),
+    contain_group(pgid)
+}
+
+/// Applies the platform containment policy to an abnormally-exited anchor
+/// and returns the resulting anchor state.
+///
+/// On Linux an `Unproven` fallback signal is a hard containment failure: the
+/// unit fails safely and never reports the canonical terminal event. On
+/// macOS the fallback `SIGKILL` result is ambiguous on `EPERM` (the kernel
+/// reports a zombie-only group and a live member this caller cannot signal
+/// with the same `EPERM`), so it is never itself a terminal fact: the
+/// `killpg(pgid, 0)` absence probe after the anchor release is the sole
+/// macOS terminal authority, and the anchor proceeds to that probe.
+fn contain_after_abnormal_exit(stream: &mut ControlStream, pgid: i32) -> InnerAnchor {
+    match containment_signal(stream, pgid) {
+        ContainmentOutcome::Contained => InnerAnchor::TerminalRetained,
+        ContainmentOutcome::Unproven(error) => {
+            #[cfg(target_os = "linux")]
+            {
+                let _ = stream.write_failure(&error);
+                InnerAnchor::ContainmentFailed
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = error;
+                InnerAnchor::TerminalRetained
+            }
+        }
     }
 }
 

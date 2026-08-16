@@ -260,8 +260,9 @@ Bash requirements:
   left (a reparented descendant is invisible), so the group's absence is
   proven by a bounded `killpg(pgid, 0)` probe reaching `ESRCH` after the
   fallback containment signal — never inferred from `ECHILD` alone, from
-  `/proc`, or from a `killpg` `EPERM` (on macOS `EPERM` means no live
-  signalable member remains, so it is not a terminal result by itself).
+  `/proc`, or from a `killpg` `EPERM` (`EPERM` proves only that the signal
+  operation was not authorized — on macOS the kernel also reports a
+  zombie-only group as `EPERM` — so it is not a terminal result by itself).
 - Explicit ownership protocol: `AnchorReady -> Start ->
   OwnershipEstablished`; the successful Bash spawn is the OS commit point,
   and post-start channel loss is conservatively treated as possible

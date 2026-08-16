@@ -1060,8 +1060,11 @@ group-scoped `ECHILD` as a whole-group terminal proof. Instead:
   reports terminality only after issuing that containment signal and then
   proving the group absent with a `killpg(pgid, 0)` probe reaching `ESRCH`;
 - a containment signal whose result is `EPERM` is never itself terminal:
-  on macOS `EPERM` means no live signalable member remains, so the group's
-  absence is proven independently rather than inferred from `EPERM`.
+  `EPERM` proves only that the signal operation was not authorized, so the
+  group's absence is proven independently by the `killpg(pgid, 0)` probe
+  rather than inferred from `EPERM`. (On macOS the kernel also reports a
+  zombie-only group as `EPERM`, which is indistinguishable from an
+  unauthorized live member, so neither is ever treated as a terminal fact.)
 
 A command that deliberately creates a new session can leave the macOS
 process group before containment, and a lost outer supervisor may not leave
@@ -1704,9 +1707,8 @@ explicit runtime-owned projection types with their own versioning
 (`RUNTIME_CLIENT_PROTOCOL_VERSION_V1`, independent from
 `EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
 version), lifecycle semantics, and cursor domain
-(`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL, Issue
-
-# 36 WebSocket) wrap this semantic layer without redefining it, and a
+(`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL,
+Issue #36 WebSocket) wrap this semantic layer without redefining it, and a
 
 future AG-UI adapter consumes this projection as its only source — there
 is no second AG-UI interpretation path directly from internal runtime

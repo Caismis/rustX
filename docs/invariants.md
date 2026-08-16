@@ -347,9 +347,11 @@ observed only at the next quiescent re-discovery.
   descendant is invisible), so macOS escalates to the outer's fallback
   containment `SIGKILL` and proves the group absent with a bounded
   `killpg(pgid, 0)` probe reaching `ESRCH`. A macOS containment signal whose
-  result is `EPERM` is never itself terminal: on macOS `EPERM` means no live
-  signalable member remains, so the group's absence is proven independently
-  rather than inferred from `EPERM`. The inner
+  result is `EPERM` is never itself terminal: `EPERM` proves only that the
+  signal operation was not authorized (the kernel also reports a zombie-only
+  group as `EPERM`, indistinguishable from an unauthorized live member), so
+  the group's absence is proven by the probe rather than inferred from
+  `EPERM`. The inner
   supervisor pid is the unit's structural ownership anchor with exactly one
   reaping owner; the outer reports the authoritative terminal event only
   after its gate reaches `ECHILD`, and only after it released the anchor.

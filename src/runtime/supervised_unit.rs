@@ -417,59 +417,81 @@ fn classify_signal_result(result: nix::Result<()>) -> Result<(), String> {
 
 /// The outcome of the one fallback containment signal (`SIGKILL` to the
 /// retained owned group).
+///
+/// A group-signal `EPERM` proves only that the requested signal operation
+/// was not authorized according to the platform's signal permission rules.
+/// It does **not** prove group absence, containment, or zombie-only
+/// membership, so it is never modelled as `Contained` and never as a
+/// terminal result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContainmentOutcome {
     /// At least one live group member was signaled, or the group is already
-    /// gone (`ESRCH`). No live member will execute further work.
+    /// gone (`ESRCH`).
     Contained,
-    /// macOS only: `killpg` returned `EPERM`, which on macOS means no live
-    /// signalable member remains in the group (only zombies). This is **not**
-    /// a terminal result by itself — the caller must independently prove the
-    /// group's absence (see [`prove_group_absent`]) before terminality.
-    #[cfg(target_os = "macos")]
-    NothingLive,
-    /// The signal operation failed for a reason other than `ESRCH` (and
-    /// other than the macOS zombie-only `EPERM`): containment is unproven.
-    Failed(String),
+    /// The signal operation did not establish containment: `EPERM` (not
+    /// authorized, or — on macOS — an ambiguity such as a zombie-only group
+    /// that the kernel also reports as `EPERM`) and every other error.
+    /// Never a success and never a terminal result; the caller must prove
+    /// the group's absence independently before terminality.
+    Unproven(String),
 }
 
 /// Issues the one fallback containment `SIGKILL` and classifies the result.
 ///
-/// On Linux, `EPERM` means the signal was not authorized for at least some
-/// target process and is therefore [`ContainmentOutcome::Failed`]. On macOS,
-/// `killpg` returns `EPERM` when the group contains only zombies (no live
-/// signalable member); that is distinguished as
-/// [`ContainmentOutcome::NothingLive`] so the caller proves the group's
-/// absence independently instead of treating `EPERM` as a terminal result.
+/// `Ok` (the signal was issued) and `ESRCH` (the group was already absent at
+/// the signal operation) are the only [`ContainmentOutcome::Contained`]
+/// results. `EPERM` and every other error are
+/// [`ContainmentOutcome::Unproven`]: the signal operation did not establish
+/// containment, and the caller must never convert that into a terminal
+/// result.
 pub(crate) fn contain_group(pgid: i32) -> ContainmentOutcome {
     classify_containment_result(killpg(Pid::from_raw(pgid), Signal::SIGKILL))
 }
 
 /// Maps one raw containment-signal result to [`ContainmentOutcome`].
 ///
-/// Separated from [`contain_group`] so the platform-specific `EPERM`
+/// Separated from [`contain_group`] so the `EPERM`-is-unproven
 /// classification is deterministically testable without constructing an OS
 /// `killpg` result.
 fn classify_containment_result(result: nix::Result<()>) -> ContainmentOutcome {
     match result {
         Ok(()) | Err(Errno::ESRCH) => ContainmentOutcome::Contained,
-        #[cfg(target_os = "macos")]
-        Err(Errno::EPERM) => ContainmentOutcome::NothingLive,
         Err(error) => {
-            ContainmentOutcome::Failed(format!("cannot contain the owned process group: {error}"))
+            ContainmentOutcome::Unproven(format!("cannot contain the owned process group: {error}"))
         }
     }
 }
 
-/// macOS: proves the owned process group is absent by probing until `ESRCH`.
+/// macOS: proves the owned process group is absent by probing `killpg(pgid, 0)`
+/// until it reaches `ESRCH`.
 ///
 /// `waitid(Id::PGid) == ECHILD` on macOS only proves the waiting supervisor
 /// has no waitable group child left; a descendant reparented to launchd is
 /// invisible to that wait. The whole group's absence is instead proven by a
-/// `killpg(pgid, 0)` probe reaching `ESRCH`, which reflects every group
-/// member rather than only the caller's children. The caller must run this
-/// only after the retained anchor was reaped: an un-reaped anchor zombie
-/// keeps the group observable and the probe would never reach `ESRCH`.
+/// `killpg(pgid, 0)` probe reaching `ESRCH`, which reflects every process in
+/// the numeric group rather than only the caller's children.
+///
+/// `ESRCH` is the sole accepted absence proof: it means no process anywhere
+/// has that numeric process-group id. `Ok(())` (a live signalable member
+/// exists) and `EPERM` (the group is still observable but this caller cannot
+/// signal any member — a zombie-only group, or a live member the caller is
+/// not authorized to signal; the kernel reports both as `EPERM`) both keep
+/// the probe polling and are never a terminal result by themselves. A hard
+/// error or a timeout leaves the group's absence unproven.
+///
+/// The caller must run this only after the retained anchor was reaped: an
+/// un-reaped anchor zombie keeps the group observable and the probe would
+/// never reach `ESRCH`.
+///
+/// # Numeric-identity (ABA) note
+///
+/// The probe runs strictly after the anchor is released, so the numeric
+/// group id may in principle be recycled by an unrelated new process group.
+/// That cannot make the probe unsound — `ESRCH` still means "no process has
+/// this pgid", which implies every process that remained in the owned group
+/// is gone. It can only make the probe conservative: a coincidental reuse
+/// keeps the group observable and turns an actually-empty owned group into
+/// an `Err` (unproven timeout), never into a false terminal result.
 #[cfg(target_os = "macos")]
 pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
     let deadline = std::time::Instant::now() + GROUP_ABSENCE_TIMEOUT;
@@ -477,9 +499,9 @@ pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
         match killpg(Pid::from_raw(pgid), None) {
             Err(Errno::ESRCH) => return Ok(()),
             // `Ok(())` means a live signalable member remains; `EPERM` means
-            // no live signalable member but some process (a zombie, or a
-            // live process this caller is not authorized to signal) keeps
-            // the group observable. Both keep polling until `ESRCH` or the
+            // the group is still observable but this caller cannot signal any
+            // member (a zombie-only group, or a live member it is not
+            // authorized to signal). Both keep polling until `ESRCH` or the
             // bound, so neither is ever a terminal result by itself.
             Ok(()) | Err(Errno::EPERM) => {}
             Err(error) => {
@@ -820,36 +842,33 @@ mod signal_contract_tests {
         );
     }
 
-    /// On macOS, `EPERM` from the fallback containment signal means no live
-    /// signalable member remains (only zombies). It is **not** `Contained`
-    /// and **not** `Failed`: the caller must prove the group's absence
-    /// independently, so `EPERM` is never itself a terminal result.
-    #[cfg(target_os = "macos")]
+    /// `EPERM` from the fallback containment signal is an explicit unproven
+    /// state on every platform: it proves only that the signal operation was
+    /// not authorized (on macOS the kernel also reports a zombie-only group
+    /// as `EPERM`, so the two cases are indistinguishable). It must never map
+    /// to `Contained` and never be a terminal result.
     #[test]
-    fn containment_eperm_is_nothing_live_on_macos() {
-        assert_eq!(
-            classify_containment_result(Err(Errno::EPERM)),
-            ContainmentOutcome::NothingLive
-        );
-    }
-
-    /// On Linux, `EPERM` means the signal was not authorized for at least
-    /// some target process, so containment is unproven (never `Contained`).
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn containment_eperm_is_failed_on_linux() {
-        assert!(matches!(
-            classify_containment_result(Err(Errno::EPERM)),
-            ContainmentOutcome::Failed(_)
-        ));
+    fn containment_eperm_is_unproven_on_every_platform() {
+        let outcome = classify_containment_result(Err(Errno::EPERM));
+        match outcome {
+            ContainmentOutcome::Unproven(message) => {
+                assert!(
+                    message.contains("EPERM"),
+                    "the unproven state must name the unauthorized signal: {message}"
+                );
+            }
+            other @ ContainmentOutcome::Contained => {
+                panic!("EPERM must never be {other:?}")
+            }
+        }
     }
 
     /// Any other containment-signal error is an explicit unproven state.
     #[test]
-    fn containment_other_errors_are_failed() {
+    fn containment_other_errors_are_unproven() {
         assert!(matches!(
             classify_containment_result(Err(Errno::EINVAL)),
-            ContainmentOutcome::Failed(_)
+            ContainmentOutcome::Unproven(_)
         ));
     }
 }
