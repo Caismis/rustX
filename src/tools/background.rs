@@ -1168,7 +1168,7 @@ mod tests {
     use std::sync::Arc;
 
     use futures_util::future::BoxFuture;
-    use tokio::sync::{Notify, watch};
+    use tokio::sync::watch;
 
     use super::test_sync::CommitBoundaryHook;
     use super::{
@@ -1238,18 +1238,18 @@ mod tests {
         }
     }
 
-    /// An executor that waits for the release notify and then returns a
+    /// An executor that waits for durable release state and then returns a
     /// fixed result, deliberately ignoring the cancellation signal.
     struct IgnoreCancellationExecutor {
         started: watch::Sender<bool>,
-        release: Arc<Notify>,
+        release: watch::Sender<bool>,
         result: ToolExecutionResult,
     }
 
     impl IgnoreCancellationExecutor {
-        fn new(result: ToolExecutionResult) -> (Self, watch::Receiver<bool>, Arc<Notify>) {
+        fn new(result: ToolExecutionResult) -> (Self, watch::Receiver<bool>, watch::Sender<bool>) {
             let (started, started_rx) = watch::channel(false);
-            let release = Arc::new(Notify::new());
+            let (release, _release_rx) = watch::channel(false);
             (
                 Self {
                     started,
@@ -1268,11 +1268,15 @@ mod tests {
             _invocation: ToolInvocation,
             _context: ToolExecutionContext<'a>,
         ) -> BoxFuture<'a, ToolExecutionResult> {
-            self.started.send_replace(true);
-            let release = self.release.clone();
+            let started = self.started.clone();
+            let mut release = self.release.subscribe();
             let result = self.result.clone();
             Box::pin(async move {
-                release.notified().await;
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
                 result
             })
         }
@@ -1343,11 +1347,8 @@ mod tests {
         else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the post-activation runner starts");
-        release.notify_one();
+        await_test_started(&mut started, "the post-activation runner starts").await;
+        release.send_replace(true);
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(
             terminal.state,
@@ -1451,11 +1452,8 @@ mod tests {
         };
         // Attempt cancellation after the commit cannot reclaim the work.
         attempt_cancellation.cancel();
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("the conversation-owned runner still starts");
-        release.notify_one();
+        await_test_started(&mut started, "the conversation-owned runner still starts").await;
+        release.send_replace(true);
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(
             terminal.state,
@@ -1485,15 +1483,12 @@ mod tests {
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("runner started");
+        await_test_started(&mut started, "runner started").await;
         // Cancellation wins in the registry while the executor is running.
         let cancelling = fixture.registry.cancel(&execution_id).expect("cancel");
         assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
         // The executor ignores cancellation and returns Success.
-        release.notify_one();
+        release.send_replace(true);
         let terminal = wait_for_terminal(&fixture, &execution_id).await;
         assert_eq!(
             terminal.state,
@@ -1608,15 +1603,29 @@ mod tests {
         assert_eq!(progress_events.len(), 1);
     }
 
+    const TEST_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
+    async fn await_test_started(started: &mut watch::Receiver<bool>, description: &'static str) {
+        tokio::time::timeout(
+            TEST_LIVENESS_GUARD,
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{description}: start wait exceeded liveness guard"))
+        .expect("start channel stays open");
+    }
+
     async fn wait_for_terminal(
         fixture: &TestRegistry,
         execution_id: &ToolExecutionId,
     ) -> super::BackgroundExecutionSnapshot {
-        fixture
-            .registry
-            .wait_until_terminal(execution_id)
-            .await
-            .expect("execution record")
+        tokio::time::timeout(
+            TEST_LIVENESS_GUARD,
+            fixture.registry.wait_until_terminal(execution_id),
+        )
+        .await
+        .expect("terminal wait exceeded liveness guard")
+        .expect("execution record")
     }
 
     /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the

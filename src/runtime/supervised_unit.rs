@@ -7,15 +7,20 @@
 //! same physical ownership guarantees:
 //!
 //! - one kernel-mediated terminal proof: the group-scoped wait
-//!   (`waitid(Id::PGid)` returning `ECHILD`) is complete only because
-//!   membership is immutable for unit descendants;
-//! - the fixed-membership restriction: an inherited seccomp filter rejects
-//!   `setsid(2)`/`setpgid(2)` with `EPERM`, so no owned descendant can
-//!   escape the unit's process group/session;
-//! - the runtime child-subreaper prerequisite, installed before the unit
-//!   spawns (`crate::runtime::process_supervision`) and re-established
+//!   (`waitid(Id::PGid)` returning `ECHILD`), with the platform-specific
+//!   wait adapter in [`crate::runtime::process_wait`];
+//! - on Linux, an inherited seccomp filter rejects `setsid(2)`/`setpgid(2)`
+//!   with `EPERM`, so no owned descendant can escape the unit's
+//!   process-group/session; macOS has the process-group lifecycle but no
+//!   equivalent seccomp restriction, so the unit owns only the processes
+//!   that remain in its process group and a descendant that deliberately
+//!   leaves that group is outside the ownership domain (not tracked,
+//!   contained, reaped, or waited for);
+//! - on Linux, the runtime child-subreaper prerequisite is installed before
+//!   the unit spawns (`crate::runtime::process_supervision`) and re-established
 //!   inside each supervisor process so orphaned descendants reparent into
-//!   the unit's reaping domain;
+//!   the unit's reaping domain; macOS has no equivalent orphan-adoption
+//!   primitive;
 //! - the single-reaper anchor discipline: the inner supervisor pid is the
 //!   structural ownership anchor with exactly one reaping owner, and
 //!   fallback containment signals are issued only while the anchor is
@@ -23,9 +28,10 @@
 //! - `TERM` -> grace -> `KILL` against the inner leader's own process
 //!   group, whose numeric id is the inner's pid — provably allocated while
 //!   signaling is legal;
-//! - catastrophic fallback containment (adopted-anchor retention with
+//! - Linux catastrophic fallback containment (adopted-anchor retention with
 //!   `WNOWAIT`, one anchored `SIGKILL`, group-scoped `ECHILD` release) when
-//!   the inner supervisor or control chain fails;
+//!   the inner supervisor or control chain fails; macOS reports an
+//!   unavailable anchor as unproven instead of claiming that proof;
 //! - one frame protocol (`[u32 LE length][kind][payload]`) for all
 //!   supervisor control traffic, separate from the unit's business I/O.
 //!
@@ -105,20 +111,21 @@ pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// `crate::tools::limits::BASH_TERM_GRACE`.
 pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
 
+/// The bounded macOS window in which the group-absence probe must reach
+/// `ESRCH` after the fallback containment signal.
+#[cfg(target_os = "macos")]
+pub(crate) const GROUP_ABSENCE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The deadline after which a missing terminal-ack frame is ignored (the
 /// owner may have disappeared; terminality was already proven).
 pub(crate) const TERMINAL_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// `PR_SET_CHILD_SUBREAPER`: orphaned descendants of the owned child
-/// reparent into this process's child domain instead of being rediscovered
-/// from `/proc`.
-///
-/// This is one of the narrowly scoped production OS shims shared by both
-/// supervisor units: subreaper setup, SIGTERM handler installation,
-/// `PR_SET_NO_NEW_PRIVS`, and seccomp filter installation. Linux-only: the
-/// lifecycle contract is claimed only where the kernel provides the
-/// subreaper mechanism.
+/// Enables the supervisor's orphan-reaping capability where the platform
+/// provides one. Linux uses `PR_SET_CHILD_SUBREAPER`; macOS has no equivalent
+/// process-wide primitive, so its normal lifecycle relies on the direct shell
+/// parent waiting for its background jobs and on process-group signaling.
 #[allow(unsafe_code)]
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn become_child_subreaper() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -130,9 +137,13 @@ pub(crate) fn become_child_subreaper() -> Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("the supervisor unit requires Linux (PR_SET_CHILD_SUBREAPER)".to_owned())
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err("the supervisor unit requires Linux or macOS process supervision".to_owned())
     }
 }
 
@@ -303,13 +314,14 @@ fn membership_restriction_program() -> [libc::sock_filter; 8] {
     ]
 }
 
-/// Installs the fixed-membership restriction: `PR_SET_NO_NEW_PRIVS` plus a
-/// `seccomp` filter that rejects `setpgid(2)` and `setsid(2)` with
-/// `EPERM`. The filter is inherited by the owned child and every
-/// descendant across `fork`/`exec`; with `no_new_privs` set, a descendant
-/// can only stack *more* restrictive filters, never remove this one, and
-/// no privilege gain can bypass it. An install failure is a pre-ownership
-/// setup failure: no owned process tree exists yet.
+/// Installs the fixed-membership restriction on Linux: `PR_SET_NO_NEW_PRIVS`
+/// plus a `seccomp` filter that rejects `setpgid(2)` and `setsid(2)` with
+/// `EPERM`. The filter is inherited by the owned child and every descendant
+/// across `fork`/`exec`; with `no_new_privs` set, a descendant can only stack
+/// more restrictive filters, never remove this one. The macOS implementation
+/// is an explicit successful no-op because macOS has no equivalent primitive;
+/// its normal process-group path remains usable but does not claim immutable
+/// membership.
 #[cfg(all(
     target_os = "linux",
     any(
@@ -358,16 +370,154 @@ pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
         target_arch = "riscv64"
     )
 )))]
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
-    Err("supervised lifecycle requires Linux on x86_64, aarch64, or riscv64".to_owned())
+    // macOS has no seccomp equivalent in the current dependency/runtime
+    // boundary. The supervisor still creates a dedicated session/process
+    // group and uses group-scoped waits, while the shell command wrapper keeps
+    // ordinary background jobs attached to the shell's wait lifecycle.
+    Ok(())
 }
 
-/// Signals one owned process group. `ESRCH` is a terminal no-op; any other
-/// failure is explicit.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    ),
+    target_os = "macos"
+)))]
+pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
+    Err("supervised lifecycle requires Linux or macOS process supervision".to_owned())
+}
+
+/// Signals one owned process group.
+///
+/// `ESRCH` is the one terminal no-op: it means no process in the target
+/// group exists, so there is nothing to signal. Every other failure —
+/// including `EPERM`, which means the signal operation was not authorized
+/// for at least some target processes — is an explicit containment failure
+/// and must never be converted into a success or a terminal result.
 pub(crate) fn signal_group(pgid: i32, signal: Signal) -> Result<(), String> {
-    match killpg(Pid::from_raw(pgid), signal) {
+    classify_signal_result(killpg(Pid::from_raw(pgid), signal))
+}
+
+/// Maps one raw group-signal result to the shared containment contract.
+///
+/// Separated from [`signal_group`] so the mapping — and in particular the
+/// rule that `EPERM` is never a success — is deterministically testable
+/// without constructing an OS `killpg` result.
+fn classify_signal_result(result: nix::Result<()>) -> Result<(), String> {
+    match result {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
         Err(error) => Err(format!("cannot signal the owned process group: {error}")),
+    }
+}
+
+/// The outcome of the one fallback containment signal (`SIGKILL` to the
+/// retained owned group).
+///
+/// A group-signal `EPERM` proves only that the requested signal operation
+/// was not authorized according to the platform's signal permission rules.
+/// It does **not** prove group absence, containment, or zombie-only
+/// membership, so it is never modelled as `Contained` and never as a
+/// terminal result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContainmentOutcome {
+    /// At least one live group member was signaled, or the group is already
+    /// gone (`ESRCH`).
+    Contained,
+    /// The signal operation did not establish containment: `EPERM` (not
+    /// authorized, or — on macOS — an ambiguity such as a zombie-only group
+    /// that the kernel also reports as `EPERM`) and every other error.
+    /// Never a success and never a terminal result; the caller must prove
+    /// the group's absence independently before terminality.
+    Unproven(String),
+}
+
+/// Issues the one fallback containment `SIGKILL` and classifies the result.
+///
+/// `Ok` (the signal was issued) and `ESRCH` (the group was already absent at
+/// the signal operation) are the only [`ContainmentOutcome::Contained`]
+/// results. `EPERM` and every other error are
+/// [`ContainmentOutcome::Unproven`]: the signal operation did not establish
+/// containment, and the caller must never convert that into a terminal
+/// result.
+pub(crate) fn contain_group(pgid: i32) -> ContainmentOutcome {
+    classify_containment_result(killpg(Pid::from_raw(pgid), Signal::SIGKILL))
+}
+
+/// Maps one raw containment-signal result to [`ContainmentOutcome`].
+///
+/// Separated from [`contain_group`] so the `EPERM`-is-unproven
+/// classification is deterministically testable without constructing an OS
+/// `killpg` result.
+fn classify_containment_result(result: nix::Result<()>) -> ContainmentOutcome {
+    match result {
+        Ok(()) | Err(Errno::ESRCH) => ContainmentOutcome::Contained,
+        Err(error) => {
+            ContainmentOutcome::Unproven(format!("cannot contain the owned process group: {error}"))
+        }
+    }
+}
+
+/// macOS: proves the owned process group is absent by probing `killpg(pgid, 0)`
+/// until it reaches `ESRCH`.
+///
+/// `waitid(Id::PGid) == ECHILD` on macOS only proves the waiting supervisor
+/// has no waitable group child left; a descendant reparented to launchd is
+/// invisible to that wait. The whole group's absence is instead proven by a
+/// `killpg(pgid, 0)` probe reaching `ESRCH`, which reflects every process in
+/// the numeric group rather than only the caller's children.
+///
+/// `ESRCH` is the sole accepted absence proof: it means no process anywhere
+/// has that numeric process-group id. `Ok(())` (a live signalable member
+/// exists) and `EPERM` (the group is still observable but this caller cannot
+/// signal any member — a zombie-only group, or a live member the caller is
+/// not authorized to signal; the kernel reports both as `EPERM`) both keep
+/// the probe polling and are never a terminal result by themselves. A hard
+/// error or a timeout leaves the group's absence unproven.
+///
+/// The caller must run this only after the retained anchor was reaped: an
+/// un-reaped anchor zombie keeps the group observable and the probe would
+/// never reach `ESRCH`.
+///
+/// # Numeric-identity (ABA) note
+///
+/// The probe runs strictly after the anchor is released, so the numeric
+/// group id may in principle be recycled by an unrelated new process group.
+/// That cannot make the probe unsound — `ESRCH` still means "no process has
+/// this pgid", which implies every process that remained in the owned group
+/// is gone. It can only make the probe conservative: a coincidental reuse
+/// keeps the group observable and turns an actually-empty owned group into
+/// an `Err` (unproven timeout), never into a false terminal result.
+#[cfg(target_os = "macos")]
+pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + GROUP_ABSENCE_TIMEOUT;
+    loop {
+        match killpg(Pid::from_raw(pgid), None) {
+            Err(Errno::ESRCH) => return Ok(()),
+            // `Ok(())` means a live signalable member remains; `EPERM` means
+            // the group is still observable but this caller cannot signal any
+            // member (a zombie-only group, or a live member it is not
+            // authorized to signal). Both keep polling until `ESRCH` or the
+            // bound, so neither is ever a terminal result by itself.
+            Ok(()) | Err(Errno::EPERM) => {}
+            Err(error) => {
+                return Err(format!("cannot probe the owned group absence: {error}"));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(
+                "the owned process group did not become provably absent after containment"
+                    .to_owned(),
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -403,7 +553,7 @@ impl FrameReader {
     /// The bytes this reader still owns: the surplus that a lifecycle phase
     /// transition must never discard. Test-only observation of the
     /// ownership invariant itself; the supervisors only ever feed and pop.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn buffered(&self) -> &[u8] {
         &self.buf
     }
@@ -468,23 +618,27 @@ pub(crate) enum EmergencyContainment {
 
 /// Catastrophic fallback after the unit's outer supervisor has been reaped.
 ///
-/// rustX is a subreaper, so the dead outer's unit descendants are now rustX
-/// children. The inner leader is retained with `WNOWAIT` before its numeric
-/// identity is used for `killpg`; this is the same ABA-proof anchor used by
-/// the normal outer path. Only after the group-scoped child wait reaches
-/// `ECHILD` is the anchor identity released and terminality proven.
+/// On Linux, rustX is a subreaper, so the dead outer's unit descendants are
+/// now rustX children. The inner leader is retained with `WNOWAIT` before its
+/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
+/// used by the normal outer path. Only after the group-scoped child wait
+/// reaches `ECHILD` is the anchor identity released and terminality proven.
+/// On macOS the inner is not adopted by rustX after outer loss, so this
+/// function returns [`EmergencyContainment::AnchorUnavailable`] when that
+/// anchor is not waitable.
 ///
 /// The anchor is matched only by pid; the unit group only by its retained
 /// pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists here, so
 /// unrelated adopted children are never consumed.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn emergency_contain_group(
     pgid: i32,
     anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
+    use crate::runtime::process_wait::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
-    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    use nix::sys::wait::{WaitPidFlag, WaitStatus};
     #[cfg(not(test))]
     let _ = anchor_unavailable;
 
@@ -542,12 +696,12 @@ pub(crate) fn emergency_contain_group(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn emergency_contain_group(
     _pgid: i32,
     _anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
-    Err("fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
+    Err("fallback containment requires Linux or macOS process supervision".to_owned())
 }
 
 #[cfg(all(
@@ -640,5 +794,84 @@ mod seccomp_tests {
         assert_eq!(program[6].k, 0x7FFF_0000);
         assert_eq!(program[7].k, 0x0005_0000 | libc::EPERM as u32);
         assert_eq!(program[8].k, 0x8000_0000);
+    }
+}
+
+#[cfg(test)]
+mod signal_contract_tests {
+    use super::{ContainmentOutcome, classify_containment_result, classify_signal_result};
+    use nix::errno::Errno;
+
+    /// A successful signal and an `ESRCH` (no target group) are the only
+    /// results that count as successful containment.
+    #[test]
+    fn success_and_esrch_are_terminal_no_ops() {
+        assert_eq!(classify_signal_result(Ok(())), Ok(()));
+        assert_eq!(classify_signal_result(Err(Errno::ESRCH)), Ok(()));
+    }
+
+    /// `EPERM` means the signal was not authorized for at least some target
+    /// processes. It is an explicit containment failure — never a success
+    /// and never a terminal result.
+    #[test]
+    fn eperm_is_never_a_success() {
+        let result = classify_signal_result(Err(Errno::EPERM));
+        assert!(result.is_err(), "EPERM must not map to success: {result:?}");
+        let message = result.expect_err("EPERM is an error");
+        assert!(
+            message.contains("EPERM"),
+            "the failure must name the unauthorized signal: {message}"
+        );
+    }
+
+    /// Any other signal error is likewise an explicit containment failure.
+    #[test]
+    fn other_errors_are_explicit_failures() {
+        assert!(classify_signal_result(Err(Errno::EINVAL)).is_err());
+        assert!(classify_signal_result(Err(Errno::EACCES)).is_err());
+    }
+
+    /// A successful containment signal and `ESRCH` (group already gone) are
+    /// the two terminal containment outcomes.
+    #[test]
+    fn containment_success_and_esrch_are_contained() {
+        assert_eq!(
+            classify_containment_result(Ok(())),
+            ContainmentOutcome::Contained
+        );
+        assert_eq!(
+            classify_containment_result(Err(Errno::ESRCH)),
+            ContainmentOutcome::Contained
+        );
+    }
+
+    /// `EPERM` from the fallback containment signal is an explicit unproven
+    /// state on every platform: it proves only that the signal operation was
+    /// not authorized (on macOS the kernel also reports a zombie-only group
+    /// as `EPERM`, so the two cases are indistinguishable). It must never map
+    /// to `Contained` and never be a terminal result.
+    #[test]
+    fn containment_eperm_is_unproven_on_every_platform() {
+        let outcome = classify_containment_result(Err(Errno::EPERM));
+        match outcome {
+            ContainmentOutcome::Unproven(message) => {
+                assert!(
+                    message.contains("EPERM"),
+                    "the unproven state must name the unauthorized signal: {message}"
+                );
+            }
+            other @ ContainmentOutcome::Contained => {
+                panic!("EPERM must never be {other:?}")
+            }
+        }
+    }
+
+    /// Any other containment-signal error is an explicit unproven state.
+    #[test]
+    fn containment_other_errors_are_unproven() {
+        assert!(matches!(
+            classify_containment_result(Err(Errno::EINVAL)),
+            ContainmentOutcome::Unproven(_)
+        ));
     }
 }

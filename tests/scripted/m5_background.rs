@@ -7,8 +7,8 @@
 //! snapshots, cross-conversation isolation, the `background_task`
 //! intrinsic, the mailbox boundary races for terminal inbound
 //! notifications, and the runtime-owned Agent Status background section.
-//! All concurrency is driven by explicit gates (watches, notifies,
-//! channels); no wall-clock sleep proves any invariant.
+//! All concurrency is driven by explicit gates (watches and channels); no
+//! wall-clock sleep proves any invariant.
 
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
 
@@ -68,7 +68,7 @@ fn utc(rfc3339: &str) -> chrono::DateTime<chrono::Utc> {
 /// until released or cancelled, and always settles.
 struct ControlledExecutor {
     started: tokio::sync::watch::Sender<bool>,
-    release: Option<Arc<tokio::sync::Notify>>,
+    release: Option<tokio::sync::watch::Sender<bool>>,
     result: ToolExecutionResult,
     progress: Vec<ToolProgress>,
 }
@@ -92,10 +92,10 @@ impl ControlledExecutor {
     ) -> (
         Self,
         tokio::sync::watch::Receiver<bool>,
-        Arc<tokio::sync::Notify>,
+        tokio::sync::watch::Sender<bool>,
     ) {
         let (started, started_rx) = tokio::sync::watch::channel(false);
-        let release = Arc::new(tokio::sync::Notify::new());
+        let (release, _release_rx) = tokio::sync::watch::channel(false);
         (
             Self {
                 started,
@@ -120,16 +120,20 @@ impl ToolExecutor for ControlledExecutor {
         invocation: ToolInvocation,
         context: ToolExecutionContext<'a>,
     ) -> futures_util::future::BoxFuture<'a, ToolExecutionResult> {
-        self.started.send_replace(true);
         let _ = invocation;
-        let release = self.release.clone();
+        let started = self.started.clone();
+        let mut release = self
+            .release
+            .as_ref()
+            .map(tokio::sync::watch::Sender::subscribe);
         let result = self.result.clone();
         let progress = self.progress.clone();
         Box::pin(async move {
+            started.send_replace(true);
             for item in progress {
                 context.progress.report(item);
             }
-            if let Some(release) = release {
+            if let Some(release) = release.as_mut() {
                 tokio::select! {
                     biased;
                     () = context.cancellation.cancelled() => {
@@ -144,7 +148,9 @@ impl ToolExecutor for ControlledExecutor {
                             truncation: None,
                         };
                     }
-                    () = release.notified() => {}
+                    released = release.wait_for(|released| *released) => {
+                        released.expect("controlled executor release channel stays open");
+                    }
                 }
             }
             result
@@ -242,10 +248,7 @@ async fn dispatch_to_terminal(fixture: &BackgroundFixture) -> ToolExecutionId {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
     execution_id
 }
 
@@ -287,10 +290,7 @@ async fn runner_cannot_begin_before_commit_gate() {
         outcome,
         BackgroundDispatchOutcome::Accepted { .. }
     ));
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started only after the commit gate");
+    await_background_started(&mut started, "runner started only after the commit gate").await;
 }
 
 /// Dispatch vs attempt cancellation: cancellation before the ownership
@@ -362,10 +362,7 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
     };
     // Attempt cancellation after the commit cannot reclaim the work.
     attempt_cancellation.cancel();
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("conversation-owned runner still starts");
+    await_background_started(&mut started, "conversation-owned runner still starts").await;
     let snapshot = registry.snapshot(&execution_id).expect("snapshot");
     assert_eq!(snapshot.state, BackgroundLifecycle::Running);
     let accepted = match &result.content[0] {
@@ -423,10 +420,7 @@ async fn cancel_before_completion_wins_settlement() {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
     let cancelling = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
     // The runner observes its background cancellation and settles.
@@ -455,10 +449,7 @@ async fn repeated_cancel_is_idempotent() {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
     let first = registry.cancel(&execution_id).expect("first cancel");
     assert_eq!(first.state, BackgroundLifecycle::Cancelling);
     let second = registry.cancel(&execution_id).expect("second cancel");
@@ -492,10 +483,7 @@ async fn starting_can_be_cancelled() {
     // Cancel immediately after commit, before the runner begins.
     let snapshot = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(snapshot.state, BackgroundLifecycle::Cancelling);
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner still starts");
+    await_background_started(&mut started, "runner still starts").await;
     wait_for_state(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
 }
 
@@ -554,10 +542,7 @@ async fn background_progress_updates_the_latest_snapshot() {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
     let snapshot = registry.snapshot(&execution_id).expect("snapshot");
     assert_eq!(
         snapshot.progress,
@@ -589,7 +574,7 @@ async fn background_progress_updates_the_latest_snapshot() {
             && reported.as_str() == "exec_1"
             && progress.message.as_deref() == Some("compiling workspace")
     ));
-    release.notify_one();
+    release.send_replace(true);
     wait_for_state(&registry, &execution_id, BackgroundLifecycle::Succeeded).await;
 }
 
@@ -646,6 +631,19 @@ async fn wait_for_state(
     }
     let snapshot = registry.snapshot(execution_id).expect("snapshot");
     panic!("state {state:?} never reached; last snapshot: {snapshot:?}");
+}
+
+async fn await_background_started(
+    started: &mut tokio::sync::watch::Receiver<bool>,
+    description: &'static str,
+) {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        started.wait_for(|is_started| *is_started),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("{description}: start wait exceeded liveness guard"))
+    .expect("background start channel stays open");
 }
 
 // ---------------------------------------------------------------------------
@@ -836,7 +834,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     // terminal notification lands in the conversation mailbox and the
     // settled attempt is never altered.
     let execution_id = ToolExecutionId::new("exec_1");
-    release_bg.notify_one();
+    release_bg.send_replace(true);
     let settled = wait_for_state(
         tool_runtime.background(),
         &execution_id,
@@ -946,11 +944,8 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
         // enqueue share one registry critical section, so observing the
         // terminal registry state deterministically means the enqueue
         // already committed before the safe-boundary snapshot of this turn.
-        bg_started
-            .wait_for(|started| *started)
-            .await
-            .expect("bg started");
-        release_bg.notify_one();
+        await_background_started(&mut bg_started, "bg started").await;
+        release_bg.send_replace(true);
         let execution_id = ToolExecutionId::new("exec_1");
         wait_for_state(
             &controller_registry,
@@ -958,7 +953,7 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
             BackgroundLifecycle::Succeeded,
         )
         .await;
-        release_fg.notify_one();
+        release_fg.send_replace(true);
     });
     let result = tokio::time::timeout(
         Duration::from_secs(10),
@@ -1015,10 +1010,7 @@ async fn background_task_status_and_cancel() {
     let BackgroundDispatchOutcome::Accepted { .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
 
     let status = common::run_tool(
         &fixture,
@@ -1218,10 +1210,7 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
-    started
-        .wait_for(|started| *started)
-        .await
-        .expect("runner started");
+    await_background_started(&mut started, "runner started").await;
     let active = registry.active_snapshot();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].execution_id, execution_id);
@@ -1322,21 +1311,15 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
 
     let controller_registry = tool_runtime.background().clone();
     let controller = tokio::spawn(async move {
-        started_b1
-            .wait_for(|started| *started)
-            .await
-            .expect("b1 started");
-        started_b2
-            .wait_for(|started| *started)
-            .await
-            .expect("b2 started");
+        await_background_started(&mut started_b1, "b1 started").await;
+        await_background_started(&mut started_b2, "b2 started").await;
         // B1 settles while the second model generation is parked. The
         // terminal registry transition and its inbound enqueue share one
         // registry critical section, so observing the terminal registry
         // state deterministically means the enqueue already committed
         // before the model is released — after the first safe-boundary
         // snapshot, which B1 could not have reached while parked.
-        release_b1.notify_one();
+        release_b1.send_replace(true);
         wait_for_state(
             &controller_registry,
             &ToolExecutionId::new("exec_1"),

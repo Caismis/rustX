@@ -136,13 +136,16 @@ Implemented in PR #21 (see [`docs/context-engine.md`](context-engine.md)):
 - Agent Status integration with Issue #22 inbound batching: one drained
   batch becomes one fresh inbound turn with exactly one admitted status fact
   targeting the final message
-- Opt-in live repeated-compaction validation (`tests/m4_live.rs`)
+- Deterministic Issue #27 repeated-compaction validation through the final
+  runtime path, the real provider adapter/HTTP-SSE boundary, and the real
+  rustx child/stdio composition against the local fake provider
 
 The M1 `ContextManifest` gained `context_window_tokens` (additive pre-1.0
 contract change; fixture and round-trip tests updated).
 
 Issue #7 (M4: context engine and Agent Status) is **completed**; Issue #27
-owns the deferred live multi-compaction/TUI verification, and Issue #8 (M5)
+owns the deterministic multi-compaction/TUI verification against the local
+fake provider, and Issue #8 (M5)
 owns the background-execution Agent Status integration, which is implemented
 by the M5 tool plane PR as a runtime-owned built-in section.
 
@@ -217,7 +220,10 @@ Bash requirements:
 - Full `/bin/bash`
 - Foreground and background execution
 - One per-invocation supervisor process unit (outer reaper-of-last-resort
-  plus inner session/group leader; both subreapers)
+  plus inner session/group leader). Linux enables child-subreaper adoption;
+  macOS uses the direct process-group path with an injected EXIT `wait` as a
+  best-effort convenience (not an ownership boundary) because it has no
+  equivalent orphan-adoption primitive.
 - stdout/stderr/combined capture
 - Timeouts
 - `TERM -> grace period -> KILL` driven by the invocation supervisor
@@ -230,15 +236,15 @@ Bash requirements:
   owned group is terminal or cancellation/timeout/process-control failure
   settles it
 - **Fixed process-group-scoped ownership**: the invocation's ownership
-  boundary is its dedicated process group, and membership is immutable for
-  Bash descendants. The inner supervisor installs a narrow inherited
-  seccomp policy (after its own `setsid()` setup, before the `/bin/bash`
-  spawn) that rejects `setsid`/`setpgid` with `EPERM` — the only syscalls
-  that can change process-group/session membership on Linux — so a
-  descendant can never leave the group or hide an in-group process behind
-  an out-of-group ancestor. A `setsid` escape attempt fails deterministically;
-  subreaper adoption of such children is a reaping detail, not an ownership
-  claim
+  boundary is its dedicated process group. Linux adds inherited seccomp
+  rejection of `setsid`/`setpgid` and child-subreaper adoption, making the
+  group wait a complete descendant proof. macOS keeps the real group and
+  cancellation lifecycle but has no equivalent seccomp or orphan-adoption
+  primitive, so it proves terminality by escalating to the outer's fallback
+  containment `SIGKILL` and probing the group absent (`killpg(pgid, 0)` ->
+  `ESRCH`); a descendant that deliberately leaves the group exits rustX's
+  ownership domain and is never claimed contained or reaped, while a lost
+  anchor remains explicitly unproven.
 - Target-ABI seccomp policy: membership syscall numbers come from the
   compiled Linux target's libc constants; x86-64 rejects the x32 syscall
   namespace explicitly because it shares `AUDIT_ARCH_X86_64`
@@ -247,25 +253,28 @@ Bash requirements:
   numeric id is its own pid — provably allocated while it lives; the final
   signal is the last `killpg`, after which the anchor is released by the
   reap and no further signal exists
-- Kernel-mediated group terminality: shell descendants that outlive the
-  shell are reparented into the invocation supervisor's child domain
-  (`PR_SET_CHILD_SUBREAPER`), and the terminal point is the group-scoped
-  wait (`waitid` with `Id::PGid`) returning `ECHILD` at the outer
-  supervisor — a complete whole-group proof only because membership is
-  immutable (an in-group process is always a matching child of the
-  supervisor that owns the gate) — never a `/proc` membership scan and
-  never a `killpg(..., 0)` probe (an un-reaped leader zombie keeps the
-  numeric group observable)
+- Kernel-mediated group terminality: the terminal point is the
+  group-scoped wait (`waitid` with `Id::PGid`) returning `ECHILD` at the
+  outer supervisor. On Linux, child-subreaper adoption plus immutable
+  membership makes that a complete whole-group proof. On macOS, that
+  `ECHILD` only proves the waiting supervisor has no waitable group child
+  left (a reparented descendant is invisible), so the group's absence is
+  proven by a bounded `killpg(pgid, 0)` probe reaching `ESRCH` after the
+  fallback containment signal — never inferred from `ECHILD` alone, from
+  `/proc`, or from a `killpg` `EPERM` (`EPERM` proves only that the signal
+  operation was not authorized — on macOS the kernel also reports a
+  zombie-only group as `EPERM` — so it is not a terminal result by itself).
 - Explicit ownership protocol: `AnchorReady -> Start ->
   OwnershipEstablished`; the successful Bash spawn is the OS commit point,
   and post-start channel loss is conservatively treated as possible
   ownership. `NoOwnership` covers pre-spawn setup failure.
 - Control-channel EOF is never post-ownership terminality. Normal settlement
-  uses `AllChildrenReaped`; catastrophic supervisor loss uses rustX's own
-  subreaper adoption, retained `WNOWAIT` anchor, anchored group containment,
-  and group-scoped `ECHILD` proof before returning `Failed`. An
-  `AnchorUnavailable` result (adopted anchor `ECHILD` without a prior
-  terminal event) is never a terminal proof and never commits a result.
+  uses `AllChildrenReaped`; on Linux, catastrophic supervisor loss uses
+  rustX's own subreaper adoption, retained `WNOWAIT` anchor, anchored group
+  containment, and group-scoped `ECHILD` proof before returning `Failed`. On
+  macOS, a lost outer without a waitable anchor is reported as
+  `AnchorUnavailable` and remains unproven; it is never converted into a
+  terminal result.
 - Single-reaper anchor ownership: the inner supervisor pid is an ownership
   anchor with exactly one reaping owner (the outer's dedicated anchor path
   in the normal lifecycle; rustX's adopted-anchor path after both
@@ -273,14 +282,14 @@ Bash requirements:
   reaping loop — generic child reaping can never consume the invocation
   anchor, and an anchor `ECHILD` before the intentional release is an
   ownership invariant violation, never process terminality.
-- Runtime child-subreaper capability: rustX's process-wide
-  `PR_SET_CHILD_SUBREAPER` activation is a runtime-level kernel
-  coordination primitive (lazy one-time, idempotent, sticky activation;
-  owned by `src/runtime/process_supervision.rs`), established before
-  `START` and never toggled per invocation. It is the catastrophic
-  fallback authority for Bash supervisor units only — in M5, Bash is the
-  only production subprocess hierarchy relying on orphan adoption, no
-  generic unknown-child reaper exists, and catastrophic Bash containment
+- Runtime child-subreaper capability: on Linux, rustX's process-wide
+  `PR_SET_CHILD_SUBREAPER` activation is a runtime-level kernel coordination
+  primitive (lazy one-time, idempotent, sticky activation; owned by
+  `src/runtime/process_supervision.rs`), established before `START` and
+  never toggled per invocation. It is the catastrophic fallback authority
+  for Bash supervisor units only — in M5, Bash is the only production
+  subprocess hierarchy relying on orphan adoption, no generic unknown-child
+  reaper exists, and catastrophic Bash containment
   remains invocation-scoped (anchor pid and invocation PGID only, never a
   broad wait), so concurrent invocations and unrelated adopted children
   are never signaled or reaped cross-group. Any future production
@@ -373,10 +382,11 @@ Implement:
   coordinator-level deterministic regressions.
 - The interactive MCP stdio supervisor unit: the M5 Bash supervisor shape
   applied to a long-lived server, composed from the same shared structural
-  ownership core (fixed-membership seccomp, group-scoped kernel terminal
+  ownership core (Linux fixed-membership seccomp and child-subreaper
+  fallback; macOS process-group lifecycle, group-scoped kernel terminal
   proof, single-owner anchor discipline, TERM/grace/KILL against the inner's
-  own group, adopted-anchor emergency containment, driver-owned settlement
-  with direct-child reap before publication, EOF-drained bounded stderr).
+  own group, driver-owned settlement with direct-child reap before
+  publication, EOF-drained bounded stderr).
   Deterministic regressions cover normal shutdown, outliving server
   children, `setsid`/`setpgid` escape attempts, TERM-resistant servers,
   inner-supervisor loss, business-handle drop, post-spawn handshake failure,

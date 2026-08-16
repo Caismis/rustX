@@ -11,16 +11,17 @@
 //! extracted so a second production subprocess hierarchy (Skill environment
 //! package managers) does not need a second, independent ownership domain.
 //!
-//! # Ownership contract (unchanged from M5)
+//! # Ownership contract
 //!
-//! - every production supervised command executes inside one fixed
-//!   rustX-owned process group created by the supervisor unit (`setsid`),
-//!   with `setsid(2)`/`setpgid(2)` rejected by the inherited seccomp
-//!   filter, so no command can escape the owned execution domain;
-//! - the runtime child-subreaper capability is consulted lazily, one-time,
-//!   idempotently and sticky, strictly before the supervisor unit spawns:
-//!   `START` — which authorizes the command spawn — is never sent before
-//!   catastrophic fallback authority exists;
+//! - every production supervised command executes inside a dedicated
+//!   rustX-owned process group created by the supervisor unit (`setsid`);
+//!   Linux additionally rejects `setsid(2)`/`setpgid(2)` with the inherited
+//!   seccomp filter, while macOS keeps the process-group boundary but has
+//!   no seccomp or child-subreaper equivalent, so its terminal proof is
+//!   weaker (see the macOS contract in the supervisor unit docs);
+//! - the runtime process-supervision prerequisite is consulted before the
+//!   supervisor unit spawns: Linux installs child-subreaper mode, while
+//!   macOS performs the successful no-op needed by its normal path;
 //! - there is no generic `waitpid(-1)` process-wide reaper; catastrophic
 //!   containment is invocation-scoped (retained anchor pid and invocation
 //!   process group only);
@@ -29,7 +30,9 @@
 //!   `TERM` -> grace -> `KILL` sequence, so a shell-parent exit can never
 //!   let owned group work escape the timeout/cancellation contract;
 //! - a terminal result is returned only after the owned process group is
-//!   terminal and the direct supervisor child is reaped.
+//!   terminal and the direct supervisor child is reaped. If macOS loses the
+//!   outer supervisor before that proof, the driver keeps the result
+//!   explicitly unproven rather than claiming physical settlement.
 //!
 //! # Result waiter versus invocation
 //!
@@ -516,9 +519,12 @@ impl RunnerTerminalHold {
 pub(crate) struct RunnerChannelEofHook {
     seen_tx: tokio::sync::watch::Sender<bool>,
     seen_rx: tokio::sync::watch::Receiver<bool>,
+    #[cfg(target_os = "linux")]
     proceed_tx: tokio::sync::watch::Sender<bool>,
     proceed_rx: tokio::sync::watch::Receiver<bool>,
+    #[cfg(target_os = "linux")]
     timeout_tx: tokio::sync::watch::Sender<bool>,
+    #[cfg(target_os = "linux")]
     timeout_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -527,13 +533,19 @@ impl RunnerChannelEofHook {
     pub(crate) fn new() -> Self {
         let (seen_tx, seen_rx) = tokio::sync::watch::channel(false);
         let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
+        #[cfg(target_os = "linux")]
         let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(false);
+        #[cfg(not(target_os = "linux"))]
+        let _ = proceed_tx;
         Self {
             seen_tx,
             seen_rx,
+            #[cfg(target_os = "linux")]
             proceed_tx,
             proceed_rx,
+            #[cfg(target_os = "linux")]
             timeout_tx,
+            #[cfg(target_os = "linux")]
             timeout_rx,
         }
     }
@@ -545,10 +557,12 @@ impl RunnerChannelEofHook {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn release_emergency_containment(&self) {
         let _ = self.proceed_tx.send(true);
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn force_timeout(&self) {
         let _ = self.timeout_tx.send(true);
     }
@@ -561,7 +575,7 @@ impl RunnerChannelEofHook {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 async fn wait_for_forced_timeout(control: Option<&RunnerTestControl>) {
     if let Some(hook) = control.and_then(|control| control.channel_eof.as_ref()) {
         let mut rx = hook.timeout_rx.clone();
@@ -573,7 +587,7 @@ async fn wait_for_forced_timeout(control: Option<&RunnerTestControl>) {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(any(not(test), not(target_os = "linux")))]
 async fn wait_for_forced_timeout(_control: Option<&RunnerTestControl>) {
     std::future::pending::<()>().await;
 }

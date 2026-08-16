@@ -273,6 +273,12 @@ class ProviderServer:
         for emit in emits:
             if isinstance(emit, Gate):
                 await self.run.reach_gate(emit.name, index)
+                # The disconnect watcher may have observed EOF while this
+                # response was parked at the gate. Do not let buffered socket
+                # writes turn an already-abandoned unallowed stream into a
+                # successful script.
+                if disconnected.is_set():
+                    return None
                 continue
             if isinstance(emit, Disconnect):
                 writer.transport.abort()
@@ -283,6 +289,8 @@ class ProviderServer:
                     await writer.drain()
                 except (ConnectionResetError, BrokenPipeError):
                     disconnected.set()
+                    return None
+                if disconnected.is_set():
                     return None
                 await self.run.observe(
                     control.CHUNK_FLUSHED, request_index=index, bytes=len(emit)

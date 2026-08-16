@@ -3503,22 +3503,22 @@ mod tests {
         );
     }
 
-    /// A parking background executor: starts, waits for the release notify,
-    /// and then settles with a fixed result.
+    /// A parking background executor: its returned future reports entry,
+    /// waits for durable release state, and then settles with a fixed result.
     struct ParkingBackgroundTool {
         definition: ToolDefinition,
         started: tokio::sync::watch::Sender<bool>,
-        release: Arc<tokio::sync::Notify>,
+        release: tokio::sync::watch::Sender<bool>,
     }
 
     impl ParkingBackgroundTool {
         fn new() -> (
             Self,
             tokio::sync::watch::Receiver<bool>,
-            Arc<tokio::sync::Notify>,
+            tokio::sync::watch::Sender<bool>,
         ) {
             let (started, started_rx) = tokio::sync::watch::channel(false);
-            let release = Arc::new(tokio::sync::Notify::new());
+            let (release, _release_rx) = tokio::sync::watch::channel(false);
             (
                 Self {
                     definition: ToolDefinition {
@@ -3546,10 +3546,14 @@ mod tests {
             _invocation: ToolInvocation,
             _context: crate::tools::executor::ToolExecutionContext<'a>,
         ) -> BoxFuture<'a, ToolExecutionResult> {
-            self.started.send_replace(true);
-            let release = self.release.clone();
+            let started = self.started.clone();
+            let mut release = self.release.subscribe();
             Box::pin(async move {
-                release.notified().await;
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
                 ToolExecutionResult {
                     status: ToolExecutionStatus::Success,
                     content: Vec::new(),
@@ -3726,11 +3730,11 @@ mod tests {
             // 2. The detached background runner is provably started; settle
             //    it. Its terminal enqueue can only block on the mailbox
             //    mutex that drain #1 still owns.
-            started
-                .wait_for(|started| *started)
+            tokio::time::timeout(LIVENESS_GUARD, started.wait_for(|started| *started))
                 .await
+                .expect("bg runner start wait exceeded liveness guard")
                 .expect("bg runner started");
-            release.notify_one();
+            release.send_replace(true);
             // 3. Release drain #1: the [human] batch is appended, turn 1
             //    completes, and the loop reaches the continuation boundary.
             release_tx.send(()).expect("release the first drain");

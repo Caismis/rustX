@@ -405,11 +405,7 @@ impl McpServerRuntime {
                     Ok(service) => service,
                     Err(error) => {
                         let preview = process.stderr_preview();
-                        return Err(if preview.is_empty() {
-                            error
-                        } else {
-                            McpError::Discovery(format!("{error}; server stderr: {preview}"))
-                        });
+                        return Err(append_server_stderr(error, &preview));
                     }
                 };
                 (service, Some(Arc::new(tokio::sync::Mutex::new(process))))
@@ -711,6 +707,21 @@ where
             ))),
             error => McpError::Discovery(bound_error(&error.to_string())),
         })
+}
+
+fn append_server_stderr(error: McpError, preview: &str) -> McpError {
+    if preview.is_empty() {
+        return error;
+    }
+    match error {
+        McpError::Discovery(message) => {
+            McpError::Discovery(format!("{message}; server stderr: {preview}"))
+        }
+        McpError::ProtocolCompatibility(message) => {
+            McpError::ProtocolCompatibility(format!("{message}; server stderr: {preview}"))
+        }
+        error => error,
+    }
 }
 
 fn joined_versions(versions: &[ProtocolVersion]) -> String {

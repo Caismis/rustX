@@ -13,9 +13,10 @@
 //!   observation of finalized tool results and the deferred post-tool context
 //!   it may propose.
 //!
-//! Every race is established by explicit synchronization (`watch`, `Notify`,
-//! and the fixture tools' own gates). No test uses `sleep`, a timeout, or
-//! scheduler luck to establish a claimed interleaving.
+//! Every race is established by explicit synchronization (`watch` and the
+//! fixture tools' own gates). No test uses `sleep`, timeout, or scheduler luck
+//! to establish a claimed interleaving; the bounded waits only contain a
+//! broken fixture so the test process fails fast.
 
 use super::{common, support};
 
@@ -23,7 +24,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use tokio::sync::{Notify, watch};
+use tokio::sync::watch;
 
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
@@ -336,7 +337,7 @@ impl ToolExecutor for InstantTool {
 /// whole batch into one shared list.
 struct GatedTool {
     definition: ToolDefinition,
-    release: Arc<Notify>,
+    release: watch::Sender<bool>,
     started: watch::Sender<bool>,
     completion_order: Arc<Mutex<Vec<String>>>,
     completed: watch::Sender<bool>,
@@ -347,11 +348,11 @@ impl GatedTool {
         definition: ToolDefinition,
         completion_order: Arc<Mutex<Vec<String>>>,
     ) -> (Self, GatedToolHandle) {
-        let release = Arc::new(Notify::new());
+        let (release, _release_rx) = watch::channel(false);
         let started = watch::Sender::new(false);
         let completed = watch::Sender::new(false);
         let handle = GatedToolHandle {
-            release: Arc::clone(&release),
+            release: release.clone(),
             started: started.subscribe(),
             completed: completed.subscribe(),
         };
@@ -376,25 +377,33 @@ impl GatedTool {
 
 /// The test-side control handle of one [`GatedTool`].
 struct GatedToolHandle {
-    release: Arc<Notify>,
+    release: watch::Sender<bool>,
     started: watch::Receiver<bool>,
     completed: watch::Receiver<bool>,
 }
 
+const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
+
 impl GatedToolHandle {
     async fn await_started(&mut self) {
-        self.started
-            .wait_for(|started| *started)
-            .await
-            .expect("gated tool start channel stays open");
+        tokio::time::timeout(
+            GATED_TOOL_LIVENESS_GUARD,
+            self.started.wait_for(|started| *started),
+        )
+        .await
+        .expect("gated tool start wait exceeded liveness guard")
+        .expect("gated tool start channel stays open");
     }
 
     async fn release_and_await_completion(&mut self) {
-        self.release.notify_one();
-        self.completed
-            .wait_for(|completed| *completed)
-            .await
-            .expect("gated tool completion channel stays open");
+        self.release.send_replace(true);
+        tokio::time::timeout(
+            GATED_TOOL_LIVENESS_GUARD,
+            self.completed.wait_for(|completed| *completed),
+        )
+        .await
+        .expect("gated tool completion wait exceeded liveness guard")
+        .expect("gated tool completion channel stays open");
     }
 }
 
@@ -404,9 +413,14 @@ impl ToolExecutor for GatedTool {
         invocation: ToolInvocation,
         _context: ToolExecutionContext<'a>,
     ) -> BoxFuture<'a, ToolExecutionResult> {
-        self.started.send_replace(true);
+        let started = self.started.clone();
+        let mut release = self.release.subscribe();
         Box::pin(async move {
-            self.release.notified().await;
+            started.send_replace(true);
+            release
+                .wait_for(|released| *released)
+                .await
+                .expect("gated tool release channel stays open");
             self.completion_order
                 .lock()
                 .expect("completion order lock")

@@ -15,6 +15,8 @@ use super::capture::{
     spool_stream,
 };
 use super::input::BashInput;
+#[cfg(all(test, target_os = "linux"))]
+use crate::runtime::process_runner::RunnerLifecycleHook as BashLifecycleHook;
 #[cfg(test)]
 use crate::runtime::process_runner::RunnerTestControl;
 use crate::runtime::process_runner::{
@@ -23,8 +25,7 @@ use crate::runtime::process_runner::{
 };
 #[cfg(test)]
 use crate::runtime::process_runner::{
-    RunnerChannelEofHook as ChannelEofHook, RunnerLifecycleHook as BashLifecycleHook,
-    RunnerTerminalHold as TerminalHold,
+    RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
 use crate::runtime::types::CancellationReason;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
@@ -138,6 +139,7 @@ impl BashTestControl {
     /// supervisor reported the shell's natural exit until the test releases
     /// it.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn pause_at_shell_exit(mut self) -> Self {
         self.runner.pause_at_shell_exit = true;
         self
@@ -146,6 +148,7 @@ impl BashTestControl {
     /// The lifecycle hook; tests subscribe to the exact shell-exit
     /// boundary and release the parked runner through it.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn lifecycle(&self) -> &BashLifecycleHook {
         &self.runner.lifecycle
     }
@@ -165,6 +168,7 @@ impl BashTestControl {
     /// semantic state is enough: the regression proves that
     /// `AnchorUnavailable` never settles the invocation as terminal.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn force_emergency_anchor_unavailable_handle(
         &self,
     ) -> Arc<std::sync::atomic::AtomicBool> {
@@ -210,6 +214,7 @@ impl BashTestControl {
 
     /// Makes the shell wait in the supervisor fail with an injected error.
     #[must_use]
+    #[cfg(target_os = "linux")]
     pub(crate) fn fail_wait(mut self) -> Self {
         self.runner.fail_wait = true;
         self

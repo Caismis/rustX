@@ -112,6 +112,7 @@ fn process_alive(pid: i32) -> bool {
 /// (test-only fixture-topology inspection; `/proc` is never the
 /// production ownership authority).
 #[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn pgrp_of(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
@@ -332,7 +333,7 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
 /// provably alive at that boundary; only then does cancellation become
 /// observable. The result is `Cancelled` and the owned group is
 /// terminated.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
     let (dir, artifacts, workspace) = fixture();
@@ -404,7 +405,7 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
 /// settled while the descendant is alive; once the descendant exits
 /// naturally and the supervisor reaps it, the shell's natural
 /// successful exit settles the invocation as `Success`.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn natural_success_requires_terminal_child_ownership() {
     let (dir, artifacts, workspace) = fixture();
@@ -658,7 +659,7 @@ async fn sigterm_handler_setup_failure_settles_as_an_explicit_failed_result() {
 /// outer supervisor, which terminates the owned group; `Failed` is
 /// returned only after the descendant and the group are provably gone.
 /// No test-side process control follows the result.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn wait_failure_settles_as_an_explicit_failed_result() {
     let (dir, artifacts, workspace) = fixture();
@@ -1034,7 +1035,7 @@ async fn cancellation_signals_only_target_the_owned_group() {
 /// old `/proc` walk could not prove: settlement is gated on the
 /// supervisor's kernel child-wait terminal state, not on an
 /// observational membership scan.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
     let (dir, artifacts, workspace) = fixture();
@@ -1114,7 +1115,7 @@ async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
 /// recorded pid is provably terminal afterwards — nothing escaped the
 /// owned domain — and the shell's natural exit settles ordinary
 /// `Success` once the owned group is terminal.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
     let (dir, artifacts, workspace) = fixture();
@@ -1175,7 +1176,7 @@ async fn setsid_escape_attempt_is_rejected_and_nothing_escapes() {
 /// cannot leave it. The invocation timeout owns the outcome and settles
 /// `TimedOut` in bounded time with the whole owned group terminal; the
 /// recorded attempt pid is provably dead afterwards.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_times_out_with_the_owned_group() {
     let (dir, artifacts, workspace) = fixture();
@@ -1232,7 +1233,7 @@ async fn setsid_escape_attempt_times_out_with_the_owned_group() {
 /// cancellation terminates the owned group — the rejected attempt
 /// cannot survive it — and settles `Cancelled` in bounded time with the
 /// recorded attempt pid provably dead.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn setsid_escape_attempt_cancels_with_the_owned_group() {
     let (dir, artifacts, workspace) = fixture();
@@ -1295,7 +1296,7 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
 /// result may become terminal while any process still belongs to the
 /// invocation-owned process group. At the exact shell-exit boundary the
 /// test proves the fixture topology before evaluating settlement.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
     let (dir, artifacts, workspace) = fixture();
@@ -1816,10 +1817,32 @@ async fn terminal_frame_then_eof_never_overrides_terminality() {
         "the terminal frame remains authoritative; late EOF must not override it, got {:?}",
         result.status
     );
+    #[cfg(target_os = "linux")]
     assert!(
         control.recorded_signals().is_empty(),
         "no containment signal may follow an already-admitted terminal frame"
     );
+    // macOS settles the natural completion through the fallback containment
+    // signal (its terminal proof), which is issued before — never after —
+    // the terminal frame. Exactly that pre-terminal `SIGKILL` is recorded,
+    // and nothing else.
+    #[cfg(target_os = "macos")]
+    {
+        let signals = control.recorded_signals();
+        assert_eq!(
+            signals.len(),
+            1,
+            "exactly the pre-terminal fallback containment is recorded: {signals:?}"
+        );
+        assert_eq!(
+            signals[0].signal, "SIGKILL",
+            "the fallback containment is SIGKILL"
+        );
+        assert!(
+            signals[0].emitted,
+            "the fallback containment reaches the kernel"
+        );
+    }
     let _ = dir;
 }
 
@@ -1981,4 +2004,297 @@ async fn terminal_frame_is_parsed_before_buffered_eof() {
         Ok(Some(SupervisorEvent::AllChildrenReaped))
     ));
     assert!(matches!(read_supervisor_event(&mut reader).await, Ok(None)));
+}
+
+/// macOS-specific regressions for the Bash EXIT-trap and containment
+/// contract.
+///
+/// macOS has no child-subreaper, so a background descendant that outlives
+/// the shell is reparented to launchd and becomes invisible to the
+/// supervisor's group-scoped wait. The injected `trap 'wait' EXIT` is a
+/// best-effort convenience only — the user command runs in the same shell
+/// and may legally clear or replace it — so the macOS terminal proof must
+/// not depend on it. These tests prove that replacing the trap cannot
+/// produce a false terminal result: the owned group is actively contained
+/// (the background descendant is killed) instead of being reported terminal
+/// while it may still run.
+#[cfg(target_os = "macos")]
+mod macos_exit_trap_tests {
+    use super::{fixture, process_alive, run_with};
+    use std::path::Path;
+    use std::time::Duration;
+
+    /// Reads a pid file the shell wrote before settling, with a deadlock
+    /// guard (the write is an explicit fixture synchronization point, never
+    /// a correctness assumption).
+    fn read_pid(path: &Path) -> i32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pid file {} never appeared",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Polls a pid until it is provably gone (the signal-0 probe returns
+    /// `ESRCH`), with a strict deadlock guard.
+    async fn wait_for_process_death(pid: i32) {
+        for _ in 0..1000 {
+            if !process_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process {pid} is still alive after the deadline");
+    }
+
+    /// Runs one trap-replacement fixture and proves the owned background
+    /// descendant was terminated, never falsely reported terminal.
+    async fn assert_background_descendant_is_contained(trap_line: &str) {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let child_pid_file = root.join("child.pid");
+        // The shell backgrounds a long-lived descendant, writes its pid,
+        // then replaces the injected EXIT trap and exits. Without the trap
+        // the descendant is reparented to launchd; the macOS supervisor must
+        // contain it via the outer's fallback `SIGKILL` rather than report a
+        // false terminal while it still runs.
+        let command = format!(
+            "sleep 30 >/dev/null 2>&1 & echo $! > {}; {trap_line}; exit 0",
+            child_pid_file.display()
+        );
+        let result = run_with(&command, &artifacts, &workspace).await;
+        assert_eq!(
+            result.status,
+            crate::tools::types::ToolExecutionStatus::Success,
+            "the shell exited 0, so the invocation settles as Success"
+        );
+        let child_pid = read_pid(&child_pid_file);
+        wait_for_process_death(child_pid).await;
+        let _ = dir;
+    }
+
+    /// Clearing the injected EXIT trap cannot produce a false terminal
+    /// result: the reparented descendant is actively contained.
+    #[tokio::test]
+    async fn clearing_the_exit_trap_cannot_produce_false_terminal_settlement() {
+        assert_background_descendant_is_contained("trap - EXIT").await;
+    }
+
+    /// Replacing the injected EXIT trap cannot produce a false terminal
+    /// result either.
+    #[tokio::test]
+    async fn replacing_the_exit_trap_cannot_produce_false_terminal_settlement() {
+        assert_background_descendant_is_contained("trap ':' EXIT").await;
+    }
+}
+
+/// The macOS ownership-boundary regression: a descendant that deliberately
+/// leaves the invocation process group via `setsid(2)` is outside rustX's
+/// macOS ownership domain.
+///
+/// macOS has no seccomp fixed-membership primitive, so a command may legally
+/// move a descendant out of the invocation process group/session. rustX owns
+/// the invocation process-group domain: it does not track, contain, reap, or
+/// wait for an escaped descendant, and settlement of the owned group does not
+/// imply that descendant terminated. This test proves the real kernel
+/// boundary — not a comment — and then cleans up the escaped process itself.
+#[cfg(target_os = "macos")]
+mod macos_escape_boundary_tests {
+    use super::{fixture, process_alive, run_with_control};
+    use crate::runtime::cancellation::CancellationSignal;
+    use crate::tools::native::bash::BashTestControl;
+    use crate::tools::types::ToolExecutionStatus;
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use std::path::Path;
+    use std::time::Duration;
+
+    /// A small deterministic helper that records its pre-escape
+    /// pid/process-group/session, calls the `setsid(2)` libc primitive
+    /// directly via Python's `os.setsid`, records its post-escape
+    /// pid/process-group/session, and then stays alive. The post-escape file
+    /// is the deterministic synchronization point for the shell, and the
+    /// explicit `kill` in the test is the only thing that terminates it.
+    const ESCAPE_HELPER: &str = r#"import os
+import sys
+import time
+
+pre, post = sys.argv[1], sys.argv[2]
+
+with open(pre, "w") as f:
+    f.write(f"{os.getpid()} {os.getpgrp()} {os.getsid(0)}\n")
+    f.flush()
+    os.fsync(f.fileno())
+
+os.setsid()
+
+with open(post, "w") as f:
+    f.write(f"{os.getpid()} {os.getpgrp()} {os.getsid(0)}\n")
+    f.flush()
+    os.fsync(f.fileno())
+
+while True:
+    time.sleep(3600)
+"#;
+
+    /// Kills the escaped descendant on drop, so a failed assertion can never
+    /// leak the helper process. Killing an already-dead pid is a harmless
+    /// `ESRCH`.
+    struct EscapedProcessCleanup(i32);
+
+    impl Drop for EscapedProcessCleanup {
+        fn drop(&mut self) {
+            let _ = kill(Pid::from_raw(self.0), Signal::SIGKILL);
+        }
+    }
+
+    /// Polls a pid until it is provably gone (the signal-0 probe returns
+    /// `ESRCH`), with a strict deadlock guard.
+    async fn wait_for_process_death(pid: i32) {
+        for _ in 0..1000 {
+            if !process_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process {pid} is still alive after the deadline");
+    }
+
+    /// Reads a `pid pgid sid` state file, polling with a strict deadlock
+    /// guard: the helper's post-escape write is the deterministic
+    /// synchronization point, never a timing assumption.
+    fn read_state(path: &Path) -> (i32, i32, i32) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path) {
+                let fields: Vec<i32> = contents
+                    .split_whitespace()
+                    .map(str::parse::<i32>)
+                    .collect::<Result<_, _>>()
+                    .expect("state file contains integers");
+                if fields.len() == 3 {
+                    return (fields[0], fields[1], fields[2]);
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "state file {} never appeared",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The escaped descendant is provably outside the invocation process
+    /// group, the invocation still reaches its normal owned-PGID settlement,
+    /// and that settlement does not imply the escaped descendant is gone.
+    #[tokio::test]
+    #[allow(clippy::similar_names)] // pid/pgid/sid are intentionally parallel process identities
+    async fn escaped_descendant_is_outside_the_owned_group_and_survives_settlement() {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let helper_path = root.join("escape_helper.py");
+        let pre_path = root.join("escape.pre");
+        let post_path = root.join("escape.post");
+        let helper_pid_path = root.join("escape.pid");
+        let anchor_pid_path = root.join("anchor.pid");
+        std::fs::write(&helper_path, ESCAPE_HELPER).expect("write the escape helper");
+
+        // The helper records its pre-escape state, calls setsid(2), records
+        // its post-escape state, and stays alive. The shell clears the
+        // injected EXIT trap (best-effort only, and the user command may
+        // legally replace it), waits for the helper's post-escape write, then
+        // exits so the invocation can settle its owned group normally.
+        let command = format!(
+            "trap - EXIT; python3 {} {} {} >/dev/null 2>&1 & echo $! > {}; \
+             while [ ! -f {} ]; do sleep 0.05; done; exit 0",
+            helper_path.display(),
+            pre_path.display(),
+            post_path.display(),
+            helper_pid_path.display(),
+            post_path.display()
+        );
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            run_with_control(
+                command,
+                BashTestControl::new().anchor_pid_file(anchor_pid_path.clone()),
+                CancellationSignal::new(),
+                artifacts,
+                workspace,
+                Some(10),
+            ),
+        )
+        .await
+        .expect("the invocation settles exactly once (bounded)");
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Success,
+            "the owned invocation group settles normally with the escaped descendant out of domain"
+        );
+
+        let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_path)
+            .expect("anchor pid file")
+            .trim()
+            .parse()
+            .expect("anchor pid");
+        let shell_recorded_pid: i32 = std::fs::read_to_string(&helper_pid_path)
+            .expect("helper pid file")
+            .trim()
+            .parse()
+            .expect("helper pid");
+        let (pre_pid, pre_pgid, _pre_sid) = read_state(&pre_path);
+        let (escaped_pid, escaped_pgid, escaped_sid) = read_state(&post_path);
+
+        // Cleanup is armed before any assertion so a failure can never leak
+        // the escaped helper.
+        let _cleanup = EscapedProcessCleanup(escaped_pid);
+
+        // The helper is the shell's real descendant: the shell-recorded
+        // background pid matches the helper's own pid, and before escaping it
+        // was a member of the invocation process group.
+        assert_eq!(escaped_pid, shell_recorded_pid);
+        assert_eq!(pre_pid, escaped_pid);
+        assert_eq!(
+            pre_pgid, anchor_pid,
+            "the helper started inside the invocation process group"
+        );
+
+        // The escape is real: after setsid(2) the helper leads its own new
+        // session/process group, so it is no longer in the invocation PGID.
+        assert_eq!(
+            escaped_pgid, escaped_pid,
+            "setsid makes the helper its own process-group leader"
+        );
+        assert_eq!(
+            escaped_sid, escaped_pid,
+            "setsid makes the helper its own session leader"
+        );
+        assert_ne!(
+            escaped_pgid, anchor_pid,
+            "the helper left the invocation process group"
+        );
+
+        // The invocation settled its owned group, but that settlement does
+        // not imply the escaped descendant is gone: it is still alive.
+        assert!(
+            process_alive(escaped_pid),
+            "the escaped descendant is outside the owned group and must still be alive after settlement"
+        );
+
+        // The test itself owns the escaped process cleanup: the supervisor
+        // never claimed to contain it.
+        kill(Pid::from_raw(escaped_pid), Signal::SIGKILL).expect("kill the escaped descendant");
+        wait_for_process_death(escaped_pid).await;
+        let _ = dir;
+    }
 }

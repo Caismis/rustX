@@ -46,62 +46,51 @@
 //!
 //! # Fixed invocation process group
 //!
-//! A Bash invocation executes inside one fixed rustX-owned process group.
-//! Process-group/session mutation from Bash descendants is rejected so the
-//! ownership boundary cannot be escaped or partially hidden: the inner
-//! supervisor installs a narrow inherited seccomp policy between its own
-//! `setsid()` setup and the `/bin/bash` spawn that rejects `setsid(2)` and
-//! `setpgid(2)` with `EPERM` (see [`supervisor`]). `setsid`/`setpgid`
-//! are the only syscalls that can change process-group/session membership
-//! on Linux, and seccomp filters are inherited across `fork`/`exec` and can
-//! only become more restrictive. A command such as `setsid sleep 30`
-//! therefore fails deterministically (the utility exits non-zero) and
-//! nothing leaves the invocation group.
+//! A Bash invocation executes inside one dedicated rustX-owned process
+//! group. On Linux, process-group/session mutation from Bash descendants is
+//! rejected by an inherited seccomp policy. On macOS, the same session/group
+//! lifecycle and cancellation path are available, but macOS has no seccomp
+//! or child-subreaper equivalent; the supervisor wraps Bash with an EXIT
+//! `wait` so ordinary background jobs remain attached to the shell lifecycle.
+//! macOS therefore does not claim Linux's immutable-membership or
+//! supervisor-loss orphan-adoption proof.
 //!
-//! This restriction is what makes the supervisor's kernel child-wait
-//! terminal proof complete: an in-domain descendant cannot remain hidden
-//! behind an ancestor that left the domain. See the "Ownership boundary"
-//! section below and [`supervisor`] for the full argument.
+//! On Linux this restriction makes the supervisor's kernel child-wait
+//! terminal proof complete. macOS retains the real process-group wait and
+//! normal cancellation behavior, with the weaker platform guarantees stated
+//! above.
 //!
 //! # Ownership boundary
 //!
 //! The Bash invocation's ownership boundary is its dedicated process
 //! group. The invocation owns, guarantees termination of, and bases its
-//! settlement on exactly the processes that remain in that group. Because
-//! group membership is immutable for bash descendants, every process ever
-//! spawned by the shell — background children, subshells, replacement
-//! processes — remains in the invocation group for its whole lifetime:
-//! **there is no way to leave the owned execution domain from inside a
-//! Bash command**.
+//! settlement on exactly the processes that remain in that group. On Linux,
+//! group membership is immutable for Bash descendants. On macOS, descendants
+//! normally remain in the dedicated group, but a command that successfully
+//! calls `setsid(2)` can leave it; macOS does not provide the Linux seccomp
+//! mechanism used to reject that syscall.
 //!
 //! # Runtime child-subreaper capability
 //!
-//! rustX's process-wide `PR_SET_CHILD_SUBREAPER` activation is a runtime
-//! coordination-layer capability, not a Bash-local setting and not a
-//! generic reaper: it is owned by
-//! [`crate::runtime::process_supervision`], activated lazily once,
-//! idempotently and sticky, before any Bash ownership exists (before
-//! `START` authorizes the Bash spawn), and never toggled per invocation.
-//! It exists solely so that a lost Bash supervisor unit's orphaned
-//! invocation descendants reparent to the runtime process, where the
-//! invocation-scoped catastrophic containment can still retain the inner
-//! anchor and prove the invocation group terminal. Kernel reparenting does
-//! not expand Bash semantic ownership beyond the invocation process group,
-//! and rustX implements no generic unknown-child reaper: catastrophic
-//! containment remains invocation-scoped (anchor pid and invocation
-//! process group only — never a broad wait).
+//! Linux's process-wide `PR_SET_CHILD_SUBREAPER` activation is a runtime
+//! coordination-layer capability, not a Bash-local setting or generic
+//! reaper. It is owned by [`crate::runtime::process_supervision`] and
+//! established before `START` authorizes the Bash spawn. macOS has no
+//! equivalent; its normal path relies on Bash waiting for ordinary
+//! background jobs, and a lost supervisor cannot claim the Linux
+//! adopted-anchor proof.
 //!
 //! # Terminal results
 //!
 //! Every Bash `ToolExecutionResult` — `Success`, `Failed`, `Cancelled`,
 //! and `TimedOut` alike — is terminal with respect to the invocation-owned
-//! process group: no invocation-owned Bash process remains capable of
-//! executing work before any result is returned. A detected
-//! process-control/runtime failure determines the eventual result status
-//! but does not itself settle the invocation lifecycle: owned work is
-//! contained and the owned group reaped to either the normal outer terminal
-//! event or the reuse-safe catastrophic terminal point (and the capture
-//! settled) before the remembered `Failed` result is returned.
+//! process group. Linux also proves that no descendant can escape that
+//! group. macOS has the same normal group cancellation path, but a command
+//! that deliberately creates a new session leaves the invocation process
+//! group and exits rustX's ownership domain: it is not tracked, contained,
+//! reaped, or waited for, and settlement of the owned group does not imply
+//! it terminated; process-control failures remain explicit and are never
+//! treated as proof of physical settlement.
 //!
 //! # Output capture
 //!
@@ -129,6 +118,28 @@ mod input;
 #[cfg(unix)]
 #[doc(hidden)]
 pub mod supervisor;
+#[cfg(not(unix))]
+#[doc(hidden)]
+pub mod supervisor {
+    /// The supervisor role names remain available to the dedicated binary,
+    /// which reports the unsupported platform explicitly at runtime.
+    pub const ROLE_OUTER: &str = "outer";
+    pub const ROLE_INNER: &str = "inner";
+
+    /// Unix is required for the process-group ownership proof used by the
+    /// Bash supervisor.
+    pub fn run_outer_supervisor() -> ! {
+        eprintln!("Bash supervisor requires Unix process supervision");
+        std::process::exit(1);
+    }
+
+    /// Unix is required for the process-group ownership proof used by the
+    /// Bash supervisor.
+    pub fn run_inner_supervisor() -> ! {
+        eprintln!("Bash supervisor requires Unix process supervision");
+        std::process::exit(1);
+    }
+}
 #[cfg(test)]
 mod tests;
 

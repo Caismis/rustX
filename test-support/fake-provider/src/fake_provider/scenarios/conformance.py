@@ -58,19 +58,41 @@ SKILL_BODY_MARKER = "skill-body-marker-a17c"
 # -- compaction ------------------------------------------------------------
 
 COMPACTION_MARKER = "compaction-filler-marker-93be"
-#: ~200 KB of deterministic filler, worth roughly 53k estimated tokens. The
-#: Rust driver configures a 56k-token window with an 8k reserve and a 1k
-#: output budget, so turn two provably crosses the soft input limit while the
-#: complete-message compaction span provably still fits the summary model's
-#: own request budget. Both bounds are crossed by construction, never by
-#: hoping a random amount of text happens to be enough.
-FILLER = (COMPACTION_MARKER + " ") + " ".join(
-    f"compaction filler block {index:05d}." for index in range(6800)
-)
+
+
+def _filler(marker: str) -> str:
+    """~200 KB of deterministic filler, worth roughly 53k estimated tokens.
+
+    The Rust driver configures a 56k-token window with an 8k reserve and a
+    1k output budget, so the next turn provably crosses the soft input limit
+    while the complete-message compaction span provably still fits the
+    summary model's own request budget. Both bounds are crossed by
+    construction, never by hoping a random amount of text happens to be
+    enough.
+    """
+    return (marker + " ") + " ".join(
+        f"compaction filler block {index:05d}." for index in range(6800)
+    )
+
+
+FILLER = _filler(COMPACTION_MARKER)
 SUMMARY_TEXT = "conformance summary: the assistant produced one long report."
 #: The exact deterministic prefix `ModelBackedSummarizer` sends. A summary
 #: request is identified structurally, never by guessing at its content.
 SUMMARY_INSTRUCTION = "Summarize the following conversation history for continuation."
+
+# -- repeated compaction ---------------------------------------------------
+
+TURN_THREE = "conformance: turn three"
+#: Two distinct filler markers: the wire assertions below prove the first
+#: compaction's retired span never reaches the provider again, including
+#: inside the second compaction's own summary input.
+FILLER_ONE_MARKER = "compaction-filler-one-marker-51f0"
+FILLER_TWO_MARKER = "compaction-filler-two-marker-b27d"
+FILLER_ONE = _filler(FILLER_ONE_MARKER)
+FILLER_TWO = _filler(FILLER_TWO_MARKER)
+SUMMARY_ONE_TEXT = "conformance summary one: the assistant produced filler report one."
+SUMMARY_TWO_TEXT = "conformance summary two: the assistant produced filler report two."
 
 
 def _text_turn(name: str, protocol: str, model: str, prompt: str) -> Scenario:
@@ -279,6 +301,84 @@ def compaction_explicit_summary() -> Scenario:
     return _compaction("compaction_explicit_summary", SUMMARY_MODEL)
 
 
+def _compaction_twice(name: str, summary_model: str) -> Scenario:
+    """Two committed compactions through the real provider boundary.
+
+    Turn one's answer fills the window; turn two's baseline crosses the soft
+    input limit and compacts; turn two's answer refills the window; turn
+    three's baseline crosses again, and the second compaction's span is the
+    already-compacted surface — the still-active first summary plus the
+    second filler. Every `body_excludes` below is the wire proof that a
+    retired span never reaches the provider again, never resurrects beside
+    its successor summary, and never appears twice.
+    """
+    return Scenario(
+        name,
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=CHAT_MODEL,
+                body_contains=(TURN_ONE,),
+            ),
+            Stream(Text(FILLER_ONE), Finish("stop")),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=summary_model,
+                no_tools=True,
+                body_contains=(SUMMARY_INSTRUCTION, FILLER_ONE_MARKER),
+                body_excludes=(FILLER_TWO_MARKER,),
+            ),
+            Stream(Text(SUMMARY_ONE_TEXT), Finish("stop")),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=CHAT_MODEL,
+                tools_include=("read",),
+                # The first rewritten surface: summary present, filler gone.
+                body_contains=(SUMMARY_ONE_TEXT, TURN_TWO),
+                body_excludes=(FILLER_ONE_MARKER,),
+            ),
+            Stream(Text(FILLER_TWO), Finish("stop")),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=summary_model,
+                no_tools=True,
+                # The second compaction's span is the already-compacted
+                # surface: the first summary and the second filler, never
+                # the first filler's retired bytes.
+                body_contains=(SUMMARY_INSTRUCTION, SUMMARY_ONE_TEXT, FILLER_TWO_MARKER),
+                body_excludes=(FILLER_ONE_MARKER,),
+            ),
+            Stream(Text(SUMMARY_TWO_TEXT), Finish("stop")),
+        ),
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=CHAT_MODEL,
+                tools_include=("read",),
+                # The second rewritten surface carries exactly the second
+                # summary: no filler, and no resurrected first summary.
+                body_contains=(SUMMARY_TWO_TEXT, TURN_THREE),
+                body_excludes=(FILLER_ONE_MARKER, FILLER_TWO_MARKER, SUMMARY_ONE_TEXT),
+            ),
+            Stream(Text("continuing from the second summary"), Finish("stop")),
+        ),
+    )
+
+
+def compaction_twice_session_summary() -> Scenario:
+    return _compaction_twice("compaction_twice_session_summary", CHAT_MODEL)
+
+
+def compaction_twice_explicit_summary() -> Scenario:
+    return _compaction_twice("compaction_twice_explicit_summary", SUMMARY_MODEL)
+
+
 def frozen_attempt_model() -> Scenario:
     """The immutable attempt model snapshot, observed from outside rustX.
 
@@ -323,5 +423,7 @@ SCENARIOS = {
     "gated_stream_cancellation": gated_stream_cancellation,
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
+    "compaction_twice_session_summary": compaction_twice_session_summary,
+    "compaction_twice_explicit_summary": compaction_twice_explicit_summary,
     "frozen_attempt_model": frozen_attempt_model,
 }
