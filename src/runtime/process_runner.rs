@@ -532,18 +532,21 @@ pub(crate) struct RunnerChannelEofHook {
 impl RunnerChannelEofHook {
     pub(crate) fn new() -> Self {
         let (seen_tx, seen_rx) = tokio::sync::watch::channel(false);
-        let (_proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
-        let (_timeout_tx, _timeout_rx) = tokio::sync::watch::channel(false);
+        let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
+        #[cfg(target_os = "linux")]
+        let (timeout_tx, timeout_rx) = tokio::sync::watch::channel(false);
+        #[cfg(not(target_os = "linux"))]
+        let _ = proceed_tx;
         Self {
             seen_tx,
             seen_rx,
             #[cfg(target_os = "linux")]
-            proceed_tx: _proceed_tx,
+            proceed_tx,
             proceed_rx,
             #[cfg(target_os = "linux")]
-            timeout_tx: _timeout_tx,
+            timeout_tx,
             #[cfg(target_os = "linux")]
-            timeout_rx: _timeout_rx,
+            timeout_rx,
         }
     }
 
