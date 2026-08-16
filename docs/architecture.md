@@ -1848,11 +1848,21 @@ Runtime Client is a projection/control/attachment adapter over it.
   ConversationRuntime::activate()      -> active: execution may begin
   ```
 
-  An **inactive** runtime is inert: its mailbox refuses `enqueue` with
+  An **inactive** runtime is inert, and this is enforced, not merely
+  documented: its mailbox refuses `enqueue` with
   `MailboxError::ConversationInactive`, `submit_inbound` fails with
-  `InboundAdmissionError::Inactive`, no admission worker exists,
-  `admit_next_attempt` is a no-op, and it therefore publishes no
-  observation at all.
+  `InboundAdmissionError::Inactive`, `model_set` fails with the typed
+  `ModelUpdateError::Inactive`, `shutdown` fails with the typed
+  `ShutdownError::Inactive`, the background registry refuses
+  `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
+  and the capability coordinator refuses a runtime-owned `commit` with
+  `CapabilityCommitError::ConversationInactive`. No admission worker
+  exists, `admit_next_attempt` is a no-op, and an inactive runtime
+  therefore publishes no observation at all. The gates are small shared
+  pieces of state (the mailbox's own admission flag, the capability
+  coordinator's runtime-owned activation flag) flipped by `activate`
+  under the one coordinator lock; the background registry reads the
+  mailbox flag of its own resources under its own lock section.
 
   Binding a client host is a **composition decision, not a hot
   operation**. A bind after activation is refused with the typed
@@ -1894,12 +1904,13 @@ Runtime Client is a projection/control/attachment adapter over it.
   - coordinator facts cannot move — every mutator (`model_set`,
     `shutdown`, `submit_inbound`, admission, settlement) takes the
     coordinator lock, held across `[T0, R]`;
-  - a background record transitions only through tool execution, which
-    needs an admitted attempt, which needs activation — impossible
-    across `[T0, R]`;
+  - the background registry refuses `commit_dispatch` while its mailbox
+    is bound inactive, so no background record exists across `[T0, R]`
+    and none can be created;
   - the mailbox refuses `enqueue` while its bound runtime is inactive,
     so the pending queue is frozen across `[T0, R]`;
-  - the capability snapshot is captured *at* `R`.
+  - the capability coordinator refuses a runtime-owned `commit` before
+    activation, and the capability snapshot is captured *at* `R`.
 
   And because each authority installs its observer in the same lock
   section that captures its seed, no transition can be both seeded and
@@ -1907,12 +1918,12 @@ Runtime Client is a projection/control/attachment adapter over it.
 
   **Bootstrap state never fabricates a live event.** The projection
   installs every seeded fact — canonical history, session model,
-  capability snapshot, pending inbound, *and pre-existing background
-  executions* — as snapshot state through
+  capability snapshot, and pending inbound — as snapshot state through
   `RuntimeClientProjection::bootstrap`. Nothing is routed through
   `apply`, so bootstrap publishes no `RuntimeClientEvent` and allocates
   no `RuntimeClientCursor`: `{ snapshot, cursor 0 }` is the state at `R`,
-  and the first cursor belongs to a real post-activation transition.
+  and the first cursor belongs to a real post-activation transition (the
+  background seed is provably empty under the lifecycle rule).
   Since an inactive runtime publishes nothing, `R` coincides with
   activation and the live stream carries every observation the runtime
   ever emits.
@@ -2076,9 +2087,10 @@ Runtime Client is a projection/control/attachment adapter over it.
   published event or fails explicitly with `resync_required`. This holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
-  never replayed through `apply`, so no pre-existing runtime fact —
-  including a background execution that was already running — allocates a
-  cursor or publishes an event.
+  never replayed through `apply`, so no pre-existing runtime fact
+  allocates a cursor or publishes an event — and, under the Issue #61
+  lifecycle, no background execution can even exist at bootstrap (the
+  registry refuses dispatch commits while its mailbox is bound inactive).
 - **RuntimeEvent mapping policy.** Every internal event is classified
   PROJECT / FOLD INTO CLIENT STATE ONLY / INTERNAL in the projection
   owner: attempt lifecycle/settlement, streaming output, tool-call
@@ -2384,7 +2396,7 @@ stream by the existing projection owner, under the same coordinator lock that
 owns attempt admission. There is no second event stream and no second cursor
 domain.
 
-### Layer 8: The local conversation runtime process (Issue #42)
+### Layer 8: The local conversation runtime process (Issue #42, Issue #61)
 
 ```text
 explicit startup arguments (--models --session --workspace --runtime-root)
@@ -2399,14 +2411,24 @@ ModelCatalog + LocalSessionConfig
         +--> prepare_candidate() -> commit()   <-- before serving
         +--> context policy / Surface / status pieces
         |
-ConversationRuntime (Issue #61: the semantic conversation coordinator)
+LocalConversationCore  (the one shared semantic composition, inactive)
         |
-        +--> RuntimeClientHost (projection/control/attachment adapter)
+        +-- into_interactive(): RuntimeClientHost (projection/control/
+        |                       attachment adapter), then activate
+        |       -> LocalConversationRuntime -> RuntimeClientEndpoint
+        |          -> stdio JSONL (Issue #38)
         |
-RuntimeClientEndpoint -> stdio JSONL (Issue #38)
+        +-- into_headless(): activate, no Runtime Client host
+                -> HeadlessConversationRuntime (Issue #60 subagents)
 ```
 
-`LocalConversationRuntime::compose` is the one Rust-side composition owner.
+`LocalConversationCore::compose` is the one Rust-side semantic composition
+owner; `LocalConversationRuntime::compose` and
+`HeadlessConversationRuntime::compose` are the two final paths over it, both
+returning already-active runtimes and both activating through the one
+`ConversationRuntime::activate` boundary. The startup capability commit
+happens *before* the conversation runtime is constructed, so it is not
+subject to the runtime's lifecycle gate.
 The governing invariant:
 
 > One local runtime process owns one conversation session. That session owns

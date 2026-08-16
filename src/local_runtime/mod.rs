@@ -26,7 +26,8 @@ pub mod serve;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
+    HeadlessConversationRuntime, LocalConversationCore, LocalConversationRuntime,
+    LocalRuntimeDependencies, LocalRuntimeError, LocalRuntimePaths,
 };
 pub use config::{
     LOCAL_SESSION_SCHEMA_VERSION, LocalSessionConfig, LocalSessionConfigError, McpServerDocument,

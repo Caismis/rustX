@@ -175,12 +175,12 @@ pub struct ConversationToolRuntime {
 /// identity.
 ///
 /// A [`ConversationToolRuntime`] is the canonical mailbox/background
-/// identity of a conversation, and a Runtime Client host is the conversation
-/// coordinator over it: canonical history, the current-attempt slot, the
-/// projection and its cursor domain, attachment state, and the inbound and
-/// attempt identity counters all live in that one host. Two hosts over one
-/// runtime identity would therefore be two coordinators over one
-/// authoritative runtime.
+/// identity of a conversation, and a Runtime Client host is the
+/// projection/control/attachment adapter over the `ConversationRuntime`
+/// that coordinates it (Issue #61): the runtime owns canonical history,
+/// the current-attempt slot, attempt admission, and the model authority;
+/// the host owns only the client projection. Two hosts over one runtime
+/// identity would still be two adapters over one authoritative runtime.
 ///
 /// The binding is claimed once and never released. It is deliberately
 /// **not** a lease: it is not reset when the bound host is dropped, because

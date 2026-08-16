@@ -627,6 +627,32 @@ impl ConversationInboundMailbox {
             .admission = MailboxAdmission::BoundActive;
     }
 
+    /// Whether a conversation runtime owns this mailbox and has not been
+    /// activated yet.
+    ///
+    /// This is the lifecycle gate other runtime-owned subsystems consult
+    /// (for example the background registry's dispatch commit) while
+    /// holding their own synchronization boundary. The flag transitions
+    /// under the mailbox lock at the runtime's construction
+    /// ([`ConversationInboundMailbox::bind_inactive`]) and activation
+    /// ([`ConversationInboundMailbox::activate`]), so a reader under its
+    /// own lock section observes one of the two stable states and the
+    /// decision linearizes against activation: a `BoundInactive`
+    /// observation refuses the commit, a `BoundActive` observation means
+    /// activation already committed.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    #[must_use]
+    pub(crate) fn is_bound_inactive(&self) -> bool {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .admission
+            == MailboxAdmission::BoundInactive
+    }
+
     /// Creates an inbound mailbox with test-only synchronization hooks
     /// installed. Only available under `#[cfg(test)]`; never used by
     /// production code.
@@ -841,6 +867,31 @@ mod tests {
         assert_eq!(
             mailbox.enqueue(human("m1", "hi")).expect("enqueue").get(),
             1
+        );
+    }
+
+    /// A mailbox claimed by an inactive conversation runtime (Issue #61)
+    /// refuses inbound with the typed error and consumes no sequence; the
+    /// activation transition restores admission.
+    #[test]
+    fn enqueue_is_refused_while_the_owning_runtime_is_inactive() {
+        let mailbox = mailbox();
+        mailbox.bind_inactive();
+        assert_eq!(
+            mailbox.enqueue(human("m1", "early")),
+            Err(MailboxError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-1"),
+            })
+        );
+        assert_eq!(mailbox.drain(), None, "no pending item exists");
+        mailbox.activate();
+        assert_eq!(
+            mailbox
+                .enqueue(human("m2", "after activation"))
+                .expect("enqueue")
+                .get(),
+            1,
+            "the refused enqueue consumed no sequence"
         );
     }
 

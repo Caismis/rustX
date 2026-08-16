@@ -118,7 +118,7 @@ impl RuntimeAttachment {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)
             }
-            RuntimeClientRequest::Shutdown { .. } => Ok(self.inner.shutdown()),
+            RuntimeClientRequest::Shutdown { .. } => self.inner.shutdown(),
         };
         match result {
             Ok(result) => RuntimeClientResponse {

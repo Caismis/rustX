@@ -363,7 +363,9 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
     else {
@@ -419,7 +421,9 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &CancellationSignal::new())
+        .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
     else {

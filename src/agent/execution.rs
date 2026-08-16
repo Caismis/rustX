@@ -2215,10 +2215,19 @@ impl<'a> AgentExecution<'a> {
                     .background()
                     .commit_dispatch(prepared, &self.cancellation.signal())
                 {
-                    BackgroundDispatchOutcome::Accepted { result, .. } => result,
-                    BackgroundDispatchOutcome::RolledBack => {
-                        cancelled_result(self.cancellation.reason())
-                    }
+                    Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => result,
+                    // A rolled-back dispatch (attempt cancellation won at
+                    // the ownership boundary) or a refused commit (the
+                    // owning conversation runtime is not activated) both
+                    // leave no detached execution; the originating attempt
+                    // observes a cancelled result slot.
+                    Ok(BackgroundDispatchOutcome::RolledBack)
+                    | Err(
+                        crate::tools::background::BackgroundDispatchError::ConversationInactive {
+                            ..
+                        },
+                    ) => cancelled_result(self.cancellation.reason()),
+                    Err(error) => failed_result(&error.to_string()),
                 }
             }
             Err(error) => failed_result(&error.to_string()),

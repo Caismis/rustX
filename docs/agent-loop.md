@@ -221,7 +221,10 @@ published as runtime-owned `ConversationObservation`s
 **exactly once**, by the Runtime Client projection; the runtime keeps no
 mirrored attempt/status/compaction read model. It does not need one: a
 Runtime Client host binds before the conversation runtime is activated
-(Issue #61), and an inactive runtime publishes nothing, so an installed
+(Issue #61), the inactive phase admits no semantic mutation at all
+(mailbox, `model_set`, `shutdown`, background dispatch commit, and
+runtime-owned capability commit are all refused typed), and an inactive
+runtime therefore publishes nothing, so an installed
 consumer observes every observation the runtime ever emits. When no host
 is bound, the queue simply has no consumer and the loop runs identically.
 

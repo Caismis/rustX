@@ -569,8 +569,14 @@ Implemented in the current architecture:
   every later projected fact or fails explicitly with `resync_required`
   (Issue #37 invariant preserved across the split).
 - Runtime lifecycle: `ConversationRuntime::new` constructs the runtime
-  **inactive** (mailbox refuses inbound, no admission worker, no
-  observation published); a `RuntimeClientHost` may then optionally bind;
+  **inactive** and the inactive phase is structurally inert, not merely
+  documented: the mailbox refuses inbound, `model_set` fails typed with
+  `ModelUpdateError::Inactive`, `shutdown` fails typed with
+  `ShutdownError::Inactive`, the background registry refuses
+  `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
+  and the capability coordinator refuses a runtime-owned `commit` with
+  `CapabilityCommitError::ConversationInactive` — all consuming nothing.
+  A `RuntimeClientHost` may then optionally bind;
   `ConversationRuntime::activate` is the one explicit composition boundary
   after which semantic execution may begin. Binding a client host is a
   pre-activation decision — a late bind fails with the typed
@@ -583,19 +589,28 @@ Implemented in the current architecture:
   installing the queue and every subsystem seam and capturing the seed as
   `coordinator facts → background → mailbox → capability (= the cut R)`.
   Every earlier authority is provably frozen across `[T0, R]` — coordinator
-  facts by the held lock, background because no attempt can run, the
-  mailbox because an inactive conversation refuses `enqueue` — so the
+  facts by the held lock, background because the registry refuses
+  `commit_dispatch` while its mailbox is bound inactive, the mailbox
+  because an inactive conversation refuses `enqueue`, and capability
+  because a runtime-owned `commit` is refused before activation — so the
   combined seed is one real global state, not four independent cuts. The
-  projection installs every seeded fact (including pre-existing background
-  executions) as snapshot state: bootstrap publishes nothing and allocates
-  no cursor, so the first `RuntimeClientCursor` always belongs to a real
-  post-activation transition. `RuntimeClientHost::new` performs all
+  projection installs every seeded fact as snapshot state: bootstrap
+  publishes nothing and allocates no cursor, so the first
+  `RuntimeClientCursor` always belongs to a real post-activation
+  transition. `RuntimeClientHost::new` performs all
   fallible work before/at the binding claim, releases the claim if the
   handshake fails, and never leaves a claimed-but-invalid binding.
 - Identity claims: one conversation runtime coordinator per
   `ConversationToolRuntime` identity (claim at coordinator construction) and
   one Runtime Client host per coordinator (claim at host construction);
   both are one-time lifetime bindings with typed already-bound rejections.
+- Two-layer production composition: `LocalConversationCore` assembles the
+  semantic composition (catalog, session model, tool runtime, capability,
+  context) once and constructs the `ConversationRuntime` inactive;
+  `LocalConversationRuntime::compose` (interactive) binds the Runtime
+  Client host then activates, and `HeadlessConversationRuntime::compose`
+  (headless) activates the same core with no host ever constructed. Both
+  final paths return already-active runtimes.
 - Deterministic regressions: headless full turn (no attachment), headless
   real tool cycle (ToolCall → canonical ToolResult → second model turn →
   terminal settlement, zero attachments), idle async wakeup, async-wake vs
@@ -605,11 +620,16 @@ Implemented in the current architecture:
   capability revision immutability, attachment independence, one
   human+runtime admission path, lifecycle regressions (interactive
   pre-activation bind, headless activation, typed rejection of a late host
-  bind, attach/detach/reattach after activation), bootstrap regressions
-  (pre-existing background + capability state allocates no live cursor
-  event, pre-cut model transition seeded not duplicated, post-activation
-  transition delivered exactly once), and construction-outside-Tokio
-  rejection — all with gates/barriers/Notify/watch, never sleeps.
+  bind, attach/detach/reattach after activation), inactive-runtime
+  regressions (model_set, shutdown, background dispatch commit, and
+  capability commit while inactive are all refused typed and consume
+  nothing; cursor 0 stays stable until activation; the first cursor
+  belongs to a real post-activation transition), production-composition
+  regressions (interactive and headless resolve the same semantic
+  composition; a real headless turn runs with no host; the interactive
+  path still runs over the same composition), and
+  construction-outside-Tokio rejection — all with gates/barriers/
+  Notify/watch, never sleeps.
 
 Intentionally absent (no concrete native owner or consumer):
 `PreToolPolicy`, tool-execution wrappers/middleware, post-tool result

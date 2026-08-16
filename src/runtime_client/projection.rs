@@ -245,12 +245,16 @@ impl RuntimeClientProjection {
     /// snapshot read model.
     ///
     /// **Nothing here publishes and nothing here allocates a cursor.**
-    /// The seed *is* the state at cursor 0 — including pre-existing
-    /// background executions, which are installed as snapshot state rather
-    /// than replayed through [`RuntimeClientProjection::apply`], so state
-    /// that existed before the bootstrap cut can never fabricate a live
-    /// event. Every transition after `R` arrives through the live
-    /// observation stream and gets the first real cursor.
+    /// The seed *is* the state at cursor 0 — canonical history, session
+    /// model, the startup capability snapshot, and pending inbound — all
+    /// installed as snapshot state rather than replayed through
+    /// [`RuntimeClientProjection::apply`], so state that existed before
+    /// the bootstrap cut can never fabricate a live event. The background
+    /// seed is provably empty under the Issue #61 lifecycle (the registry
+    /// refuses dispatch commits while its mailbox is bound inactive) and
+    /// is still installed from the same seed for one coherent cut. Every
+    /// transition after `R` arrives through the live observation stream
+    /// and gets the first real cursor.
     pub(crate) fn bootstrap(
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,

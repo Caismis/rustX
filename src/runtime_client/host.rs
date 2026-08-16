@@ -622,7 +622,8 @@ impl ClientInner {
     ///
     /// Returns [`RuntimeClientError::InvalidModelConfiguration`] when the
     /// configuration cannot be resolved against the catalog or cannot run
-    /// under the session context policy, and
+    /// under the session context policy, [`RuntimeClientError::InvalidState`]
+    /// while the runtime is not yet activated, and
     /// [`RuntimeClientError::ProjectionExhausted`] when the observation
     /// stream is over.
     pub(crate) fn model_set(
@@ -636,6 +637,9 @@ impl ClientInner {
             .runtime
             .model_set(config)
             .map_err(|error| match error {
+                ModelUpdateError::Inactive => RuntimeClientError::InvalidState {
+                    message: "the conversation runtime is not activated".to_owned(),
+                },
                 ModelUpdateError::InvalidConfiguration(message) => {
                     RuntimeClientError::InvalidModelConfiguration { message }
                 }
@@ -694,10 +698,19 @@ impl ClientInner {
     /// Shutdown is not detach and not cancellation: the current attempt
     /// continues to its settlement, semantic runtime work is never mutated,
     /// and no further inbound admission occurs.
-    #[must_use]
-    pub(crate) fn shutdown(&self) -> RuntimeClientResult {
-        self.runtime.shutdown();
-        RuntimeClientResult::ShutdownAccepted
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::InvalidState`] while the runtime is
+    /// not yet activated: an inert conversation has no runtime lifecycle
+    /// to end, so the request is refused and nothing is published.
+    pub(crate) fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.runtime
+            .shutdown()
+            .map_err(|_error| RuntimeClientError::InvalidState {
+                message: "the conversation runtime is not activated".to_owned(),
+            })?;
+        Ok(RuntimeClientResult::ShutdownAccepted)
     }
 }
 
@@ -820,12 +833,14 @@ impl RuntimeClientHost {
         // ---- Infallible wiring: from here construction always succeeds. ----
         //
         // The projection mirrors the runtime's authoritative seed exactly
-        // — canonical history, session model, capability snapshot, pending
-        // inbound, and pre-existing background executions — entirely as
-        // snapshot state. No seeded fact is routed through
-        // `RuntimeClientProjection::apply`, so bootstrap allocates no
-        // cursor and publishes no event: the first cursor belongs to a
-        // real post-activation transition.
+        // — canonical history, session model, capability snapshot, and
+        // pending inbound — entirely as snapshot state. No seeded fact is
+        // routed through `RuntimeClientProjection::apply`, so bootstrap
+        // allocates no cursor and publishes no event: the first cursor
+        // belongs to a real post-activation transition. (The background
+        // seed is provably empty under the Issue #61 lifecycle: the
+        // registry refuses dispatch commits while its mailbox is bound
+        // inactive.)
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
             seed.messages.clone(),
@@ -1073,8 +1088,12 @@ impl RuntimeClientHost {
     }
 
     /// Accepts the local-runtime shutdown request.
-    #[must_use]
-    pub fn shutdown(&self) -> RuntimeClientResult {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::InvalidState`] while the runtime is
+    /// not yet activated.
+    pub fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.shutdown()
     }
 
@@ -1294,7 +1313,8 @@ mod tests {
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, InboundAdmissionError,
+        ModelUpdateError, RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::types::RuntimeClock;
@@ -2448,6 +2468,7 @@ mod tests {
             .tool_runtime()
             .background()
             .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted dispatch");
         };
@@ -2901,6 +2922,7 @@ mod tests {
             .tool_runtime()
             .background()
             .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted dispatch");
         };
@@ -3029,8 +3051,9 @@ mod tests {
                 crate::tools::environment::ToolEnvironment::new(),
             )
             .expect("prepare");
-        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-            registry.commit_dispatch(prepared, &CancellationSignal::new())
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted dispatch");
         };
@@ -3141,6 +3164,7 @@ mod tests {
             .tool_runtime()
             .background()
             .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted dispatch");
         };
@@ -3525,6 +3549,7 @@ mod tests {
             .tool_runtime()
             .background()
             .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted");
         };
@@ -3612,6 +3637,7 @@ mod tests {
             .tool_runtime()
             .background()
             .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("dispatch commits")
         else {
             panic!("accepted");
         };
@@ -4814,22 +4840,41 @@ mod tests {
         assert_eq!(adapter.requests().len(), 2, "the reattached turn ran");
     }
 
-    /// Test 1 — bootstrap state never allocates a live cursor event.
+    /// Test C + D + E — no runtime-owned semantic commit can cross the
+    /// bootstrap while the runtime is inactive, so cursor 0 is genuinely
+    /// stable until `activate()`.
     ///
-    /// A background execution and a real capability activation exist
-    /// *before* the Runtime Client host binds. The initial snapshot must
-    /// carry both, the snapshot cursor must still be the bootstrap cursor
-    /// `0`, and no `BackgroundExecutionUpdated` / `CapabilityPublished`
-    /// event may exist merely because the state pre-existed. The first
-    /// real post-bootstrap transition then receives cursor `1`.
+    /// With the host bound over the inert runtime: an inbound submit, a
+    /// background dispatch commit, and a capability commit are all refused
+    /// typed and consume nothing; the snapshot stays at cursor 0 with the
+    /// startup capability revision seeded, and a subscription from cursor 0
+    /// stays `Pending`. After `activate()` the first real transition
+    /// receives cursor 1.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn bootstrap_state_allocates_no_live_cursor_event() {
+    async fn pre_activation_semantic_commits_cannot_cross_the_bootstrap() {
         let (_adapter, fixture) =
             runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
 
-        // Pre-existing background state, dispatched through the real
-        // background path before any host binds.
+        // Bind the host over the inert runtime. The startup capability
+        // revision (committed before the runtime existed, during
+        // composition) is legitimate bootstrap state; nothing else is.
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("host binds before activation");
+
+        // Exercise every legal pre-activation operation against the
+        // conversation-bound subsystems: each is refused typed and
+        // consumes nothing.
+        assert!(matches!(
+            fixture.runtime.submit_inbound(submit_content("early")),
+            Err(InboundAdmissionError::Inactive)
+        ));
+
+        // A background dispatch can prepare (that is pure preparation) but
+        // its ownership commit is refused: no record, no runner start.
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let registry = fixture.runtime.tool_runtime().background().clone();
@@ -4845,60 +4890,55 @@ mod tests {
                 &executor,
                 crate::tools::environment::ToolEnvironment::new(),
             )
-            .expect("prepare");
-        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
-            registry.commit_dispatch(prepared, &CancellationSignal::new())
-        else {
-            panic!("accepted dispatch");
-        };
-        started
-            .wait_for(|started| *started)
-            .await
-            .expect("background runner started");
+            .expect("preparation is allowed before activation");
+        let refused = registry.commit_dispatch(prepared, &CancellationSignal::new());
+        assert!(
+            matches!(
+                refused,
+                Err(crate::tools::background::BackgroundDispatchError::ConversationInactive { .. })
+            ),
+            "a background ownership commit before activation is refused typed: {refused:?}"
+        );
+        assert!(
+            registry.all_snapshots().is_empty(),
+            "the refused commit published no record"
+        );
+        assert!(!*started.borrow(), "the rolled-back runner never began");
 
-        // Pre-existing capability state: a real activation.
+        // A capability commit on the runtime-owned coordinator is refused
+        // typed: the active revision stays the startup one.
         write_probe_skill(&fixture.workspace, "pdf");
         let candidate = fixture
             .coordinator
             .prepare_candidate()
             .await
-            .expect("prepare with the probe skill");
-        let activated = fixture.coordinator.commit(candidate).expect("commit");
-        assert_eq!(activated.revision().get(), 1, "a real semantic activation");
+            .expect("prepare is allowed before activation");
+        let refused = fixture.coordinator.commit(candidate);
+        assert_eq!(
+            refused,
+            Err(crate::capabilities::CapabilityCommitError::ConversationInactive),
+            "a runtime-owned capability commit before activation is refused typed"
+        );
 
-        // Bind the host over the inert runtime.
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: fixture.runtime.clone(),
-            replay_limit: None,
-        })
-        .expect("host binds before activation");
-
+        // The bootstrap snapshot is exactly the startup state at cursor 0.
+        // (The startup capability commit during composition was a no-op
+        // against the empty candidate, so the seeded revision is 0.)
         let (snapshot, cursor) = host.snapshot().expect("snapshot");
-        assert_eq!(
-            cursor,
-            RuntimeClientCursor::new(0),
-            "bootstrap state allocates no cursor"
-        );
-        assert_eq!(
-            snapshot.background.len(),
-            1,
-            "the pre-existing background execution is seeded"
-        );
-        assert_eq!(snapshot.background[0].execution_id, execution_id);
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert_eq!(
             snapshot.capabilities.revision.get(),
-            1,
-            "the pre-existing capability activation is seeded"
+            0,
+            "the startup capability revision is seeded"
         );
         assert!(
-            snapshot.attempt.is_none() && snapshot.status.is_none(),
-            "an inert runtime has no attempt and no composed status"
+            snapshot.background.is_empty(),
+            "no background record exists at bootstrap"
         );
+        assert!(snapshot.attempt.is_none() && snapshot.status.is_none());
         assert_eq!(snapshot.context.compaction_count, 0);
 
-        // A subscription from the bootstrap cursor observes nothing at
-        // all until a real transition happens: no synthetic replay of the
-        // seeded state exists.
+        // A subscription from the bootstrap cursor observes nothing at all
+        // until a real post-activation transition happens.
         let (attachment, _) = host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
@@ -4907,12 +4947,45 @@ mod tests {
             .expect("subscribe from the bootstrap cursor");
         assert!(
             matches!(subscription.try_next(), EventDelivery::Pending),
-            "the bootstrap seed published no event"
+            "cursor 0 stays Pending until activation"
         );
 
-        // The first real post-bootstrap transition receives cursor 1.
+        // Activation opens every gate at once. The first real transition
+        // — the capability commit — receives cursor 1, the next — the
+        // background dispatch commit — cursor 2.
         fixture.runtime.activate();
-        release.notify_waiters();
+        let activated = fixture
+            .coordinator
+            .commit(
+                fixture
+                    .coordinator
+                    .prepare_candidate()
+                    .await
+                    .expect("prepare after activation"),
+            )
+            .expect("a runtime-owned commit succeeds after activation");
+        assert_eq!(activated.revision().get(), 1, "the first real activation");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(
+                registry
+                    .prepare_dispatch(
+                        &ToolInvocation {
+                            call_id: ToolCallId::new("call-bg-2"),
+                            tool_id: ToolId::new("tool-bg"),
+                            tool_name: "bg".to_owned(),
+                            mode: ToolInvocationMode::Background,
+                            arguments: serde_json::json!({}),
+                        },
+                        &executor,
+                        crate::tools::environment::ToolEnvironment::new(),
+                    )
+                    .expect("prepare"),
+                &CancellationSignal::new(),
+            )
+            .expect("dispatch commits after activation")
+        else {
+            panic!("accepted dispatch");
+        };
         let events = receive_until(&subscription, |event| {
             matches!(
                 event.event,
@@ -4923,11 +4996,19 @@ mod tests {
         assert_eq!(
             events[0].cursor,
             RuntimeClientCursor::new(1),
-            "the first cursor belongs to a real post-bootstrap transition"
+            "the first cursor belongs to a real post-activation transition"
         );
-        // The terminal background settlement publishes its canonical
-        // notification enqueue and then the registry transition — both
-        // real post-activation facts.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeClientEvent::CapabilityPublished { .. }
+                ))
+                .count(),
+            1,
+            "the post-activation capability commit is published exactly once"
+        );
         assert_eq!(
             events
                 .iter()
@@ -4937,71 +5018,155 @@ mod tests {
                 ))
                 .count(),
             1,
-            "exactly one real background transition, never a seeded replay"
+            "the post-activation background commit is published exactly once, never seeded"
         );
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event.event, RuntimeClientEvent::CapabilityPublished { .. })),
-            "the seeded capability activation is never re-published"
-        );
+        // The conversation-owned runner really starts and settles after
+        // activation.
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the post-activation runner starts");
+        release.notify_waiters();
+        registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
     }
 
-    /// A session model update that linearizes before the bootstrap cut is
-    /// part of the seed and is never re-applied as a live observation.
+    /// Test A — a model mutation while the runtime is inactive is rejected
+    /// typed and consumes nothing: the model is unchanged, the host
+    /// snapshot stays at cursor 0, and no `SessionModelChanged` event
+    /// exists. After activation the same update succeeds and is delivered
+    /// exactly once with the first real cursor.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn pre_bootstrap_model_transition_is_seeded_not_duplicated() {
+    async fn model_set_while_inactive_is_rejected_and_consumes_nothing() {
         let (_adapter, fixture) =
             runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
-
-        // The transition linearizes before any host exists: it is folded
-        // into the runtime's authoritative state with no consumer.
-        fixture
-            .runtime
-            .model_set(marked_model_config(&fixture.runtime, "before-cut"))
-            .expect("model transition before the cut");
-
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
             runtime: fixture.runtime.clone(),
             replay_limit: None,
         })
         .expect("host construction");
-        fixture.runtime.activate();
 
-        // The seed contains the transition...
+        // The live mutation is refused typed while inactive...
+        let refused = fixture
+            .runtime
+            .model_set(marked_model_config(&fixture.runtime, "early"))
+            .expect_err("a model update while inactive is refused");
+        assert_eq!(refused, ModelUpdateError::Inactive);
+
+        // ...consumes nothing: the model is unchanged, the snapshot is the
+        // bootstrap state at cursor 0, and no event exists.
         let (snapshot, cursor) = host.snapshot().expect("snapshot");
-        assert_eq!(
-            snapshot.model.configured.request_params.get("before-cut"),
-            Some(&serde_json::json!("changed")),
-            "the pre-cut transition must be part of the seed"
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert!(
+            snapshot
+                .model
+                .configured
+                .request_params
+                .get("early")
+                .is_none(),
+            "the rejected update left the model unchanged"
         );
-        assert_eq!(
-            cursor,
-            RuntimeClientCursor::new(0),
-            "the seed allocated no cursor"
-        );
-        // ...and it is not re-applied as an extra live event: drive one
-        // real turn and assert no SessionModelChanged publication exists.
         let (attachment, _) = host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
             .expect("attach");
-        let subscription = attachment.subscribe_events(cursor).expect("subscribe");
-        attachment
-            .handle_request(RuntimeClientRequest::SubmitInbound {
-                id: crate::runtime_client::RequestId::new(1),
-                content: submit_content("drive a turn"),
-            })
-            .result
-            .expect("accepted");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe");
+        assert!(
+            matches!(subscription.try_next(), EventDelivery::Pending),
+            "the rejected update published no event"
+        );
+
+        // After activation the same update succeeds and receives the first
+        // real cursor, exactly once.
+        fixture.runtime.activate();
+        fixture
+            .runtime
+            .model_set(marked_model_config(&fixture.runtime, "early"))
+            .expect("the update succeeds after activation");
         let events = receive_until(&subscription, |event| {
-            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+            matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
         })
         .await;
+        assert_eq!(
+            events[0].cursor,
+            RuntimeClientCursor::new(1),
+            "the first cursor belongs to the real post-activation transition"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    RuntimeClientEvent::SessionModelChanged { .. }
+                ))
+                .count(),
+            1,
+            "the post-activation update is delivered exactly once"
+        );
+    }
+
+    /// Test B — a shutdown while the runtime is inactive is rejected typed
+    /// and is non-semantic: the runtime is not marked shutting down, the
+    /// snapshot stays at cursor 0, and no `RuntimeShutdown` event exists.
+    /// After activation shutdown retains the existing runtime semantics.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_while_inactive_is_rejected_and_consumes_nothing() {
+        let (_adapter, fixture) =
+            runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("host construction");
+
+        assert_eq!(
+            fixture.runtime.shutdown(),
+            Err(crate::runtime::conversation_runtime::ShutdownError::Inactive),
+            "a shutdown while inactive is refused typed"
+        );
+        let (snapshot, cursor) = host.snapshot().expect("snapshot");
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
         assert!(
-            !events.iter().any(|event| {
-                matches!(event.event, RuntimeClientEvent::SessionModelChanged { .. })
-            }),
-            "the pre-cut transition must never be re-published"
+            !snapshot.shutting_down,
+            "the refused shutdown never marked the runtime shutting down"
+        );
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe");
+        assert!(
+            matches!(subscription.try_next(), EventDelivery::Pending),
+            "the refused shutdown published no event"
+        );
+
+        // After activation shutdown keeps its existing semantics: accepted,
+        // published exactly once, and inbound is gated afterwards.
+        fixture.runtime.activate();
+        fixture
+            .runtime
+            .shutdown()
+            .expect("accepted after activation");
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::RuntimeShutdown)
+        })
+        .await;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, RuntimeClientEvent::RuntimeShutdown))
+                .count(),
+            1,
+            "the post-activation shutdown publishes exactly one event"
+        );
+        assert_eq!(
+            fixture.runtime.submit_inbound(submit_content("late")),
+            Err(InboundAdmissionError::Shutdown)
         );
     }
 

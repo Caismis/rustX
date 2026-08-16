@@ -17,10 +17,16 @@
 //! cancellation resources, and spawns the runner behind a start/commit gate
 //! (the runner cannot begin before the gate is released). [`ConversationBackgroundRegistry::commit_dispatch`]
 //! is the one deterministic linearization point of background ownership:
-//! the registry synchronization boundary is acquired first, the final
-//! attempt-cancellation observation happens at that same protected boundary,
-//! and only then does the commit happen:
+//! the registry synchronization boundary is acquired first, the activation
+//! gate and the final attempt-cancellation observation happen at that same
+//! protected boundary, and only then does the commit happen:
 //!
+//! - the owning conversation runtime is inactive (Issue #61): the commit is
+//!   refused with [`BackgroundDispatchError::ConversationInactive`] and the
+//!   prepared dispatch rolls back completely — no published record, no
+//!   accepted result, the runner never begins. Once a `ConversationToolRuntime`
+//!   is claimed by a `ConversationRuntime`, new background ownership commits
+//!   cannot begin before `ConversationRuntime::activate`;
 //! - attempt cancellation observable at the boundary: the prepared dispatch
 //!   rolls back completely under the same boundary — no published record,
 //!   no accepted result, the runner is aborted and never begins;
@@ -28,8 +34,8 @@
 //!   ownership transfers exactly once, the accepted result is produced, and
 //!   a later attempt cancellation can never reclaim the detached execution.
 //!
-//! There is no unchecked window between the deciding cancellation
-//! observation and the prepared→owned registry transition.
+//! There is no unchecked window between the deciding observations and the
+//! prepared→owned registry transition.
 //!
 //! # Cancellation-vs-completion race
 //!
@@ -214,6 +220,19 @@ pub enum BackgroundDispatchOutcome {
 pub enum BackgroundDispatchError {
     /// The invocation is not a background invocation.
     NotBackgroundInvocation,
+    /// The conversation mailbox of this registry is bound to a
+    /// `ConversationRuntime` that has not been activated yet (Issue #61).
+    ///
+    /// A new background ownership commit cannot begin before the owning
+    /// conversation runtime activates: the prepared dispatch is rolled
+    /// back completely — no published record, no accepted result, and the
+    /// runner never begins. The conversation-bound instance follows the
+    /// runtime lifecycle; only a standalone (unclaimed) registry commits
+    /// unconditionally.
+    ConversationInactive {
+        /// The conversation whose runtime has not been activated.
+        conversation_id: ConversationId,
+    },
     /// The execution sequence space is exhausted.
     SequenceExhausted,
     /// An internal dispatch failure.
@@ -226,6 +245,10 @@ impl core::fmt::Display for BackgroundDispatchError {
             Self::NotBackgroundInvocation => write!(
                 f,
                 "only background invocations can be dispatched to the background registry"
+            ),
+            Self::ConversationInactive { conversation_id } => write!(
+                f,
+                "conversation {conversation_id} is not activated; a new background ownership commit cannot begin before the owning conversation runtime activates"
             ),
             Self::SequenceExhausted => write!(f, "the execution sequence space is exhausted"),
             Self::Internal(message) => write!(f, "background dispatch failed: {message}"),
@@ -503,24 +526,53 @@ impl ConversationBackgroundRegistry {
 
     /// Stage two: commits the prepared dispatch (the linearization point).
     ///
-    /// The registry synchronization boundary is acquired first; the final
-    /// attempt-cancellation observation happens at that same protected
-    /// boundary, so there is no unchecked window between the deciding
-    /// cancellation observation and the prepared→owned transition. If the
-    /// attempt cancellation is observable, the prepared dispatch rolls back
-    /// completely under the boundary — no published record, no accepted
-    /// result, and the runner is aborted and never begins. Otherwise
-    /// conversation ownership commits exactly once: the record is published
-    /// as `Starting`, the runner gate is released, and the accepted
+    /// The registry synchronization boundary is acquired first; the
+    /// activation gate and the final attempt-cancellation observation
+    /// happen at that same protected boundary, so there is no unchecked
+    /// window between the deciding observations and the prepared→owned
+    /// transition.
+    ///
+    /// The activation gate is the owning conversation runtime's lifecycle:
+    /// when this registry's mailbox is bound to an inactive
+    /// `ConversationRuntime`, the commit is refused with
+    /// [`BackgroundDispatchError::ConversationInactive`] and the prepared
+    /// dispatch rolls back completely — no published record, no accepted
+    /// result, and the runner is aborted and never begins (Issue #61:
+    /// once a conversation tool runtime is claimed by a conversation
+    /// runtime, new background ownership commits cannot begin before
+    /// `ConversationRuntime::activate`). A standalone registry whose
+    /// mailbox is unbound commits unconditionally.
+    ///
+    /// If the runtime is active and the attempt cancellation is observable
+    /// at the boundary, the prepared dispatch rolls back completely under
+    /// the boundary — no published record, no accepted result, and the
+    /// runner is aborted and never begins. Otherwise conversation
+    /// ownership commits exactly once: the record is published as
+    /// `Starting`, the runner gate is released, and the accepted
     /// attempt-facing result is produced. No await or cancellation
     /// checkpoint can split the ownership commit from the accepted result.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackgroundDispatchError::ConversationInactive`] when the
+    /// owning conversation runtime has not been activated.
     pub fn commit_dispatch(
         &self,
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
-    ) -> BackgroundDispatchOutcome {
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         let mut state = self.state();
+        // The activation gate: observed under this registry critical
+        // section, so the commit linearizes cleanly against
+        // `ConversationRuntime::activate` — a commit that observes the
+        // pre-activation state is refused, one that observes the
+        // post-activation state is a real post-activation transition. On
+        // refusal the prepared handle drops and rolls the dispatch back.
+        if self.resources.mailbox.is_bound_inactive() {
+            return Err(BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            });
+        }
         // TEST-ONLY ownership-commit boundary: the registry lock is held and
         // the deciding cancellation observation is next. Tests park here to
         // make the linearization exact.
@@ -537,11 +589,11 @@ impl ConversationBackgroundRegistry {
                 prepared_record.runner.abort();
             }
             prepared.committed = true;
-            return BackgroundDispatchOutcome::RolledBack;
+            return Ok(BackgroundDispatchOutcome::RolledBack);
         }
         let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
             prepared.committed = true;
-            return BackgroundDispatchOutcome::RolledBack;
+            return Ok(BackgroundDispatchOutcome::RolledBack);
         };
         let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
         let execution_id = prepared.execution_id.clone();
@@ -553,10 +605,10 @@ impl ConversationBackgroundRegistry {
         self.notify_state_change();
         prepared.committed = true;
         prepared_record.gate.notify_one();
-        BackgroundDispatchOutcome::Accepted {
+        Ok(BackgroundDispatchOutcome::Accepted {
             execution_id,
             result,
-        }
+        })
     }
 
     /// Requests cancellation of one execution and returns the canonical
@@ -1110,6 +1162,67 @@ mod tests {
             .expect("prepare")
     }
 
+    /// A dispatch commit on a registry whose mailbox is bound to an
+    /// inactive conversation runtime is refused typed (Issue #61): no
+    /// published record, no accepted result, and the runner never begins —
+    /// the prepared dispatch rolls back completely. Opening the mailbox
+    /// (activation) restores normal dispatch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn commit_is_refused_while_the_owning_runtime_is_inactive() {
+        let fixture = registry("conv-bg-gated");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        // Claim the registry's mailbox exactly as
+        // `ConversationRuntime::new` does.
+        fixture.mailbox.bind_inactive();
+
+        let prepared = prepare(&fixture, &executor);
+        let refused = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect_err("a runtime-owned commit before activation is refused");
+        assert_eq!(
+            refused,
+            super::BackgroundDispatchError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-bg-gated"),
+            }
+        );
+        assert_eq!(
+            fixture.registry.all_snapshots().len(),
+            0,
+            "the refused commit published no record"
+        );
+        assert!(!*started.borrow(), "the rolled-back runner never began");
+
+        // Activation (the mailbox opens) restores normal dispatch.
+        fixture.mailbox.activate();
+        let prepared = prepare(&fixture, &executor);
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("dispatch commits after activation")
+        else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the post-activation runner starts");
+        release.notify_one();
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the post-activation execution settles normally"
+        );
+    }
+
     /// Cancellation observable at the ownership-commit boundary rolls the
     /// prepared dispatch back: no published record, no accepted result, and
     /// the runner never begins. The test parks the commit exactly between
@@ -1128,7 +1241,9 @@ mod tests {
         let registry = fixture.registry.clone();
         let attempt_for_task = attempt_cancellation.clone();
         let commit_task = tokio::task::spawn_blocking(move || {
-            registry.commit_dispatch(prepared, &attempt_for_task)
+            registry
+                .commit_dispatch(prepared, &attempt_for_task)
+                .expect("the commit returns an outcome")
         });
         // The commit is parked inside its critical section: the deciding
         // cancellation observation is next. The hook interactions run on
@@ -1182,7 +1297,9 @@ mod tests {
         let registry = fixture.registry.clone();
         let attempt_for_task = attempt_cancellation.clone();
         let commit_task = tokio::task::spawn_blocking(move || {
-            registry.commit_dispatch(prepared, &attempt_for_task)
+            registry
+                .commit_dispatch(prepared, &attempt_for_task)
+                .expect("the commit returns an outcome")
         });
         // Release the boundary immediately: ownership commits while the
         // attempt cancellation is still fresh. The hook interactions run
@@ -1225,10 +1342,13 @@ mod tests {
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = prepare(&fixture, &executor);
-        let outcome = fixture.registry.commit_dispatch(
-            prepared,
-            &crate::runtime::cancellation::CancellationSignal::new(),
-        );
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("the commit returns an outcome");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
@@ -1317,10 +1437,13 @@ mod tests {
                 ToolEnvironment::new(),
             )
             .expect("prepare");
-        let outcome = fixture.registry.commit_dispatch(
-            prepared,
-            &crate::runtime::cancellation::CancellationSignal::new(),
-        );
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("the commit returns an outcome");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };

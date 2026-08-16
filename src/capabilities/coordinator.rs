@@ -79,6 +79,14 @@ struct CoordinatorInner {
     /// Claimed by the one conversation runtime coordinator of this
     /// identity.
     coordinator_claimed: AtomicBool,
+    /// Whether the claiming conversation runtime was activated (Issue #61).
+    ///
+    /// Set by [`CapabilityCoordinator::activate_conversation`] at the
+    /// runtime's activation, under the same coordinator lock section that
+    /// flips every other runtime-owned gate. A runtime-owned `commit` is
+    /// refused while the coordinator is claimed and this flag is unset;
+    /// a standalone (unclaimed) coordinator commits unconditionally.
+    conversation_activated: AtomicBool,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
@@ -254,6 +262,7 @@ impl CapabilityCoordinator {
                 observer: Mutex::new(None),
                 runtime_client_bound: AtomicBool::new(false),
                 coordinator_claimed: AtomicBool::new(false),
+                conversation_activated: AtomicBool::new(false),
                 #[cfg(test)]
                 commit_hook: Mutex::new(None),
             }),
@@ -310,6 +319,21 @@ impl CapabilityCoordinator {
     #[must_use]
     pub fn is_conversation_runtime_bound(&self) -> bool {
         self.inner.coordinator_claimed.load(Ordering::Acquire)
+    }
+
+    /// Opens the runtime-owned commit gate: the claiming conversation
+    /// runtime was activated, so live capability commits may begin.
+    ///
+    /// Called once by
+    /// [`ConversationRuntime::activate`](crate::runtime::conversation_runtime::ConversationRuntime::activate)
+    /// under the one coordinator lock, so the flag flips atomically with
+    /// every other runtime-owned lifecycle gate. The store is `Release`:
+    /// a `commit` that observes it (via `Acquire`) linearizes after
+    /// activation and is a real post-activation transition.
+    pub(crate) fn activate_conversation(&self) {
+        self.inner
+            .conversation_activated
+            .store(true, Ordering::Release);
     }
 
     /// The current active capability snapshot.
@@ -484,6 +508,21 @@ impl CapabilityCoordinator {
     /// rejected as stale; an identical candidate is a no-op that returns
     /// the current snapshot without fabricating a new revision.
     ///
+    /// # Lifecycle (Issue #61)
+    ///
+    /// Once a `ConversationRuntime` owns this coordinator, live capability
+    /// mutation follows the runtime lifecycle: a commit while the owning
+    /// runtime is inactive is refused with
+    /// [`CapabilityCommitError::ConversationInactive`] and changes nothing.
+    /// The startup commit performed *before* the conversation runtime is
+    /// constructed (the coordinator is unclaimed then) remains allowed, and
+    /// after `ConversationRuntime::activate` commits follow the normal
+    /// quiescence rules. The gate is observed under this same
+    /// synchronization boundary, so a commit linearizes cleanly against
+    /// activation: a commit that observes the pre-activation state is
+    /// refused, one that observes the post-activation state is a real
+    /// post-activation transition.
+    ///
     /// # MCP invalidation linearization
     ///
     /// The final epoch validation and the snapshot swap happen under the
@@ -508,9 +547,11 @@ impl CapabilityCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`CapabilityCommitError::Busy`] while an attempt lease is
-    /// active and [`CapabilityCommitError::StaleCandidate`] for an obsolete
-    /// base revision.
+    /// Returns [`CapabilityCommitError::ConversationInactive`] while the
+    /// owning conversation runtime is inactive,
+    /// [`CapabilityCommitError::Busy`] while an attempt lease is active and
+    /// [`CapabilityCommitError::StaleCandidate`] for an obsolete base
+    /// revision.
     ///
     /// # Panics
     ///
@@ -536,6 +577,15 @@ impl CapabilityCoordinator {
             .clone()
         {
             hook.enter();
+        }
+        // The runtime-owned activation gate: observed under this same
+        // boundary, so the commit linearizes cleanly against
+        // `ConversationRuntime::activate`. An unclaimed (standalone)
+        // coordinator commits unconditionally.
+        if self.inner.coordinator_claimed.load(Ordering::Acquire)
+            && !self.inner.conversation_activated.load(Ordering::Acquire)
+        {
+            return Err(CapabilityCommitError::ConversationInactive);
         }
         if candidate.base_revision != state.revision {
             return Err(CapabilityCommitError::StaleCandidate {

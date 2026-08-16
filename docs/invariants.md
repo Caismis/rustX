@@ -1313,6 +1313,18 @@ The frozen invariants:
   `CapabilityCoordinator`, and provider/model path as an interactive
   runtime. Headless composition is the same coordinator — never a fake
   client host and never a second execution implementation.
+- **Production composition is two-layer: one shared semantic assembly,
+  two final paths.** `LocalConversationCore` (in
+  `src/local_runtime/composition.rs`) is the single assembly of the model
+  catalog/session/tool/capability/context pieces and constructs the
+  `ConversationRuntime` **inactive**. The interactive path
+  (`LocalConversationRuntime::compose`) binds the Runtime Client host over
+  the inert core and then activates; the headless path
+  (`HeadlessConversationRuntime::compose`) activates the same core with no
+  Runtime Client host ever constructed. Both paths return already-active
+  handles, both activate through the one
+  `ConversationRuntime::activate` boundary, and neither duplicates the
+  semantic assembly.
 - **The semantic runtime does not depend on Runtime Client vocabulary.**
   The conversation runtime publishes a runtime-owned semantic
   observation contract (`ConversationObservation` in
@@ -1347,13 +1359,32 @@ The frozen invariants:
 - **The conversation runtime has one explicit lifecycle boundary.**
   `ConversationRuntime::new` constructs the runtime **inactive** and
   `ConversationRuntime::activate` is the one transition to active. An
-  inactive runtime is inert and this is structural, not conventional: its
-  mailbox refuses `enqueue` with `MailboxError::ConversationInactive`,
-  `submit_inbound` fails with `InboundAdmissionError::Inactive`,
-  `admit_next_attempt` returns without admitting, no admission worker
-  exists, and it therefore publishes no `ConversationObservation` at all.
-  Activation sets the flag, opens the mailbox, spawns the worker, and
-  attempts one admission, all against the one coordinator lock.
+  inactive runtime is inert and this is **structural, not conventional**:
+  once a `ConversationRuntime` owns its semantic subsystems, the inactive
+  phase admits no conversation-semantic mutation at all:
+
+  - the mailbox refuses `enqueue` with `MailboxError::ConversationInactive`
+    and `submit_inbound` fails with `InboundAdmissionError::Inactive`;
+  - `model_set` fails with the typed `ModelUpdateError::Inactive` and
+    consumes nothing (construction-time model configuration belongs in the
+    `SessionModelState` supplied to `ConversationRuntime::new`);
+  - `shutdown` fails with the typed `ShutdownError::Inactive` and consumes
+    nothing — an inert conversation has no runtime lifecycle to end;
+  - the background registry refuses `commit_dispatch` with the typed
+    `BackgroundDispatchError::ConversationInactive` while its mailbox is
+    bound inactive: a new background ownership commit cannot begin before
+    activation, and the prepared dispatch rolls back completely;
+  - the capability coordinator refuses a runtime-owned `commit` with
+    `CapabilityCommitError::ConversationInactive` before activation; the
+    startup commit performed *before* the conversation runtime is
+    constructed remains allowed.
+
+  The gates are small shared pieces of state, never coordinator callbacks:
+  the mailbox's own admission flag and the capability coordinator's
+  runtime-owned activation flag, both flipped by `activate` under the one
+  coordinator lock. `admit_next_attempt` returns without admitting, no
+  admission worker exists before activation, and an inactive runtime
+  therefore publishes no `ConversationObservation` at all.
 - **Binding a Runtime Client host is a pre-activation composition
   decision.** A `RuntimeClientHost` binds while its runtime is inactive;
   a bind after activation is refused with the typed
@@ -1426,28 +1457,32 @@ The frozen invariants:
 
   This is proven by synchronization, not asserted. At `R` every captured
   value is still its authority's live value: coordinator facts cannot
-  move because every mutator takes the lock held across `[T0, R]`; a
-  background record transitions only through tool execution, which needs
-  an admitted attempt and therefore activation; the mailbox refuses
-  `enqueue` while its bound runtime is inactive; and the capability
-  snapshot is captured *at* `R`. Each authority installs its observer in
-  the same lock section that captures its seed, so no transition is both
-  seeded and queued, and none is neither. Because an inactive runtime
-  publishes nothing, `R` coincides with activation and the live stream
-  carries every observation the runtime ever emits.
+  move because every mutator takes the lock held across `[T0, R]`; the
+  background registry refuses `commit_dispatch` while its mailbox is bound
+  inactive, so no background record exists across `[T0, R]` and none can
+  be created; the mailbox refuses `enqueue` while its bound runtime is
+  inactive; the capability coordinator refuses a runtime-owned `commit`
+  before activation; and the capability snapshot is captured *at* `R`.
+  Each authority installs its observer in the same lock section that
+  captures its seed, so no transition is both seeded and queued, and none
+  is neither. Because an inactive runtime publishes nothing, `R` coincides
+  with activation and the live stream carries every observation the
+  runtime ever emits.
 
   If the bridge step fails, the claim is released and the failure is a
   typed error: a failed host construction never leaves a
   claimed-but-invalid binding.
 - **Bootstrap state never fabricates a live event.**
   `RuntimeClientProjection::bootstrap` installs every seeded fact —
-  canonical history, session model, capability snapshot, pending inbound,
-  *and pre-existing background executions* — as snapshot state. No seeded
+  canonical history, session model, capability snapshot, and pending
+  inbound — as snapshot state. No seeded
   fact is routed through `RuntimeClientProjection::apply`, so bootstrap
   publishes no `RuntimeClientEvent` and allocates no
   `RuntimeClientCursor`. `{ snapshot, cursor 0 }` is the state at `R`, and
   the first allocated cursor always belongs to a real post-activation
-  semantic transition.
+  semantic transition: the background seed is provably empty under the
+  lifecycle rule, and every other authority's semantic commit is
+  lifecycle-gated until activation.
 - **The runtime keeps no mirrored client read model.** The runtime folds
   `ConversationObservation` exactly zero times: `src/runtime/observation.rs`
   owns the vocabulary and the leaf queue, and the Runtime Client

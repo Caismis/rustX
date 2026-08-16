@@ -1,4 +1,5 @@
-//! The one Rust-side local runtime composition owner (Issue #42).
+//! The one Rust-side local runtime composition owner (Issue #42, Issue
+//! #61).
 //!
 //! ```text
 //! explicit startup configuration
@@ -15,19 +16,30 @@
 //!         +--> context policy/estimator/status pieces
 //!         |
 //!         v
-//! ConversationRuntime (Issue #61: the semantic conversation coordinator)
-//!         |            [constructed inactive]
-//!         +--> RuntimeClientHost (projection/control/attachment adapter)
-//!         |            [optional, bound before activation]
-//!         v
-//! ConversationRuntime::activate()   <- semantic execution may begin
+//! LocalConversationCore  (the shared semantic composition, inactive)
 //!         |
-//!         v
-//! RuntimeClientEndpoint
+//!         +-- into_interactive(): bind RuntimeClientHost, then activate
+//!         |       -> LocalConversationRuntime (Runtime Client + endpoint)
 //!         |
-//!         v
-//! stdio / JSONL  (Issue #38)
+//!         +-- into_headless(): activate with no Runtime Client host
+//!                 -> HeadlessConversationRuntime (Issue #60 subagents)
 //! ```
+//!
+//! The semantic composition — the model catalog/session/tool/capability/
+//! context assembly — exists exactly once in
+//! [`LocalConversationCore::compose`]. The interactive and headless
+//! production runtimes are the two final paths over that same core:
+//!
+//! ```text
+//! compose semantic inactive core
+//!     |
+//!     +-- interactive: bind RuntimeClientHost, activate, return
+//!     +-- headless:    activate, return
+//! ```
+//!
+//! Activation is the one explicit lifecycle boundary in both paths
+//! (`ConversationRuntime::activate`), and in both paths the returned
+//! handles are already active.
 //!
 //! The governing invariant:
 //!
@@ -52,14 +64,14 @@
 //! initialized protocol server: composition returns an error and the process
 //! exits before a single protocol byte is written.
 //!
-//! The conversation runtime is constructed **inactive**, the optional
-//! Runtime Client host binds over the inert runtime, and composition then
-//! activates it explicitly. Binding a host is therefore a composition
-//! decision, not a hot operation: a headless composition (Issue #60
-//! subagents, every zero-client regression) omits the host entirely and
-//! activates directly, and a late bind over an activated runtime is
-//! refused with `HostConstructionError::RuntimeAlreadyActivated`. Runtime
-//! Client *attachments* remain fully dynamic after activation.
+//! The conversation runtime is constructed **inactive** inside the core;
+//! the optional Runtime Client host binds over the inert runtime, and the
+//! final path then activates it explicitly. Binding a host is therefore a
+//! composition decision, not a hot operation: a headless composition
+//! (Issue #60 subagents) omits the host entirely and activates directly,
+//! and a late bind over an activated runtime is refused with
+//! `HostConstructionError::RuntimeAlreadyActivated`. Runtime Client
+//! *attachments* remain fully dynamic after activation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -144,30 +156,41 @@ impl std::fmt::Debug for LocalRuntimeDependencies {
     }
 }
 
-/// The composed local conversation runtime.
+/// The shared semantic composition of one local runtime (Issue #61).
 ///
-/// It owns the semantic owners of the process: exactly one
-/// `ConversationToolRuntime`, one `CapabilityCoordinator`, and one
-/// `ConversationRuntime`. The Runtime Client host is the projection/control
-/// adapter over that runtime; the endpoint handed to a transport is derived
-/// from that adapter.
-pub struct LocalConversationRuntime {
+/// This is the single assembly point of the model catalog/session/tool/
+/// capability/context pieces. It owns exactly the semantic owners of the
+/// process — one `ConversationToolRuntime`, one `CapabilityCoordinator`,
+/// and one `ConversationRuntime` — and nothing protocol-shaped. The
+/// conversation runtime is constructed **inactive**; the two final paths
+/// over this core are [`LocalConversationRuntime::compose`] (interactive,
+/// binds a Runtime Client host before activating) and
+/// [`HeadlessConversationRuntime::compose`] (headless, activates without
+/// any Runtime Client host).
+pub struct LocalConversationCore {
     runtime: ConversationRuntime,
-    host: RuntimeClientHost,
     tool_runtime: ConversationToolRuntime,
     capability: CapabilityCoordinator,
 }
 
-impl std::fmt::Debug for LocalConversationRuntime {
+impl std::fmt::Debug for LocalConversationCore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LocalConversationRuntime")
+        f.debug_struct("LocalConversationCore")
             .field("conversation_id", self.tool_runtime.conversation_id())
             .finish_non_exhaustive()
     }
 }
 
-impl LocalConversationRuntime {
-    /// Composes the runtime from explicit startup paths.
+impl LocalConversationCore {
+    /// Composes the shared semantic runtime from explicit startup paths.
+    ///
+    /// The runtime is left **inactive**: the caller must finish through
+    /// [`LocalConversationCore::into_interactive`] or
+    /// [`LocalConversationCore::into_headless`] (or, for low-level
+    /// composition callers, activate the runtime explicitly). Prefer the
+    /// two final composition paths of
+    /// [`LocalConversationRuntime`]/[`HeadlessConversationRuntime`], which
+    /// return already-active handles.
     ///
     /// # Errors
     ///
@@ -241,7 +264,9 @@ impl LocalConversationRuntime {
         })?;
 
         // 10-11. Prepare and commit the initial capability candidate before
-        // anything can serve protocol input.
+        // anything can serve protocol input. This is the startup capability
+        // commit: it happens *before* the conversation runtime exists, so
+        // it is not subject to the runtime's lifecycle gate (Issue #61).
         let candidate = capability.prepare_candidate().await.map_err(|error| {
             LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
@@ -254,7 +279,9 @@ impl LocalConversationRuntime {
             })?;
 
         // 12-13. The context policy/estimator/status pieces and the one
-        // authoritative conversation runtime coordinator.
+        // authoritative conversation runtime coordinator, constructed
+        // **inactive**: the final composition path activates it after the
+        // optional Runtime Client host binds.
         let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: session.agent_id.clone(),
             model,
@@ -270,34 +297,116 @@ impl LocalConversationRuntime {
             initial_messages: Vec::new(),
         })?;
 
+        Ok(Self {
+            runtime,
+            tool_runtime,
+            capability,
+        })
+    }
+
+    /// The one conversation runtime coordinator of this composition.
+    #[must_use]
+    pub const fn runtime(&self) -> &ConversationRuntime {
+        &self.runtime
+    }
+
+    /// The one conversation tool runtime of this composition.
+    #[must_use]
+    pub const fn tool_runtime(&self) -> &ConversationToolRuntime {
+        &self.tool_runtime
+    }
+
+    /// The one capability coordinator of this composition.
+    #[must_use]
+    pub const fn capability(&self) -> &CapabilityCoordinator {
+        &self.capability
+    }
+
+    /// Finishes the composition as an **interactive** runtime: the Runtime
+    /// Client host binds over the still-inactive runtime, then the runtime
+    /// activates. Binding a host is a pre-activation composition decision,
+    /// so this is the only path that may construct a host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocalRuntimeError::Host`] when the Runtime Client host
+    /// cannot bind (a fresh core leaves no reason: no bridge exists and
+    /// the runtime is inactive).
+    pub fn into_interactive(self) -> Result<LocalConversationRuntime, LocalRuntimeError> {
         // 14. The Runtime Client projection/control/attachment adapter over
         // that runtime. Binding is a pre-activation composition decision
         // (Issue #61): the runtime is still inert here, so the host's
         // initial snapshot is the runtime's real state at the activation
         // cut and no bootstrap fact can fabricate a live client event.
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
-            runtime: runtime.clone(),
+            runtime: self.runtime.clone(),
             replay_limit: None,
         })?;
 
         // 15. Activation: the one explicit lifecycle boundary. The client
         // host-binding decision is now frozen, the mailbox opens, the
-        // admission worker starts, and semantic execution may begin. A
-        // headless composition reaches this same step without step 14.
-        runtime.activate();
+        // admission worker starts, and semantic execution may begin.
+        self.runtime.activate();
 
-        Ok(Self {
-            runtime,
-            host,
-            tool_runtime,
-            capability,
-        })
+        Ok(LocalConversationRuntime { core: self, host })
+    }
+
+    /// Finishes the composition as a **headless** runtime: the runtime
+    /// activates with no Runtime Client host at all (Issue #60 subagents,
+    /// every zero-client deployment). The semantic composition is exactly
+    /// the one [`LocalConversationCore::compose`] builds.
+    #[must_use]
+    pub fn into_headless(self) -> HeadlessConversationRuntime {
+        // The one explicit lifecycle boundary, without step 14.
+        self.runtime.activate();
+        HeadlessConversationRuntime { core: self }
+    }
+}
+
+/// The composed interactive local conversation runtime.
+///
+/// It owns the semantic owners of the process (see
+/// [`LocalConversationCore`]) plus the Runtime Client host — the
+/// projection/control adapter over the runtime — and the endpoint handed
+/// to a transport is derived from that adapter.
+pub struct LocalConversationRuntime {
+    core: LocalConversationCore,
+    host: RuntimeClientHost,
+}
+
+impl std::fmt::Debug for LocalConversationRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LocalConversationRuntime")
+            .field("conversation_id", self.tool_runtime().conversation_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalConversationRuntime {
+    /// Composes the interactive runtime from explicit startup paths.
+    ///
+    /// The shared semantic composition (see
+    /// [`LocalConversationCore::compose`]) is built once, the Runtime
+    /// Client host binds over the inert runtime, and the runtime is then
+    /// activated. The returned runtime is already active.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first composition failure. Every failure happens before
+    /// any protocol output exists.
+    pub async fn compose(
+        paths: &LocalRuntimePaths,
+        dependencies: &LocalRuntimeDependencies,
+    ) -> Result<Self, LocalRuntimeError> {
+        LocalConversationCore::compose(paths, dependencies)
+            .await?
+            .into_interactive()
     }
 
     /// The one conversation runtime coordinator of this process.
     #[must_use]
     pub const fn runtime(&self) -> &ConversationRuntime {
-        &self.runtime
+        &self.core.runtime
     }
 
     /// The one Runtime Client host (projection/control adapter) of this
@@ -310,19 +419,79 @@ impl LocalConversationRuntime {
     /// The one conversation tool runtime of this process.
     #[must_use]
     pub const fn tool_runtime(&self) -> &ConversationToolRuntime {
-        &self.tool_runtime
+        &self.core.tool_runtime
     }
 
     /// The one capability coordinator of this process.
     #[must_use]
     pub const fn capability(&self) -> &CapabilityCoordinator {
-        &self.capability
+        &self.core.capability
     }
 
-    /// 15. Creates the Runtime Client endpoint a transport wraps.
+    /// Creates the Runtime Client endpoint a transport wraps.
     #[must_use]
     pub fn endpoint(&self) -> RuntimeClientEndpoint {
         RuntimeClientEndpoint::new(self.host.clone())
+    }
+}
+
+/// The composed headless local conversation runtime.
+///
+/// The same semantic composition as the interactive runtime
+/// ([`LocalConversationCore`]), activated with **no** Runtime Client host:
+/// no projection, no attachment policy, no protocol endpoint. Headless
+/// drivers publish ordinary inbound through
+/// [`ConversationRuntime::submit_inbound`](crate::runtime::conversation_runtime::ConversationRuntime::submit_inbound)
+/// and await settlement through the runtime's settlement signal.
+pub struct HeadlessConversationRuntime {
+    core: LocalConversationCore,
+}
+
+impl std::fmt::Debug for HeadlessConversationRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessConversationRuntime")
+            .field("conversation_id", self.tool_runtime().conversation_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl HeadlessConversationRuntime {
+    /// Composes the headless runtime from explicit startup paths.
+    ///
+    /// The shared semantic composition (see
+    /// [`LocalConversationCore::compose`]) is built once and activated
+    /// directly, with no Runtime Client host ever constructed. The
+    /// returned runtime is already active.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first composition failure. Every failure happens before
+    /// any protocol output exists.
+    pub async fn compose(
+        paths: &LocalRuntimePaths,
+        dependencies: &LocalRuntimeDependencies,
+    ) -> Result<Self, LocalRuntimeError> {
+        Ok(LocalConversationCore::compose(paths, dependencies)
+            .await?
+            .into_headless())
+    }
+
+    /// The one conversation runtime coordinator of this runtime.
+    #[must_use]
+    pub const fn runtime(&self) -> &ConversationRuntime {
+        &self.core.runtime
+    }
+
+    /// The one conversation tool runtime of this runtime.
+    #[must_use]
+    pub const fn tool_runtime(&self) -> &ConversationToolRuntime {
+        &self.core.tool_runtime
+    }
+
+    /// The one capability coordinator of this runtime.
+    #[must_use]
+    pub const fn capability(&self) -> &CapabilityCoordinator {
+        &self.core.capability
     }
 }
 

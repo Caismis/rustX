@@ -791,7 +791,7 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     //      mid-record; the event reaching the wire is the proof.
     assert_eq!(
         fixture.host.shutdown(),
-        RuntimeClientResult::ShutdownAccepted
+        Ok(RuntimeClientResult::ShutdownAccepted)
     );
     sink.await_record(|record| {
         is_event(record) && matches!(as_event(record).event, RuntimeClientEvent::RuntimeShutdown)

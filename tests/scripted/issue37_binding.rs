@@ -202,7 +202,9 @@ fn dispatch_background(
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare background dispatch");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let rustx::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
         outcome
     else {

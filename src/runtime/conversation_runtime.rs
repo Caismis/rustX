@@ -83,10 +83,36 @@
 //! ConversationRuntime::activate()       -> active: semantic execution may begin
 //! ```
 //!
-//! An **inactive** runtime is inert: its mailbox refuses inbound
-//! ([`MailboxError::ConversationInactive`]), no admission worker exists,
-//! [`admit_next_attempt`](RuntimeInner::admit_next_attempt) is a no-op, and
-//! therefore it publishes **no** observation at all.
+//! An **inactive** runtime is inert, and this is enforced, not merely
+//! documented. Once a `ConversationRuntime` owns its semantic subsystems,
+//! the inactive phase admits no conversation-semantic mutation at all:
+//!
+//! ```text
+//! ConversationRuntime constructed
+//!     |
+//!     |  inactive composition phase
+//!     |    no inbound admission        (mailbox refuses enqueue)
+//!     |    no model mutation           (model_set: ModelUpdateError::Inactive)
+//!     |    no shutdown transition      (shutdown:  ShutdownError::Inactive)
+//!     |    no background dispatch commit (registry: BackgroundDispatchError::ConversationInactive)
+//!     |    no active capability commit (coordinator: CapabilityCommitError::ConversationInactive)
+//!     |
+//! [optional RuntimeClientHost bootstrap]
+//!     |
+//! ConversationRuntime::activate()      <- the one freeze/open boundary
+//!     |
+//! all runtime semantic mutations may begin
+//! ```
+//!
+//! The lifecycle gates are small shared pieces of state, never coordinator
+//! callbacks: the mailbox's own admission flag (set by `bind_inactive` at
+//! construction and `activate` at activation), and the capability
+//! coordinator's runtime-owned activation flag. The background registry
+//! reads the mailbox admission flag of its own resources under its own
+//! lock section. `activate` flips them all under the one coordinator lock,
+//! so a subsystem commit and an activation always linearize: a commit that
+//! observes the pre-activation state is refused, one that observes the
+//! post-activation state is a real post-activation transition.
 //!
 //! Binding a Runtime Client host is a **pre-activation** composition
 //! decision, not a hot operation: a host bind after activation is refused
@@ -139,12 +165,13 @@
 //! - the coordinator-owned facts cannot move — every mutator
 //!   (`model_set`, `shutdown`, `submit_inbound`, admission, settlement)
 //!   takes the coordinator lock, which is held across `[T0, R]`;
-//! - a background record transitions only through tool execution, which
-//!   requires an admitted attempt, which requires activation — impossible
-//!   across `[T0, R]`;
+//! - the background registry refuses `commit_dispatch` while its mailbox is
+//!   bound inactive, so no background record exists across `[T0, R]` and
+//!   none can be created;
 //! - the mailbox refuses `enqueue` while its bound runtime is inactive, so
 //!   the pending queue is frozen across `[T0, R]`;
-//! - the capability snapshot is captured *at* `R`.
+//! - the capability coordinator refuses a runtime-owned `commit` before
+//!   activation, and the capability snapshot is captured *at* `R`.
 //!
 //! And because each authority's observer installation shares one lock
 //! section with its own seed capture, no transition can be both seeded and
@@ -546,10 +573,9 @@ pub(crate) struct RuntimeInner {
     /// set exactly once when a projection consumer installs itself through
     /// [`RuntimeInner::install_observation_bridge`].
     pending: std::sync::OnceLock<Arc<PendingObservations>>,
-    /// Test-only settlement signal: fired once per attempt settlement so
-    /// headless regressions await the authoritative state handoff
-    /// deterministically instead of by polling timeout.
-    #[cfg(test)]
+    /// Settlement signal: fired once per attempt settlement handoff, so
+    /// headless drivers await the authoritative state transfer
+    /// deterministically instead of by polling.
     settlement: tokio::sync::Notify,
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
@@ -620,10 +646,12 @@ impl RuntimeInner {
     /// also what rejects an already-activated runtime atomically against
     /// [`ConversationRuntime::activate`]. See the module documentation
     /// ("The bootstrap cut") for the coherence proof; in short, the
-    /// coordinator facts are frozen by the held lock, the background
-    /// registry and the mailbox are frozen because an inactive runtime can
-    /// neither execute a tool nor accept inbound, and the capability
-    /// snapshot is captured at `R` itself.
+    /// coordinator facts are frozen by the held lock, and every subsystem
+    /// semantic commit is lifecycle-gated: the background registry refuses
+    /// `commit_dispatch` while its mailbox is bound inactive, the mailbox
+    /// refuses inbound while inactive, and the capability coordinator
+    /// refuses a runtime-owned `commit` before activation — with the
+    /// capability snapshot itself captured at `R`.
     ///
     /// # Errors
     ///
@@ -666,7 +694,8 @@ impl RuntimeInner {
         let shutting_down = state.shutting_down;
         let model = state.model.view();
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
-        // ---- T1: the background registry (frozen: no attempt can run) ----
+        // ---- T1: the background registry (frozen: the registry refuses
+        //          commits while its mailbox is bound inactive) ----
         let background = self
             .tool_runtime
             .background()
@@ -827,7 +856,6 @@ impl RuntimeInner {
             {
                 state.current_attempt = None;
             }
-            #[cfg(test)]
             self.settlement.notify_one();
             // Test-only gate: the conversation state is restored and the
             // current-attempt slot is cleared, but the next-admission
@@ -1099,7 +1127,6 @@ impl ConversationRuntime {
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
-            #[cfg(test)]
             settlement: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
@@ -1140,6 +1167,17 @@ impl ConversationRuntime {
     #[must_use]
     pub fn tool_runtime(&self) -> &ConversationToolRuntime {
         &self.inner.tool_runtime
+    }
+
+    /// The shared session-owned context plane of this runtime.
+    ///
+    /// The context policy, the token estimator, and the Agent Status
+    /// composer persist across attempts; each attempt derives its
+    /// [`ContextRuntime`](crate::context::ContextRuntime) from this plane
+    /// plus that attempt's frozen model snapshot.
+    #[must_use]
+    pub fn context_config(&self) -> &ConversationContextConfig {
+        &self.inner.context
     }
 
     /// The one capability coordinator of this runtime.
@@ -1225,9 +1263,13 @@ impl ConversationRuntime {
                 return;
             }
             state.activated = true;
-            // Under the same lock section, so an admission or a bootstrap
-            // handshake can never observe a half-activated runtime.
+            // Under the same lock section, so an admission, a bootstrap
+            // handshake, or a runtime-owned subsystem commit can never
+            // observe a half-activated runtime: the mailbox opens and the
+            // capability coordinator's runtime-owned commit gate opens at
+            // the same linearization point.
             self.inner.mailbox.activate();
+            self.inner.capability.activate_conversation();
         }
         self.inner.ensure_worker();
         // Any inbound published before activation (there can be none: the
@@ -1335,6 +1377,15 @@ impl ConversationRuntime {
 
     /// Replaces the authoritative session model configuration.
     ///
+    /// # Lifecycle
+    ///
+    /// A model update is a live semantic mutation: it is refused with the
+    /// typed [`ModelUpdateError::Inactive`] while the runtime is inactive
+    /// and consumes nothing. Construction-time model configuration belongs
+    /// in the [`SessionModelState`] supplied to
+    /// [`ConversationRuntime::new`](Self::new), not in a live mutation of a
+    /// runtime that has not started.
+    ///
     /// # Linearization
     ///
     /// The whole operation — resolution, validation, and state replacement
@@ -1350,14 +1401,18 @@ impl ConversationRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelUpdateError::InvalidConfiguration`] when the
-    /// configuration cannot be resolved against the catalog or cannot run
-    /// under the session context policy.
+    /// Returns [`ModelUpdateError::Inactive`] before activation and
+    /// [`ModelUpdateError::InvalidConfiguration`] when the configuration
+    /// cannot be resolved against the catalog or cannot run under the
+    /// session context policy.
     pub fn model_set(
         &self,
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
         let mut state = self.inner.lock_state();
+        if !state.activated {
+            return Err(ModelUpdateError::Inactive);
+        }
         // Resolve into a scratch copy first: `SessionModelState::apply` is
         // itself transactional, and the context-policy check runs against the
         // *candidate* snapshot before anything is published.
@@ -1400,12 +1455,29 @@ impl ConversationRuntime {
     /// continues to its settlement, semantic runtime work is never mutated,
     /// and no further inbound admission occurs. The acceptance is published
     /// as the [`ConversationObservation::Shutdown`] observation.
-    pub fn shutdown(&self) {
+    ///
+    /// # Lifecycle
+    ///
+    /// Shutdown is a live semantic mutation: shutting down a conversation
+    /// that has never activated is refused with the typed
+    /// [`ShutdownError::Inactive`] and consumes nothing — no shutting-down
+    /// state, no cursor, no [`ConversationObservation::Shutdown`] event. An
+    /// inactive conversation has no runtime lifecycle to end.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShutdownError::Inactive`] before activation. After
+    /// activation shutdown is accepted (idempotently) and never fails.
+    pub fn shutdown(&self) -> Result<(), ShutdownError> {
         let mut state = self.inner.lock_state();
+        if !state.activated {
+            return Err(ShutdownError::Inactive);
+        }
         if !state.shutting_down {
             state.shutting_down = true;
             self.inner.observe(ConversationObservation::Shutdown);
         }
+        Ok(())
     }
 
     /// Returns the immutable in-memory request facts retained by this
@@ -1467,6 +1539,15 @@ impl ConversationRuntime {
         execution_id: &ToolExecutionId,
     ) -> Option<BackgroundExecutionSnapshot> {
         self.inner.tool_runtime.background().cancel(execution_id)
+    }
+
+    /// The settlement handoff signal of this runtime: fired once per
+    /// attempt settlement, so a headless driver can await the
+    /// authoritative state transfer deterministically instead of by
+    /// polling.
+    #[must_use]
+    pub fn settlement_signal(&self) -> &tokio::sync::Notify {
+        &self.inner.settlement
     }
 }
 
@@ -1538,7 +1619,14 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub model: SessionModelView,
     /// The currently pending inbound items, in mailbox sequence order.
     pub inbound_pending: Vec<InboundItem>,
-    /// The authoritative background execution records.
+    /// The authoritative background execution records at the cut.
+    ///
+    /// Provably empty under the Issue #61 lifecycle: the background
+    /// registry refuses `commit_dispatch` while its mailbox is bound
+    /// inactive, so no record can exist when the bridge is installed. The
+    /// seed is captured anyway, in the same registry section that installs
+    /// the observer, so the handshake is one coherent cut for whatever
+    /// state exists.
     pub background: Vec<BackgroundExecutionSnapshot>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,
@@ -1590,9 +1678,21 @@ pub enum CancelAttemptError {
 /// A session model update failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelUpdateError {
+    /// The runtime has not been activated: a live semantic mutation of an
+    /// inert conversation is refused and consumes nothing.
+    Inactive,
     /// The configuration cannot be resolved against the catalog or cannot
     /// run under the session context policy.
     InvalidConfiguration(String),
+}
+
+/// A runtime shutdown failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShutdownError {
+    /// The runtime has not been activated: an inert conversation has no
+    /// runtime lifecycle to end, so the request is refused and nothing is
+    /// published.
+    Inactive,
 }
 
 /// Projects a model-resolution failure into a descriptive message.
@@ -1799,13 +1899,6 @@ impl ConversationRuntime {
     /// lifetime tests.
     pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
         self.inner.wake.install_worker_exit_probe(sender);
-    }
-
-    /// The test-only settlement signal: fired once per attempt settlement
-    /// handoff, so headless regressions await the authoritative state
-    /// transfer deterministically instead of by polling timeout.
-    pub(crate) fn settlement_signal(&self) -> &tokio::sync::Notify {
-        &self.inner.settlement
     }
 }
 
@@ -2475,7 +2568,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn shutdown_gates_further_admission() {
         let fixture = headless_fixture().await;
-        fixture.runtime.shutdown();
+        fixture
+            .runtime
+            .shutdown()
+            .expect("accepted after activation");
         assert!(matches!(
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)

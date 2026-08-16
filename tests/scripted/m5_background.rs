@@ -236,7 +236,9 @@ async fn dispatch_to_terminal(fixture: &BackgroundFixture) -> ToolExecutionId {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -278,7 +280,9 @@ async fn runner_cannot_begin_before_commit_gate() {
         !*started.borrow(),
         "the runner must not begin before the commit gate"
     );
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     assert!(matches!(
         outcome,
         BackgroundDispatchOutcome::Accepted { .. }
@@ -306,7 +310,9 @@ async fn cancellation_before_ownership_commit_rolls_back() {
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
     attempt_cancellation.cancel();
-    let outcome = registry.commit_dispatch(prepared, &attempt_cancellation);
+    let outcome = registry
+        .commit_dispatch(prepared, &attempt_cancellation)
+        .expect("dispatch commits");
     assert_eq!(
         outcome,
         BackgroundDispatchOutcome::RolledBack,
@@ -344,7 +350,9 @@ async fn ownership_commit_wins_over_later_attempt_cancellation() {
         )
         .expect("prepare");
     let attempt_cancellation = rustx::runtime::CancellationSignal::new();
-    let outcome = registry.commit_dispatch(prepared, &attempt_cancellation);
+    let outcome = registry
+        .commit_dispatch(prepared, &attempt_cancellation)
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted {
         execution_id,
         result,
@@ -409,7 +417,9 @@ async fn cancel_before_completion_wins_settlement() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -439,7 +449,9 @@ async fn repeated_cancel_is_idempotent() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -471,7 +483,9 @@ async fn starting_can_be_cancelled() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -534,7 +548,9 @@ async fn background_progress_updates_the_latest_snapshot() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -993,7 +1009,9 @@ async fn background_task_status_and_cancel() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { .. } = outcome else {
         panic!("accepted");
     };
@@ -1194,7 +1212,9 @@ async fn agent_status_active_snapshot_excludes_terminal_entries() {
             rustx::tools::environment::ToolEnvironment::new(),
         )
         .expect("prepare");
-    let outcome = registry.commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+    let outcome = registry
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
