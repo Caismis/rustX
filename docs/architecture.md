@@ -1047,13 +1047,29 @@ Linux ABI and rejects x32 execution on x86-64.
 
 macOS has the same real process-group and `waitid` lifecycle, using the
 platform libc adapter because `nix` does not expose `waitid` on Apple
-targets. It has no seccomp or child-subreaper equivalent, so Bash is wrapped
-with an EXIT `wait` to keep ordinary background jobs attached to the shell's
-normal lifecycle. A command that deliberately creates a new session can
-leave the macOS group, and a lost outer supervisor may not leave a waitable
-anchor; those cases are reported as unproven rather than converted into a
-false terminal proof. `/proc` is never the source of truth for ownership or
-quiescence on either platform.
+targets. It has no seccomp or child-subreaper equivalent, so a descendant
+that outlives the shell is reparented to launchd and becomes invisible to
+the supervisor's group-scoped wait. macOS therefore does **not** treat a
+group-scoped `ECHILD` as a whole-group terminal proof. Instead:
+
+- Bash is wrapped with an EXIT `wait` as a **best-effort convenience** so
+  ordinary background jobs finish naturally; it is not an ownership
+  boundary and the user command may legally replace it;
+- when the shell is reaped, the inner supervisor escalates to the outer's
+  fallback containment (`SIGKILL` to the retained group), and the outer
+  reports terminality only after issuing that containment signal and then
+  proving the group absent with a `killpg(pgid, 0)` probe reaching `ESRCH`;
+- a containment signal whose result is `EPERM` is never itself terminal:
+  on macOS `EPERM` means no live signalable member remains, so the group's
+  absence is proven independently rather than inferred from `EPERM`.
+
+A command that deliberately creates a new session can leave the macOS
+process group before containment, and a lost outer supervisor may not leave
+a waitable anchor; those cases are reported as unproven rather than
+converted into a false terminal proof. macOS terminal settlement therefore
+proves the group was actively terminated — not that every member was
+reaped, which rustX cannot prove on macOS. `/proc` is never the source of
+truth for ownership or quiescence on either platform.
 
 **The inner supervisor pid is an ownership anchor with exactly one
 reaping owner.** The outer supervisor's dedicated anchor path is the only
@@ -1422,8 +1438,14 @@ equivalent), and issues `TERM -> grace -> KILL` with `killpg` against its
 own process group; an outer supervisor is the reaper of last resort with the
 single-owner anchor discipline and the authoritative terminal report. The
 kernel-mediated terminal proof is the group-scoped wait
-(`waitid(Id::PGid)` returning `ECHILD`) — never a `/proc` scan or a
-`killpg(0)` probe. rustX's detached driver task owns physical settlement
+(`waitid(Id::PGid)` returning `ECHILD`) — never a `/proc` scan and never a
+`killpg(0)` probe **on Linux, where child-subreaper adoption plus the
+fixed-membership restriction make that a complete whole-group proof**. On
+macOS that `ECHILD` only proves the waiting supervisor has no waitable group
+child left, so macOS instead escalates to the outer's fallback containment
+`SIGKILL` and proves the group absent with a bounded `killpg(pgid, 0)` probe
+reaching `ESRCH` — never a fabricated whole-group emptiness claim. rustX's
+detached driver task owns physical settlement
 from the moment the supervisor spawn succeeds, drains the server's stderr
 until EOF (bounded preview), reaps the direct supervisor child before
 publishing settlement, and runs Linux's adopted-anchor emergency containment
@@ -1683,7 +1705,9 @@ explicit runtime-owned projection types with their own versioning
 `EVENT_SCHEMA_VERSION`, the manifest schema version, and the crate
 version), lifecycle semantics, and cursor domain
 (`RuntimeClientCursor`). Later transports (Issue #38 stdio JSONL, Issue
-#36 WebSocket) wrap this semantic layer without redefining it, and a
+
+# 36 WebSocket) wrap this semantic layer without redefining it, and a
+
 future AG-UI adapter consumes this projection as its only source — there
 is no second AG-UI interpretation path directly from internal runtime
 events. The existing `src/protocol` boundary remains the compiled
@@ -2770,7 +2794,6 @@ fails the pipeline instead of silently skipping the conformance suite.
 
 CI runs the TUI as a separate job on the nvm LTS line, so the Rust suites
 never depend on Node being present.
-
 
 ## 3. Dependency rule
 

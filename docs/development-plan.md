@@ -221,8 +221,9 @@ Bash requirements:
 - Foreground and background execution
 - One per-invocation supervisor process unit (outer reaper-of-last-resort
   plus inner session/group leader). Linux enables child-subreaper adoption;
-  macOS uses the direct process-group path and Bash's EXIT `wait` wrapper
-  because it has no equivalent orphan-adoption primitive.
+  macOS uses the direct process-group path with an injected EXIT `wait` as a
+  best-effort convenience (not an ownership boundary) because it has no
+  equivalent orphan-adoption primitive.
 - stdout/stderr/combined capture
 - Timeouts
 - `TERM -> grace period -> KILL` driven by the invocation supervisor
@@ -239,7 +240,9 @@ Bash requirements:
   rejection of `setsid`/`setpgid` and child-subreaper adoption, making the
   group wait a complete descendant proof. macOS keeps the real group and
   cancellation lifecycle but has no equivalent seccomp or orphan-adoption
-  primitive; deliberate session escapes and lost-anchor cases remain
+  primitive, so it proves terminality by escalating to the outer's fallback
+  containment `SIGKILL` and probing the group absent (`killpg(pgid, 0)` ->
+  `ESRCH`); deliberate session escapes and lost-anchor cases remain
   explicitly unproven.
 - Target-ABI seccomp policy: membership syscall numbers come from the
   compiled Linux target's libc constants; x86-64 rejects the x32 syscall
@@ -252,11 +255,13 @@ Bash requirements:
 - Kernel-mediated group terminality: the terminal point is the
   group-scoped wait (`waitid` with `Id::PGid`) returning `ECHILD` at the
   outer supervisor. On Linux, child-subreaper adoption plus immutable
-  membership makes that a complete whole-group proof. On macOS, ordinary
-  background jobs stay attached through Bash's EXIT `wait`; missing Linux
-  orphan-adoption or membership guarantees are reported explicitly rather
-  than inferred from `/proc` or a `killpg(..., 0)` probe (an un-reaped leader
-  zombie keeps the numeric group observable)
+  membership makes that a complete whole-group proof. On macOS, that
+  `ECHILD` only proves the waiting supervisor has no waitable group child
+  left (a reparented descendant is invisible), so the group's absence is
+  proven by a bounded `killpg(pgid, 0)` probe reaching `ESRCH` after the
+  fallback containment signal — never inferred from `ECHILD` alone, from
+  `/proc`, or from a `killpg` `EPERM` (on macOS `EPERM` means no live
+  signalable member remains, so it is not a terminal result by itself).
 - Explicit ownership protocol: `AnchorReady -> Start ->
   OwnershipEstablished`; the successful Bash spawn is the OS commit point,
   and post-start channel loss is conservatively treated as possible

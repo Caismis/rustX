@@ -340,7 +340,16 @@ observed only at the next quiescent re-discovery.
   (provably allocated while signaling is legal); the kernel-mediated
   terminal proof is the group-scoped wait (`waitid(Id::PGid)` returning
   `ECHILD`) at the inner (normal) and at the outer (release gate) — never a
-  `/proc` membership scan and never a `killpg(..., 0)` probe. The inner
+  `/proc` membership scan and never a `killpg(..., 0)` probe **on Linux,
+  where child-subreaper adoption plus the fixed-membership restriction make
+  that a complete whole-group proof**. On macOS that `ECHILD` only proves
+  the waiting supervisor has no waitable group child left (a reparented
+  descendant is invisible), so macOS escalates to the outer's fallback
+  containment `SIGKILL` and proves the group absent with a bounded
+  `killpg(pgid, 0)` probe reaching `ESRCH`. A macOS containment signal whose
+  result is `EPERM` is never itself terminal: on macOS `EPERM` means no live
+  signalable member remains, so the group's absence is proven independently
+  rather than inferred from `EPERM`. The inner
   supervisor pid is the unit's structural ownership anchor with exactly one
   reaping owner; the outer reports the authoritative terminal event only
   after its gate reaches `ECHILD`, and only after it released the anchor.
@@ -715,11 +724,15 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   with an inherited seccomp policy rejecting `setsid(2)`/`setpgid(2)`, and
   enables child-subreaper adoption; those primitives make the group-scoped
   `waitid` terminal proof complete even for orphaned descendants. macOS has
-  the same real process-group/cancellation path and wraps Bash with an EXIT
-  `wait` for ordinary background jobs, but has no equivalent seccomp or
-  child-subreaper primitive. A deliberate macOS `setsid(2)` escape or a
-  supervisor loss without a waitable anchor is therefore reported as
-  unproven, never as a fabricated terminal result.
+  the same real process-group/cancellation path but no equivalent seccomp or
+  child-subreaper primitive, so it does **not** treat a group-scoped
+  `ECHILD` as a whole-group proof: it escalates to the outer supervisor's
+  fallback containment `SIGKILL` and proves the group absent with a bounded
+  `killpg(pgid, 0)` probe reaching `ESRCH`. The injected EXIT `wait` wrapper
+  is a best-effort convenience for ordinary background jobs, never an
+  ownership boundary. A deliberate macOS `setsid(2)` escape or a supervisor
+  loss without a waitable anchor is reported as unproven, never as a
+  fabricated terminal result.
 - **The `START` gate consumes only `START`.** The Bash inner supervisor's
   rustX-facing control direction has one `FrameReader` for the whole
   invocation: `await_start` drains what is already buffered before it reads
@@ -779,9 +792,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - Each Bash invocation owns one invocation-local supervisor process unit
   (an outer reaper-of-last-resort plus an inner session/group leader that
   spawns `/bin/bash`). Linux enables child-subreaper reparenting for
-  descendants that outlive the shell; macOS has no equivalent and wraps Bash
-  with an EXIT `wait` for ordinary background jobs. `/proc` enumeration is
-  never the source of truth for process ownership or quiescence.
+  descendants that outlive the shell; macOS has no equivalent, so a
+  descendant that outlives the shell is reparented to launchd and is
+  contained by the outer's fallback `SIGKILL` rather than claimed reaped.
+  `/proc` enumeration is never the source of truth for process ownership or
+  quiescence.
 - Bash ownership commits at the successful `/bin/bash` spawn, after the
   inner has created the invocation session/group and installed the
   platform's membership policy. The inner first reports its retained anchor and waits
@@ -833,13 +848,16 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   the invocation group. On Linux, `P_PGID`'s `ECHILD` is a complete
   whole-group terminal proof because seccomp makes membership immutable and
   child-subreaper adoption keeps orphaned descendants in the supervisor's
-  child domain. On macOS, ordinary background jobs are kept attached by
-  Bash's EXIT `wait`, but the Linux descendant-escape and orphan-adoption
-  guarantees do not apply; an unproven lost-anchor case is never converted
-  into terminality. The outer `AllChildrenReaped` event plus output-capture
-  settlement is the exact lifecycle linearization point on the normal path;
-  `killpg(..., 0)` probes are never the terminal point because an un-reaped
-  group-leader zombie keeps the numeric group observable.
+  child domain. On macOS, that `ECHILD` only proves the waiting supervisor
+  has no waitable group child left, so macOS proves the group absent with a
+  bounded `killpg(pgid, 0)` probe reaching `ESRCH` after the fallback
+  containment signal — the Linux descendant-escape and orphan-adoption
+  guarantees do not apply, and an unproven lost-anchor case is never
+  converted into terminality. The outer `AllChildrenReaped` event plus
+  output-capture settlement is the exact lifecycle linearization point on
+  the normal path; on Linux `killpg(..., 0)` probes are never the terminal
+  point because an un-reaped group-leader zombie keeps the numeric group
+  observable.
 - Process-control failures are never silent: supervisor setup, shell
   spawning, waiting/reaping, signaling, and control-channel failures surface
   as an explicit failed tool result — never as an ordinary `Success`,
@@ -1190,7 +1208,7 @@ Core invariant:
 The load-bearing split of this seam:
 
 | Question | Answer | Owner |
-|---|---|---|
+| --- | --- | --- |
 | *When* does a proposal become eligible? | after its owning tool batch reaches structural settlement, at the next primary step | Agent Loop |
 | *Who* owns the fact it states? | the trusted identity its observer was registered under | Context Assembly |
 

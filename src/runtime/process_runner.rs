@@ -16,9 +16,9 @@
 //! - every production supervised command executes inside a dedicated
 //!   rustX-owned process group created by the supervisor unit (`setsid`);
 //!   Linux additionally rejects `setsid(2)`/`setpgid(2)` with the inherited
-//!   seccomp filter, while macOS uses the process-group boundary and Bash's
-//!   parent-wait wrapper because it has no seccomp or child-subreaper
-//!   equivalent;
+//!   seccomp filter, while macOS keeps the process-group boundary but has
+//!   no seccomp or child-subreaper equivalent, so its terminal proof is
+//!   weaker (see the macOS contract in the supervisor unit docs);
 //! - the runtime process-supervision prerequisite is consulted before the
 //!   supervisor unit spawns: Linux installs child-subreaper mode, while
 //!   macOS performs the successful no-op needed by its normal path;

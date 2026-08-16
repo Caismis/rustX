@@ -1817,10 +1817,32 @@ async fn terminal_frame_then_eof_never_overrides_terminality() {
         "the terminal frame remains authoritative; late EOF must not override it, got {:?}",
         result.status
     );
+    #[cfg(target_os = "linux")]
     assert!(
         control.recorded_signals().is_empty(),
         "no containment signal may follow an already-admitted terminal frame"
     );
+    // macOS settles the natural completion through the fallback containment
+    // signal (its terminal proof), which is issued before — never after —
+    // the terminal frame. Exactly that pre-terminal `SIGKILL` is recorded,
+    // and nothing else.
+    #[cfg(target_os = "macos")]
+    {
+        let signals = control.recorded_signals();
+        assert_eq!(
+            signals.len(),
+            1,
+            "exactly the pre-terminal fallback containment is recorded: {signals:?}"
+        );
+        assert_eq!(
+            signals[0].signal, "SIGKILL",
+            "the fallback containment is SIGKILL"
+        );
+        assert!(
+            signals[0].emitted,
+            "the fallback containment reaches the kernel"
+        );
+    }
     let _ = dir;
 }
 
@@ -1982,4 +2004,95 @@ async fn terminal_frame_is_parsed_before_buffered_eof() {
         Ok(Some(SupervisorEvent::AllChildrenReaped))
     ));
     assert!(matches!(read_supervisor_event(&mut reader).await, Ok(None)));
+}
+
+/// macOS-specific regressions for the Bash EXIT-trap and containment
+/// contract.
+///
+/// macOS has no child-subreaper, so a background descendant that outlives
+/// the shell is reparented to launchd and becomes invisible to the
+/// supervisor's group-scoped wait. The injected `trap 'wait' EXIT` is a
+/// best-effort convenience only — the user command runs in the same shell
+/// and may legally clear or replace it — so the macOS terminal proof must
+/// not depend on it. These tests prove that replacing the trap cannot
+/// produce a false terminal result: the owned group is actively contained
+/// (the background descendant is killed) instead of being reported terminal
+/// while it may still run.
+#[cfg(target_os = "macos")]
+mod macos_exit_trap_tests {
+    use super::{fixture, process_alive, run_with};
+    use std::path::Path;
+    use std::time::Duration;
+
+    /// Reads a pid file the shell wrote before settling, with a deadlock
+    /// guard (the write is an explicit fixture synchronization point, never
+    /// a correctness assumption).
+    fn read_pid(path: &Path) -> i32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(path)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pid file {} never appeared",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Polls a pid until it is provably gone (the signal-0 probe returns
+    /// `ESRCH`), with a strict deadlock guard.
+    async fn wait_for_process_death(pid: i32) {
+        for _ in 0..1000 {
+            if !process_alive(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("process {pid} is still alive after the deadline");
+    }
+
+    /// Runs one trap-replacement fixture and proves the owned background
+    /// descendant was terminated, never falsely reported terminal.
+    async fn assert_background_descendant_is_contained(trap_line: &str) {
+        let (dir, artifacts, workspace) = fixture();
+        let root = workspace.root().to_path_buf();
+        let child_pid_file = root.join("child.pid");
+        // The shell backgrounds a long-lived descendant, writes its pid,
+        // then replaces the injected EXIT trap and exits. Without the trap
+        // the descendant is reparented to launchd; the macOS supervisor must
+        // contain it via the outer's fallback `SIGKILL` rather than report a
+        // false terminal while it still runs.
+        let command = format!(
+            "sleep 30 >/dev/null 2>&1 & echo $! > {}; {trap_line}; exit 0",
+            child_pid_file.display()
+        );
+        let result = run_with(&command, &artifacts, &workspace).await;
+        assert_eq!(
+            result.status,
+            crate::tools::types::ToolExecutionStatus::Success,
+            "the shell exited 0, so the invocation settles as Success"
+        );
+        let child_pid = read_pid(&child_pid_file);
+        wait_for_process_death(child_pid).await;
+        let _ = dir;
+    }
+
+    /// Clearing the injected EXIT trap cannot produce a false terminal
+    /// result: the reparented descendant is actively contained.
+    #[tokio::test]
+    async fn clearing_the_exit_trap_cannot_produce_false_terminal_settlement() {
+        assert_background_descendant_is_contained("trap - EXIT").await;
+    }
+
+    /// Replacing the injected EXIT trap cannot produce a false terminal
+    /// result either.
+    #[tokio::test]
+    async fn replacing_the_exit_trap_cannot_produce_false_terminal_settlement() {
+        assert_background_descendant_is_contained("trap ':' EXIT").await;
+    }
 }

@@ -87,13 +87,19 @@
 //! invocation group:
 //!
 //! - the inner supervisor's group-scoped wait returning `ECHILD` — every
-//!   child of the inner that is in the invocation group is reaped; it then
-//!   exits with `INNER_EXIT_NORMAL`;
+//!   child of the inner that is in the invocation group is reaped. On Linux
+//!   that is the complete terminal proof and the inner exits with
+//!   `INNER_EXIT_NORMAL`; on macOS it only proves the inner has no waitable
+//!   group child left (reparented descendants are invisible), so the inner
+//!   exits with `INNER_EXIT_CONTAINMENT` and the outer's fallback
+//!   containment signal terminates the retained group;
 //! - the outer supervisor's group-scoped wait returning `ECHILD` — no
 //!   child of the outer remains in the invocation group (the inner anchor
 //!   itself is a member and is released by this same wait, strictly after
 //!   any fallback containment signal); it then reports
-//!   `MSG_ALL_CHILDREN_REAPED` and exits.
+//!   `MSG_ALL_CHILDREN_REAPED` and exits. On macOS this frame means "the
+//!   anchor was released after the group was actively signaled", not "the
+//!   group is proven empty".
 //!
 //! # Single-reaper anchor ownership
 //!
@@ -133,9 +139,9 @@
 //! |---|---|---|---|
 //! | outer dedicated anchor wait (`waitid(Pid(inner), WNOWAIT \| WEXITED \| WNOHANG)`) | only the inner anchor | observes only (`WNOWAIT`) | outer dedicated path; `ECHILD` = invariant violation, never terminal |
 //! | outer frozen-anchor wait (`waitid(Pid(inner), WUNTRACED \| WNOHANG)`) | only the inner anchor | observes/consumes the stop event | outer dedicated path |
-//! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release) |
+//! | outer group gate (`waitid(PGid(inner), WEXITED \| WNOHANG)`) | every outer child in the invocation group, including the anchor | consumes | outer gate; `ECHILD` = canonical terminal event (the anchor's only reaper release); on macOS this is only a terminal event because the fallback containment signal was already issued while the anchor was retained |
 //! | inner reaping hygiene (`waitpid(-1, WNOHANG)`) | every child of the inner (bash and adopted in-group descendants) | consumes | inner supervisor; no child of the inner is ever an anchor, so this never consumes another owner's identity |
-//! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` |
+//! | inner group gate (`waitid(PGid(self), WEXITED \| WNOHANG)`) | every inner child in the invocation group | consumes | inner supervisor; `ECHILD` = `INNER_EXIT_NORMAL` on Linux, `INNER_EXIT_CONTAINMENT` on macOS |
 //!
 //! rustX's own waits (the outer's direct reap and the catastrophic
 //! adoption path) are documented in the Bash tool.
@@ -218,11 +224,29 @@
 //!
 //! Linux uses `PR_SET_CHILD_SUBREAPER` plus the fixed-membership seccomp
 //! filter, so group-scoped `ECHILD` is a complete descendant proof even when
-//! Bash backgrounds work. macOS has neither primitive; it uses the same
-//! `setsid`/process-group/`waitid` lifecycle and wraps Bash with an EXIT
-//! `wait` so ordinary background jobs remain children of the shell until the
-//! group settles. A macOS supervisor-loss path that cannot retain a waitable
-//! anchor is reported as unproven rather than converted into terminality.
+//! Bash backgrounds work. macOS has neither primitive: a descendant that
+//! outlives the shell is reparented to launchd and becomes invisible to the
+//! supervisor's group-scoped wait, so `ECHILD` on macOS never proves the
+//! group empty. macOS therefore uses a weaker, honest contract:
+//!
+//! - Bash is wrapped with an EXIT `wait` as a **best-effort convenience**
+//!   so ordinary background jobs finish naturally; it is not an ownership
+//!   boundary and the user command may legally replace it;
+//! - when the shell is reaped, the inner supervisor escalates to the outer
+//!   supervisor's fallback containment (`SIGKILL` to the retained group)
+//!   instead of claiming group terminality from `ECHILD`;
+//! - the outer reports terminality only after it issued that containment
+//!   signal while the anchor was retained and then released the anchor.
+//!   This proves the group was actively terminated, not that every member
+//!   was reaped — the claim rustX cannot make on macOS;
+//! - a containment signal that fails (for example `EPERM`) is an explicit
+//!   containment failure, never a terminal result;
+//! - a macOS supervisor-loss path that cannot retain a waitable anchor is
+//!   reported as unproven rather than converted into terminality.
+//!
+//! A macOS command that deliberately leaves the group (`setsid`/`setpgid`)
+//! before containment is outside rustX's macOS proof; that limitation is
+//! documented and is never claimed as contained.
 
 use std::process::{Command, Stdio};
 
@@ -233,11 +257,13 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, read, write};
 
 use crate::runtime::process_wait::{Id, waitid};
+#[cfg(target_os = "macos")]
+use crate::runtime::supervised_unit::prove_group_absent;
 use crate::runtime::supervised_unit::{
     FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
     MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
     MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
-    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
+    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper, contain_group,
     enforce_fixed_group_membership, ignore_group_term,
 };
 
@@ -282,6 +308,11 @@ pub const FORCE_ANCHOR_LOSS_ENV: &str = "RUSTX_TEST_FORCE_ANCHOR_LOSS";
 /// production.
 pub const OUTER_BARRIER_DIR_ENV: &str = "RUSTX_TEST_OUTER_BARRIER_DIR";
 
+/// Test-only injection: the outer supervisor's fallback containment signal
+/// fails with an injected permission error (the deterministic stand-in for
+/// `killpg` returning `EPERM`). Never set in production.
+pub const FAIL_CONTAINMENT_ENV: &str = "RUSTX_TEST_FAIL_CONTAINMENT";
+
 // All protocol constants, exit codes, structural primitives, and the
 // `TERM` -> grace -> `KILL` timings come from the shared supervisor-unit
 // core (`crate::runtime::supervised_unit`), so the Bash and interactive
@@ -319,6 +350,9 @@ pub fn run_inner_supervisor() -> ! {
 /// An `ECHILD` from the dedicated observation before the intentional
 /// release is an ownership invariant violation — never a terminal
 /// observation — and moves the anchor to [`InnerAnchor::UnexpectedlyLost`].
+/// A fallback containment signal that fails moves the anchor to
+/// [`InnerAnchor::ContainmentFailed`]: the anchor is still retained but the
+/// owned group was not provably contained, so terminality stays unproven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InnerAnchor {
     /// The anchor is alive (or not yet observed terminal) and retained;
@@ -334,6 +368,10 @@ enum InnerAnchor {
     /// gates on the numeric group id (the release could be an ABA hazard),
     /// never signals, and never reports the canonical terminal event.
     UnexpectedlyLost,
+    /// The fallback containment signal failed while the anchor was still
+    /// retained. The owned group was not provably contained, so the outer
+    /// fails safely and never reports the canonical terminal event.
+    ContainmentFailed,
 }
 
 /// The outer supervisor: the final containment and reaping authority. It
@@ -420,12 +458,18 @@ fn run_outer() -> i32 {
                             // Abnormal termination with possibly-live owned
                             // work: active containment while the anchor is
                             // still held (it is observed but un-reaped).
-                            containment_signal(&mut stream, inner_pid);
+                            if let Err(error) = containment_signal(&mut stream, inner_pid) {
+                                let _ = stream.write_failure(&error);
+                                anchor = InnerAnchor::ContainmentFailed;
+                            }
                         }
                     }
                     Ok(WaitStatus::Signaled(..)) => {
                         anchor = InnerAnchor::TerminalRetained;
-                        containment_signal(&mut stream, inner_pid);
+                        if let Err(error) = containment_signal(&mut stream, inner_pid) {
+                            let _ = stream.write_failure(&error);
+                            anchor = InnerAnchor::ContainmentFailed;
+                        }
                     }
                     Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
@@ -500,6 +544,17 @@ fn run_outer() -> i32 {
                 ) {
                     Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
+                        // macOS: `ECHILD` only proves this supervisor has no
+                        // waitable group child left; a reparented descendant
+                        // is invisible to it. The group's absence is proven
+                        // independently (after the anchor was reaped) before
+                        // the terminal frame is emitted.
+                        #[cfg(target_os = "macos")]
+                        if let Err(error) = prove_group_absent(inner_pid) {
+                            let _ = stream.write_failure(&error);
+                            anchor = InnerAnchor::ContainmentFailed;
+                            continue;
+                        }
                         if stream.write_frame(MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
                             await_terminal_ack();
                         }
@@ -512,15 +567,14 @@ fn run_outer() -> i32 {
                     }
                 }
             }
-            InnerAnchor::UnexpectedlyLost => {
-                // Fail-safe: the anchor is gone before its intentional
-                // release. The group-scoped gate is no longer authoritative
-                // (the numeric group id could be an ABA hazard), no signal
-                // may be issued, and the canonical terminal event must
-                // never be reported. The invocation cannot prove terminal
-                // child ownership from this supervisor anymore; the failure
-                // was already reported once above. Stay alive and
-                // non-terminal rather than fabricate a terminal state.
+            InnerAnchor::UnexpectedlyLost | InnerAnchor::ContainmentFailed => {
+                // Fail-safe: the owned-group terminal state cannot be
+                // proven (the anchor was lost before its intentional
+                // release, or the fallback containment signal failed). The
+                // specific failure was already reported once above. Never
+                // signal the unproven numeric id again and never report
+                // the canonical terminal event: stay alive and non-terminal
+                // rather than fabricate a terminal state.
             }
         }
         // Test-only deterministic barrier: parks this supervisor after it
@@ -582,22 +636,29 @@ fn await_terminal_ack() {
 /// invocation's process group. This is issued only while the structural
 /// anchor is held — the inner supervisor is still un-reaped, so the group
 /// id is provably allocated to this invocation — and never afterwards.
-fn containment_signal(stream: &mut ControlStream, pgid: i32) {
+///
+/// A failed signal (for example `EPERM` when the signal was not authorized
+/// for some target) is returned as an explicit containment failure: the
+/// caller must never convert it into a terminal result.
+fn containment_signal(stream: &mut ControlStream, pgid: i32) -> Result<(), String> {
     stream
         .write_frame(
             MSG_SIGNAL_ATTEMPT,
             &signal_attempt_payload(pgid, Signal::SIGKILL, true),
         )
         .ok();
-    match killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
-        Ok(()) | Err(Errno::ESRCH) => {}
-        #[cfg(target_os = "macos")]
-        Err(Errno::EPERM) => {}
-        Err(error) => {
-            let _ = stream.write_failure(&format!(
-                "cannot contain the owned invocation group: {error}"
-            ));
-        }
+    if std::env::var(FAIL_CONTAINMENT_ENV).is_ok() {
+        // Test-only seam: the deterministic stand-in for `killpg` returning
+        // `EPERM` — the signal operation was attempted but not authorized.
+        return Err("injected containment signal failure (killpg EPERM)".to_owned());
+    }
+    match contain_group(pgid) {
+        crate::runtime::supervised_unit::ContainmentOutcome::Failed(error) => Err(error),
+        // `Contained` (live member signaled, or the group is already gone)
+        // and, on macOS, `NothingLive` (only zombies remain) both proceed:
+        // the group-scoped gate and the macOS absence probe — never this
+        // signal's result alone — decide terminality.
+        _ => Ok(()),
     }
 }
 
@@ -697,10 +758,15 @@ fn run_inner() -> i32 {
         let _ = stream.write_preownership_failure("injected bash spawn failure");
         return INNER_EXIT_NORMAL;
     }
-    // macOS does not provide Linux's child-subreaper reparenting. Keep the
-    // normal Bash job domain attached to the shell parent so background jobs
-    // are waited for before the shell reports its own exit; Linux retains the
-    // original command bytes and uses subreaper adoption for descendants.
+    // macOS does not provide Linux's child-subreaper reparenting. The EXIT
+    // `wait` is a best-effort convenience only: it keeps the ordinary
+    // background-job domain attached to the shell so those jobs finish
+    // naturally. It is NOT an ownership boundary and is NOT the source of
+    // terminal correctness — the user command runs in the same shell and may
+    // legally replace the trap, so the macOS terminal proof below (escalate
+    // to the outer supervisor's fallback containment once the shell is
+    // reaped) stays valid regardless. Linux retains the original command
+    // bytes and uses subreaper adoption for descendants.
     #[cfg(target_os = "macos")]
     let shell_command = format!("trap 'wait' EXIT\n{command}");
     #[cfg(not(target_os = "macos"))]
@@ -793,12 +859,25 @@ fn run_inner() -> i32 {
         // the invocation group — the complete terminal state. This is the
         // exact structural point; it is not a probe, a scan, or a timing
         // observation.
+        //
+        // On macOS this proof does not hold: without a child-subreaper, a
+        // descendant that outlives the shell is reparented to launchd and
+        // becomes invisible to this supervisor's group-scoped wait, so
+        // `ECHILD` only means "no child of this supervisor remains in the
+        // group". macOS therefore escalates to the outer supervisor's
+        // fallback containment (a `SIGKILL` to the retained group) instead
+        // of claiming the group is empty.
         match waitid(
             Id::PGid(Pid::from_raw(self_pid)),
             WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
         ) {
             Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return INNER_EXIT_NORMAL,
+            Err(Errno::ECHILD) => {
+                #[cfg(target_os = "macos")]
+                return INNER_EXIT_CONTAINMENT;
+                #[cfg(not(target_os = "macos"))]
+                return INNER_EXIT_NORMAL;
+            }
             Err(error) => {
                 let _ = stream.write_failure(&format!(
                     "cannot observe the owned group terminal state: {error}"
@@ -1397,6 +1476,149 @@ mod anchor_reaping_tests {
             status.success(),
             "the outer must exit 0 after the terminal event"
         );
+        wait_for_reaped(inner_pid);
+        wait_for_reaped(sleep_pid);
+        wait_for_group_gone(inner_pid);
+    }
+
+    /// A failed fallback containment signal is never a terminal result.
+    ///
+    /// The injected seam models `killpg` returning `EPERM`: the signal was
+    /// attempted (the observable `MSG_SIGNAL_ATTEMPT` carries `emitted`)
+    /// but not authorized. The outer supervisor must report the explicit
+    /// containment failure and must never emit the canonical
+    /// `MSG_ALL_CHILDREN_REAPED` terminal frame while the owned group may
+    /// still be live.
+    #[test]
+    fn failed_containment_signal_never_reports_terminal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let barrier_dir = dir.path().join("barrier");
+        std::fs::create_dir_all(&barrier_dir).expect("barrier dir");
+        let anchor_pid_file = dir.path().join("anchor.pid");
+        let sleep_pid_file = dir.path().join("sleep.pid");
+        let command = format!(
+            "sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+            sleep_pid_file.display()
+        );
+        let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let mut outer = std::process::Command::new(supervisor_binary())
+            .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+            .env(COMMAND_ENV, &command)
+            .env(ANCHOR_PID_FILE_ENV, &anchor_pid_file)
+            .env(OUTER_BARRIER_DIR_ENV, &barrier_dir)
+            // The injected wait failure turns the shell's exit into an
+            // abnormal inner completion (`INNER_EXIT_CONTAINMENT`) with
+            // possibly-live owned work.
+            .env(FAIL_WAIT_ENV, "1")
+            // The injected containment failure is the deterministic stand-in
+            // for `killpg` returning `EPERM`.
+            .env(FAIL_CONTAINMENT_ENV, "1")
+            .stdin(Stdio::from(std::os::unix::io::OwnedFd::from(stream_b)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the outer supervisor");
+        let mut stream = stream_a;
+        nix::fcntl::fcntl(
+            &stream,
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .expect("nonblocking control stream");
+
+        // 1. The outer provably observed the anchor StillAlive and parked
+        //    at the barrier.
+        wait_for_file(&barrier_dir.join("observed"));
+        let inner_pid = read_pid(&anchor_pid_file);
+
+        // 2. Authorize the Bash spawn; the injected wait failure turns the
+        //    shell exit into `INNER_EXIT_CONTAINMENT` while the outer stays
+        //    parked, leaving the owned descendant live.
+        send_start(&mut stream);
+        let sleep_pid = read_pid(&sleep_pid_file);
+        wait_for_unreaped_zombie(inner_pid);
+        assert!(
+            group_alive(inner_pid),
+            "the owned group must still be live while the anchor sits as a zombie"
+        );
+        assert!(
+            proc_state(sleep_pid).is_some(),
+            "the owned descendant must still exist when containment is attempted"
+        );
+
+        // 3. The next loop phase runs: the outer observes the abnormal
+        //    inner exit and attempts the fallback containment, which the
+        //    injected seam fails with the EPERM stand-in.
+        let _ = std::fs::write(barrier_dir.join("proceed"), "go");
+        let deadline = Instant::now() + DEADLINE;
+        let mut reader = FrameReader::new();
+        let mut saw_signal_attempt = false;
+        let mut saw_containment_failure = false;
+        while !saw_containment_failure {
+            let (kind, payload) = next_frame(
+                &mut stream,
+                &mut reader,
+                &mut outer,
+                Some(inner_pid),
+                deadline,
+                "the outer supervisor never reported the containment failure",
+            );
+            match kind {
+                MSG_SIGNAL_ATTEMPT => {
+                    assert!(payload.len() >= 9, "malformed signal-attempt frame");
+                    let signal = i32::from_le_bytes(payload[4..8].try_into().expect("four bytes"));
+                    let emitted = payload[8] != 0;
+                    assert_eq!(signal, libc::SIGKILL, "the containment signal is SIGKILL");
+                    assert!(emitted, "the containment attempt must reach the kernel");
+                    saw_signal_attempt = true;
+                }
+                MSG_PROCESS_CONTROL_FAILURE => {
+                    let message = String::from_utf8_lossy(&payload).into_owned();
+                    if message.contains("containment") {
+                        saw_containment_failure = true;
+                    }
+                }
+                MSG_ANCHOR_READY | MSG_OWNERSHIP_ESTABLISHED => {}
+                MSG_ALL_CHILDREN_REAPED => {
+                    panic!("a failed containment signal must never produce the terminal frame")
+                }
+                other => panic!("unexpected control frame kind {other:#04x}"),
+            }
+        }
+        assert!(
+            saw_signal_attempt,
+            "the containment attempt must be observable before its failure"
+        );
+
+        // 4. The owned group is still live (the containment signal failed),
+        //    and no terminal frame may arrive: a bounded-absence proof with
+        //    the same persistent reader so surplus bytes are never dropped.
+        let absence_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            while let Some((kind, _payload)) = reader.pop() {
+                assert_ne!(
+                    kind, MSG_ALL_CHILDREN_REAPED,
+                    "a failed containment signal must never emit the terminal frame"
+                );
+            }
+            let mut chunk = [0u8; 64];
+            match stream.read(&mut chunk) {
+                Ok(0) => panic!("the outer supervisor exited without a terminal frame"),
+                Ok(count) => reader.feed(&chunk[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("control channel read failed: {error}"),
+            }
+            if Instant::now() >= absence_deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // 5. Test-side cleanup: the containment correctly failed, so the
+        //    test terminates the still-live owned group and reaps the stuck
+        //    outer; the adopted descendants then reparent and are reaped.
+        let _ = killpg(Pid::from_raw(inner_pid), Signal::SIGKILL);
+        let _ = outer.kill();
+        let _ = outer.wait();
         wait_for_reaped(inner_pid);
         wait_for_reaped(sleep_pid);
         wait_for_group_gone(inner_pid);

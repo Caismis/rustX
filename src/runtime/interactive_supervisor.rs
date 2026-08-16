@@ -31,7 +31,12 @@
 //! - the kernel-mediated terminal proof is the group-scoped wait
 //!   (`waitid(Id::PGid)` returning `ECHILD`) at the inner (normal) and at
 //!   the outer (release gate), never a `/proc` scan and never a
-//!   `killpg(..., 0)` probe;
+//!   `killpg(..., 0)` probe. On Linux, child-subreaper adoption plus the
+//!   fixed-membership restriction makes that `ECHILD` a complete whole-group
+//!   proof; on macOS it only proves the waiting supervisor has no waitable
+//!   group child left (reparented descendants are invisible), so macOS
+//!   escalates to the outer's fallback containment `SIGKILL` instead of
+//!   claiming the group is empty;
 //! - the inner supervisor pid is the unit's structural ownership anchor
 //!   with exactly one reaping owner: the outer's dedicated observation
 //!   (`WNOWAIT`) and the outer's group-scoped release. The outer reports
@@ -40,7 +45,9 @@
 //! - when the inner terminates abnormally with possibly-live owned work
 //!   (`INNER_EXIT_CONTAINMENT`), the outer issues the one fallback
 //!   containment `SIGKILL` while the anchor is still retained, then
-//!   releases the anchor through the gate;
+//!   releases the anchor through the gate; a containment signal that fails
+//!   (for example `EPERM`) is an explicit containment failure and the unit
+//!   never reports the canonical terminal event;
 //! - when the outer itself is lost, Linux rustX runs the shared adopted-anchor
 //!   emergency containment; macOS has no orphan-adoption primitive and
 //!   reports terminality as unproven if the anchor is no longer waitable;
@@ -130,11 +137,13 @@ use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
 use crate::runtime::process_wait::{Id, waitid};
+#[cfg(target_os = "macos")]
+use crate::runtime::supervised_unit::prove_group_absent;
 use crate::runtime::supervised_unit::{
     FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
     MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,
     MSG_PROCESS_CONTROL_FAILURE, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK, MSG_TERMINATE,
-    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper,
+    POLL_INTERVAL, TERM_GRACE, TERMINAL_ACK_TIMEOUT, become_child_subreaper, contain_group,
     enforce_fixed_group_membership, ignore_group_term, signal_group, write_frame,
 };
 
@@ -375,12 +384,26 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                             // Abnormal termination with possibly-live owned
                             // work: active containment while the anchor is
                             // still held (observed but un-reaped).
-                            containment_signal(&mut upstream, inner_pid);
+                            if let Err(error) = containment_signal(&mut upstream, inner_pid) {
+                                let _ = write_frame(
+                                    &mut upstream,
+                                    MSG_PROCESS_CONTROL_FAILURE,
+                                    error.as_bytes(),
+                                );
+                                anchor = AnchorState::ContainmentFailed;
+                            }
                         }
                     }
                     Ok(WaitStatus::Signaled(..)) => {
                         anchor = AnchorState::TerminalRetained;
-                        containment_signal(&mut upstream, inner_pid);
+                        if let Err(error) = containment_signal(&mut upstream, inner_pid) {
+                            let _ = write_frame(
+                                &mut upstream,
+                                MSG_PROCESS_CONTROL_FAILURE,
+                                error.as_bytes(),
+                            );
+                            anchor = AnchorState::ContainmentFailed;
+                        }
                     }
                     Err(Errno::EINTR) => {}
                     Err(Errno::ECHILD) => {
@@ -442,6 +465,22 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                         // this same wait, strictly after any fallback
                         // containment signal. This is the authoritative
                         // terminal event.
+                        //
+                        // macOS: `ECHILD` only proves this supervisor has no
+                        // waitable group child left; a reparented descendant
+                        // is invisible to it. The group's absence is proven
+                        // independently (after the anchor was reaped) before
+                        // the terminal frame is emitted.
+                        #[cfg(target_os = "macos")]
+                        if let Err(error) = prove_group_absent(inner_pid) {
+                            let _ = write_frame(
+                                &mut upstream,
+                                MSG_PROCESS_CONTROL_FAILURE,
+                                error.as_bytes(),
+                            );
+                            anchor = AnchorState::ContainmentFailed;
+                            continue;
+                        }
                         if !terminal_reported {
                             terminal_reported = true;
                             if write_frame(&mut upstream, MSG_ALL_CHILDREN_REAPED, &[]).is_ok() {
@@ -459,9 +498,12 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                     }
                 }
             }
-            AnchorState::UnexpectedlyLost => {
+            AnchorState::UnexpectedlyLost | AnchorState::ContainmentFailed => {
                 // Fail-safe: never signal the unproven numeric id and never
-                // report the canonical terminal event.
+                // report the canonical terminal event (the anchor was lost
+                // before its intentional release, or the fallback
+                // containment signal failed). The specific failure was
+                // already reported once above.
             }
         }
         if terminal_reported && ack_seen {
@@ -1026,22 +1068,33 @@ enum AnchorState {
     /// The anchor is not waitable before its intentional release: an
     /// ownership invariant violation. The unit fails safely.
     UnexpectedlyLost,
+    /// The fallback containment signal failed while the anchor was still
+    /// retained. The owned group was not provably contained, so the unit
+    /// fails safely and never reports the canonical terminal event.
+    ContainmentFailed,
 }
 
 /// The outer supervisor's active containment: one final `SIGKILL` to the
 /// unit's process group, issued only while the structural anchor is held.
-fn containment_signal(upstream: &mut std::os::unix::net::UnixStream, pgid: i32) {
+///
+/// A failed signal (for example `EPERM`) is returned as an explicit
+/// containment failure: the caller must never convert it into a terminal
+/// result.
+fn containment_signal(
+    upstream: &mut std::os::unix::net::UnixStream,
+    pgid: i32,
+) -> Result<(), String> {
     let mut payload = Vec::with_capacity(9);
     payload.extend_from_slice(&pgid.to_le_bytes());
     payload.extend_from_slice(&(Signal::SIGKILL as i32).to_le_bytes());
     payload.push(1);
     let _ = write_frame(upstream, MSG_SIGNAL_ATTEMPT, &payload);
-    if let Err(error) = signal_group(pgid, Signal::SIGKILL) {
-        let _ = write_frame(
-            upstream,
-            MSG_PROCESS_CONTROL_FAILURE,
-            format!("cannot contain the owned unit group: {error}").as_bytes(),
-        );
+    match contain_group(pgid) {
+        crate::runtime::supervised_unit::ContainmentOutcome::Failed(error) => Err(error),
+        // `Contained` and, on macOS, `NothingLive` both proceed: terminality
+        // is decided by the group-scoped gate plus the macOS absence probe,
+        // never by this signal's result alone.
+        _ => Ok(()),
     }
 }
 
@@ -1241,12 +1294,25 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         // supervisor is a server descendant that can never leave the group;
         // ECHILD therefore means no process other than this supervisor
         // remains in the unit group — the complete terminal state.
+        //
+        // On macOS this proof does not hold: without a child-subreaper, a
+        // descendant that outlives the server is reparented to launchd and
+        // becomes invisible to this supervisor's group-scoped wait, so
+        // `ECHILD` only means "no child of this supervisor remains in the
+        // group". macOS therefore escalates to the outer supervisor's
+        // fallback containment (a `SIGKILL` to the retained group) instead
+        // of claiming the group is empty.
         match waitid(
             Id::PGid(Pid::from_raw(self_pid)),
             WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
         ) {
             Ok(WaitStatus::StillAlive | _) | Err(Errno::EINTR) => {}
-            Err(Errno::ECHILD) => return INNER_EXIT_NORMAL,
+            Err(Errno::ECHILD) => {
+                #[cfg(target_os = "macos")]
+                return INNER_EXIT_CONTAINMENT;
+                #[cfg(not(target_os = "macos"))]
+                return INNER_EXIT_NORMAL;
+            }
             Err(error) => {
                 let _ = write_frame(
                     &mut control,

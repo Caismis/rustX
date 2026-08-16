@@ -5,6 +5,20 @@ rustX is a standalone Rust execution runtime for durable, tool-using LLM agents.
 The runtime's native process supervision is supported on Linux and macOS.
 Windows is outside the supported target set.
 
+Linux and macOS do not provide identical kernel guarantees, and rustX does
+not claim they do:
+
+- **Linux** — child-subreaper orphan adoption plus an inherited seccomp
+  fixed-membership restriction. Group-scoped `waitid(ECHILD)` is a complete
+  owned-descendant terminal proof, including shell-backgrounded and
+  supervisor-loss descendants.
+- **macOS** — a dedicated session/process group with a native libc `waitid`
+  adapter and direct-child reaping. macOS has no child-subreaper and no
+  seccomp fixed-membership primitive, so rustX proves terminality by
+  actively signaling the retained group; a descendant that leaves the group
+  or a lost waitable anchor is reported as unproven, never as a fabricated
+  terminal result.
+
 > Status: pre-alpha. The architecture is intentionally allowed to break before 1.0 when a cleaner abstraction is available.
 
 ## Goals
