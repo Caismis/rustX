@@ -1618,13 +1618,13 @@ mod anchor_reaping_tests {
 
         // 5. Test-side cleanup: the containment correctly failed, so the
         //    test terminates the still-live owned group and reaps the stuck
-        //    outer; the adopted descendants then reparent and are reaped.
+        //    outer. The adopted descendants are zombies of the now-dead
+        //    outer and are reparented to init (this test process is not a
+        //    subreaper and is never their reaper); they are dead, never live
+        //    work.
         let _ = killpg(Pid::from_raw(inner_pid), Signal::SIGKILL);
         let _ = outer.kill();
         let _ = outer.wait();
-        wait_for_reaped(inner_pid);
-        wait_for_reaped(sleep_pid);
-        wait_for_group_gone(inner_pid);
     }
 
     /// The end-to-end regression of the coalesced `START` gate scenario.
