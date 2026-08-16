@@ -1843,7 +1843,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   them:
 
   ```text
-  ConversationRuntime::new(..)         -> inactive
+  ConversationRuntime::new(..)         -> runtime-owned / inactive
       [optional] RuntimeClientHost::new(..)     bind the client adapter
   ConversationRuntime::activate()      -> active: execution may begin
   ```
@@ -1858,11 +1858,22 @@ Runtime Client is a projection/control/attachment adapter over it.
   and the capability coordinator refuses a runtime-owned `commit` with
   `CapabilityCommitError::ConversationInactive`. No admission worker
   exists, `admit_next_attempt` is a no-op, and an inactive runtime
-  therefore publishes no observation at all. The gates are small shared
-  pieces of state (the mailbox's own admission flag, the capability
-  coordinator's runtime-owned activation flag) flipped by `activate`
-  under the one coordinator lock; the background registry reads the
-  mailbox flag of its own resources under its own lock section.
+  therefore publishes no observation at all.
+
+  There is exactly **one authoritative activation state**: the shared
+  `ConversationLifecycle` token composed by the runtime and read by every
+  runtime-owned semantic boundary. The mailbox keeps no activation flag
+  (runtime ownership is the lifecycle handle itself), the capability
+  coordinator keeps no activation flag (the handle is attached at its
+  claim), the coordinator keeps no copy, and the background registry reads
+  the same gate through its mailbox. `activate` performs the single
+  `Inactive -> Active` transition of that one token — the activation
+  linearization point — under the one coordinator lock; everything after
+  it (worker spawn, initial admission kick) is the one-time
+  post-transition work of the single winning caller. Because there is no
+  subsystem-specific intermediate activation state, background and
+  capability commits can never observe contradictory lifecycle states in
+  one real-time history.
 
   Binding a client host is a **composition decision, not a hot
   operation**. A bind after activation is refused with the typed
@@ -1951,7 +1962,8 @@ Runtime Client is a projection/control/attachment adapter over it.
   boundary the dispatch ownership commit linearizes at — it requires a
   pristine background plane (no prepared dispatch, no committed record),
   claims the coordinator binding, and binds the canonical mailbox
-  inactive, all at one point:
+  runtime-owned with a fresh `Inactive` shared lifecycle, all at one
+  point:
 
   ```text
   standalone ConversationToolRuntime
@@ -1959,13 +1971,13 @@ Runtime Client is a projection/control/attachment adapter over it.
       |  ownership transfer (one registry critical section)
       |    1. require pristine background (no prepared, no committed)
       |    2. claim the coordinator binding
-      |    3. bind the mailbox BoundInactive
+      |    3. bind the mailbox runtime-owned + shared Inactive lifecycle
       v
   ConversationRuntime-owned / inactive
       |
       |  background commit -> BackgroundDispatchError::ConversationInactive
       v
-  ConversationRuntime::activate()
+  ConversationRuntime::activate()   (the shared lifecycle Inactive -> Active)
   ```
 
   Either a standalone background commit wins the section first — the
@@ -1980,6 +1992,12 @@ Runtime Client is a projection/control/attachment adapter over it.
   capability claim fails after the transfer, the mailbox is unbound and
   the coordinator claim released again, restoring the exact previous
   standalone state.
+
+  The ownership transfer (`standalone -> runtime-owned/inactive`) and
+  activation (`inactive -> active`) are two distinct commit points: the
+  transfer establishes runtime ownership plus the `Inactive` lifecycle
+  relationship, and `activate` later performs the one lifecycle
+  transition.
 
   This is a runtime ownership invariant, not a caller convention. Two
   coordinators over one authoritative runtime would each admit attempts

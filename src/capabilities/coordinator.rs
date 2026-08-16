@@ -11,6 +11,7 @@ use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationErr
 use crate::capabilities::snapshot::CapabilitySnapshot;
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
+use crate::runtime::types::ConversationLifecycle;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
 };
@@ -48,6 +49,18 @@ struct CoordinatorState {
     active_attempts: u64,
     /// The next environment staging sequence (never enters any digest).
     _next_staging: AtomicU64,
+    /// The shared activation lifecycle of the claiming conversation
+    /// runtime (Issue #61).
+    ///
+    /// Set by [`CapabilityCoordinator::claim_conversation_runtime`] and
+    /// read by `commit`, both under this state lock — so it can never
+    /// disagree with the `coordinator_claimed` atomic. This is **not**
+    /// another activation authority: the capability keeps no activation
+    /// state of its own, and active/inactive is answered by the lifecycle
+    /// itself, the same handle the mailbox, the background registry, and
+    /// the coordinator observe. `None` = standalone/unclaimed, which
+    /// commits unconditionally.
+    conversation_lifecycle: Option<ConversationLifecycle>,
 }
 
 /// The conversation/capability-owner coordination state.
@@ -79,14 +92,6 @@ struct CoordinatorInner {
     /// Claimed by the one conversation runtime coordinator of this
     /// identity.
     coordinator_claimed: AtomicBool,
-    /// Whether the claiming conversation runtime was activated (Issue #61).
-    ///
-    /// Set by [`CapabilityCoordinator::activate_conversation`] at the
-    /// runtime's activation, under the same coordinator lock section that
-    /// flips every other runtime-owned gate. A runtime-owned `commit` is
-    /// refused while the coordinator is claimed and this flag is unset;
-    /// a standalone (unclaimed) coordinator commits unconditionally.
-    conversation_activated: AtomicBool,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
@@ -257,12 +262,12 @@ impl CapabilityCoordinator {
                     snapshot: initial_snapshot,
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
+                    conversation_lifecycle: None,
                 }),
                 condvar: Condvar::new(),
                 observer: Mutex::new(None),
                 runtime_client_bound: AtomicBool::new(false),
                 coordinator_claimed: AtomicBool::new(false),
-                conversation_activated: AtomicBool::new(false),
                 #[cfg(test)]
                 commit_hook: Mutex::new(None),
             }),
@@ -302,16 +307,35 @@ impl CapabilityCoordinator {
     }
 
     /// Claims the one-time conversation-runtime-coordinator binding of this
-    /// coordinator identity.
+    /// coordinator identity, together with the claiming runtime's shared
+    /// activation lifecycle.
     ///
     /// Returns `true` for the one claim that wins and `false` for every
     /// later claim on any clone. Never reset by dropping the bound
     /// coordinator.
-    pub(crate) fn claim_conversation_runtime(&self) -> bool {
-        self.inner
+    ///
+    /// The claim and the lifecycle attachment share the capability state
+    /// lock — the same boundary `commit` reads them under — so a
+    /// runtime-owned `commit` can never observe a claimed coordinator
+    /// without its lifecycle. A standalone (unclaimed) coordinator keeps no
+    /// lifecycle and commits unconditionally.
+    pub(crate) fn claim_conversation_runtime(&self, lifecycle: &ConversationLifecycle) -> bool {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
+        if self
+            .inner
             .coordinator_claimed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+            .is_err()
+        {
+            return false;
+        }
+        state.conversation_lifecycle = Some(lifecycle.clone());
+        drop(state);
+        true
     }
 
     /// Whether this coordinator identity is already bound to a conversation
@@ -319,21 +343,6 @@ impl CapabilityCoordinator {
     #[must_use]
     pub fn is_conversation_runtime_bound(&self) -> bool {
         self.inner.coordinator_claimed.load(Ordering::Acquire)
-    }
-
-    /// Opens the runtime-owned commit gate: the claiming conversation
-    /// runtime was activated, so live capability commits may begin.
-    ///
-    /// Called once by
-    /// [`ConversationRuntime::activate`](crate::runtime::conversation_runtime::ConversationRuntime::activate)
-    /// under the one coordinator lock, so the flag flips atomically with
-    /// every other runtime-owned lifecycle gate. The store is `Release`:
-    /// a `commit` that observes it (via `Acquire`) linearizes after
-    /// activation and is a real post-activation transition.
-    pub(crate) fn activate_conversation(&self) {
-        self.inner
-            .conversation_activated
-            .store(true, Ordering::Release);
     }
 
     /// The current active capability snapshot.
@@ -579,11 +588,16 @@ impl CapabilityCoordinator {
             hook.enter();
         }
         // The runtime-owned activation gate: observed under this same
-        // boundary, so the commit linearizes cleanly against
-        // `ConversationRuntime::activate`. An unclaimed (standalone)
-        // coordinator commits unconditionally.
-        if self.inner.coordinator_claimed.load(Ordering::Acquire)
-            && !self.inner.conversation_activated.load(Ordering::Acquire)
+        // boundary, so the commit linearizes cleanly against the shared
+        // lifecycle transition (`ConversationLifecycle::activate`). The
+        // capability stores no activation state of its own — the lifecycle
+        // handle attached by the claim *is* the runtime ownership, and
+        // active/inactive is answered by the lifecycle itself, the same
+        // authority the mailbox, the background registry, and the
+        // coordinator observe. An unclaimed (standalone) coordinator
+        // commits unconditionally.
+        if let Some(lifecycle) = &state.conversation_lifecycle
+            && !lifecycle.is_active()
         {
             return Err(CapabilityCommitError::ConversationInactive);
         }

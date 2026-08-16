@@ -78,7 +78,7 @@
 //! transition between them is the one explicit composition boundary:
 //!
 //! ```text
-//! ConversationRuntime::new(..)          -> inactive
+//! ConversationRuntime::new(..)          -> runtime-owned / inactive
 //!     [optional] RuntimeClientHost::new(..)   binds the client adapter
 //! ConversationRuntime::activate()       -> active: semantic execution may begin
 //! ```
@@ -87,16 +87,47 @@
 //! `ConversationToolRuntime` it claims (Issue #61): under the background
 //! registry synchronization boundary it requires a pristine background
 //! plane (no prepared dispatch, no committed record), claims the one-time
-//! coordinator binding, and binds the canonical mailbox inactive — all at
-//! one linearization point. Either a standalone background commit wins
-//! first (construction fails typed with
-//! [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] and nothing is
-//! consumed) or the transfer wins first (a later background commit is
-//! refused with
+//! coordinator binding, and binds the canonical mailbox runtime-owned with
+//! a fresh `Inactive` shared lifecycle — all at one linearization point.
+//! Either a standalone background commit wins first (construction fails
+//! typed with [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] and
+//! nothing is consumed) or the transfer wins first (a later background
+//! commit is refused with
 //! [`BackgroundDispatchError::ConversationInactive`](crate::tools::background::BackgroundDispatchError::ConversationInactive)).
 //! A runtime is therefore constructed only over a pristine background
 //! plane, and the inactive phase can never inherit a detached semantic
 //! transition.
+//!
+//! # One activation lifecycle authority
+//!
+//! The conversation has exactly **one** authoritative activation state:
+//! the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+//! composed by the runtime and shared with every runtime-owned semantic
+//! boundary — the inbound mailbox (runtime ownership is the lifecycle
+//! handle; the mailbox keeps no activation flag), the background registry
+//! (reads the same gate through its mailbox), the capability coordinator
+//! (reads the same handle attached at its claim), and the coordinator
+//! itself. `activate` performs the single `Inactive -> Active` transition
+//! of that one lifecycle, and every runtime-owned semantic commit observes
+//! it:
+//!
+//! ```text
+//! operation observes Inactive
+//!     -> it linearizes before activation
+//!     -> runtime-semantic commit is refused (typed, consumes nothing)
+//!
+//! operation observes Active
+//!     -> it linearizes after activation
+//!     -> normal subsystem rules apply
+//! ```
+//!
+//! There is no subsystem-specific intermediate activation state, so two
+//! runtime-owned subsystems can never disagree about whether the
+//! conversation is active: a background commit that has observed `Active`
+//! and a capability commit that starts afterwards necessarily observes
+//! `Active` too (the lifecycle transition is monotonic). The ownership
+//! transfer (`standalone -> runtime-owned/inactive`) and activation
+//! (`inactive -> active`) are two distinct commit points.
 //!
 //! An **inactive** runtime is inert, and this is enforced, not merely
 //! documented. Once a `ConversationRuntime` owns its semantic subsystems,
@@ -114,21 +145,20 @@
 //!     |
 //! [optional RuntimeClientHost bootstrap]
 //!     |
-//! ConversationRuntime::activate()      <- the one freeze/open boundary
+//! ConversationRuntime::activate()      <- the one Inactive -> Active transition
 //!     |
 //! all runtime semantic mutations may begin
 //! ```
 //!
-//! The lifecycle gates are small shared pieces of state, never coordinator
-//! callbacks: the mailbox's own admission flag (set by the ownership
-//! transfer at construction — `bind_inactive` — and `activate` at
-//! activation), and the capability coordinator's runtime-owned activation
-//! flag. The background registry reads the mailbox admission flag of its
-//! own resources under its own lock section. `activate` flips them all
-//! under the one coordinator lock, so a subsystem commit and an activation
-//! always linearize: a commit that observes the pre-activation state is
-//! refused, one that observes the post-activation state is a real
-//! post-activation transition.
+//! The lifecycle is an `AcqRel/ Acquire` atomic token, read-only from every
+//! subsystem critical section: no subsystem ever takes the coordinator
+//! lock, and the coordinator lock is held only for the coordinator's own
+//! operations and the host-binding handshake. `activate` performs the
+//! transition under that lock, which is what serializes it against the
+//! host-binding decision: a bootstrap that acquires the lock first sees
+//! `Inactive` and completes before activation, one that acquires it after
+//! sees `Active` and is refused
+//! ([`RuntimeBootstrapError::RuntimeAlreadyActivated`]).
 //!
 //! Binding a Runtime Client host is a **pre-activation** composition
 //! decision, not a hot operation: a host bind after activation is refused
@@ -227,7 +257,7 @@ use crate::runtime::inbound::{
 };
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
-use crate::runtime::types::{CancellationReason, RuntimeClock, SystemClock};
+use crate::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeClock, SystemClock};
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
 
@@ -414,14 +444,6 @@ struct CoordinatorState {
     /// coordinator physically cannot mutate a competing copy. Settlement
     /// moves the authoritative state back in.
     conversation: Option<ConversationState>,
-    /// Whether the runtime was activated (Issue #61).
-    ///
-    /// It lives under the admission lock because it is *both* the gate of
-    /// semantic execution and the freeze point of the Runtime Client host
-    /// binding decision: `activate` sets it and the bootstrap handshake
-    /// rejects on it, both under this one lock, so the two can never
-    /// interleave ambiguously.
-    activated: bool,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     /// Whether shutdown was accepted: no further inbound admission, no
@@ -505,6 +527,12 @@ impl WakeGate {
 ///   conversation state is restored and the current-attempt slot is
 ///   cleared, **before** the next-admission handoff, so an enqueue during
 ///   the park provably races the settlement-to-next-attempt boundary.
+/// - `activation_gate`: parked at the entrance of `ConversationRuntime::activate`,
+///   **before** the coordinator lock is acquired and before the lifecycle
+///   transition, so while the park holds the conversation is provably
+///   still `Inactive` and every competing runtime-owned commit or host
+///   bind can still proceed. Releasing the gate commits the one
+///   `Inactive -> Active` transition.
 ///
 /// All synchronization is `std` (mutex + condvar) because the coordinator
 /// boundary is a `std` mutex critical section; the parking blocks the OS
@@ -519,6 +547,9 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
+    /// Parks the next activation before the lifecycle transition when
+    /// armed.
+    pub(crate) activation_gate: Option<Arc<Gate>>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -593,6 +624,11 @@ pub(crate) struct RuntimeInner {
     tool_runtime: ConversationToolRuntime,
     mailbox: ConversationInboundMailbox,
     capability: CapabilityCoordinator,
+    /// The one authoritative activation lifecycle of this conversation
+    /// (Issue #61): the single `Inactive -> Active` transition, shared with
+    /// the mailbox, the background registry, and the capability
+    /// coordinator. The coordinator keeps no activation state of its own.
+    lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
     /// The Tokio execution runtime this conversation was constructed in.
     ///
@@ -705,10 +741,13 @@ impl RuntimeInner {
         // the freeze that makes the combined seed one real global state.
         let state = self.lock_state();
         // Binding a Runtime Client host is a pre-activation composition
-        // decision. Rejecting here, under the lock `activate` also takes,
-        // is what makes the lifecycle boundary structural rather than
-        // conventional.
-        if state.activated {
+        // decision. Rejecting here, under the lock `activate` also takes
+        // for its lifecycle transition, is what makes the host-binding
+        // decision race atomically against activation: a bootstrap that
+        // acquires the lock first sees `Inactive` and completes before
+        // activation, one that acquires it after sees `Active` and is
+        // refused.
+        if self.lifecycle.is_active() {
             return Err(RuntimeBootstrapError::RuntimeAlreadyActivated {
                 conversation_id: self.conversation_id.clone(),
             });
@@ -949,7 +988,7 @@ impl RuntimeInner {
             gate.enter();
         }
         let mut state = self.lock_state();
-        if !state.activated || state.shutting_down || state.current_attempt.is_some() {
+        if !self.lifecycle.is_active() || state.shutting_down || state.current_attempt.is_some() {
             return;
         }
         let Some(batch) = self.mailbox.drain() else {
@@ -1126,19 +1165,25 @@ impl ConversationRuntime {
 
         // ---- Ownership commit: the one tool-runtime ownership transfer. ----
         //
-        // The conversation runtime claims the tool runtime through one
+        // The conversation runtime composes the one shared activation
+        // lifecycle and claims the tool runtime through one
         // ownership-transfer contract (Issue #61): the transfer runs under
         // the background registry synchronization boundary, requires a
         // pristine background plane (no prepared dispatch, no committed
         // record), claims the one-time coordinator binding, and binds the
-        // canonical mailbox inactive at the same linearization point. A
-        // standalone background commit therefore either wins first (this
-        // construction fails typed with `ToolRuntimeNotQuiescent`, and the
-        // claim is never consumed) or this transfer wins first (a later
-        // commit observes the `BoundInactive` mailbox and is refused with
+        // canonical mailbox runtime-owned with this fresh `Inactive`
+        // lifecycle at the same linearization point. A standalone
+        // background commit therefore either wins first (this construction
+        // fails typed with `ToolRuntimeNotQuiescent`, and the claim is
+        // never consumed) or this transfer wins first (a later commit
+        // observes the runtime-owned inactive mailbox and is refused with
         // `BackgroundDispatchError::ConversationInactive`). An inactive
         // runtime can never inherit detached background work.
-        match config.tool_runtime.claim_conversation_runtime_inactive() {
+        let lifecycle = ConversationLifecycle::new();
+        match config
+            .tool_runtime
+            .claim_conversation_runtime_inactive(&lifecycle)
+        {
             Ok(()) => {}
             Err(crate::tools::runtime::ConversationRuntimeClaimError::AlreadyBound) => {
                 return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
@@ -1147,7 +1192,11 @@ impl ConversationRuntime {
                 return Err(ConversationRuntimeError::ToolRuntimeNotQuiescent { conversation_id });
             }
         }
-        if !config.capability.claim_conversation_runtime() {
+        // The capability coordinator is a separate identity: it claims the
+        // same shared lifecycle under its own state lock, so its commit
+        // gate observes exactly the activation decision the mailbox and
+        // the background registry observe.
+        if !config.capability.claim_conversation_runtime(&lifecycle) {
             // Transactional construction: the tool-runtime ownership
             // transfer is rolled back to its exact previous standalone
             // state — mailbox unbound, coordinator claim released — so a
@@ -1159,9 +1208,9 @@ impl ConversationRuntime {
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
         // The conversation is inert until `activate`: the ownership
-        // transfer already bound its mailbox inactive, so nothing can be
-        // admitted and nothing can be observed while the optional Runtime
-        // Client host binds.
+        // transfer already bound its mailbox with the Inactive lifecycle,
+        // so nothing can be admitted and nothing can be observed while the
+        // optional Runtime Client host binds.
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -1173,13 +1222,13 @@ impl ConversationRuntime {
             tool_runtime: config.tool_runtime,
             mailbox,
             capability: config.capability,
+            lifecycle,
             clock,
             executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
                 request_history: RequestHistory::default(),
                 conversation: Some(conversation),
-                activated: false,
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
@@ -1306,31 +1355,61 @@ impl ConversationRuntime {
 
     /// Activates the runtime: semantic execution may begin.
     ///
-    /// This is the one explicit lifecycle boundary of Issue #61. Before
-    /// it, the runtime is inert and a `RuntimeClientHost` may bind over
-    /// it; at it, the Runtime Client host-binding decision is frozen, the
-    /// mailbox opens, and the admission worker starts. Activation is the
-    /// bootstrap cut a bound Runtime Client projection is seeded against.
+    /// This is the one explicit lifecycle boundary of Issue #61: the single
+    /// `Inactive -> Active` transition of the shared
+    /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// every runtime-owned semantic boundary observes. Before it, the
+    /// runtime is inert and a `RuntimeClientHost` may bind over it; at it,
+    /// the Runtime Client host-binding decision is frozen. Activation is
+    /// the bootstrap cut a bound Runtime Client projection is seeded
+    /// against.
+    ///
+    /// The transition is a `compare_exchange` under the one coordinator
+    /// lock — the same lock the host-binding handshake takes — so the
+    /// host-binding decision races atomically against it: a bootstrap that
+    /// acquires the lock first sees `Inactive` and completes before
+    /// activation, one that acquires it after sees `Active` and is refused
+    /// with [`RuntimeBootstrapError::RuntimeAlreadyActivated`]. The
+    /// transition itself is the linearization point; spawning the
+    /// admission worker and the initial admission kick are the one-time
+    /// post-transition steps of the single winning caller.
     ///
     /// Runtime Client *attachments* remain fully dynamic afterwards: this
     /// boundary freezes only which adapter (if any) observes the runtime,
     /// never how long a client stays attached.
     ///
-    /// Activating twice is a no-op; the first activation wins.
+    /// Activating twice is a no-op: exactly one concurrent call commits the
+    /// transition and performs the one-time post-activation work; every
+    /// other call observes `Active` and returns without changing anything.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the test-only coordinator probe lock is poisoned,
+    /// which would mean a previous test hook panicked while holding it.
     pub fn activate(&self) {
+        // Test-only activation gate: parked before the coordinator lock and
+        // before the lifecycle transition, so while the park holds the
+        // conversation is provably still Inactive and every competing
+        // runtime-owned commit or host bind can still proceed. The gate
+        // parks only when armed and disarms after one park.
+        #[cfg(test)]
+        if let Some(probe) = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            && let Some(gate) = &probe.activation_gate
         {
-            let mut state = self.inner.lock_state();
-            if state.activated {
+            gate.enter();
+        }
+        {
+            // The lock serializes the lifecycle transition against the
+            // host-binding handshake; the CAS is the transition itself.
+            let _state = self.inner.lock_state();
+            if !self.inner.lifecycle.activate() {
                 return;
             }
-            state.activated = true;
-            // Under the same lock section, so an admission, a bootstrap
-            // handshake, or a runtime-owned subsystem commit can never
-            // observe a half-activated runtime: the mailbox opens and the
-            // capability coordinator's runtime-owned commit gate opens at
-            // the same linearization point.
-            self.inner.mailbox.activate();
-            self.inner.capability.activate_conversation();
         }
         self.inner.ensure_worker();
         // Any inbound published before activation (there can be none: the
@@ -1342,7 +1421,7 @@ impl ConversationRuntime {
     /// Whether this runtime was activated.
     #[must_use]
     pub fn is_activated(&self) -> bool {
-        self.inner.lock_state().activated
+        self.inner.lifecycle.is_active()
     }
 
     /// Submits one ordinary inbound user message.
@@ -1369,7 +1448,7 @@ impl ConversationRuntime {
         }
         let (message_id, timestamp) = {
             let mut state = self.inner.lock_state();
-            if !state.activated {
+            if !self.inner.lifecycle.is_active() {
                 return Err(InboundAdmissionError::Inactive);
             }
             if state.shutting_down {
@@ -1471,7 +1550,7 @@ impl ConversationRuntime {
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
         let mut state = self.inner.lock_state();
-        if !state.activated {
+        if !self.inner.lifecycle.is_active() {
             return Err(ModelUpdateError::Inactive);
         }
         // Resolve into a scratch copy first: `SessionModelState::apply` is
@@ -1531,7 +1610,7 @@ impl ConversationRuntime {
     /// activation shutdown is accepted (idempotently) and never fails.
     pub fn shutdown(&self) -> Result<(), ShutdownError> {
         let mut state = self.inner.lock_state();
-        if !state.activated {
+        if !self.inner.lifecycle.is_active() {
             return Err(ShutdownError::Inactive);
         }
         if !state.shutting_down {
@@ -2395,6 +2474,7 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
+            activation_gate: None,
         }))
         .await;
         gate.arm();

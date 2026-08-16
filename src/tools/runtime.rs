@@ -50,6 +50,7 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::SystemClock;
 use crate::runtime::identity::ConversationId;
 use crate::runtime::inbound::ConversationInboundMailbox;
+use crate::runtime::types::ConversationLifecycle;
 use crate::tools::artifacts::{ArtifactError, ArtifactStore};
 use crate::tools::background::{
     BackgroundOwnershipClaimError, BackgroundResources, ConversationBackgroundRegistry,
@@ -390,7 +391,8 @@ impl ConversationToolRuntime {
     /// require a pristine background plane (no prepared dispatch,
     ///     no committed record)
     /// claim the one-time coordinator binding of this identity
-    /// bind the canonical mailbox BoundInactive
+    /// bind the canonical mailbox runtime-owned with the shared
+    ///     Inactive lifecycle
     /// ```
     ///
     /// Because the registry lock is the same boundary the background
@@ -404,6 +406,13 @@ impl ConversationToolRuntime {
     /// work, and once `ConversationRuntime::new` succeeds the runtime is
     /// semantically inert until `activate()`.
     ///
+    /// The `lifecycle` is the
+    /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// composed by the `ConversationRuntime` being constructed; it is
+    /// shared with the mailbox, the capability coordinator, and the
+    /// coordinator itself, so activation (`Inactive -> Active`) is one
+    /// transition every runtime-owned semantic boundary observes.
+    ///
     /// # Errors
     ///
     /// Returns [`ConversationRuntimeClaimError::AlreadyBound`] when this
@@ -413,11 +422,12 @@ impl ConversationToolRuntime {
     /// coordinator claim, no mailbox transition, and no capability claim.
     pub(crate) fn claim_conversation_runtime_inactive(
         &self,
+        lifecycle: &ConversationLifecycle,
     ) -> Result<(), ConversationRuntimeClaimError> {
-        match self
-            .background
-            .claim_conversation_runtime_inactive(&self.runtime_client.coordinator_claimed)
-        {
+        match self.background.claim_conversation_runtime_inactive(
+            &self.runtime_client.coordinator_claimed,
+            lifecycle,
+        ) {
             Ok(()) => Ok(()),
             Err(BackgroundOwnershipClaimError::AlreadyClaimed) => {
                 Err(ConversationRuntimeClaimError::AlreadyBound)

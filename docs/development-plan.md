@@ -573,7 +573,8 @@ Implemented in the current architecture:
   ownership transfer: under the background registry lock it requires a
   pristine background plane (no prepared dispatch, no committed record),
   claims the one-time coordinator binding, and binds the canonical mailbox
-  inactive at one linearization point — so a standalone background commit
+  runtime-owned with a fresh `Inactive` shared lifecycle at one
+  linearization point — so a standalone background commit
   either wins first (construction fails typed with
   `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
   nothing) or loses to the transfer (a later commit fails
@@ -585,6 +586,20 @@ Implemented in the current architecture:
   `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
   and the capability coordinator refuses a runtime-owned `commit` with
   `CapabilityCommitError::ConversationInactive` — all consuming nothing.
+  Activation has **one authoritative lifecycle state**: the shared
+  `ConversationLifecycle` token composed by the runtime, read by the
+  mailbox (runtime ownership is the handle itself), the background
+  registry (through its mailbox), the capability coordinator (attached at
+  its claim), and the coordinator itself. `ConversationRuntime::activate`
+  performs the single `Inactive -> Active` transition of that one token
+  under the one coordinator lock — the activation linearization point —
+  and the one winning caller spawns the admission worker and performs the
+  initial admission kick; concurrent calls are idempotent. No
+  subsystem-specific intermediate activation state exists, so background
+  and capability commits can never disagree about whether the
+  conversation is active. The ownership transfer
+  (`standalone -> runtime-owned/inactive`) and activation
+  (`inactive -> active`) are two distinct commit points.
   A `RuntimeClientHost` may then optionally bind;
   `ConversationRuntime::activate` is the one explicit composition boundary
   after which semantic execution may begin. Binding a client host is a
@@ -635,7 +650,20 @@ Implemented in the current architecture:
   regressions (model_set, shutdown, background dispatch commit, and
   capability commit while inactive are all refused typed and consume
   nothing; cursor 0 stays stable until activation; the first cursor
-  belongs to a real post-activation transition), ownership-transfer
+  belongs to a real post-activation transition), activation regressions
+  (an activation-gate test parks `activate` before the lifecycle
+  transition and proves both sides: while parked, background commit,
+  capability commit, and mailbox enqueue all observe `Inactive` and are
+  refused typed; after the transition the same operations follow the
+  normal active semantics; a real-time ordered cross-subsystem regression
+  parks a background commit after it has observed `Active` at the
+  registry ownership-commit boundary and proves a capability commit that
+  begins afterwards — and one that begins after the background completed —
+  cannot observe a stale `Inactive`; a host-bind-vs-activate race proves
+  the host binds with the bootstrap seed at cursor 0 while `activate` is
+  parked before the transition; concurrent `activate` calls are
+  idempotent — one CAS winner, one worker, exactly one attempt from one
+  inbound item), ownership-transfer
   regressions (a tool runtime with a committed background record or a
   prepared dispatch is rejected typed `ToolRuntimeNotQuiescent` with no
   claim consumed, the mailbox left standalone, and the staged/committed

@@ -3316,6 +3316,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                activation_gate: None,
             },
         )
         .await;
@@ -3394,6 +3395,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                activation_gate: None,
             },
         )
         .await;
@@ -3911,6 +3913,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                activation_gate: None,
             },
         )
         .await;
@@ -3988,6 +3991,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
+                activation_gate: None,
             },
         )
         .await;
@@ -4214,6 +4218,7 @@ mod tests {
             CoordinatorProbe {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
+                activation_gate: None,
             },
         )
         .await;
@@ -5471,7 +5476,11 @@ mod tests {
         // Consume the capability identity's one-time claim *before*
         // construction, so the capability claim inside `new` fails after
         // the tool-runtime transfer already succeeded.
-        assert!(fixture.coordinator.claim_conversation_runtime());
+        assert!(
+            fixture
+                .coordinator
+                .claim_conversation_runtime(&crate::runtime::types::ConversationLifecycle::new())
+        );
 
         let refused = ConversationRuntime::new(claim_config(&fixture))
             .expect_err("a claimed capability identity rejects construction");
@@ -5490,6 +5499,383 @@ mod tests {
             .mailbox()
             .enqueue(inbound_text("standalone-4", "still standalone"))
             .expect("the rolled-back mailbox accepts standalone inbound");
+    }
+
+    /// The activation regression: `ConversationRuntime::activate` performs
+    /// one shared `Inactive -> Active` lifecycle transition, and every
+    /// runtime-owned semantic boundary observes exactly that transition.
+    ///
+    /// The activation gate parks `activate` before the lifecycle
+    /// transition: while parked, a background commit, a capability commit,
+    /// and a mailbox enqueue all observe `Inactive` and are refused typed
+    /// (consuming nothing); after the gate is released the same operations
+    /// observe `Active` and follow the normal active semantics. The park
+    /// proves both sides against the *one* shared decision — the mailbox,
+    /// the background registry, and the capability coordinator can never
+    /// observe contradictory lifecycle states, because there is only one
+    /// activation state to observe.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn activation_is_one_shared_lifecycle_transition() {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let (_adapter, fixture) = runtime_only_fixture(
+            vec![one_turn_stop(), one_turn_stop()],
+            ToolRegistry::new(),
+            Some(CoordinatorProbe {
+                admission_gate: None,
+                settlement_gate: None,
+                activation_gate: Some(gate.clone()),
+            }),
+        )
+        .await;
+        let registry = fixture.runtime.tool_runtime().background().clone();
+        let coordinator = fixture.coordinator.clone();
+        gate.arm();
+
+        // Park `activate` exactly before the lifecycle transition: while
+        // the park holds, the conversation is provably still Inactive.
+        let runtime = fixture.runtime.clone();
+        let activate_task = tokio::task::spawn_blocking(move || runtime.activate());
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+                .await
+                .expect("activate entered the gate");
+        }
+
+        // Pre-side: every runtime-owned semantic commit observes Inactive
+        // and is refused typed, consuming nothing.
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-activation-pre"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let refused = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect_err("a pre-transition background commit is refused");
+        assert_eq!(
+            refused,
+            BackgroundDispatchError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-host"),
+            }
+        );
+        assert!(
+            registry.all_snapshots().is_empty(),
+            "the refused commit published no record"
+        );
+        assert!(!*started.borrow(), "the rolled-back runner never begins");
+
+        let refused = coordinator
+            .commit(coordinator.prepare_candidate().await.expect("prepare"))
+            .expect_err("a pre-transition capability commit is refused");
+        assert_eq!(
+            refused,
+            crate::capabilities::CapabilityCommitError::ConversationInactive
+        );
+
+        let refused = fixture
+            .runtime
+            .submit_inbound(submit_content("early"))
+            .expect_err("a pre-transition inbound is refused");
+        assert_eq!(refused, InboundAdmissionError::Inactive);
+
+        // A real capability candidate for the post-transition commit.
+        write_probe_skill(&fixture.workspace, "pdf");
+
+        // Release: the one lifecycle transition commits.
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+                .await
+                .expect("the activation gate was released");
+        }
+        activate_task.await.expect("activate completes");
+        assert!(fixture.runtime.is_activated());
+
+        // Post-side: the same operations observe Active and follow the
+        // normal active semantics.
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-activation-post"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = registry
+            .commit_dispatch(prepared, &CancellationSignal::new())
+            .expect("a post-transition background commit succeeds")
+        else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the post-transition runner starts");
+
+        let committed = coordinator
+            .commit(coordinator.prepare_candidate().await.expect("prepare"))
+            .expect("a post-transition capability commit succeeds");
+        assert_eq!(
+            committed.revision().get(),
+            1,
+            "the first live capability revision"
+        );
+
+        fixture
+            .runtime
+            .submit_inbound(submit_content("late"))
+            .expect("a post-transition inbound is accepted");
+        fixture.runtime.settlement_signal().notified().await;
+
+        // Settle the background execution cleanly.
+        release.notify_waiters();
+        let terminal = registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the post-transition execution settles normally"
+        );
+    }
+
+    /// The real-time ordered cross-subsystem regression: the old
+    /// implementation could produce "background commit succeeds, then a
+    /// capability commit that starts afterwards returns
+    /// `ConversationInactive`" across one activation call. With the one
+    /// shared lifecycle authority that history is structurally impossible.
+    ///
+    /// The registry commit-boundary hook parks a background commit after
+    /// it has already observed `Active` inside its critical section; a
+    /// capability commit that begins afterwards — and a second one that
+    /// begins after the background commit completed — must observe the
+    /// same `Active` lifecycle. The park and the task join prove the
+    /// real-time ordering with no timing assumptions.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_semantic_commits_cannot_disagree_across_activation() {
+        let (_adapter, fixture) = runtime_only_fixture(
+            vec![one_turn_stop(), one_turn_stop()],
+            ToolRegistry::new(),
+            None,
+        )
+        .await;
+        let registry = fixture.runtime.tool_runtime().background().clone();
+        let coordinator = fixture.coordinator.clone();
+        fixture.runtime.activate();
+
+        // Real capability candidates for the two post-activation commits.
+        write_probe_skill(&fixture.workspace, "pdf");
+
+        // Prepare a background dispatch and park its commit at the
+        // registry ownership-commit boundary: the commit has already
+        // observed the shared lifecycle (Active) inside its critical
+        // section when the hook fires.
+        let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        registry.install_commit_boundary_hook(hook.clone());
+        let (tool, mut started, release) = ParkingBackgroundTool::new();
+        let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
+        let prepared = registry
+            .prepare_dispatch(
+                &claim_background_invocation("call-epoch-b"),
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let commit_registry = registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            commit_registry.commit_dispatch(prepared, &CancellationSignal::new())
+        });
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.wait_entered())
+                .await
+                .expect("the background commit entered its boundary after observing Active");
+        }
+
+        // A capability commit that begins now — real-time after the
+        // background commit's lifecycle observation — must observe the
+        // same Active lifecycle: it cannot fail ConversationInactive.
+        let committed = coordinator
+            .commit(coordinator.prepare_candidate().await.expect("prepare"))
+            .expect("the capability observes Active, never a stale Inactive");
+        assert_eq!(committed.revision().get(), 1);
+
+        // The background commit completes successfully.
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.proceed())
+                .await
+                .expect("the background commit boundary was released");
+        }
+        let outcome = commit_task
+            .await
+            .expect("commit outcome")
+            .expect("the background commit succeeds after observing Active");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        started
+            .wait_for(|started| *started)
+            .await
+            .expect("the runner starts");
+
+        // The old contradiction shape: B completed successfully, then C
+        // begins — C must still observe Active, never a stale Inactive.
+        write_probe_skill(&fixture.workspace, "docx");
+        let committed = coordinator
+            .commit(coordinator.prepare_candidate().await.expect("prepare"))
+            .expect("a capability commit after the background completion cannot observe Inactive");
+        assert_eq!(committed.revision().get(), 2);
+
+        // Settle the background execution cleanly.
+        release.notify_waiters();
+        let terminal = registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Succeeded,
+            "the background execution settles normally"
+        );
+    }
+
+    /// The host-binding vs activation race: `RuntimeClientHost::new` and
+    /// `ConversationRuntime::activate` race against the same lifecycle
+    /// transition, serialized by the one coordinator lock the transition
+    /// commits under. This interleaving proves "host wins": the host
+    /// binds while `activate` is parked before the lifecycle transition,
+    /// completes with the bootstrap seed at cursor 0, and the transition
+    /// then commits — the first cursor belongs to a real post-activation
+    /// transition. The activation-wins interleaving is proven by
+    /// `late_host_bind_after_activation_is_rejected_typed`.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn host_bind_racing_activation_has_one_clean_linearization() {
+        let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let (_adapter, fixture) = runtime_only_fixture(
+            vec![one_turn_stop()],
+            ToolRegistry::new(),
+            Some(CoordinatorProbe {
+                admission_gate: None,
+                settlement_gate: None,
+                activation_gate: Some(gate.clone()),
+            }),
+        )
+        .await;
+        gate.arm();
+
+        // Park `activate` before the lifecycle transition: the
+        // conversation is provably still Inactive, so the host bind wins
+        // the race and completes with the full bootstrap seed.
+        let runtime = fixture.runtime.clone();
+        let activate_task = tokio::task::spawn_blocking(move || runtime.activate());
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+                .await
+                .expect("activate entered the gate");
+        }
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: fixture.runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("the host binds before the lifecycle transition");
+        assert!(
+            fixture.runtime.tool_runtime().is_runtime_client_bound(),
+            "the successful bind consumed the one-time claim"
+        );
+        let (snapshot, cursor) = host.snapshot().expect("snapshot");
+        assert_eq!(cursor, RuntimeClientCursor::new(0));
+        assert!(
+            snapshot.background.is_empty(),
+            "the inert runtime contributes no background seed"
+        );
+
+        // Release the transition: activation commits and the one-time
+        // post-activation kick runs.
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+                .await
+                .expect("the activation gate was released");
+        }
+        activate_task.await.expect("activate completes");
+        assert!(fixture.runtime.is_activated());
+
+        // The first cursor belongs to a real post-activation transition.
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach");
+        let subscription = attachment
+            .subscribe_events(RuntimeClientCursor::new(0))
+            .expect("subscribe from the bootstrap cursor");
+        host.submit_inbound(submit_content("first transition"))
+            .expect("accepted");
+        let events = receive_until(&subscription, |event| {
+            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        })
+        .await;
+        assert_eq!(
+            events[0].cursor,
+            RuntimeClientCursor::new(1),
+            "the first cursor is a real post-activation transition"
+        );
+    }
+
+    /// Concurrent `activate` calls are idempotent: exactly one call
+    /// commits the lifecycle transition (`Inactive -> Active` CAS) and
+    /// performs the one-time post-transition work — worker spawn and the
+    /// admission kick — and every other call observes `Active` and returns
+    /// without changing anything. A single inbound item therefore admits
+    /// exactly one attempt, never two.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_activation_is_idempotent_and_creates_one_worker() {
+        let (adapter, fixture) =
+            runtime_only_fixture(vec![one_turn_stop()], ToolRegistry::new(), None).await;
+        let runtime = fixture.runtime.clone();
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let a = {
+            let runtime = runtime.clone();
+            let barrier = barrier.clone();
+            tokio::task::spawn_blocking(move || {
+                barrier.wait();
+                runtime.activate();
+            })
+        };
+        let b = {
+            let runtime = runtime.clone();
+            let barrier = barrier.clone();
+            tokio::task::spawn_blocking(move || {
+                barrier.wait();
+                runtime.activate();
+            })
+        };
+        barrier.wait();
+        a.await.expect("activate a");
+        b.await.expect("activate b");
+        assert!(fixture.runtime.is_activated());
+
+        // One inbound item admits exactly one attempt: a duplicated
+        // activation kick can never admit a second attempt from one item,
+        // and a duplicated worker is structurally impossible (one CAS
+        // winner, one `worker_started` guard).
+        fixture
+            .runtime
+            .submit_inbound(submit_content("one item"))
+            .expect("accepted");
+        fixture.runtime.settlement_signal().notified().await;
+        assert_eq!(
+            adapter.requests().len(),
+            1,
+            "exactly one attempt from one activation epoch"
+        );
     }
 
     /// Test A — a model mutation while the runtime is inactive is rejected

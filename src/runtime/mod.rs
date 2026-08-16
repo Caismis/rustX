@@ -82,6 +82,6 @@ pub use inbound::{
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use types::{
-    CancellationReason, RuntimeClock, RuntimeError, SystemClock, TokenMeasurement,
-    TokenMeasurementSource,
+    CancellationReason, ConversationLifecycle, RuntimeClock, RuntimeError, SystemClock,
+    TokenMeasurement, TokenMeasurementSource,
 };

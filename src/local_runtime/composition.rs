@@ -343,8 +343,8 @@ impl LocalConversationCore {
             replay_limit: None,
         })?;
 
-        // 15. Activation: the one explicit lifecycle boundary. The client
-        // host-binding decision is now frozen, the mailbox opens, the
+        // 15. Activation: the one shared Inactive -> Active lifecycle
+        // transition. The client host-binding decision is now frozen, the
         // admission worker starts, and semantic execution may begin.
         self.runtime.activate();
 

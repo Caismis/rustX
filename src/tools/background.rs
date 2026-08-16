@@ -52,14 +52,15 @@
 //!         |  (one registry critical section)
 //!         |    1. require no prepared dispatch and no committed record
 //!         |    2. claim the coordinator binding
-//!         |    3. bind the mailbox BoundInactive
+//!         |    3. bind the mailbox runtime-owned with the shared
+//!         |       Inactive lifecycle
 //!         v
 //! ConversationRuntime-owned / inactive
 //!         |
 //!         |  from this point:
 //!         |    background commit -> BackgroundDispatchError::ConversationInactive
 //!         v
-//! ConversationRuntime::activate()
+//! ConversationRuntime::activate()   (the shared lifecycle Inactive -> Active)
 //! ```
 //!
 //! Either a standalone background commit wins the section first (the claim
@@ -110,7 +111,7 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::types::CancellationReason;
+use crate::runtime::types::{CancellationReason, ConversationLifecycle};
 use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
@@ -491,16 +492,17 @@ impl ConversationBackgroundRegistry {
     /// 1. requires a pristine background plane: no prepared dispatch and
     ///    no committed execution record;
     /// 2. claims the coordinator binding of the runtime identity;
-    /// 3. binds the canonical mailbox inactive (`BoundInactive`).
+    /// 3. binds the canonical mailbox runtime-owned with the fresh
+    ///    `Inactive` shared lifecycle.
     /// ```
     ///
     /// The three steps share the registry lock with the dispatch ownership
     /// commit, so they serialize: either a standalone background commit
     /// linearizes first (its record is then visible here, and the claim is
     /// refused [`BackgroundOwnershipClaimError::NotQuiescent`]), or this
-    /// transfer linearizes first (the mailbox becomes `BoundInactive`
-    /// before this section ends, and a later `commit_dispatch` observes it
-    /// and is refused with
+    /// transfer linearizes first (the mailbox becomes runtime-owned with
+    /// the shared lifecycle `Inactive` before this section ends, and a
+    /// later `commit_dispatch` observes it and is refused with
     /// [`BackgroundDispatchError::ConversationInactive`]). A conversation
     /// runtime can therefore never be constructed over a tool runtime that
     /// already contains staged or committed background ownership state, and
@@ -513,7 +515,11 @@ impl ConversationBackgroundRegistry {
     /// The `coordinator_claimed` atomic is the one-time binding of the
     /// tool-runtime identity ([`ConversationToolRuntime`](crate::tools::runtime::ConversationToolRuntime));
     /// the claim commits under this registry section, so a concurrent
-    /// second transfer cannot interleave with the quiescence check.
+    /// second transfer cannot interleave with the quiescence check. The
+    /// `lifecycle` is the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// composed by the `ConversationRuntime` being constructed; activation
+    /// (`Inactive -> Active`) is a later, distinct transition that every
+    /// runtime-owned semantic boundary observes through this same handle.
     ///
     /// # Errors
     ///
@@ -525,6 +531,7 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn claim_conversation_runtime_inactive(
         &self,
         coordinator_claimed: &AtomicBool,
+        lifecycle: &ConversationLifecycle,
     ) -> Result<(), BackgroundOwnershipClaimError> {
         let state = self.state();
         if !state.prepared.is_empty() || !state.records.is_empty() {
@@ -536,7 +543,7 @@ impl ConversationBackgroundRegistry {
         {
             return Err(BackgroundOwnershipClaimError::AlreadyClaimed);
         }
-        self.resources.mailbox.bind_inactive();
+        self.resources.mailbox.bind_inactive(lifecycle);
         Ok(())
     }
 
@@ -1288,16 +1295,18 @@ mod tests {
     /// A dispatch commit on a registry whose mailbox is bound to an
     /// inactive conversation runtime is refused typed (Issue #61): no
     /// published record, no accepted result, and the runner never begins —
-    /// the prepared dispatch rolls back completely. Opening the mailbox
-    /// (activation) restores normal dispatch.
+    /// the prepared dispatch rolls back completely. The shared lifecycle's
+    /// activation transition restores normal dispatch.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn commit_is_refused_while_the_owning_runtime_is_inactive() {
         let fixture = registry("conv-bg-gated");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         // Claim the registry's mailbox exactly as
-        // `ConversationRuntime::new` does.
-        fixture.mailbox.bind_inactive();
+        // `ConversationRuntime::new` does: the ownership transfer binds
+        // the mailbox with a fresh Inactive shared lifecycle.
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        fixture.mailbox.bind_inactive(&lifecycle);
 
         let prepared = prepare(&fixture, &executor);
         let refused = fixture
@@ -1320,8 +1329,9 @@ mod tests {
         );
         assert!(!*started.borrow(), "the rolled-back runner never began");
 
-        // Activation (the mailbox opens) restores normal dispatch.
-        fixture.mailbox.activate();
+        // Activation (the shared lifecycle transition) restores normal
+        // dispatch.
+        assert!(lifecycle.activate(), "the first activation wins");
         let prepared = prepare(&fixture, &executor);
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = fixture
             .registry

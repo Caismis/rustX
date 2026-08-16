@@ -1356,12 +1356,15 @@ The frozen invariants:
   `ConversationRuntimeError::NoExecutionRuntime` error, so
   `ConversationRuntime::activate` can always spawn it, and native/headless
   producers never depend on a client call for activation.
-- **The conversation runtime has one explicit lifecycle boundary.**
+- **The conversation has one authoritative activation lifecycle.**
   `ConversationRuntime::new` constructs the runtime **inactive** and
-  `ConversationRuntime::activate` is the one transition to active. An
-  inactive runtime is inert and this is **structural, not conventional**:
-  once a `ConversationRuntime` owns its semantic subsystems, the inactive
-  phase admits no conversation-semantic mutation at all:
+  `ConversationRuntime::activate` performs the single `Inactive -> Active`
+  transition of the one shared
+  `ConversationLifecycle` token, composed by the runtime and shared with
+  every runtime-owned semantic boundary. An inactive runtime is inert and
+  this is **structural, not conventional**: once a `ConversationRuntime`
+  owns its semantic subsystems, the inactive phase admits no
+  conversation-semantic mutation at all:
 
   - the mailbox refuses `enqueue` with `MailboxError::ConversationInactive`
     and `submit_inbound` fails with `InboundAdmissionError::Inactive`;
@@ -1372,31 +1375,41 @@ The frozen invariants:
     nothing — an inert conversation has no runtime lifecycle to end;
   - the background registry refuses `commit_dispatch` with the typed
     `BackgroundDispatchError::ConversationInactive` while its mailbox is
-    bound inactive: a new background ownership commit cannot begin before
-    activation, and the prepared dispatch rolls back completely;
+    runtime-owned inactive: a new background ownership commit cannot begin
+    before activation, and the prepared dispatch rolls back completely;
   - the capability coordinator refuses a runtime-owned `commit` with
     `CapabilityCommitError::ConversationInactive` before activation; the
     startup commit performed *before* the conversation runtime is
     constructed remains allowed.
 
-  The gates are small shared pieces of state, never coordinator callbacks:
-  the mailbox's own admission flag and the capability coordinator's
-  runtime-owned activation flag, both flipped by `activate` under the one
-  coordinator lock. `admit_next_attempt` returns without admitting, no
-  admission worker exists before activation, and an inactive runtime
-  therefore publishes no `ConversationObservation` at all.
+  The lifecycle is one `AcqRel/ Acquire` atomic token, read-only from
+  every subsystem critical section: the mailbox stores no activation state
+  (runtime ownership is the lifecycle handle itself), the capability
+  coordinator stores no activation state (the lifecycle handle is attached
+  at its claim), the coordinator keeps no copy, and the background
+  registry reads the same gate through its mailbox. Every gate therefore
+  observes exactly the same decision: an operation that observes
+  `Inactive` linearizes before activation and is refused, one that
+  observes `Active` linearizes after activation and follows normal
+  subsystem rules. No subsystem-specific intermediate activation state
+  exists, so background and capability commits can never disagree about
+  whether the conversation is active. `admit_next_attempt` returns
+  without admitting, no admission worker exists before activation, and an
+  inactive runtime therefore publishes no `ConversationObservation` at
+  all.
 - **Binding a Runtime Client host is a pre-activation composition
   decision.** A `RuntimeClientHost` binds while its runtime is inactive;
   a bind after activation is refused with the typed
   `HostConstructionError::RuntimeAlreadyActivated` (from
   `RuntimeBootstrapError::RuntimeAlreadyActivated`, checked under the same
-  coordinator lock `activate` takes, so the two can never interleave
-  ambiguously). rustX makes **no** promise that a first host installed
-  after semantic execution began would reconstruct the read state a
-  continuously attached client would have — that speculative contract is
-  deliberately not supported. A headless runtime (Issue #60 subagents,
-  every zero-client regression) never constructs a host at all. Runtime
-  Client **attachments** remain fully dynamic after activation: host
+  coordinator lock `activate` takes for its lifecycle transition, so the
+  two can never interleave ambiguously). rustX makes **no** promise that a
+  first host installed after semantic execution began would reconstruct
+  the read state a continuously attached client would have — that
+  speculative contract is deliberately not supported. A headless runtime
+  (Issue #60 subagents, every zero-client regression) never constructs a
+  host at all. Runtime Client **attachments** remain fully dynamic after
+  activation: host
   binding lifetime and attachment lifetime are different axes.
 - **Admission linearization is one coordinator-owned point.** The idle
   observation, the shutdown/admission-gate observation, the finite
@@ -1440,7 +1453,8 @@ The frozen invariants:
   lock — the same boundary the dispatch ownership commit linearizes at —
   it requires no prepared dispatch and no committed record, claims the
   one-time coordinator binding, and binds the canonical mailbox
-  `BoundInactive`, all at one point. Either a standalone background
+  runtime-owned with a fresh `Inactive` shared lifecycle, all at one
+  point. Either a standalone background
   commit wins that section first (construction fails typed with
   `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
   nothing — no coordinator claim, no capability claim, the mailbox stays
@@ -1453,6 +1467,13 @@ The frozen invariants:
   claim released, restoring the exact previous standalone state, so a
   fresh construction of the same identity may be attempted once the
   background plane is pristine again.
+
+  The ownership transfer (`standalone -> runtime-owned/inactive`) and
+  activation (`inactive -> active`) are **two distinct commit points**: the
+  transfer establishes runtime ownership plus the `Inactive` lifecycle
+  relationship under the registry lock, and
+  `ConversationRuntime::activate` later performs the one lifecycle
+  transition. Nothing in the transfer can skip or reorder the two.
 - **An inactive runtime cannot receive a background semantic transition
   inherited from before construction.** Because the ownership transfer
   requires a pristine background plane and then refuses dispatch commits

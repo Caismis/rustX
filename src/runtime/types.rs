@@ -1,12 +1,76 @@
 //! Runtime-owned shared semantics: token measurements, cancellation reasons,
-//! and runtime errors.
+//! runtime errors, and the conversation lifecycle.
 //!
 //! These types are shared by context, tool, model, and event contracts. They
 //! are plain runtime-owned data and never reference provider SDK or storage
 //! types.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+/// The one authoritative activation lifecycle of a conversation (Issue #61).
+///
+/// A conversation is either `Inactive` or `Active`, and exactly one
+/// `Inactive -> Active` transition exists for the conversation's lifetime.
+/// The lifecycle is composed by the [`ConversationRuntime`](crate::runtime::ConversationRuntime)
+/// and shared with every runtime-owned semantic boundary that gates on
+/// conversation activation — the inbound mailbox, the background registry
+/// (through the mailbox it owns), the capability coordinator, and the
+/// coordinator itself. All of them observe the **same** state, so no
+/// runtime-owned subsystem can disagree about whether the conversation is
+/// active.
+///
+/// The activation transition
+/// ([`ConversationLifecycle::activate`]) is the one activation
+/// linearization point: an operation that observes `Inactive` linearizes
+/// before activation and is refused, one that observes `Active` linearizes
+/// after activation and follows the normal subsystem rules. There is no
+/// subsystem-specific intermediate activation state.
+///
+/// # Memory ordering
+///
+/// The transition is a `compare_exchange(Inactive, Active)` with `AcqRel`
+/// (failure `Acquire`) and every observation is a plain `Acquire` load. The
+/// ordering contract is exactly the activation decision: a reader that
+/// observes `Active` synchronizes-with the winning transition and sees
+/// everything the transition published. The token does not impose ordering
+/// on unrelated subsystem data.
+#[derive(Debug, Clone, Default)]
+pub struct ConversationLifecycle {
+    active: Arc<AtomicBool>,
+}
+
+impl ConversationLifecycle {
+    /// Creates a fresh conversation lifecycle in the `Inactive` state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether the conversation is currently active.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Performs the one `Inactive -> Active` transition.
+    ///
+    /// Returns `true` for exactly the one call that committed the
+    /// transition and `false` for every concurrent or later call, which
+    /// makes activation idempotent: a caller that receives `true` may
+    /// perform exactly the one-time post-activation work (for example
+    /// spawning the admission worker), and a caller that receives `false`
+    /// must not.
+    #[must_use]
+    pub fn activate(&self) -> bool {
+        self.active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
 
 /// A token measurement of a model input, with explicit provenance.
 ///
