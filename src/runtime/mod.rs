@@ -38,9 +38,9 @@ pub(crate) mod interactive_process;
 #[doc(hidden)]
 pub mod interactive_supervisor;
 /// The runtime-owned semantic observation contract (Issue #61): the
-/// observation vocabulary, the leaf pending-observation queue, and the
-/// runtime semantic record. Runtime Client projection types never appear
-/// here; the Runtime Client adapter translates these shapes.
+/// observation vocabulary and the leaf pending-observation queue. Runtime
+/// Client projection types never appear here; the Runtime Client adapter
+/// translates these shapes, and it owns the only fold of the stream.
 pub(crate) mod observation;
 /// The internal owned supervised command runner shared by native Bash and
 /// Skill environment materialization: the M5 Bash process-group lifecycle

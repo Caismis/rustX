@@ -99,16 +99,12 @@ use super::snapshot::{
 use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
 use crate::agent::observer::AgentStatusObservation;
 use crate::context::status::{AgentStatusSectionData, render_agent_status};
-use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
+use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
 use crate::runtime::inbound::InboundItem;
-use crate::runtime::observation::{
-    ConversationObservation, RuntimeAttemptPhase, RuntimeAttemptSemantics,
-    RuntimeCompactionSemantics, RuntimeForegroundExecution, RuntimeForegroundState,
-    RuntimeInFlightBlock, RuntimeInFlightMessage,
-};
+use crate::runtime::observation::ConversationObservation;
 use crate::tools::background::BackgroundExecutionSnapshot;
 use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 
@@ -243,26 +239,31 @@ impl RuntimeClientProjection {
     /// Seeds the projection from the runtime-owned bootstrap snapshot.
     ///
     /// The conversation runtime captured every fact of this snapshot at
-    /// one per-authority linearization cut (see
+    /// one global cut `R` while it was still inactive (see
     /// `ConversationRuntime::install_observation_bridge`); this method
     /// owns the translation of the semantic source types into the client
-    /// snapshot read model. Nothing is published and no cursor is
-    /// allocated for the seed: the seed *is* the state at cursor 0, and
-    /// every transition after its authorities' cuts arrives through the
-    /// live observation stream.
+    /// snapshot read model.
+    ///
+    /// **Nothing here publishes and nothing here allocates a cursor.**
+    /// The seed *is* the state at cursor 0 — including pre-existing
+    /// background executions, which are installed as snapshot state rather
+    /// than replayed through [`RuntimeClientProjection::apply`], so state
+    /// that existed before the bootstrap cut can never fabricate a live
+    /// event. Every transition after `R` arrives through the live
+    /// observation stream and gets the first real cursor.
     pub(crate) fn bootstrap(
         &mut self,
         seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
     ) {
         self.snapshot.shutting_down = seed.shutting_down;
-        self.snapshot.attempt = seed
-            .attempt
-            .as_ref()
-            .map(|semantics| attempt_view_from_semantics(semantics, &seed.model));
-        self.snapshot.status = seed.status.as_ref().map(status_view);
         self.snapshot.inbound.pending =
             seed.inbound_pending.iter().map(inbound_item_view).collect();
-        self.snapshot.context = compaction_view_from_semantics(&seed.compaction);
+        for existing in &seed.background {
+            upsert_background(&mut self.snapshot.background, background_view(existing));
+        }
+        // An inactive runtime has never admitted an attempt, composed an
+        // Agent Status, or compacted, so `attempt`, `status`, and
+        // `context` keep their empty initial values by construction.
     }
 
     /// Applies one authoritative observation: fold the snapshot read
@@ -1171,152 +1172,6 @@ fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
         AttemptFailure::Runtime { error } => RuntimeClientAttemptFailure::Runtime {
             error: error.clone(),
         },
-    }
-}
-
-/// Projects one platform-level attempt outcome into the external outcome
-/// shape. The bootstrap translation of a folded terminal settlement uses
-/// this same mapping as the live terminal-event fold, so a seeded attempt
-/// view and an incrementally folded one always agree.
-fn outcome_view(outcome: &AttemptOutcome) -> RuntimeClientOutcome {
-    match outcome {
-        AttemptOutcome::Completed { finish_reason } => RuntimeClientOutcome::Completed {
-            finish_reason: finish_reason.clone(),
-        },
-        AttemptOutcome::Cancelled { reason } => RuntimeClientOutcome::Cancelled { reason: *reason },
-        AttemptOutcome::TimedOut => RuntimeClientOutcome::TimedOut,
-        AttemptOutcome::LimitExceeded { limit } => {
-            RuntimeClientOutcome::LimitExceeded { limit: *limit }
-        }
-        AttemptOutcome::Failed { error } => RuntimeClientOutcome::Failed {
-            error: client_failure(error),
-        },
-    }
-}
-
-/// Translates the runtime-owned semantic attempt state into the external
-/// attempt view at adapter bootstrap.
-///
-/// The semantic record is folded from the same observation stream the
-/// projection folds live; this translation maps it into the projection's
-/// attempt read model at the bootstrap cut. The session model view is the
-/// fallback for an attempt whose frozen model has not been folded yet
-/// (structurally unreachable: the freeze observation follows the
-/// admission observation under one coordinator lock).
-fn attempt_view_from_semantics(
-    semantics: &RuntimeAttemptSemantics,
-    session_model: &SessionModelView,
-) -> RuntimeClientAttempt {
-    RuntimeClientAttempt {
-        attempt_id: semantics.attempt_id.clone(),
-        phase: match &semantics.phase {
-            RuntimeAttemptPhase::Admitted => RuntimeClientAttemptPhase::Admitted,
-            RuntimeAttemptPhase::Running => RuntimeClientAttemptPhase::Running,
-            RuntimeAttemptPhase::Settled { outcome } => RuntimeClientAttemptPhase::Settled {
-                outcome: outcome_view(outcome),
-            },
-        },
-        turn: semantics.turn,
-        last_usage: semantics.last_usage.clone(),
-        in_flight: semantics
-            .in_flight
-            .as_ref()
-            .map(in_flight_view_from_semantics),
-        foreground: semantics
-            .foreground
-            .iter()
-            .map(foreground_view_from_semantics)
-            .collect(),
-        model: semantics
-            .model
-            .clone()
-            .unwrap_or_else(|| Box::new(session_model.to_attempt_view())),
-    }
-}
-
-/// Translates one runtime-owned in-flight message into the external shape.
-fn in_flight_view_from_semantics(message: &RuntimeInFlightMessage) -> InFlightAssistantMessage {
-    InFlightAssistantMessage {
-        message_id: message.message_id.clone(),
-        blocks: message
-            .blocks
-            .iter()
-            .map(|block| match block {
-                RuntimeInFlightBlock::Text { block_index, text } => InFlightBlock::Text {
-                    block_index: *block_index,
-                    text: text.clone(),
-                },
-                RuntimeInFlightBlock::Reasoning { block_index, text } => InFlightBlock::Reasoning {
-                    block_index: *block_index,
-                    text: text.clone(),
-                },
-                RuntimeInFlightBlock::Refusal { block_index, text } => InFlightBlock::Refusal {
-                    block_index: *block_index,
-                    text: text.clone(),
-                },
-                RuntimeInFlightBlock::ToolCall {
-                    block_index,
-                    call_id,
-                    tool_id,
-                    name,
-                    arguments,
-                } => InFlightBlock::ToolCall {
-                    block_index: *block_index,
-                    call_id: call_id.clone(),
-                    tool_id: tool_id.clone(),
-                    name: name.clone(),
-                    arguments: arguments.clone(),
-                },
-            })
-            .collect(),
-    }
-}
-
-/// Translates one runtime-owned foreground execution into the external
-/// shape.
-fn foreground_view_from_semantics(
-    execution: &RuntimeForegroundExecution,
-) -> ForegroundToolExecution {
-    ForegroundToolExecution {
-        call_id: execution.call_id.clone(),
-        tool_id: execution.tool_id.clone(),
-        name: execution.name.clone(),
-        state: match &execution.state {
-            RuntimeForegroundState::Assembled { arguments } => ForegroundToolState::Assembled {
-                arguments: arguments.clone(),
-            },
-            RuntimeForegroundState::Running {
-                arguments,
-                progress,
-            } => ForegroundToolState::Running {
-                arguments: arguments.clone(),
-                progress: progress.clone(),
-            },
-            RuntimeForegroundState::Settled { arguments, result } => ForegroundToolState::Settled {
-                arguments: arguments.clone(),
-                result: result.clone(),
-            },
-        },
-    }
-}
-
-/// Translates the runtime-owned compaction semantics into the external
-/// context view.
-fn compaction_view_from_semantics(
-    compaction: &RuntimeCompactionSemantics,
-) -> RuntimeClientContextView {
-    RuntimeClientContextView {
-        compaction_count: compaction.count,
-        latest_compaction: compaction
-            .latest
-            .as_ref()
-            .map(|facts| RuntimeClientCompactionView {
-                generation: facts.generation,
-                summary_message_id: facts.summary_message_id.clone(),
-                surface_revision: facts.surface_revision,
-                tokens_before: facts.tokens_before,
-                estimated_tokens_after: facts.estimated_tokens_after,
-            }),
     }
 }
 

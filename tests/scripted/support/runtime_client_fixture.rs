@@ -268,6 +268,9 @@ impl RuntimeClientFixtureBuilder {
             replay_limit: self.replay_limit,
         })
         .expect("runtime client host");
+        // The explicit Issue #61 lifecycle boundary: the host bound over
+        // the inert runtime, so semantic execution may begin now.
+        runtime.activate();
         RuntimeClientFixture {
             host,
             runtime,

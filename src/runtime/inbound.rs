@@ -182,6 +182,16 @@ pub enum MailboxError {
         /// The conversation the mailbox actually belongs to.
         actual: ConversationId,
     },
+    /// The mailbox is owned by a conversation runtime that has not been
+    /// activated yet, so the conversation accepts no inbound work.
+    ///
+    /// See [`ConversationInboundMailbox::bind_inactive`]: this is the
+    /// Issue #61 activation contract, and it is what makes the pending
+    /// seed of the Runtime Client bootstrap handshake provably frozen.
+    ConversationInactive {
+        /// The conversation that has not been activated.
+        conversation_id: ConversationId,
+    },
     /// The capability lease and tool runtime do not share the same
     /// conversation/workspace ownership domain.
     CapabilityOwnershipMismatch {
@@ -213,6 +223,10 @@ impl fmt::Display for MailboxError {
                 f,
                 "mailbox belongs to conversation {actual}, expected {expected}"
             ),
+            Self::ConversationInactive { conversation_id } => write!(
+                f,
+                "conversation {conversation_id} is not activated and accepts no inbound"
+            ),
             Self::CapabilityOwnershipMismatch {
                 capability_conversation,
                 runtime_conversation,
@@ -230,8 +244,29 @@ impl fmt::Display for MailboxError {
 
 impl Error for MailboxError {}
 
+/// The admission state of one conversation mailbox (Issue #61).
+///
+/// A mailbox with no conversation runtime bound over it is an ordinary
+/// standalone coordination contract and always accepts inbound. Once a
+/// [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
+/// binds it, the mailbox follows that runtime's activation lifecycle: an
+/// inactive conversation accepts no inbound work, so the pending queue is
+/// provably frozen while the optional Runtime Client host binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MailboxAdmission {
+    /// No conversation runtime owns this mailbox; inbound is accepted.
+    Unbound,
+    /// A conversation runtime owns this mailbox but has not activated;
+    /// inbound is refused.
+    BoundInactive,
+    /// The owning conversation runtime is activated; inbound is accepted.
+    BoundActive,
+}
+
 /// The internal synchronized state of one conversation mailbox.
 struct MailboxState {
+    /// Whether this mailbox currently accepts inbound work.
+    admission: MailboxAdmission,
     /// The last successfully allocated inbound sequence (0 = none yet).
     last_sequence: u64,
     /// The pending, not-yet-drained items in enqueue order.
@@ -251,6 +286,7 @@ impl core::fmt::Debug for MailboxState {
         #[cfg(not(test))]
         let probe: Option<&str> = None;
         f.debug_struct("MailboxState")
+            .field("admission", &self.admission)
             .field("last_sequence", &self.last_sequence)
             .field("pending_len", &self.pending.len())
             .field(
@@ -513,6 +549,7 @@ impl ConversationInboundMailbox {
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
+                admission: MailboxAdmission::Unbound,
                 last_sequence: 0,
                 pending: VecDeque::new(),
                 observer: None,
@@ -535,6 +572,11 @@ impl ConversationInboundMailbox {
     /// queue). No enqueue can be lost between the seed and the live
     /// observation stream and none can be applied twice.
     ///
+    /// The handshake runs while the owning conversation runtime is still
+    /// inactive, so the captured pending queue additionally cannot move
+    /// after this section: [`ConversationInboundMailbox::enqueue`] refuses
+    /// an inactive conversation.
+    ///
     /// # Panics
     ///
     /// Panics only if the mailbox lock is poisoned.
@@ -543,8 +585,46 @@ impl ConversationInboundMailbox {
         observer: Arc<dyn InboundObserver>,
     ) -> Vec<InboundItem> {
         let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        debug_assert_eq!(
+            state.admission,
+            MailboxAdmission::BoundInactive,
+            "the bootstrap handshake runs only while the owning runtime is inactive"
+        );
         state.observer = Some(observer);
         state.pending.iter().cloned().collect()
+    }
+
+    /// Marks this mailbox as owned by a conversation runtime that has not
+    /// been activated yet: inbound is refused until
+    /// [`ConversationInboundMailbox::activate`].
+    ///
+    /// Called once by
+    /// [`ConversationRuntime::new`](crate::runtime::conversation_runtime::ConversationRuntime::new).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn bind_inactive(&self) {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .admission = MailboxAdmission::BoundInactive;
+    }
+
+    /// Opens inbound admission: the owning conversation runtime is
+    /// activated and semantic execution may begin.
+    ///
+    /// Called once by
+    /// [`ConversationRuntime::activate`](crate::runtime::conversation_runtime::ConversationRuntime::activate).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn activate(&self) {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .admission = MailboxAdmission::BoundActive;
     }
 
     /// Creates an inbound mailbox with test-only synchronization hooks
@@ -556,6 +636,7 @@ impl ConversationInboundMailbox {
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
+                admission: MailboxAdmission::Unbound,
                 last_sequence: 0,
                 pending: VecDeque::new(),
                 observer: None,
@@ -598,7 +679,9 @@ impl ConversationInboundMailbox {
     ///
     /// Returns [`MailboxError::CompactionSummaryNotEligible`] for a
     /// compaction summary, [`MailboxError::MissingTimestamp`] for an
-    /// ordinary message without a persisted timestamp, and
+    /// ordinary message without a persisted timestamp,
+    /// [`MailboxError::ConversationInactive`] when a conversation runtime
+    /// owns this mailbox and has not been activated, and
     /// [`MailboxError::SequenceExhausted`] when the sequence space is
     /// exhausted. A failed enqueue consumes no sequence.
     ///
@@ -614,6 +697,11 @@ impl ConversationInboundMailbox {
             return Err(MailboxError::MissingTimestamp);
         }
         let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        if state.admission == MailboxAdmission::BoundInactive {
+            return Err(MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            });
+        }
         let sequence = state
             .last_sequence
             .checked_add(1)
@@ -958,6 +1046,7 @@ mod tests {
         let mailbox = ConversationInboundMailbox {
             conversation_id: ConversationId::new("conv-1"),
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
+                admission: super::MailboxAdmission::Unbound,
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
                 observer: None,
@@ -1021,6 +1110,7 @@ mod tests {
         let mailbox = ConversationInboundMailbox {
             conversation_id: ConversationId::new("conv-1"),
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
+                admission: super::MailboxAdmission::Unbound,
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
                 observer: None,

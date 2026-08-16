@@ -215,15 +215,15 @@ While an attempt runs, reconstruction is explicitly unavailable because
 the single ConversationState is moved into that attempt. No current model
 settings, contributors, Skills, clock, or status fill historical gaps.
 
-While an attempt runs, the loop's observation seam also feeds the
-runtime-owned semantic record (`src/runtime/observation.rs`): the same
-`observe_event`/`observe_committed`/`observe_status` facts a Runtime
-Client projection would fold accumulate as derived read state (committed
-messages, attempt semantics, Agent Status, compaction), so a Runtime
-Client adapter constructed mid-attempt receives a coherent bootstrap
-without a second mutable conversation authority. The record is cleared at
-settlement, when the authoritative `ConversationState` returns to the
-coordinator.
+The loop's `observe_event`/`observe_committed`/`observe_status` facts are
+published as runtime-owned `ConversationObservation`s
+(`src/runtime/observation.rs`) into one leaf queue. That stream is folded
+**exactly once**, by the Runtime Client projection; the runtime keeps no
+mirrored attempt/status/compaction read model. It does not need one: a
+Runtime Client host binds before the conversation runtime is activated
+(Issue #61), and an inactive runtime publishes nothing, so an installed
+consumer observes every observation the runtime ever emits. When no host
+is bound, the queue simply has no consumer and the loop runs identically.
 
 ## 4.3 Typed lifecycle interception (Issue #56)
 

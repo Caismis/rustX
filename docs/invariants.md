@@ -1338,11 +1338,35 @@ The frozen invariants:
   the runtime is idle notifies the admission worker through the mailbox's
   own wake handle; no client request, submit, or later host-lock drain is
   required for the next attempt to be admitted exactly once. The
-  admission worker is guaranteed to exist: `ConversationRuntime::new`
-  rejects construction outside a Tokio execution runtime with the typed
-  `ConversationRuntimeError::NoExecutionRuntime` error, so a partially
-  active coordinator is not representable and native/headless producers
-  never depend on a later client call for activation.
+  admission worker is guaranteed to exist for an activated runtime:
+  `ConversationRuntime::new` rejects construction outside a Tokio
+  execution runtime with the typed
+  `ConversationRuntimeError::NoExecutionRuntime` error, so
+  `ConversationRuntime::activate` can always spawn it, and native/headless
+  producers never depend on a client call for activation.
+- **The conversation runtime has one explicit lifecycle boundary.**
+  `ConversationRuntime::new` constructs the runtime **inactive** and
+  `ConversationRuntime::activate` is the one transition to active. An
+  inactive runtime is inert and this is structural, not conventional: its
+  mailbox refuses `enqueue` with `MailboxError::ConversationInactive`,
+  `submit_inbound` fails with `InboundAdmissionError::Inactive`,
+  `admit_next_attempt` returns without admitting, no admission worker
+  exists, and it therefore publishes no `ConversationObservation` at all.
+  Activation sets the flag, opens the mailbox, spawns the worker, and
+  attempts one admission, all against the one coordinator lock.
+- **Binding a Runtime Client host is a pre-activation composition
+  decision.** A `RuntimeClientHost` binds while its runtime is inactive;
+  a bind after activation is refused with the typed
+  `HostConstructionError::RuntimeAlreadyActivated` (from
+  `RuntimeBootstrapError::RuntimeAlreadyActivated`, checked under the same
+  coordinator lock `activate` takes, so the two can never interleave
+  ambiguously). rustX makes **no** promise that a first host installed
+  after semantic execution began would reconstruct the read state a
+  continuously attached client would have — that speculative contract is
+  deliberately not supported. A headless runtime (Issue #60 subagents,
+  every zero-client regression) never constructs a host at all. Runtime
+  Client **attachments** remain fully dynamic after activation: host
+  binding lifetime and attachment lifetime are different axes.
 - **Admission linearization is one coordinator-owned point.** The idle
   observation, the shutdown/admission-gate observation, the finite
   watermark-bounded mailbox drain, the canonical-history commits, the
@@ -1378,33 +1402,59 @@ The frozen invariants:
   identity is rejected with a typed already-bound error and has no
   semantic side effect. The Runtime Client binding (one host per
   coordinator) is a second, independent claim taken by host construction.
-- **The Runtime Client adapter bootstrap is one linearizable handshake.**
+- **The adapter bootstrap is one global cut, not four independent ones.**
   `RuntimeClientHost::new` claims the one-time client binding, then
   performs exactly one fallible step —
-  `ConversationRuntime::install_observation_bridge` — which installs the
-  observation queue and every subsystem observation seam and captures the
-  semantic bootstrap snapshot at one per-authority cut (the
-  coordinator/record section installs the queue and captures the cut `R`;
-  the mailbox, background, and capability sections each install their
-  seam and capture their seed under their own lock). A transition before
-  its authority's cut is in the seed and was never queued; one after the
-  cut is queued and not in the seed; no transition can fall between the
-  two and none can be applied twice. If the bridge step fails (a previous
-  headless bridge exists), the claim is released and the failure is a
+  `ConversationRuntime::install_observation_bridge`. That handshake runs
+  entirely under the one coordinator lock over an inert runtime,
+  installing the observation queue and every subsystem seam and capturing
+  the seed in this order:
+
+  ```text
+  T0  coordinator lock; reject if activated; install the queue;
+      capture shutting_down / canonical messages / session model
+  T1  background registry: install observer + capture snapshots
+  T2  mailbox:             install observer + capture pending
+  R   capability:          install observer + capture snapshot   <- the cut
+  ```
+
+  > There exists one runtime bootstrap cut `R`. The initial semantic
+  > snapshot contains every projected runtime fact committed through `R`.
+  > Every projected semantic transition after `R` is delivered exactly
+  > once through the live observation stream, in semantic publication
+  > order. No transition before `R` is published as a post-`R` event.
+
+  This is proven by synchronization, not asserted. At `R` every captured
+  value is still its authority's live value: coordinator facts cannot
+  move because every mutator takes the lock held across `[T0, R]`; a
+  background record transitions only through tool execution, which needs
+  an admitted attempt and therefore activation; the mailbox refuses
+  `enqueue` while its bound runtime is inactive; and the capability
+  snapshot is captured *at* `R`. Each authority installs its observer in
+  the same lock section that captures its seed, so no transition is both
+  seeded and queued, and none is neither. Because an inactive runtime
+  publishes nothing, `R` coincides with activation and the live stream
+  carries every observation the runtime ever emits.
+
+  If the bridge step fails, the claim is released and the failure is a
   typed error: a failed host construction never leaves a
   claimed-but-invalid binding.
-- **Adapter construction works while an attempt is active.** The runtime
-  semantic record (in `src/runtime/observation.rs`) folds the
-  attempt-derived facts — committed canonical messages, attempt
-  semantics (phase, turn, usage, in-flight output, foreground tools,
-  frozen model), the latest Agent Status, and compaction statistics —
-  from the same observation stream a client folds, under its own leaf
-  lock, and clears them at settlement when the authoritative
-  `ConversationState` becomes directly readable again. A bootstrap while
-  `AgentExecution` owns the one mutable `ConversationState` therefore
-  seeds a coherent client read model without copying that state into a
-  second authority, and never panics or requires the conversation to be
-  idle.
+- **Bootstrap state never fabricates a live event.**
+  `RuntimeClientProjection::bootstrap` installs every seeded fact —
+  canonical history, session model, capability snapshot, pending inbound,
+  *and pre-existing background executions* — as snapshot state. No seeded
+  fact is routed through `RuntimeClientProjection::apply`, so bootstrap
+  publishes no `RuntimeClientEvent` and allocates no
+  `RuntimeClientCursor`. `{ snapshot, cursor 0 }` is the state at `R`, and
+  the first allocated cursor always belongs to a real post-activation
+  semantic transition.
+- **The runtime keeps no mirrored client read model.** The runtime folds
+  `ConversationObservation` exactly zero times: `src/runtime/observation.rs`
+  owns the vocabulary and the leaf queue, and the Runtime Client
+  projection is the one and only fold. There is no runtime-side attempt
+  phase, in-flight streaming, foreground-tool, Agent Status, or
+  compaction mirror to drift from the projection or to be reset at
+  settlement.
 
 ## Runtime Client projection (Issue #37)
 
@@ -1535,8 +1585,9 @@ semantic normalization boundary. The frozen invariants:
 - **No authoritative subsystem acquires the coordinator or projection
   lock.** The mailbox, the background registry, and the capability
   coordinator fire their observation seams while holding their own lock;
-  each seam only folds the runtime semantic record and appends an
-  immutable observation to the shared leaf synchronization boundary.
+  each seam only appends an immutable observation to the shared leaf
+  synchronization boundary — the runtime performs no fold of its own, so
+  no intermediate lock sits between a subsystem and that leaf.
   The admission worker waits on the mailbox's own shared wake handle — a
   leaf signal, never a lock. The lock graph is therefore acyclic by
   construction rather than by a call-order convention, an authoritative
@@ -1548,11 +1599,10 @@ semantic normalization boundary. The frozen invariants:
   the attempt; settlement moves it back in `AgentExecutionResult`.
   `ConversationState` is not Clone, so no second mutable canonical
   authority can be derived from one revision.
-  `RuntimeClientSnapshot.messages` is projection only, the runtime
-  semantic record is append-only derived read state folded from the
-  attempt's own observation stream and cleared at settlement, and
-  deterministic regressions verify the projection mirror against the
-  authoritative ledger rather than coordinating two histories.
+  `RuntimeClientSnapshot.messages` is projection only, the runtime keeps
+  no derived message mirror of its own, and deterministic regressions
+  verify the projection mirror against the authoritative ledger rather
+  than coordinating two histories.
 - **One active attachment.** Protocol v1 admits at most one attachment
   per runtime instance; a second attach fails deterministically without
   evicting the first; reconnect receives a fresh attachment identity;

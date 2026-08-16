@@ -72,47 +72,90 @@
 //! or after it (affects only future attempts). See the deterministic race
 //! regressions in the test module.
 //!
+//! # Lifecycle: construction, optional client binding, activation
+//!
+//! A conversation runtime has exactly two lifecycle states, and the
+//! transition between them is the one explicit composition boundary:
+//!
+//! ```text
+//! ConversationRuntime::new(..)          -> inactive
+//!     [optional] RuntimeClientHost::new(..)   binds the client adapter
+//! ConversationRuntime::activate()       -> active: semantic execution may begin
+//! ```
+//!
+//! An **inactive** runtime is inert: its mailbox refuses inbound
+//! ([`MailboxError::ConversationInactive`]), no admission worker exists,
+//! [`admit_next_attempt`](RuntimeInner::admit_next_attempt) is a no-op, and
+//! therefore it publishes **no** observation at all.
+//!
+//! Binding a Runtime Client host is a **pre-activation** composition
+//! decision, not a hot operation: a host bind after activation is refused
+//! with the typed [`RuntimeBootstrapError::RuntimeAlreadyActivated`]. A
+//! headless runtime (Issue #60 subagents, every zero-client regression)
+//! simply never constructs a host. Runtime Client *attachments* remain
+//! fully dynamic after activation — attach, detach, reattach — because
+//! attachment lifetime and host-binding lifetime are different axes.
+//!
 //! # Observation bridge
 //!
 //! The coordinator publishes every semantically meaningful transition as a
 //! runtime-owned [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
 //! into the shared leaf
 //! [`PendingObservations`](crate::runtime::observation::PendingObservations)
-//! queue, and folds the same transitions into its runtime-owned semantic
-//! record. The Runtime Client projection folds that queue under its own
+//! queue. The Runtime Client projection folds that queue under its own
 //! synchronization boundary, translating the semantic observations into
 //! its snapshot/cursor read model (see `RuntimeClientProjection`), so
-//! snapshot/cursor reads remain linearizable. A conversation with zero
-//! Runtime Client attachments runs the exact same admission/execution
-//! path; the observation queue simply has no consumer and the record
-//! simply has no bootstrap reader.
+//! snapshot/cursor reads remain linearizable. The runtime keeps no second
+//! fold of that vocabulary. A conversation with zero Runtime Client
+//! attachments runs the exact same admission/execution path; the
+//! observation queue simply has no consumer.
 //!
-//! # Adapter bootstrap linearization
+//! # The bootstrap cut
 //!
 //! [`ConversationRuntime::install_observation_bridge`] is the one runtime
-//! handshake a Runtime Client adapter uses at construction. It installs
-//! the observation queue and every subsystem observation seam **and**
-//! captures the semantic bootstrap snapshot as one linearizable handoff:
+//! handshake a Runtime Client adapter uses at construction. It runs
+//! entirely under the one coordinator lock, refuses an already-activated
+//! runtime under that same lock, installs the observation queue and every
+//! subsystem observation seam, and captures the bootstrap seed:
 //!
-//! - the queue is installed and the coordinator-owned facts plus the
-//!   semantic record are captured in one section that holds the
-//!   coordinator lock and the record lock (the cut `R`);
-//! - the mailbox observer is installed and the pending items are captured
-//!   in one section that holds the mailbox lock;
-//! - the background observer is installed and the retained records are
-//!   captured in one section that holds the background registry lock;
-//! - the capability observer is installed and the active snapshot is
-//!   captured in one section that holds the capability state lock.
+//! ```text
+//! T0  coordinator lock; reject if activated; install the queue;
+//!     capture shutting_down / canonical messages / session model
+//! T1  background registry: install observer + capture snapshots  (one background section)
+//! T2  mailbox:             install observer + capture pending    (one mailbox section)
+//! R   capability:          install observer + capture snapshot   (one capability section)
+//!     coordinator lock released
+//! ```
 //!
-//! A transition that linearizes before its authority's cut is in the
-//! captured seed and could not have been queued (the observer/sink did not
-//! exist at its publication point); one that linearizes after the cut is
-//! queued and not in the seed. No transition can fall between the two, so
-//! `seed + live observations` is exactly one complete Runtime Client
-//! projection with no loss and no duplication. Because the semantic
-//! record keeps the attempt-derived facts while `AgentExecution` owns the
-//! one mutable `ConversationState`, the handshake works while an attempt
-//! is active without a second conversation authority.
+//! > **Invariant.** The bootstrap cut `R` is a real global state of the
+//! > runtime: the initial snapshot contains every projected runtime fact
+//! > committed through `R`, every projected transition after `R` is
+//! > delivered exactly once through the live observation stream in
+//! > semantic publication order, and no transition before `R` is published
+//! > as a post-`R` event.
+//!
+//! Every captured value is still the authority's live value at `R`:
+//!
+//! - the coordinator-owned facts cannot move — every mutator
+//!   (`model_set`, `shutdown`, `submit_inbound`, admission, settlement)
+//!   takes the coordinator lock, which is held across `[T0, R]`;
+//! - a background record transitions only through tool execution, which
+//!   requires an admitted attempt, which requires activation — impossible
+//!   across `[T0, R]`;
+//! - the mailbox refuses `enqueue` while its bound runtime is inactive, so
+//!   the pending queue is frozen across `[T0, R]`;
+//! - the capability snapshot is captured *at* `R`.
+//!
+//! And because each authority's observer installation shares one lock
+//! section with its own seed capture, no transition can be both seeded and
+//! queued, and none can be neither.
+//!
+//! Activation is what actually opens the stream: since an inactive runtime
+//! publishes nothing, `R` coincides with the activation point and the live
+//! stream carries *every* observation the runtime ever emits. The first
+//! allocated `RuntimeClientCursor` is therefore always a real
+//! post-activation semantic transition — bootstrap state never fabricates
+//! a live event.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
@@ -138,9 +181,7 @@ use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
     InboundSequence, InitialTurnTrigger, MailboxError,
 };
-use crate::runtime::observation::{
-    ConversationObservation, PendingObservations, RuntimeAttemptSemantics, RuntimeSemanticRecord,
-};
+use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{CancellationReason, RuntimeClock, SystemClock};
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
@@ -308,6 +349,14 @@ struct CoordinatorState {
     /// coordinator physically cannot mutate a competing copy. Settlement
     /// moves the authoritative state back in.
     conversation: Option<ConversationState>,
+    /// Whether the runtime was activated (Issue #61).
+    ///
+    /// It lives under the admission lock because it is *both* the gate of
+    /// semantic execution and the freeze point of the Runtime Client host
+    /// binding decision: `activate` sets it and the bootstrap handshake
+    /// rejects on it, both under this one lock, so the two can never
+    /// interleave ambiguously.
+    activated: bool,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     /// Whether shutdown was accepted: no further inbound admission, no
@@ -405,11 +454,6 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) admission_gate: Option<Arc<Gate>>,
     /// Parks the next settlement handoff when armed.
     pub(crate) settlement_gate: Option<Arc<Gate>>,
-    /// Parks the observation bridge right after the bootstrap cut (the
-    /// coordinator/record section that installs the queue and captures the
-    /// seed) and before the subsystem observer installations, so a test can
-    /// run an exact transition against the cut without timing assumptions.
-    pub(crate) bootstrap_gate: Option<Arc<Gate>>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -485,6 +529,13 @@ pub(crate) struct RuntimeInner {
     mailbox: ConversationInboundMailbox,
     capability: CapabilityCoordinator,
     clock: Arc<dyn RuntimeClock>,
+    /// The Tokio execution runtime this conversation was constructed in.
+    ///
+    /// Captured (and validated) at construction so
+    /// [`ConversationRuntime::activate`] spawns the admission worker
+    /// unconditionally, from any thread, with no `Handle::try_current`
+    /// dependency at the activation call site.
+    executor: tokio::runtime::Handle,
     /// The one admission synchronization boundary.
     state: Mutex<CoordinatorState>,
     /// The runtime admission worker's wake boundary.
@@ -495,11 +546,6 @@ pub(crate) struct RuntimeInner {
     /// set exactly once when a projection consumer installs itself through
     /// [`RuntimeInner::install_observation_bridge`].
     pending: std::sync::OnceLock<Arc<PendingObservations>>,
-    /// The runtime-owned semantic record: the derived read state of the
-    /// attempt-derived facts (committed messages, attempt semantics, Agent
-    /// Status, compaction) that are not readable from a static owner while
-    /// `AgentExecution` owns the one mutable `ConversationState`.
-    record: Mutex<RuntimeSemanticRecord>,
     /// Test-only settlement signal: fired once per attempt settlement so
     /// headless regressions await the authoritative state handoff
     /// deterministically instead of by polling timeout.
@@ -552,105 +598,90 @@ impl RuntimeInner {
         )
     }
 
-    /// Publishes one semantic observation: folds it into the runtime-owned
-    /// semantic record and appends it to the shared leaf queue, when a
-    /// projection consumer exists and the queue is open.
+    /// Publishes one semantic observation into the shared leaf queue,
+    /// when a projection consumer exists and the queue is open.
     ///
-    /// The record fold and the queue-publication check share the one
-    /// record-lock section, which is what makes the adapter bootstrap
-    /// handshake (see [`RuntimeInner::install_observation_bridge`])
-    /// linearizable: an observation either linearizes entirely before the
-    /// bootstrap cut (folded, not queued) or entirely after it (queued,
-    /// not folded into the captured seed).
+    /// This is a leaf publication: the runtime keeps no second fold of the
+    /// observation vocabulary. Because the queue is installed while the
+    /// runtime is still inactive (see
+    /// [`RuntimeInner::install_observation_bridge`]) and an inactive
+    /// runtime publishes nothing, an installed consumer observes every
+    /// observation this runtime ever emits.
     fn observe(&self, observation: ConversationObservation) {
-        let mut record = self
-            .record
-            .lock()
-            .expect("runtime semantic record lock poisoned");
-        record.fold(&observation);
         if let Some(pending) = self.pending.get() {
             pending.push(observation);
         }
     }
 
-    /// Installs the observation bridge and captures the semantic bootstrap
-    /// snapshot as one linearizable handoff.
+    /// Installs the observation bridge and captures the bootstrap seed at
+    /// one global cut `R`.
     ///
-    /// Phase 1 (the cut `R`): under the coordinator lock and the record
-    /// lock, the queue is installed and the coordinator-owned facts plus
-    /// the runtime semantic record are captured. Coordinator transitions
-    /// serialize on the coordinator lock; attempt observations serialize
-    /// on the record lock; both therefore linearize entirely before the
-    /// cut (folded, in the seed, never queued) or entirely after it
-    /// (queued, not in the seed).
+    /// The whole handshake runs under the one coordinator lock, which is
+    /// also what rejects an already-activated runtime atomically against
+    /// [`ConversationRuntime::activate`]. See the module documentation
+    /// ("The bootstrap cut") for the coherence proof; in short, the
+    /// coordinator facts are frozen by the held lock, the background
+    /// registry and the mailbox are frozen because an inactive runtime can
+    /// neither execute a tool nor accept inbound, and the capability
+    /// snapshot is captured at `R` itself.
     ///
-    /// Phases 2-4 install each subsystem's observation seam and capture
-    /// that subsystem's seed under that subsystem's own lock, so the same
-    /// before/after property holds per authority.
+    /// # Errors
+    ///
+    /// Returns [`RuntimeBootstrapError::RuntimeAlreadyActivated`] when the
+    /// runtime was already activated and
+    /// [`RuntimeBootstrapError::BridgeAlreadyInstalled`] when an
+    /// observation bridge already exists.
     fn install_observation_bridge(
         self: &Arc<Self>,
         queue: Arc<PendingObservations>,
     ) -> Result<RuntimeBootstrapSnapshot, RuntimeBootstrapError> {
-        // ---- Phase 1: the bootstrap cut ----
+        // The one coordinator lock is held across every phase below: it is
+        // the freeze that makes the combined seed one real global state.
         let state = self.lock_state();
-        let record = self
-            .record
-            .lock()
-            .expect("runtime semantic record lock poisoned");
+        // Binding a Runtime Client host is a pre-activation composition
+        // decision. Rejecting here, under the lock `activate` also takes,
+        // is what makes the lifecycle boundary structural rather than
+        // conventional.
+        if state.activated {
+            return Err(RuntimeBootstrapError::RuntimeAlreadyActivated {
+                conversation_id: self.conversation_id.clone(),
+            });
+        }
         if self.pending.set(queue).is_err() {
             return Err(RuntimeBootstrapError::BridgeAlreadyInstalled {
                 conversation_id: self.conversation_id.clone(),
             });
         }
-        // The authoritative canonical history: the coordinator-owned
-        // `ConversationState` while idle, the runtime semantic record's
-        // committed-message history while an attempt is active.
-        let messages = match state.conversation.as_ref() {
-            Some(conversation) => conversation.ledger().audit_records().to_vec(),
-            None => record.messages.clone(),
-        };
-        let seed = (
-            state.shutting_down,
-            messages,
-            state.model.view(),
-            record.attempt.clone(),
-            record.status.clone(),
-            record.compaction.clone(),
-        );
-        drop(record);
-        drop(state);
-        // Test-only gate: parked right after the cut and before the
-        // subsystem installations, so a test can run an exact transition
-        // against the cut.
-        #[cfg(test)]
-        if let Some(probe) = self
-            .probe
-            .lock()
-            .expect("coordinator probe lock poisoned")
+        // ---- T0: the coordinator-owned facts ----
+        //
+        // An inactive runtime never moved its conversation state into an
+        // attempt, so the authoritative canonical history is right here.
+        let messages = state
+            .conversation
             .as_ref()
-            && let Some(gate) = &probe.bootstrap_gate
-        {
-            gate.enter();
-        }
-        // ---- Phase 2: the mailbox (observer + pending seed, one section) ----
+            .expect("an inactive runtime owns its conversation state")
+            .ledger()
+            .audit_records()
+            .to_vec();
+        let shutting_down = state.shutting_down;
+        let model = state.model.view();
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
-        let inbound_pending = self.mailbox.install_observer_and_pending(observer.clone());
-        // ---- Phase 3: the background registry ----
+        // ---- T1: the background registry (frozen: no attempt can run) ----
         let background = self
             .tool_runtime
             .background()
             .install_observer_and_snapshots(observer.clone());
-        // ---- Phase 4: the capability coordinator ----
+        // ---- T2: the mailbox (frozen: an inactive conversation refuses
+        //          inbound) ----
+        let inbound_pending = self.mailbox.install_observer_and_pending(observer.clone());
+        // ---- R: the capability coordinator, the cut itself ----
         let capabilities = self.capability.install_observer_and_snapshot(observer);
-        let (shutting_down, messages, model, attempt, status, compaction) = seed;
+        drop(state);
         Ok(RuntimeBootstrapSnapshot {
             conversation_id: self.conversation_id.clone(),
             shutting_down,
             messages,
             model,
-            attempt,
-            status,
-            compaction,
             inbound_pending,
             background,
             capabilities,
@@ -660,6 +691,9 @@ impl RuntimeInner {
     /// Spawns the admission worker: admits the next attempt whenever the
     /// wake gate fires (any mailbox enqueue), so idle asynchronous inbound
     /// is admitted without any client request.
+    ///
+    /// Spawning uses the execution-runtime handle captured at
+    /// construction, so activation from any thread starts the worker.
     ///
     /// # Lifetime
     ///
@@ -674,11 +708,6 @@ impl RuntimeInner {
     /// gate and wakes the worker; the worker observes the closed gate and
     /// exits. The upgrade check is a second, independent exit path.
     fn ensure_worker(self: &Arc<Self>) {
-        // Construction may happen outside a runtime; a later call from a
-        // public entry point spawns the worker instead.
-        if tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
         if self.worker_started.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -689,7 +718,11 @@ impl RuntimeInner {
         // idle conversation admits asynchronous inbound without any client
         // request.
         let mailbox_wake = self.mailbox.wake();
-        tokio::spawn(async move {
+        // The execution runtime validated at construction, so activation
+        // spawns the worker unconditionally: it can neither panic on a
+        // missing runtime nor silently leave a conversation that never
+        // admits anything.
+        self.executor.spawn(async move {
             loop {
                 tokio::select! {
                     biased;
@@ -794,14 +827,6 @@ impl RuntimeInner {
             {
                 state.current_attempt = None;
             }
-            // The authoritative `ConversationState` is readable again, so
-            // the runtime-owned semantic record no longer needs to carry
-            // the attempt-derived facts: an adapter bootstrap after this
-            // point seeds from the conversation state directly.
-            *self
-                .record
-                .lock()
-                .expect("runtime semantic record lock poisoned") = RuntimeSemanticRecord::default();
             #[cfg(test)]
             self.settlement.notify_one();
             // Test-only gate: the conversation state is restored and the
@@ -834,7 +859,8 @@ impl RuntimeInner {
     ///
     /// # Linearization
     ///
-    /// The idle observation, the shutdown/admission-gate observation, the
+    /// The activation observation, the idle observation, the
+    /// shutdown/admission-gate observation, the
     /// finite mailbox drain, the canonical-history commits, the attempt-id
     /// allocation, the model snapshot freeze, and the current-attempt
     /// publication all share the one coordinator lock. The mailbox drain
@@ -857,7 +883,7 @@ impl RuntimeInner {
             gate.enter();
         }
         let mut state = self.lock_state();
-        if state.shutting_down || state.current_attempt.is_some() {
+        if !state.activated || state.shutting_down || state.current_attempt.is_some() {
             return;
         }
         let Some(batch) = self.mailbox.drain() else {
@@ -871,15 +897,6 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        // The runtime semantic record takes over the attempt-derived read
-        // facts while the attempt owns the one mutable `ConversationState`:
-        // the pre-attempt canonical history is copied here (an immutable
-        // audit read of the state the coordinator itself still owns), and
-        // every later commit is appended through the observation stream.
-        self.record
-            .lock()
-            .expect("runtime semantic record lock poisoned")
-            .messages = conversation.ledger().audit_records().to_vec();
         let mut fresh_ids = Vec::with_capacity(batch.items().len());
         for item in batch.into_items() {
             let block = MessageBlock::User(item.into_message());
@@ -958,7 +975,14 @@ impl core::fmt::Debug for ConversationRuntime {
 }
 
 impl ConversationRuntime {
-    /// Creates the runtime and installs the observation seams.
+    /// Creates the runtime in its **inactive** lifecycle state.
+    ///
+    /// An inactive runtime is inert: its mailbox refuses inbound, it has
+    /// no admission worker, it admits no attempt, and it publishes no
+    /// observation. The composition may now optionally bind a
+    /// `RuntimeClientHost` over it, and must then call
+    /// [`ConversationRuntime::activate`] before semantic execution can
+    /// begin. A headless composition simply activates directly.
     ///
     /// # One conversation authority
     ///
@@ -1018,15 +1042,15 @@ impl ConversationRuntime {
             .map_err(|error| {
                 ConversationRuntimeError::InvalidInitialConversation(error.to_string())
             })?;
-        // The admission worker must exist before the runtime is usable:
-        // native mailbox producers wake it, and there is no client path
-        // that guarantees activation for a headless runtime. A runtime
-        // constructed outside a Tokio execution runtime would silently
-        // never admit anything, so it is rejected explicitly here, still
-        // in the fallible section.
-        if tokio::runtime::Handle::try_current().is_err() {
+        // Activation spawns the admission worker, and a runtime with no
+        // worker would silently never admit anything. The execution
+        // runtime is required — and captured — here, still in the fallible
+        // section and before any claim, so `activate` spawns the worker
+        // unconditionally and the impossible composition is rejected as
+        // early as it can be seen.
+        let Ok(executor) = tokio::runtime::Handle::try_current() else {
             return Err(ConversationRuntimeError::NoExecutionRuntime);
-        }
+        };
 
         // ---- Ownership commit: the one-time coordinator binding claim. ----
         //
@@ -1045,6 +1069,10 @@ impl ConversationRuntime {
 
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
+        // The conversation is inert until `activate`: its mailbox refuses
+        // inbound, so nothing can be admitted and nothing can be observed
+        // while the optional Runtime Client host binds.
+        mailbox.bind_inactive();
         let clock = config
             .clock
             .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
@@ -1057,10 +1085,12 @@ impl ConversationRuntime {
             mailbox,
             capability: config.capability,
             clock,
+            executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
                 request_history: RequestHistory::default(),
                 conversation: Some(conversation),
+                activated: false,
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
@@ -1069,13 +1099,11 @@ impl ConversationRuntime {
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
-            record: Mutex::new(RuntimeSemanticRecord::default()),
             #[cfg(test)]
             settlement: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
         });
-        inner.ensure_worker();
         Ok(Self { inner })
     }
 
@@ -1146,13 +1174,6 @@ impl ConversationRuntime {
         self.inner.install_observation_bridge(queue)
     }
 
-    /// Ensures the admission worker is running. Construction guarantees a
-    /// Tokio execution runtime, so the first call spawns the worker;
-    /// later calls are idempotent no-ops.
-    pub(crate) fn ensure_worker(&self) {
-        self.inner.ensure_worker();
-    }
-
     /// Claims the one-time Runtime Client binding of the tool runtime and of
     /// the capability coordinator.
     ///
@@ -1184,6 +1205,43 @@ impl ConversationRuntime {
         self.inner.capability.release_runtime_client_claim();
     }
 
+    /// Activates the runtime: semantic execution may begin.
+    ///
+    /// This is the one explicit lifecycle boundary of Issue #61. Before
+    /// it, the runtime is inert and a `RuntimeClientHost` may bind over
+    /// it; at it, the Runtime Client host-binding decision is frozen, the
+    /// mailbox opens, and the admission worker starts. Activation is the
+    /// bootstrap cut a bound Runtime Client projection is seeded against.
+    ///
+    /// Runtime Client *attachments* remain fully dynamic afterwards: this
+    /// boundary freezes only which adapter (if any) observes the runtime,
+    /// never how long a client stays attached.
+    ///
+    /// Activating twice is a no-op; the first activation wins.
+    pub fn activate(&self) {
+        {
+            let mut state = self.inner.lock_state();
+            if state.activated {
+                return;
+            }
+            state.activated = true;
+            // Under the same lock section, so an admission or a bootstrap
+            // handshake can never observe a half-activated runtime.
+            self.inner.mailbox.activate();
+        }
+        self.inner.ensure_worker();
+        // Any inbound published before activation (there can be none: the
+        // mailbox refused it) and any inbound racing this activation is
+        // admitted here rather than depending on a wake permit.
+        self.inner.admit_next_attempt();
+    }
+
+    /// Whether this runtime was activated.
+    #[must_use]
+    pub fn is_activated(&self) -> bool {
+        self.inner.lock_state().activated
+    }
+
     /// Submits one ordinary inbound user message.
     ///
     /// The runtime owns authoritative metadata: the message identity, the
@@ -1195,7 +1253,8 @@ impl ConversationRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`InboundAdmissionError::Shutdown`] after shutdown,
+    /// Returns [`InboundAdmissionError::Inactive`] before activation,
+    /// [`InboundAdmissionError::Shutdown`] after shutdown,
     /// [`InboundAdmissionError::EmptyContent`] for empty content, and
     /// [`InboundAdmissionError::Mailbox`] for a mailbox admission failure.
     pub fn submit_inbound(
@@ -1207,6 +1266,9 @@ impl ConversationRuntime {
         }
         let (message_id, timestamp) = {
             let mut state = self.inner.lock_state();
+            if !state.activated {
+                return Err(InboundAdmissionError::Inactive);
+            }
             if state.shutting_down {
                 return Err(InboundAdmissionError::Shutdown);
             }
@@ -1231,7 +1293,6 @@ impl ConversationRuntime {
             .mailbox
             .enqueue(message)
             .map_err(InboundAdmissionError::Mailbox)?;
-        self.inner.ensure_worker();
         Ok(InboundAdmission {
             message_id,
             inbound_sequence: sequence,
@@ -1422,6 +1483,16 @@ pub enum RuntimeBootstrapError {
         /// The conversation whose runtime is already bridged.
         conversation_id: ConversationId,
     },
+    /// The runtime was already activated.
+    ///
+    /// Binding a Runtime Client host is a pre-activation composition
+    /// decision (Issue #61): the bootstrap seed is only coherent while the
+    /// runtime is inert, so a late bind is refused rather than
+    /// approximated.
+    RuntimeAlreadyActivated {
+        /// The conversation whose runtime is already activated.
+        conversation_id: ConversationId,
+    },
 }
 
 impl core::fmt::Display for RuntimeBootstrapError {
@@ -1431,6 +1502,10 @@ impl core::fmt::Display for RuntimeBootstrapError {
                 f,
                 "the conversation runtime of {conversation_id} already has an observation bridge installed"
             ),
+            Self::RuntimeAlreadyActivated { conversation_id } => write!(
+                f,
+                "the conversation runtime of {conversation_id} is already activated; a Runtime Client host binds before activation"
+            ),
         }
     }
 }
@@ -1439,30 +1514,28 @@ impl std::error::Error for RuntimeBootstrapError {}
 
 /// The semantic facts a Runtime Client adapter seeds from at construction:
 /// the runtime-owned bootstrap snapshot captured by
-/// [`ConversationRuntime::install_observation_bridge`].
+/// [`ConversationRuntime::install_observation_bridge`] at the global cut
+/// `R`.
 ///
 /// Every field is a runtime-owned semantic source type or runtime-owned
 /// immutable view; the Runtime Client layer owns the translation into its
 /// snapshot read model.
+///
+/// There is deliberately no attempt / Agent Status / compaction field: a
+/// runtime binds its Runtime Client host while inactive, so no attempt has
+/// ever run, no status has been composed, and no compaction has occurred.
+/// Every one of those facts arrives through the live observation stream.
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeBootstrapSnapshot {
     /// The conversation identity.
     pub conversation_id: ConversationId,
     /// Whether the runtime accepted shutdown.
     pub shutting_down: bool,
-    /// The authoritative canonical history so far. While an attempt is
-    /// active this is the runtime semantic record's committed-message
-    /// history; between attempts it is read from the authoritative
-    /// `ConversationState`.
+    /// The authoritative canonical history at the cut, read from the
+    /// coordinator-owned `ConversationState`.
     pub messages: Vec<MessageBlock>,
     /// The authoritative session model view.
     pub model: SessionModelView,
-    /// The current attempt semantics, when an attempt is active.
-    pub attempt: Option<RuntimeAttemptSemantics>,
-    /// The latest composed Agent Status observation, when one exists.
-    pub status: Option<crate::agent::observer::AgentStatusObservation>,
-    /// The committed compaction semantics.
-    pub compaction: crate::runtime::observation::RuntimeCompactionSemantics,
     /// The currently pending inbound items, in mailbox sequence order.
     pub inbound_pending: Vec<InboundItem>,
     /// The authoritative background execution records.
@@ -1483,6 +1556,9 @@ pub struct InboundAdmission {
 /// An inbound publish failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InboundAdmissionError {
+    /// The runtime was not activated: an inert conversation accepts no
+    /// inbound work.
+    Inactive,
     /// The runtime accepted shutdown: no further inbound admission occurs.
     Shutdown,
     /// Inbound content must not be empty.
@@ -1494,6 +1570,7 @@ pub enum InboundAdmissionError {
 impl core::fmt::Display for InboundAdmissionError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Inactive => f.write_str("the conversation runtime is not activated"),
             Self::Shutdown => f.write_str("the conversation runtime is shutting down"),
             Self::EmptyContent => f.write_str("inbound content must not be empty"),
             Self::Mailbox(error) => error.fmt(f),
@@ -1561,15 +1638,15 @@ fn validate_context_policy(
 }
 
 /// The observation seam implementation bridging the authoritative runtime
-/// owners into the runtime-owned semantic record and the shared leaf
-/// observation queue.
+/// owners into the shared leaf observation queue.
 ///
 /// [`RuntimeObserver::push`] serves the mailbox, the background registry,
 /// the capability coordinator, and `AgentExecution`, all of which fire
 /// while holding (or being owned by) their authoritative boundary. The
-/// observation is folded into the runtime semantic record and appended to
-/// the leaf queue; the projection worker is woken. These paths never
-/// acquire the coordinator lock or the Runtime Client projection lock.
+/// observation is appended to the leaf queue and the projection worker is
+/// woken — nothing else. These paths never acquire the coordinator lock or
+/// the Runtime Client projection lock, and the runtime performs no fold of
+/// its own.
 ///
 /// # Lifetime
 ///
@@ -1604,9 +1681,8 @@ impl RuntimeObserver {
         }
     }
 
-    /// Appends one observation to the runtime semantic record and the leaf
-    /// queue, without acquiring the coordinator lock or the Runtime Client
-    /// projection lock.
+    /// Appends one observation to the leaf queue, without acquiring the
+    /// coordinator lock or the Runtime Client projection lock.
     ///
     /// This is the only shape legal from a subsystem observer that fires
     /// while its authoritative lock is held.
@@ -1731,15 +1807,6 @@ impl ConversationRuntime {
     pub(crate) fn settlement_signal(&self) -> &tokio::sync::Notify {
         &self.inner.settlement
     }
-
-    /// The runtime-owned semantic record (test observability).
-    pub(crate) fn semantic_record(&self) -> RuntimeSemanticRecord {
-        self.inner
-            .record
-            .lock()
-            .expect("runtime semantic record lock poisoned")
-            .clone()
-    }
 }
 
 #[cfg(test)]
@@ -1860,6 +1927,9 @@ mod tests {
         runtime
             .install_observation_bridge(pending.clone())
             .expect("first bridge install");
+        // The bridge installed over the inert runtime; activation is the
+        // cut, exactly as in the interactive composition.
+        runtime.activate();
         HeadlessFixture {
             _dir: dir,
             runtime,
@@ -1968,9 +2038,8 @@ mod tests {
     /// ```
     ///
     /// The production `AgentExecution` / Context Assembly / `ToolRuntime` /
-    /// `CapabilityCoordinator` path is used unchanged; observation happens
-    /// through the runtime-owned semantic record and authoritative state
-    /// only.
+    /// `CapabilityCoordinator` path is used unchanged; the test observes
+    /// only the runtime-owned observation stream and authoritative state.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn headless_tool_cycle_with_zero_attachments() {
@@ -2051,6 +2120,7 @@ mod tests {
         // Zero observation bridge, zero client: the runtime runs the exact
         // production path with no consumer attached.
         let (runtime, model) = headless_runtime(&dir, scripts, Some(registry), None).await;
+        runtime.activate();
 
         let admission = runtime
             .submit_inbound(text_content("use echo"))
@@ -2120,11 +2190,9 @@ mod tests {
         assert!(!runtime.has_current_attempt());
         let history = runtime.request_history();
         assert_eq!(history.snapshots().len(), 2, "both requests retained");
-        // The semantic record is cleared at settlement: the authoritative
-        // ConversationState is the one source again.
-        let record = runtime.semantic_record();
-        assert!(record.attempt.is_none());
-        assert!(record.messages.is_empty());
+        // The coordinator owns the one authoritative ConversationState
+        // again: the runtime keeps no second derived read model to reset.
+        assert!(runtime.coordinator_ledger().is_some());
     }
 
     /// The idle async wakeup: an idle conversation runtime with a purely
@@ -2171,7 +2239,6 @@ mod tests {
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
-            bootstrap_gate: None,
         }))
         .await;
         gate.arm();

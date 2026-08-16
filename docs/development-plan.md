@@ -540,9 +540,9 @@ Implemented in the current architecture:
   `ConversationState`, `RequestHistory` (now `src/runtime/request_history.rs`),
   the shutdown gate, the mailbox/admission relationship, and settlement
   handoff. It installs no client-bound observation seams, so a conversation
-  executes identically with zero Runtime Client attachments (headless
-  composition is the same `AgentExecution`/Context
-  Assembly/ToolRuntime/Capability/provider path).
+  executes identically with zero Runtime Client attachments and with no
+  Runtime Client host at all (headless composition is the same
+  `AgentExecution`/Context Assembly/ToolRuntime/Capability/provider path).
 - `RuntimeClientHost` is the projection + control + attachment adapter over
   the coordinator: it owns the projection read model (snapshot/cursor/
   bounded replay/subscribers), the one-active-attachment policy, and
@@ -558,28 +558,40 @@ Implemented in the current architecture:
   observation, finite drain, canonical commit, attempt-id allocation, model
   freeze, current-attempt publication) under the one coordinator lock.
 - Runtime-owned observation contract: `src/runtime/observation.rs` defines
-  `ConversationObservation` (semantic source types only), the leaf
-  `PendingObservations` queue, and the runtime semantic record (committed
-  messages, attempt semantics, Agent Status, compaction) folded while
-  `AgentExecution` owns the one mutable `ConversationState`. The Runtime
-  Client projection translates the semantic vocabulary; the runtime never
-  imports Runtime Client projection/snapshot types.
+  `ConversationObservation` (semantic source types only) and the leaf
+  `PendingObservations` queue. There is exactly **one** fold of that
+  vocabulary — the Runtime Client projection — and the runtime keeps no
+  mirrored client read model. The runtime never imports Runtime Client
+  projection/snapshot types.
 - Observation handoff: the coordinator publishes semantic observations into
   a shared leaf queue; every projection lock acquisition drains it first, so
   `snapshot + cursor C` remains linearizable and `resume(after C)` observes
   every later projected fact or fails explicitly with `resync_required`
   (Issue #37 invariant preserved across the split).
-- Adapter bootstrap linearization:
-  `ConversationRuntime::install_observation_bridge` installs the queue and
-  every subsystem seam and captures the semantic bootstrap snapshot at one
-  per-authority cut, so a Runtime Client adapter constructed at any time —
-  including while an attempt is active — starts from a coherent seed plus
-  a gap-free, duplication-free live stream. `RuntimeClientHost::new`
-  performs all fallible work before/at the binding claim, releases the
-  claim if the bridge fails, and never leaves a claimed-but-invalid
-  binding. `ConversationRuntime::new` rejects construction outside a Tokio
-  execution runtime with a typed error, so the admission worker exists
-  before the runtime is usable.
+- Runtime lifecycle: `ConversationRuntime::new` constructs the runtime
+  **inactive** (mailbox refuses inbound, no admission worker, no
+  observation published); a `RuntimeClientHost` may then optionally bind;
+  `ConversationRuntime::activate` is the one explicit composition boundary
+  after which semantic execution may begin. Binding a client host is a
+  pre-activation decision — a late bind fails with the typed
+  `HostConstructionError::RuntimeAlreadyActivated` — while Runtime Client
+  *attachments* remain fully dynamic afterwards. Headless runtimes
+  (Issue #60 subagents, every zero-client regression) never construct a
+  host at all.
+- One global bootstrap cut: `ConversationRuntime::install_observation_bridge`
+  runs entirely under the one coordinator lock over an inert runtime,
+  installing the queue and every subsystem seam and capturing the seed as
+  `coordinator facts → background → mailbox → capability (= the cut R)`.
+  Every earlier authority is provably frozen across `[T0, R]` — coordinator
+  facts by the held lock, background because no attempt can run, the
+  mailbox because an inactive conversation refuses `enqueue` — so the
+  combined seed is one real global state, not four independent cuts. The
+  projection installs every seeded fact (including pre-existing background
+  executions) as snapshot state: bootstrap publishes nothing and allocates
+  no cursor, so the first `RuntimeClientCursor` always belongs to a real
+  post-activation transition. `RuntimeClientHost::new` performs all
+  fallible work before/at the binding claim, releases the claim if the
+  handshake fails, and never leaves a claimed-but-invalid binding.
 - Identity claims: one conversation runtime coordinator per
   `ConversationToolRuntime` identity (claim at coordinator construction) and
   one Runtime Client host per coordinator (claim at host construction);
@@ -591,10 +603,13 @@ Implemented in the current architecture:
   enqueue-during-active-attempt, safe-boundary tool-batch structure,
   snapshot/cursor linearization races, model-update freeze at admission,
   capability revision immutability, attachment independence, one
-  human+runtime admission path, bootstrap cut races (transition after the
-  cut, transition before the cut, capability transition across the cut,
-  host construction while an attempt is active), and construction-outside-
-  Tokio rejection — all with gates/barriers/Notify, never sleeps.
+  human+runtime admission path, lifecycle regressions (interactive
+  pre-activation bind, headless activation, typed rejection of a late host
+  bind, attach/detach/reattach after activation), bootstrap regressions
+  (pre-existing background + capability state allocates no live cursor
+  event, pre-cut model transition seeded not duplicated, post-activation
+  transition delivered exactly once), and construction-outside-Tokio
+  rejection — all with gates/barriers/Notify/watch, never sleeps.
 
 Intentionally absent (no concrete native owner or consumer):
 `PreToolPolicy`, tool-execution wrappers/middleware, post-tool result

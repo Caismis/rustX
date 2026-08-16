@@ -16,8 +16,11 @@
 //!         |
 //!         v
 //! ConversationRuntime (Issue #61: the semantic conversation coordinator)
-//!         |
+//!         |            [constructed inactive]
 //!         +--> RuntimeClientHost (projection/control/attachment adapter)
+//!         |            [optional, bound before activation]
+//!         v
+//! ConversationRuntime::activate()   <- semantic execution may begin
 //!         |
 //!         v
 //! RuntimeClientEndpoint
@@ -48,6 +51,15 @@
 //! capability startup failure therefore never leaves a partially
 //! initialized protocol server: composition returns an error and the process
 //! exits before a single protocol byte is written.
+//!
+//! The conversation runtime is constructed **inactive**, the optional
+//! Runtime Client host binds over the inert runtime, and composition then
+//! activates it explicitly. Binding a host is therefore a composition
+//! decision, not a hot operation: a headless composition (Issue #60
+//! subagents, every zero-client regression) omits the host entirely and
+//! activates directly, and a late bind over an activated runtime is
+//! refused with `HostConstructionError::RuntimeAlreadyActivated`. Runtime
+//! Client *attachments* remain fully dynamic after activation.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -259,11 +271,20 @@ impl LocalConversationRuntime {
         })?;
 
         // 14. The Runtime Client projection/control/attachment adapter over
-        // that runtime.
+        // that runtime. Binding is a pre-activation composition decision
+        // (Issue #61): the runtime is still inert here, so the host's
+        // initial snapshot is the runtime's real state at the activation
+        // cut and no bootstrap fact can fabricate a live client event.
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
             runtime: runtime.clone(),
             replay_limit: None,
         })?;
+
+        // 15. Activation: the one explicit lifecycle boundary. The client
+        // host-binding decision is now frozen, the mailbox opens, the
+        // admission worker starts, and semantic execution may begin. A
+        // headless composition reaches this same step without step 14.
+        runtime.activate();
 
         Ok(Self {
             runtime,

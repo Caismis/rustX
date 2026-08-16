@@ -237,6 +237,7 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
     );
     let _host =
         RuntimeClientHost::new(host_config).expect("the first host binds the runtime identity");
+    runtime.activate();
 
     // Every handle of the same identity observes both bindings — including
     // clones taken before the coordinator existed and clones of clones.
@@ -266,6 +267,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         model.clone(),
     );
     let host_a = RuntimeClientHost::new(host_config).expect("first host");
+    runtime.activate();
 
     let attachment = host_a
         .attach(rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
@@ -288,6 +290,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         }
         Err(HostConstructionError::ObservationBridgeAlreadyInstalled { .. }) => {
             panic!("the binding claim must reject a second host before the bridge")
+        }
+        Err(HostConstructionError::RuntimeAlreadyActivated { .. }) => {
+            panic!("the binding claim must reject a second host before the lifecycle check")
         }
         Ok(_) => panic!("a second host over one runtime identity must be rejected"),
     }
@@ -406,15 +411,13 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     let bundle = new_bundle("conv-37-bind-lifetime").await;
-    let host = RuntimeClientHost::new(
-        config(
-            bundle.runtime.clone(),
-            bundle.coordinator.clone(),
-            Arc::new(FakeModel::new(Vec::new())),
-        )
-        .1,
-    )
-    .expect("first host");
+    let (runtime, host_config) = config(
+        bundle.runtime.clone(),
+        bundle.coordinator.clone(),
+        Arc::new(FakeModel::new(Vec::new())),
+    );
+    let host = RuntimeClientHost::new(host_config).expect("first host");
+    runtime.activate();
     drop(host);
     assert!(
         bundle.runtime.is_runtime_client_bound(),
@@ -446,15 +449,14 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     // same conversation id.
     let fresh = new_bundle("conv-37-bind-lifetime").await;
     assert!(!fresh.runtime.is_runtime_client_bound());
-    let host = RuntimeClientHost::new(
-        config(
-            fresh.runtime.clone(),
-            fresh.coordinator.clone(),
-            Arc::new(FakeModel::new(Vec::new())),
-        )
-        .1,
-    )
-    .expect("a fresh runtime identity is bindable");
+    let (fresh_runtime, fresh_host_config) = config(
+        fresh.runtime.clone(),
+        fresh.coordinator.clone(),
+        Arc::new(FakeModel::new(Vec::new())),
+    );
+    let host =
+        RuntimeClientHost::new(fresh_host_config).expect("a fresh runtime identity is bindable");
+    fresh_runtime.activate();
     host.snapshot().expect("the fresh host is operational");
     assert!(fresh.runtime.is_runtime_client_bound());
 }
@@ -464,15 +466,13 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reconnect_replaces_the_attachment_not_the_host() {
     let bundle = new_bundle("conv-37-bind-reconnect").await;
-    let host = RuntimeClientHost::new(
-        config(
-            bundle.runtime.clone(),
-            bundle.coordinator.clone(),
-            Arc::new(FakeModel::new(Vec::new())),
-        )
-        .1,
-    )
-    .expect("host");
+    let (runtime, host_config) = config(
+        bundle.runtime.clone(),
+        bundle.coordinator.clone(),
+        Arc::new(FakeModel::new(Vec::new())),
+    );
+    let host = RuntimeClientHost::new(host_config).expect("host");
+    runtime.activate();
 
     let first = host.endpoint();
     let response = first.handle_request(RuntimeClientRequest::Initialize {
@@ -556,15 +556,13 @@ async fn await_message_committed(
 async fn the_host_conversation_identity_is_the_tool_runtime_identity() {
     let bundle = new_bundle("conv-37-authority").await;
     let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
-    let host = RuntimeClientHost::new(
-        config(
-            bundle.runtime.clone(),
-            bundle.coordinator.clone(),
-            model.clone(),
-        )
-        .1,
-    )
-    .expect("host");
+    let (runtime, host_config) = config(
+        bundle.runtime.clone(),
+        bundle.coordinator.clone(),
+        model.clone(),
+    );
+    let host = RuntimeClientHost::new(host_config).expect("host");
+    runtime.activate();
     let authority = bundle.runtime.conversation_id().clone();
 
     // The host reports exactly the tool runtime's conversation.
