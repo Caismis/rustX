@@ -262,7 +262,7 @@ async fn cloning_a_tool_runtime_does_not_create_a_new_binding_identity() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() {
     let bundle = new_bundle("conv-37-bind-reject").await;
-    let model = Arc::new(FakeModel::new(vec![one_turn_stop()]));
+    let model = Arc::new(FakeModel::new(vec![one_turn_stop(), one_turn_stop()]));
     let (runtime, host_config) = config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
@@ -331,10 +331,10 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         })
         .expect("enqueue");
     // The enqueued message is admitted by the runtime's idle wakeup; the
-    // admitted attempt settles immediately (no model scripts). Waiting for
-    // its request-history transfer makes the runtime provably idle before
-    // the capability commit below, so the commit can never be rejected as
-    // Busy by an active attempt lease.
+    // admitted attempt settles immediately. Waiting for its request-history
+    // transfer makes the runtime provably idle before the capability commit
+    // below, so the commit can never be rejected as Busy by an active attempt
+    // lease.
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
             if !host_a.request_history().snapshots().is_empty() {
@@ -345,6 +345,22 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     })
     .await
     .expect("the admitted attempt must settle before the capability commit");
+    // Consume the first attempt's terminal event before submitting the next
+    // inbound. Otherwise the later wait could mistake this already-published
+    // event for the second attempt, making the request-count assertion depend
+    // on scheduler timing.
+    loop {
+        let delivery =
+            tokio::time::timeout(std::time::Duration::from_secs(120), subscription.next())
+                .await
+                .expect("the first attempt event must arrive");
+        let rustx::runtime_client::EventDelivery::Event(event) = delivery else {
+            panic!("subscription stays open, got {delivery:?}");
+        };
+        if matches!(event.event, RuntimeClientEvent::AttemptSettled { .. }) {
+            break;
+        }
+    }
     write_skill(&bundle.dir.path().join("workspace"), "binding-skill");
     let candidate = bundle
         .coordinator
@@ -402,8 +418,8 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     assert!(settled.attempt.is_some(), "host A ran the attempt");
     assert_eq!(
         model.requests().len(),
-        1,
-        "exactly one host drove the model"
+        2,
+        "the single bound host drove both accepted turns"
     );
 }
 
