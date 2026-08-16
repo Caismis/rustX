@@ -3894,10 +3894,24 @@ mod tests {
     /// inbound through the native publisher reach the same coordinator
     /// admission path: one finite batch, mailbox order preserved, exactly
     /// one attempt (Test 3).
+    ///
+    /// The admission gate makes the interleaving exact: the async enqueue
+    /// starts an admission that parks before the coordinator lock, so the
+    /// human submit provably lands in the mailbox before the finite drain.
+    #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn human_and_runtime_inbound_share_one_admission_path() {
-        let (adapter, fixture) =
-            host_fixture(vec![one_turn_stop()], ToolRegistry::new(), composer()).await;
+        let admission_gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+        let (adapter, fixture) = host_fixture_probe_with_runtime_gate(
+            Arc::new(crate::runtime_client::test_sync::ProjectionProbe::default()),
+            vec![one_turn_stop()],
+            CoordinatorProbe {
+                admission_gate: Some(admission_gate.clone()),
+                settlement_gate: None,
+            },
+        )
+        .await;
+        admission_gate.arm();
         let (attachment, _) = fixture
             .host
             .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
@@ -3907,18 +3921,23 @@ mod tests {
             .expect("subscribe");
 
         // The native Runtime producer publishes first (a background-style
-        // terminal notification), then the human submit.
+        // terminal notification), waking the admission worker; the worker
+        // parks at the runtime gate before the coordinator lock, so the
+        // human submit below provably lands before the finite drain.
         fixture
             .runtime
             .tool_runtime()
             .mailbox()
             .enqueue(inbound_text("conv-host-async-1", "runtime"))
             .expect("runtime enqueue");
+        admission_gate.wait_entered();
         attachment.handle_request(RuntimeClientRequest::SubmitInbound {
             id: crate::runtime_client::RequestId::new(1),
             content: submit_content("human"),
         });
 
+        // Release: one admission drains both messages in mailbox order.
+        admission_gate.release();
         receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
