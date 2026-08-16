@@ -115,6 +115,22 @@ pub struct CompactionCommit {
     pub expected_revision: SurfaceRevision,
 }
 
+/// The validated, not-yet-installed transition of one compaction.
+///
+/// Produced by [`ConversationState::validate_compaction_commit`] after every
+/// fallible condition (stale revision, invalid span, structural integrity,
+/// duplicate identity) has been checked against the current state; consumed
+/// by [`ConversationState::install_prepared_compaction`], which is infallible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedCompaction {
+    /// The inclusive active span the summary replaces.
+    span: SurfaceSpan,
+    /// The resolved inclusive active index range of the span.
+    start: usize,
+    /// The resolved inclusive active index range of the span.
+    end: usize,
+}
+
 /// The committed record of one applied compaction.
 ///
 /// Every field is derived from already-committed conversation state; no
@@ -228,13 +244,49 @@ impl ConversationState {
     /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
     /// [`ConversationError::Surface`] when the identity is already active.
     pub fn commit(&mut self, message: MessageBlock) -> Result<MessageId, ConversationError> {
-        let id = message_id_of(&message);
+        self.prepare_commit(&message)?;
+        Ok(self.install_prepared(message))
+    }
+
+    /// Validates that `message` can be committed without mutating anything.
+    ///
+    /// This is the prepare half of the Issue #63 canonical-commit seam: the
+    /// caller validates every fallible condition (duplicate Ledger identity,
+    /// already-active Surface identity) against the current state, then
+    /// commits the same message durably, and only then installs it with
+    /// [`ConversationState::install_prepared`], which is infallible under
+    /// exclusive ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
+    /// [`ConversationError::Surface`] when the identity is already active.
+    pub fn prepare_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
+        let id = message_id_of(message);
         if self.surface.is_active(&id) {
             return Err(ConversationError::Surface(SurfaceError::AlreadyActive(id)));
         }
-        let id = self.ledger.append(message)?;
-        self.surface.append_after_validation(id.clone());
+        if self.ledger.contains(&id) {
+            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                id,
+            )));
+        }
         Ok(id)
+    }
+
+    /// Installs a commit whose identity was already validated by
+    /// [`ConversationState::prepare_commit`].
+    ///
+    /// Infallible: the caller validated against this exact state and holds
+    /// exclusive ownership, so neither the Ledger nor the Surface can reject
+    /// the same message again.
+    pub fn install_prepared(&mut self, message: MessageBlock) -> MessageId {
+        let id = message_id_of(&message);
+        debug_assert!(!self.surface.is_active(&id));
+        debug_assert!(!self.ledger.contains(&id));
+        self.ledger.append_after_validation(message);
+        self.surface.append_after_validation(id.clone());
+        id
     }
 
     /// Hydrates the current Surface: the finite active messages in active
@@ -368,6 +420,67 @@ impl ConversationState {
         let (_, index) = self.structure()?;
         index.validate_span(start, end)?;
         Ok((start, end))
+    }
+
+    /// Validates a prepared [`CompactionCommit`] against the current Surface
+    /// without mutating anything, producing the deterministic prepared
+    /// transition for [`ConversationState::install_prepared_compaction`].
+    ///
+    /// This is the prepare half of the Issue #63 canonical-compaction seam:
+    /// the caller validates the revision and span here, appends the summary
+    /// durably, then installs the transition infallibly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationError::Surface`] with
+    /// [`SurfaceError::StaleRevision`] when the Surface moved since the
+    /// command was prepared, and otherwise the [`ConversationError`] of the
+    /// first violated identity/span/structural condition.
+    pub fn validate_compaction_commit(
+        &self,
+        commit: &CompactionCommit,
+    ) -> Result<PreparedCompaction, ConversationError> {
+        let current = self.surface.revision();
+        if commit.expected_revision != current {
+            return Err(ConversationError::Surface(SurfaceError::StaleRevision {
+                expected: commit.expected_revision,
+                actual: current,
+            }));
+        }
+        let (start, end) = self.validate_compaction_span(&commit.summary.id, &commit.span)?;
+        Ok(PreparedCompaction {
+            span: commit.span.clone(),
+            start,
+            end,
+        })
+    }
+
+    /// Installs a compaction whose span was already validated by
+    /// [`ConversationState::validate_compaction_commit`].
+    ///
+    /// Infallible: the caller validated against this exact state and holds
+    /// exclusive ownership, so the span and identity re-validation can no
+    /// longer fail.
+    pub fn install_prepared_compaction(
+        &mut self,
+        summary: UserMessageBlock,
+        prepared: PreparedCompaction,
+    ) -> CompactionRecord {
+        let summary_message_id = self
+            .ledger
+            .append_after_validation(MessageBlock::User(summary));
+        let surface_revision = self.surface.replace_after_validation(
+            &prepared.span,
+            summary_message_id.clone(),
+            prepared.start,
+            prepared.end,
+        );
+        CompactionRecord {
+            summary_message_id,
+            replaced: prepared.span,
+            surface_revision,
+            generation: self.surface.compaction_generation(),
+        }
     }
 
     /// The single semantic commit/linearization point of compaction:

@@ -140,17 +140,35 @@ Message Ledger          = adopted canonical conversational facts
   persistence, and producer correlation/idempotency state commit in one
   durable transaction, and producer success is returned only after that
   commit. A failed acceptance exposes no successful sequence, no pending
-  record, and no correlation;
+  record, and no correlation. A successful acceptance and the coordinator's
+  `shutdown` have one total ordering: the coordinator holds its one state
+  lock across the lifecycle/shutdown decision and the durable acceptance,
+  so shutdown linearizes either entirely before the acceptance (the
+  acceptance fails with `Shutdown` and commits no pending item and consumes
+  no sequence) or entirely after it;
 - the mailbox accepts only ordinary inbound messages
   (`InboundKind::Message`) that carry their persisted UTC timestamp;
   runtime compaction summaries are rejected at acceptance;
 - a safe-boundary selection performs exactly one finite watermark-bounded
   non-destructive snapshot; adoption then atomically appends the selected
-  messages to the durable canonical prefix and removes their pending
+  messages to the durable canonical Message Ledger and removes their pending
   records in one transaction, so post-watermark arrivals are deferred to
   the next batch and a crash can never observe a pending record without its
   canonical commit nor a canonical message that remains independently
   re-adoptable;
+- canonical adoption is the prepare → durable → install seam: every fallible
+  in-memory condition (duplicate identity, already-active Surface identity)
+  is validated before the durable adoption commit, the durable append and
+  the pending removal share one transaction, and the in-memory install is
+  then infallible under exclusive ownership. There is no window where a
+  durable adoption has committed but the canonical in-memory conversation
+  state may still reject it;
+- the durable Message Ledger is the complete ordered canonical prefix: every
+  canonical `MessageBlock` commit — adopted inbound `User` messages,
+  `Assistant` messages, `ToolResult`s, context facts, and compaction
+  summaries — appends to it in canonical order. It is never a filtered
+  subsequence of inbound-only rows with intervening `Assistant`/`Tool` facts
+  omitted;
 - one message still produces one one-item batch, and every adopted item
   becomes its own distinct canonical `UserMessageBlock` in inbound sequence
   order — never concatenated, never delivered through an intermediate
@@ -175,7 +193,22 @@ Message Ledger          = adopted canonical conversational facts
   enqueue never reopens or reclassifies that attempt;
 - terminal failure paths never drain the mailbox: pending items remain for
   later conversation processing, and idle attempt creation for them is not
-  implemented by the mailbox contract.
+  implemented by the mailbox contract;
+- the durable store binds itself to exactly one `ConversationId` on first
+  creation and enforces that binding on every reopen: opening a database
+  created for conversation A under conversation B fails typed with
+  `InboundStoreError::ConversationIdMismatch` and mutates nothing;
+- a durable storage failure in idle admission is never silently swallowed:
+  the coordinator records the failure, publishes a `DurableFailure`
+  observation, and re-kicks the admission wake gate exactly once (bounded by
+  a retry flag, so a persistent failure is not a hot loop). The accepted
+  pending work remains intact because selection is non-destructive;
+- background terminal settlement publishes its durable terminal inbound
+  **before** the record becomes observable as terminal: the terminal
+  candidate is computed first, the notification is durably accepted, and only
+  then is the terminal lifecycle committed. A durable acceptance failure
+  leaves the record non-terminal, so an observable terminal settlement
+  always implies the terminal inbound already obtained durable ownership.
 
 ## Capability immutability
 

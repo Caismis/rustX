@@ -139,9 +139,22 @@ impl MessageLedger {
         if self.index.contains_key(&id) {
             return Err(LedgerError::DuplicateMessageId(id));
         }
+        Ok(self.append_after_validation(message))
+    }
+
+    /// Appends a commit after the caller has already validated that the
+    /// identity is absent under exclusive ownership.
+    ///
+    /// This is the infallible half of the prepare→install canonical-commit
+    /// seam (Issue #63): once a caller has validated the Ledger and Surface
+    /// identities against the current state, the ordinary [`MessageLedger::append`]
+    /// failure can no longer occur.
+    pub(crate) fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
+        let id = message_id_of(&message);
+        debug_assert!(!self.index.contains_key(&id));
         self.index.insert(id.clone(), self.records.len());
         self.records.push(message);
-        Ok(id)
+        id
     }
 
     /// The committed record of one identity, by keyed lookup.

@@ -463,6 +463,15 @@ struct CoordinatorState {
     shutting_down: bool,
     /// The next attempt identity sequence.
     next_attempt_seq: u64,
+    /// The last durable-authority storage failure, when the coordinator hit
+    /// one (Issue #63, Finding 5). Recorded and surfaced through the
+    /// observation stream; a storage failure is never silently swallowed.
+    storage_failure: Option<String>,
+    /// Whether the coordinator already scheduled exactly one bounded storage
+    /// retry (Finding 5). A failure arms it and re-kicks the wake gate once;
+    /// the next admission attempt disarms it, so a persistent failure never
+    /// becomes a hot infinite loop.
+    storage_retry_armed: bool,
 }
 
 /// The runtime admission worker's wake boundary.
@@ -560,6 +569,11 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next activation before the lifecycle transition when
     /// armed.
     pub(crate) activation_gate: Option<Arc<Gate>>,
+    /// Parks the next `submit_inbound` **after** the coordinator lock is
+    /// acquired and the shutdown/activation decision is read, but **before**
+    /// the durable acceptance. This is the exact critical-section window the
+    /// Issue #63 (Finding 1) fix closes.
+    pub(crate) submit_gate: Option<Arc<Gate>>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -720,6 +734,23 @@ impl RuntimeInner {
     fn observe(&self, observation: ConversationObservation) {
         if let Some(pending) = self.pending.get() {
             pending.push(observation);
+        }
+    }
+
+    /// Records a durable-authority storage failure without silently
+    /// swallowing it (Issue #63, Finding 5).
+    ///
+    /// The failure is recorded in the coordinator state and published as a
+    /// [`ConversationObservation::DurableFailure`]. Exactly one bounded retry
+    /// is scheduled by re-kicking the admission wake gate; the retry flag is
+    /// armed so a persistent failure never becomes a hot infinite loop, and
+    /// the accepted pending work is left intact for the retry.
+    fn record_storage_failure(&self, state: &mut CoordinatorState, message: String) {
+        state.storage_failure = Some(message.clone());
+        self.observe(ConversationObservation::DurableFailure { message });
+        if !state.storage_retry_armed {
+            state.storage_retry_armed = true;
+            self.wake.notify.notify_one();
         }
     }
 
@@ -948,15 +979,18 @@ impl RuntimeInner {
             // current-attempt slot is cleared, but the next-admission
             // handoff has not run yet. An enqueue during this park
             // deterministically races the settlement boundary. The gate
-            // parks only when armed and disarms after one park.
+            // parks only when armed and disarms after one park. The gate
+            // handle is extracted before the park so the probe mutex is not
+            // held while parked.
             #[cfg(test)]
-            if let Some(probe) = self
+            let settlement_gate = self
                 .probe
                 .lock()
                 .expect("coordinator probe lock poisoned")
                 .as_ref()
-                && let Some(gate) = &probe.settlement_gate
-            {
+                .and_then(|probe| probe.settlement_gate.clone());
+            #[cfg(test)]
+            if let Some(gate) = settlement_gate {
                 gate.enter();
             }
         }
@@ -983,18 +1017,23 @@ impl RuntimeInner {
     /// this lock. After the publication the lock is released and the
     /// attempt task is spawned, so at most one active [`AgentExecution`]
     /// exists per conversation.
+    #[allow(clippy::too_many_lines)]
     fn admit_next_attempt(self: &Arc<Self>) {
         // Test-only gate: parks before the coordinator lock, so a competing
         // publish can still enqueue while the admission is gated. The gate
-        // parks only when armed and disarms after one park.
+        // parks only when armed and disarms after one park. The gate handle
+        // is extracted before the park so the probe mutex is not held while
+        // parked (a parked admission must never block a submit that holds the
+        // coordinator lock and only briefly probes the gate).
         #[cfg(test)]
-        if let Some(probe) = self
+        let admission_gate = self
             .probe
             .lock()
             .expect("coordinator probe lock poisoned")
             .as_ref()
-            && let Some(gate) = &probe.admission_gate
-        {
+            .and_then(|probe| probe.admission_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = admission_gate {
             gate.enter();
         }
         let mut state = self.lock_state();
@@ -1003,17 +1042,59 @@ impl RuntimeInner {
         }
         // Selection freezes the finite watermark (non-destructive): an
         // acceptance that linearizes after this point can never join the
-        // selected batch.
-        let Some(batch) = self.mailbox.select_pending_batch().ok().flatten() else {
-            return;
+        // selected batch. A storage failure here is never silently
+        // swallowed (Finding 5): it is recorded, observed, and re-kicked
+        // exactly once.
+        let batch = match self.mailbox.select_pending_batch() {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                state.storage_retry_armed = false;
+                return;
+            }
+            Err(error) => {
+                self.record_storage_failure(&mut state, error.to_string());
+                return;
+            }
         };
+        // Prepare the canonical transition **before** the durable adoption
+        // commit: validate every fallible in-memory condition now, so the
+        // post-commit installation is infallible (Finding 2). On a
+        // validation failure nothing is durably adopted and the items remain
+        // pending.
+        let mut prepare_error: Option<crate::conversation::ConversationError> = None;
+        {
+            let conversation = state
+                .conversation
+                .as_ref()
+                .expect("the coordinator owns the conversation state while idle");
+            for item in batch.items() {
+                let block = crate::durable::inbox::canonical_block(item.message());
+                if let Err(error) = conversation.prepare_commit(&block) {
+                    prepare_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if let Some(error) = prepare_error {
+            self.record_storage_failure(
+                &mut state,
+                format!(
+                    "a pending inbound item cannot be prepared for canonical adoption: {error}"
+                ),
+            );
+            return;
+        }
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction. On failure the selected items
-        // remain durably pending (crash-before-adoption semantics) and the
-        // next admission re-attempts them.
-        let Ok(adopted) = self.mailbox.adopt_pending_batch(&batch) else {
-            return;
+        // remain durably pending and the failure is surfaced, never swallowed.
+        let adopted = match self.mailbox.adopt_pending_batch(&batch) {
+            Ok(adopted) => adopted,
+            Err(error) => {
+                self.record_storage_failure(&mut state, error.to_string());
+                return;
+            }
         };
+        state.storage_retry_armed = false;
         // Ownership transfer: the coordinator hands its conversation state
         // to the attempt. From here until settlement the coordinator holds
         // `None` and the attempt is the single mutable conversation
@@ -1024,9 +1105,9 @@ impl RuntimeInner {
             .expect("the coordinator owns the conversation state while idle");
         let mut fresh_ids = Vec::with_capacity(adopted.len());
         for block in adopted {
-            let message_id = conversation
-                .commit(block.clone())
-                .expect("a durably-adopted inbound identity is unique");
+            // Infallible: every adopted identity was validated by
+            // `prepare_commit` above under exclusive ownership.
+            let message_id = conversation.install_prepared(block.clone());
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
@@ -1260,6 +1341,8 @@ impl ConversationRuntime {
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
+                storage_failure: None,
+                storage_retry_armed: false,
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
@@ -1418,16 +1501,19 @@ impl ConversationRuntime {
         // before the lifecycle transition, so while the park holds the
         // conversation is provably still Inactive and every competing
         // runtime-owned commit or host bind can still proceed. The gate
-        // parks only when armed and disarms after one park.
+        // parks only when armed and disarms after one park. The gate handle
+        // is extracted before the park so the probe mutex is not held while
+        // parked.
         #[cfg(test)]
-        if let Some(probe) = self
+        let activation_gate = self
             .inner
             .probe
             .lock()
             .expect("coordinator probe lock poisoned")
             .as_ref()
-            && let Some(gate) = &probe.activation_gate
-        {
+            .and_then(|probe| probe.activation_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = activation_gate {
             gate.enter();
         }
         {
@@ -1468,6 +1554,11 @@ impl ConversationRuntime {
     /// [`InboundAdmissionError::Shutdown`] after shutdown,
     /// [`InboundAdmissionError::EmptyContent`] for empty content, and
     /// [`InboundAdmissionError::Mailbox`] for a durable acceptance failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the test-only coordinator probe lock is poisoned,
+    /// which would mean a previous test hook panicked while holding it.
     pub fn submit_inbound(
         &self,
         content: Vec<UserContentBlock>,
@@ -1475,14 +1566,39 @@ impl ConversationRuntime {
         if content.is_empty() {
             return Err(InboundAdmissionError::EmptyContent);
         }
-        {
-            let state = self.inner.lock_state();
-            if !self.inner.lifecycle.is_active() {
-                return Err(InboundAdmissionError::Inactive);
-            }
-            if state.shutting_down {
-                return Err(InboundAdmissionError::Shutdown);
-            }
+        // Issue #63 (Finding 1): the one coordinator lock is held across the
+        // lifecycle/shutdown check **and** the durable acceptance, so a
+        // successful acceptance and shutdown have one total ordering.
+        // Shutdown therefore linearizes either entirely before the
+        // acceptance (and the acceptance fails with `Shutdown`) or entirely
+        // after it (and the acceptance is a legal pre-shutdown success).
+        // Holding the coordinator lock here nests only the mailbox/store
+        // locks inside it, the same order the admission worker already
+        // takes; no mailbox/store → coordinator edge exists, so the lock
+        // graph stays acyclic.
+        let state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_active() {
+            return Err(InboundAdmissionError::Inactive);
+        }
+        if state.shutting_down {
+            return Err(InboundAdmissionError::Shutdown);
+        }
+        // Test-only gate: parked while holding the coordinator lock, after
+        // the shutdown/activation decision and before the durable acceptance,
+        // so a race regression can prove shutdown cannot slip between the
+        // decision and the commit. The gate handle is extracted before the
+        // park so the probe mutex is not held while parked.
+        #[cfg(test)]
+        let submit_gate = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.submit_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = submit_gate {
+            gate.enter();
         }
         // The durable acceptance linearization point: the sequence, the
         // deterministic message identity, the pending record, and (when a
@@ -2079,6 +2195,7 @@ mod tests {
         RuntimeConversationConfig,
     };
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
+    use crate::durable::inbox::InboundStore;
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
@@ -2174,6 +2291,66 @@ mod tests {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
             None => ConversationRuntime::new(config).expect("runtime"),
         };
+        (runtime, model)
+    }
+
+    /// Builds the conversation runtime of one headless fixture over a custom
+    /// canonical mailbox (used by the storage-fault regression, which needs
+    /// direct access to the durable store).
+    async fn headless_runtime_over_mailbox(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
+        let conversation_id = ConversationId::new(conversation_id);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
+            conversation_id.clone(),
+            crate::tools::runtime::ConversationRuntimeConfig {
+                mailbox: Some(mailbox),
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            },
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let model = Arc::new(FakeModel::new(vec![one_turn_script()]));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
+                status_composer: AgentStatusComposer::default(),
+            },
+            tool_runtime,
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+        };
+        let runtime = ConversationRuntime::new(config).expect("runtime");
         (runtime, model)
     }
 
@@ -2500,6 +2677,7 @@ mod tests {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
             activation_gate: None,
+            submit_gate: None,
         }))
         .await;
         gate.arm();
@@ -2812,6 +2990,198 @@ mod tests {
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)
         ));
+    }
+
+    /// Issue #63 (Finding 1): a successful acceptance and shutdown have one
+    /// total ordering. When acceptance linearizes first — proven by parking
+    /// `submit_inbound` inside its coordinator-lock critical section while
+    /// `shutdown` blocks on that same lock — the acceptance succeeds and
+    /// shutdown follows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn submit_linearizes_before_shutdown_when_acceptance_wins() {
+        let gate = Arc::new(super::Gate::default());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            admission_gate: None,
+            settlement_gate: None,
+            activation_gate: None,
+            submit_gate: Some(gate.clone()),
+        }))
+        .await;
+        gate.arm();
+
+        // `submit_inbound` parks inside its critical section: the coordinator
+        // lock is held, the shutdown decision was read, but the durable
+        // acceptance has not yet committed.
+        let submit_runtime = fixture.runtime.clone();
+        let submit_task = tokio::task::spawn_blocking(move || {
+            submit_runtime
+                .submit_inbound(text_content("raced"))
+                .expect("acceptance linearized before shutdown")
+        });
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+                .await
+                .expect("submit parked inside its critical section");
+        }
+
+        // Shutdown now blocks: it cannot acquire the coordinator lock while
+        // submit holds it. The timeout is a liveness guard only (the proof is
+        // the held lock, not the wait).
+        let shutdown_runtime = fixture.runtime.clone();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let shutdown_task = tokio::task::spawn_blocking(move || {
+            let _ = shutdown_runtime.shutdown();
+            let _ = shutdown_tx.send(());
+        });
+        let blocked = shutdown_rx.recv_timeout(std::time::Duration::from_millis(300));
+        assert!(
+            blocked.is_err(),
+            "shutdown must block while submit holds the critical section"
+        );
+
+        // Release submit: the acceptance commits, then shutdown acquires the
+        // lock and linearizes after it.
+        {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+                .await
+                .expect("release submit");
+        }
+        let admission = submit_task.await.expect("submit completed");
+        assert_eq!(
+            admission.inbound_sequence.get(),
+            1,
+            "the acceptance was the first sequence of the conversation"
+        );
+        shutdown_task.await.expect("shutdown completed");
+        // Shutdown is now authoritative: no later acceptance succeeds.
+        assert!(matches!(
+            fixture.runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+    }
+
+    /// Issue #63 (Finding 1): when shutdown linearizes first, a later submit
+    /// returns `Shutdown` and commits no pending item and consumes no
+    /// sequence. Admission is frozen deterministically so the pre-shutdown
+    /// acceptance stays pending for the exact-count assertion.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_linearizes_before_acceptance_commits_nothing() {
+        let admission_gate = Arc::new(super::Gate::default());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            admission_gate: Some(admission_gate.clone()),
+            settlement_gate: None,
+            activation_gate: None,
+            submit_gate: None,
+        }))
+        .await;
+        // Freeze admission so the worker cannot adopt the pre-shutdown item.
+        admission_gate.arm();
+        let first = fixture
+            .runtime
+            .submit_inbound(text_content("before"))
+            .expect("pre-shutdown acceptance");
+        assert_eq!(first.inbound_sequence.get(), 1);
+        admission_gate.wait_entered();
+        // Shutdown linearizes first.
+        fixture
+            .runtime
+            .shutdown()
+            .expect("shutdown accepted after activation");
+        assert!(matches!(
+            fixture.runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+
+        // The refused acceptance committed no pending item and consumed no
+        // sequence: exactly the one pre-shutdown acceptance remains durable.
+        let batch = fixture
+            .runtime
+            .tool_runtime()
+            .mailbox()
+            .select_pending_batch()
+            .expect("select")
+            .expect("exactly one pre-shutdown pending item");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "the refused acceptance committed no pending item"
+        );
+        assert_eq!(
+            batch.items()[0].sequence().get(),
+            1,
+            "the refused acceptance consumed no sequence"
+        );
+        // Release the frozen admission worker so the test's tokio runtime can
+        // shut down: the worker observes `shutting_down` and returns without
+        // adopting the pending item.
+        admission_gate.release();
+    }
+
+    /// Issue #63 (Finding 5): a durable select storage failure is never
+    /// silently swallowed — it is recorded, observed as a `DurableFailure`,
+    /// and the bounded re-kick runs exactly one retry. Both failing
+    /// selections are non-destructive, so the accepted pending item remains
+    /// intact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn select_storage_failure_is_surfaced_and_pending_remains_intact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // A custom in-memory store so the fault hook is directly armable.
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new("conv-select-fault"))
+                .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-select-fault", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Arm two select faults: the first admission fails and re-kicks
+        // exactly once; the retry fails again (bounded — no second re-kick).
+        store.arm_fail_select_times(2);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        // The failure and its bounded retry are both surfaced as
+        // `DurableFailure` observations (never silently swallowed).
+        let mut failures = 0;
+        while failures < 2 {
+            for observation in pending.drain() {
+                if matches!(observation, ConversationObservation::DurableFailure { .. }) {
+                    failures += 1;
+                }
+            }
+            if failures >= 2 {
+                break;
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(30), pending.wait())
+                .await
+                .expect("durable failures observed within the liveness guard");
+        }
+        assert_eq!(
+            failures, 2,
+            "the failure and its bounded retry were both surfaced"
+        );
+
+        // The pending item remains durably intact (both selections were
+        // non-destructive) and no attempt was admitted.
+        assert_eq!(
+            store.load_pending().expect("load pending").len(),
+            1,
+            "the storage failure left the accepted pending item intact"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "no attempt was admitted through a failed selection"
+        );
     }
 
     /// Cancelling an unknown attempt identity fails explicitly and never

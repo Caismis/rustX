@@ -13,8 +13,12 @@ use rustx::durable::{
     AcceptedInbound, InboundDraft, InboundStore, InboundStoreError, SqliteInboundStore,
 };
 use rustx::message::content::TextBlock;
-use rustx::message::types::{InboundKind, UserContentBlock, UserSource};
-use rustx::runtime::identity::{AgentId, ConversationId, MessageId};
+use rustx::message::types::{
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserSource,
+};
+use rustx::runtime::identity::{AgentId, ConversationId, MessageId, ToolCallId, ToolId};
+use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -298,5 +302,124 @@ fn failed_acceptance_leaves_nothing() {
         next.sequence.get(),
         2,
         "no sequence was consumed by failures"
+    );
+}
+
+fn assistant_block(id: &str) -> MessageBlock {
+    MessageBlock::Assistant(AssistantMessageBlock {
+        id: MessageId::new(id),
+        content: vec![AssistantContentBlock::Text(TextBlock {
+            text: format!("assistant {id}"),
+        })],
+    })
+}
+
+fn tool_block(id: &str) -> MessageBlock {
+    MessageBlock::Tool(ToolMessageBlock {
+        id: MessageId::new(id),
+        tool_call_id: ToolCallId::new("call-1"),
+        tool_id: ToolId::new("tool-a"),
+        result: ToolExecutionResult {
+            status: ToolExecutionStatus::Success,
+            content: Vec::new(),
+            duration_ms: 1,
+            exit_code: None,
+            artifacts: Vec::new(),
+            truncation: None,
+        },
+    })
+}
+
+/// Issue #63 store identity (Finding 4): the durable database binds itself to
+/// one `ConversationId` on first creation and rejects a reopen under a
+/// different identity without mutating the existing data.
+#[test]
+fn store_identity_binds_on_create_and_rejects_a_mismatched_reopen() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+    // First open binds the database to conv-A.
+    let store = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("open");
+    store.accept_inbound(human("hi")).expect("accept");
+    drop(store);
+    // Reopen as conv-A succeeds with the original data intact.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("reopen");
+    assert_eq!(reopened.load_pending().expect("load").len(), 1);
+    drop(reopened);
+    // Reopen as conv-B is a typed failure.
+    let mismatch = SqliteInboundStore::open(ConversationId::new("conv-B"), &path);
+    assert!(matches!(
+        mismatch,
+        Err(InboundStoreError::ConversationIdMismatch { stored, requested })
+            if stored == ConversationId::new("conv-A") && requested == ConversationId::new("conv-B")
+    ));
+    // No mutation: conv-A still owns its accepted pending item.
+    let again = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("reopen A");
+    assert_eq!(
+        again.load_pending().expect("load").len(),
+        1,
+        "the rejected open mutated nothing"
+    );
+}
+
+/// Issue #63 canonical adoption (Finding 2): the durable Message Ledger is a
+/// complete ordered prefix — it preserves Assistant and Tool facts that occur
+/// between two inbound adoption commits, not a filtered subsequence.
+#[test]
+fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    // Initial canonical prefix.
+    store
+        .seed_canonical(&[MessageBlock::User(
+            rustx::message::types::UserMessageBlock {
+                id: MessageId::new("msg-user-0"),
+                content: text_blocks("start"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+            },
+        )])
+        .expect("seed");
+    // Inbound batch 1.
+    store.accept_inbound(human("A")).expect("accept A");
+    store
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .expect("adopt A");
+    // Intervening canonical facts (assistant + tool) between the two
+    // inbound adoptions, appended through the canonical durability seam.
+    store
+        .append_canonical(&assistant_block("assistant-1"))
+        .expect("assistant");
+    store.append_canonical(&tool_block("tool-1")).expect("tool");
+    // Inbound batch 2.
+    store.accept_inbound(human("B")).expect("accept B");
+    store
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(2))
+        .expect("adopt B");
+    drop(store);
+
+    // Reopen: the durable ledger is the complete ordered prefix, never a
+    // filtered subsequence.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let canonical = reopened.load_canonical().expect("load canonical");
+    let ids: Vec<String> = canonical
+        .iter()
+        .map(|block| rustx::conversation::message_id_of(block).into_string())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "msg-user-0",
+            "conv-1-inbound-1",
+            "assistant-1",
+            "tool-1",
+            "conv-1-inbound-2",
+        ],
+        "the durable ledger is the exact canonical ordering"
+    );
+    assert!(
+        reopened.load_pending().expect("load pending").is_empty(),
+        "both inbound batches were adopted exactly once"
     );
 }

@@ -11,7 +11,10 @@
 //!   with the same committed correlation resolves to the same acceptance
 //!   deterministically (exactly-once).
 //! - `message_ledger.position` is the append-order position of the durable
-//!   canonical prefix.
+//!   canonical Message Ledger (the complete ordered prefix of the
+//!   authoritative in-memory Message Ledger).
+//! - `store_identity.conversation_id` binds the database to exactly one
+//!   `ConversationId` on first creation and is enforced on every reopen.
 //!
 //! The sequence counter lives in `inbox_meta` so it survives adoption (which
 //! deletes pending rows) and restart. There is deliberately no second
@@ -23,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::message::types::{MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
@@ -44,6 +47,11 @@ pub struct SqliteInboundStore {
     pub(crate) fail_next_accept_commit: Arc<AtomicBool>,
     #[cfg(test)]
     pub(crate) fail_next_adopt_commit: Arc<AtomicBool>,
+    /// Test-only fault hook: the next N [`InboundStore::select_pending_batch`]
+    /// calls fail with a storage error (Finding 5). Never present in
+    /// production.
+    #[cfg(test)]
+    pub(crate) fail_select_remaining: Arc<AtomicUsize>,
 }
 
 impl core::fmt::Debug for SqliteInboundStore {
@@ -108,10 +116,19 @@ impl SqliteInboundStore {
                 message_id TEXT NOT NULL UNIQUE,
                 message_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS store_identity (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                conversation_id TEXT NOT NULL
+            );
             INSERT OR IGNORE INTO inbox_meta (key, value)
                 VALUES ('next_inbound_sequence', 0);",
         )
         .map_err(|error| storage(format!("migrate: {error}")))?;
+        // Issue #63 store identity: the durable authority binds itself to one
+        // ConversationId on first creation and enforces that binding on every
+        // reopen, so a database created for conversation A can never be
+        // reopened as conversation B (Finding 4).
+        Self::bind_or_check_identity(&conn, &conversation_id)?;
         Ok(Self {
             conversation_id,
             conn: Arc::new(Mutex::new(conn)),
@@ -119,7 +136,43 @@ impl SqliteInboundStore {
             fail_next_accept_commit: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
             fail_next_adopt_commit: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            fail_select_remaining: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// Binds the database to `conversation_id` on first creation and rejects
+    /// a reopen under a different identity.
+    fn bind_or_check_identity(
+        conn: &Connection,
+        conversation_id: &ConversationId,
+    ) -> Result<(), InboundStoreError> {
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT conversation_id FROM store_identity WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| storage(format!("identity probe: {error}")))?;
+        match existing {
+            None => {
+                conn.execute(
+                    "INSERT INTO store_identity (id, conversation_id) VALUES (1, ?1)",
+                    [conversation_id.as_str()],
+                )
+                .map_err(|error| storage(format!("bind identity: {error}")))?;
+            }
+            Some(stored) => {
+                if stored != conversation_id.as_str() {
+                    return Err(InboundStoreError::ConversationIdMismatch {
+                        stored: ConversationId::new(stored),
+                        requested: conversation_id.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Arms the next acceptance to roll back immediately before its commit
@@ -134,6 +187,13 @@ impl SqliteInboundStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_next_adopt_commit(&self) {
         self.fail_next_adopt_commit.store(true, Ordering::SeqCst);
+    }
+
+    /// Arms the next `n` pending selections to fail with a storage error.
+    /// Test-only (Finding 5).
+    #[cfg(test)]
+    pub(crate) fn arm_fail_select_times(&self, n: usize) {
+        self.fail_select_remaining.fetch_add(n, Ordering::SeqCst);
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, InboundStoreError> {
@@ -305,6 +365,16 @@ impl InboundStore for SqliteInboundStore {
     }
 
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, InboundStoreError> {
+        #[cfg(test)]
+        if self
+            .fail_select_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                (remaining > 0).then(|| remaining - 1)
+            })
+            .is_ok()
+        {
+            return Err(storage("fault injected: select pending batch"));
+        }
         let conn = self.lock()?;
         let items = load_pending_rows(&conn)?;
         let Some(watermark) = items.last().map(|item| item.sequence) else {
@@ -442,6 +512,38 @@ impl InboundStore for SqliteInboundStore {
         }
         tx.commit()
             .map_err(|error| storage(format!("seed commit: {error}")))?;
+        Ok(())
+    }
+
+    fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical append transaction: {error}")))?;
+        let id = crate::conversation::message_id_of(message);
+        if Self::message_id_exists(&tx, &id)? {
+            return Err(InboundStoreError::DuplicateMessageId(id));
+        }
+        let position: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(position), 0) FROM message_ledger",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| storage(format!("canonical append position: {error}")))?;
+        let position = position.checked_add(1).ok_or_else(|| {
+            InboundStoreError::Storage("canonical ledger position exhausted".to_owned())
+        })?;
+        let message_json = serde_json::to_string(message)
+            .map_err(|error| storage(format!("serialize canonical: {error}")))?;
+        tx.execute(
+            "INSERT INTO message_ledger (position, message_id, message_json)
+             VALUES (?1, ?2, ?3)",
+            rusqlite::params![position, id.as_str(), message_json],
+        )
+        .map_err(|error| map_insert_error(&error, &id))?;
+        tx.commit()
+            .map_err(|error| storage(format!("canonical append commit: {error}")))?;
         Ok(())
     }
 

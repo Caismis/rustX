@@ -122,6 +122,16 @@ pub(crate) enum ConversationObservation {
     },
     /// The runtime accepted shutdown.
     Shutdown,
+    /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
+    /// a storage operation the coordinator must not silently swallow
+    /// (Issue #63, Finding 5). The failure is recorded and a bounded retry is
+    /// scheduled; accepted pending work remains intact.
+    DurableFailure {
+        /// The human-readable storage failure description.
+        #[allow(dead_code)]
+        // surfaced by tests; the projection folds it without a client event
+        message: String,
+    },
 }
 
 /// The tiny synchronization boundary between the conversation runtime and

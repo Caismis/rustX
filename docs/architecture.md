@@ -47,8 +47,9 @@ durable/inbox.rs           InboundStore trait + domain types (InboundDraft,
                            operations
 durable/sqlite.rs          SqliteInboundStore: the M8 SQLite backend (per-
                            conversation durable sequence counter, pending
-                           records, correlation/idempotency state, and the
-                           durable canonical message prefix)
+                           records, correlation/idempotency state, the durable
+                           canonical Message Ledger, and the per-database
+                           ConversationId binding)
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
@@ -302,20 +303,31 @@ Two linearization points are defined exactly:
    producer correlation/idempotency state commit in **one** transaction.
    Producer success is returned only after that commit. The process-local
    wake fires strictly after it and is a liveness optimization — a crash
-   between the commit and the wake loses nothing.
+   between the commit and the wake loses nothing. A successful acceptance
+   and the coordinator's `shutdown` have one total ordering: the coordinator
+   holds its one state lock across the lifecycle/shutdown decision **and**
+   the durable acceptance, so shutdown linearizes either entirely before the
+   acceptance (the acceptance then fails with `Shutdown` and commits nothing)
+   or entirely after it.
 2. **Adoption** ([`InboundStore::adopt_pending_batch`]): the selected finite
-   watermark batch is appended to the durable canonical message prefix and
+   watermark batch is appended to the durable canonical Message Ledger and
    its pending records are removed in **one** transaction. Crash before the
    commit leaves the items pending; crash after it makes them canonical
    exactly once and never independently re-adoptable.
 
 `select_pending_batch` is a non-destructive finite-watermark snapshot: an
 item accepted after the snapshot belongs to the next batch. The durable
-store is the crash-recoverable prefix of the Message Ledger; the in-memory
-`ConversationState` extends it during execution (full #11 durability is a
+store is the crash-recoverable Message Ledger: every canonical commit —
+adopted inbound `User` messages, `Assistant` messages, `ToolResult`s,
+context facts, and compaction summaries — appends to it in canonical order
+through the prepare → durable-append → infallible-install seam, so it is the
+exact ordered prefix of the authoritative in-memory `ConversationState` for
+the portion claimed durable (full #11 surface-revision durability remains a
 later milestone). Background terminal notifications converge on the same
 acceptance seam with a deterministic producer correlation, so a retry with
-the same committed correlation can never publish a duplicate notification.
+the same committed correlation can never publish a duplicate notification;
+and the durable terminal inbound commits **before** the background record is
+exposed as terminal.
 
 ### Layer 1: Agent kernel
 

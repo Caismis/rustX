@@ -93,6 +93,16 @@ pub enum InboundStoreError {
     DuplicateMessageId(MessageId),
     /// The acceptance owner requires non-empty inbound content.
     EmptyContent,
+    /// The durable database is bound to a different [`ConversationId`] than
+    /// the one the caller requested (Issue #63 store identity). The durable
+    /// authority enforces its own identity, so a database created for one
+    /// conversation cannot be reopened as another.
+    ConversationIdMismatch {
+        /// The conversation the database is bound to.
+        stored: ConversationId,
+        /// The conversation the caller requested.
+        requested: ConversationId,
+    },
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -108,6 +118,10 @@ impl core::fmt::Display for InboundStoreError {
                 )
             }
             Self::EmptyContent => write!(f, "inbound content must not be empty"),
+            Self::ConversationIdMismatch { stored, requested } => write!(
+                f,
+                "the durable inbox is bound to conversation {stored}, not {requested}"
+            ),
             Self::Storage(message) => write!(f, "durable inbound storage failed: {message}"),
         }
     }
@@ -180,22 +194,38 @@ pub trait InboundStore: Send + Sync + 'static {
     /// Returns [`InboundStoreError::Storage`] on a backend read failure.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, InboundStoreError>;
 
-    /// Seeds the durable canonical prefix with the conversation's initial
-    /// canonical messages.
+    /// Seeds the durable canonical Message Ledger with the conversation's
+    /// initial canonical messages.
     ///
     /// Idempotent: a store whose canonical ledger is already non-empty is
     /// left unchanged (the caller re-supplies the same deterministic initial
-    /// messages across restarts). This is the bootstrap that makes
-    /// [`InboundStore::load_canonical`] the complete crash-recoverable
-    /// canonical prefix rather than only the adopted inbound suffix.
+    /// messages across restarts).
     ///
     /// # Errors
     ///
     /// Returns [`InboundStoreError::Storage`] when the seed transaction fails.
     fn seed_canonical(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
 
-    /// Loads the durable canonical message ledger in commit order (the
-    /// crash-recoverable prefix of the Message Ledger).
+    /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
+    ///
+    /// This is the canonical-append durability seam every **non-inbound**
+    /// canonical commit goes through (Assistant messages, `ToolResult`s, and
+    /// runtime compaction summaries). It must be called in canonical commit
+    /// order so the durable Ledger remains the exact ordered prefix of the
+    /// authoritative in-memory Message Ledger. Inbound adoption appends its
+    /// selected User messages through [`InboundStore::adopt_pending_batch`]
+    /// instead, so the pending removal and the canonical append share one
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::DuplicateMessageId`] when the identity is
+    /// already committed to the durable Ledger and
+    /// [`InboundStoreError::Storage`] on a backend failure.
+    fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError>;
+
+    /// Loads the durable canonical Message Ledger in commit order (the
+    /// complete crash-recoverable prefix of the Message Ledger).
     ///
     /// # Errors
     ///

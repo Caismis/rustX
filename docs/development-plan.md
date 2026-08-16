@@ -735,8 +735,9 @@ Implement interfaces for:
 
 Development backend:
 
-- SQLite (`rusqlite`, bundled) for the durable inbound/canonical prefix;
-  JSONL / filesystem storage remains acceptable for other local validation.
+- SQLite (`rusqlite`, bundled) for the durable Message Ledger and the
+  durable inbound/canonical prefix; JSONL / filesystem storage remains
+  acceptable for other local validation.
 
 Semantics:
 
@@ -761,10 +762,21 @@ accepted-but-not-yet-adopted inbound: the per-conversation
 watermark selection, and the atomic canonical-adoption transaction.
 `ConversationInboundMailbox` is reduced to process-local wakeup/coordination;
 background terminal notifications converge on the same acceptance seam with
-a deterministic producer correlation. The durable store is the
-crash-recoverable prefix of the Message Ledger (initial messages + adopted
-inbound); full #11 durability of every canonical domain remains a later
-milestone.
+a deterministic producer correlation, and the durable terminal inbound
+commits before the record is exposed as terminal.
+
+The durable store now persists the **complete** canonical Message Ledger —
+initial messages, adopted inbound `User` messages, `Assistant` messages,
+`ToolResult`s, context facts, and compaction summaries in canonical order —
+through the prepare → durable-append → infallible-install seam, not a
+filtered inbound-only prefix. Canonical adoption validates every fallible
+in-memory condition before the durable commit, so there is no window where a
+durable adoption has committed but the in-memory conversation may still
+reject it. The store also binds its database to one `ConversationId` and
+enforces that binding on reopen. What remains for #11 is the durability of
+the remaining canonical domains (for example the Surface revision history
+needed to replay compaction replacements after restart) and full M9
+recovery orchestration.
 
 ## Milestone 9 — Cancellation and runtime supervision
 

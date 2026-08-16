@@ -349,6 +349,33 @@ enum Terminal {
     Failed { failure: AttemptFailure },
 }
 
+/// A canonical commit failure in the attempt loop.
+///
+/// The prepare → durable → install canonical-commit seam (Issue #63, Finding
+/// 2) has two fallible phases: the in-memory preparation/validation (a
+/// [`ConversationError`]) and the durable Message Ledger append (an
+/// [`InboundStoreError`]). The install phase is infallible after both.
+#[derive(Debug)]
+enum CanonicalCommitError {
+    Conversation(ConversationError),
+    Durable(crate::durable::inbox::InboundStoreError),
+}
+
+impl core::fmt::Display for CanonicalCommitError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Conversation(error) => write!(f, "{error}"),
+            Self::Durable(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl From<ConversationError> for CanonicalCommitError {
+    fn from(error: ConversationError) -> Self {
+        Self::Conversation(error)
+    }
+}
+
 impl<'a> AgentExecution<'a> {
     /// Creates an attempt execution over the given adapter, the owned attempt
     /// capability lease, the cancellation signal, the mandatory M4 context
@@ -743,9 +770,21 @@ impl<'a> AgentExecution<'a> {
         // order. Attempt cancellation can still settle the attempt as
         // cancelled after the structurally complete result batch is
         // committed; no next model turn starts after cancellation.
-        let settled = self
+        let settled = match self
             .execute_tools(&turn_assembly.tool_calls, preflight)
-            .await;
+            .await
+        {
+            Ok(settled) => settled,
+            Err(error) => {
+                return Some(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: format!("a tool result cannot be committed: {error}"),
+                        },
+                    },
+                });
+            }
+        };
         // Cancellation observed before the observation phase begins wins
         // immediately: the batch is already structurally settled, so there is
         // no useful deferred model context to produce and no observation runs.
@@ -859,6 +898,24 @@ impl<'a> AgentExecution<'a> {
         else {
             return Ok(false);
         };
+        // Prepare the canonical transition **before** the durable adoption
+        // commit: validate every fallible in-memory condition now, so the
+        // post-commit installation is infallible (Finding 2). A validation
+        // failure leaves every item pending and adopts nothing.
+        for item in batch.items() {
+            let block = crate::durable::inbox::canonical_block(item.message());
+            self.conversation
+                .prepare_commit(&block)
+                .map_err(|error| Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: format!(
+                                "a drained inbound message cannot be prepared: {error}"
+                            ),
+                        },
+                    },
+                })?;
+        }
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction.
         let adopted = mailbox
@@ -872,20 +929,13 @@ impl<'a> AgentExecution<'a> {
             })?;
         let mut message_ids = Vec::with_capacity(adopted.len());
         for block in adopted {
-            match self.commit_canonical(&block) {
-                Ok(message_id) => message_ids.push(message_id),
-                Err(error) => {
-                    return Err(Terminal::Failed {
-                        failure: AttemptFailure::Runtime {
-                            error: RuntimeError::ContractViolation {
-                                message: format!(
-                                    "a drained inbound message cannot be committed: {error}"
-                                ),
-                            },
-                        },
-                    });
-                }
+            // Infallible: every adopted identity was validated above under
+            // exclusive ownership of the conversation state.
+            let message_id = self.conversation.install_prepared(block.clone());
+            if let Some(observer) = self.observer {
+                observer.observe_committed(&self.request.attempt_id, &block);
             }
+            message_ids.push(message_id);
         }
         let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
             failure: AttemptFailure::Runtime {
@@ -1521,12 +1571,20 @@ impl<'a> AgentExecution<'a> {
             }
             Err(error) => return Err(error),
         }
-        // The semantic commit point.
+        // The semantic commit point: prepare (validate), durable append,
+        // then infallible install (Issue #63, Finding 2).
         let summary_block = MessageBlock::User(commit.summary.clone());
+        let prepared = self
+            .conversation
+            .validate_compaction_commit(&commit)
+            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+        self.tool_runtime
+            .inbound_store()
+            .append_canonical(&summary_block)
+            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
         let record = self
             .conversation
-            .commit_compaction(commit)
-            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+            .install_prepared_compaction(commit.summary, prepared);
         // The committed runtime summary is a canonical Ledger fact, observed
         // at exactly the commit linearization point like every other commit.
         if let Some(observer) = self.observer {
@@ -1776,7 +1834,7 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         calls: &[ToolCall],
         preflight: Vec<PreflightOutcome>,
-    ) -> Vec<SettledCall> {
+    ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
         let mut slots: Vec<CallSlot> = calls
             .iter()
             .cloned()
@@ -1937,8 +1995,7 @@ impl<'a> AgentExecution<'a> {
                 tool_id: slot.tool_id.clone(),
                 result: result.clone(),
             });
-            self.commit_canonical(&block)
-                .expect("a tool result identity is unique within one attempt");
+            self.commit_canonical(&block)?;
             settled.push(SettledCall {
                 batch_position,
                 call_id: slot.call.id.clone(),
@@ -1962,7 +2019,7 @@ impl<'a> AgentExecution<'a> {
             });
         }
         self.emit(RuntimeEvent::TurnCompleted);
-        settled
+        Ok(settled)
     }
 
     /// Runs the immutable tool-result observation pass of one structurally
@@ -2288,7 +2345,7 @@ impl<'a> AgentExecution<'a> {
         &mut self,
         message_id: &MessageId,
         content: &[crate::message::types::AssistantContentBlock],
-    ) -> Result<(), ConversationError> {
+    ) -> Result<(), CanonicalCommitError> {
         self.commit_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
             id: message_id.clone(),
             content: content.to_vec(),
@@ -2296,16 +2353,32 @@ impl<'a> AgentExecution<'a> {
         Ok(())
     }
 
-    /// The one canonical commit path of the loop: one Message Ledger append
-    /// plus one Conversation Surface append, followed by the commit
-    /// observation at that same linearization point.
+    /// The one canonical commit path of the loop: prepare, durable append,
+    /// then infallible install.
     ///
     /// Every canonical commit of the attempt — drained inbound user
-    /// messages, committed Assistant messages, committed Tool messages — goes
-    /// through here. Independent ledger/surface mutations do not exist in
-    /// this module.
-    fn commit_canonical(&mut self, block: &MessageBlock) -> Result<MessageId, ConversationError> {
-        let message_id = self.conversation.commit(block.clone())?;
+    /// messages (through [`AgentExecution::safe_boundary_drain`]), committed
+    /// Assistant messages, committed Tool messages, admitted context facts —
+    /// goes through here. The durable Message Ledger append happens through
+    /// the same seam the pending-inbox adoption uses, so the durable Ledger
+    /// remains the exact ordered prefix of the authoritative in-memory
+    /// Message Ledger (Issue #63, Finding 2). Independent ledger/surface
+    /// mutations do not exist in this module.
+    fn commit_canonical(
+        &mut self,
+        block: &MessageBlock,
+    ) -> Result<MessageId, CanonicalCommitError> {
+        // Prepare: validate the fallible in-memory conditions first, so the
+        // post-commit installation below is infallible.
+        self.conversation.prepare_commit(block)?;
+        // Durable append through the canonical Message Ledger seam.
+        self.tool_runtime
+            .inbound_store()
+            .append_canonical(block)
+            .map_err(CanonicalCommitError::Durable)?;
+        // Infallible install: the identity was validated above and the
+        // attempt holds exclusive ownership of the conversation state.
+        let message_id = self.conversation.install_prepared(block.clone());
         if let Some(observer) = self.observer {
             observer.observe_committed(&self.request.attempt_id, block);
         }

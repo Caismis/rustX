@@ -3376,6 +3376,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
             },
         )
         .await;
@@ -3455,6 +3456,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
             },
         )
         .await;
@@ -3965,6 +3967,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
             },
         )
         .await;
@@ -4043,6 +4046,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
                 activation_gate: None,
+                submit_gate: None,
             },
         )
         .await;
@@ -4264,6 +4268,7 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
             },
         )
         .await;
@@ -5619,6 +5624,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                submit_gate: None,
             }),
         )
         .await;
@@ -5858,6 +5864,7 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                submit_gate: None,
             }),
         )
         .await;

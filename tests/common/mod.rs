@@ -384,18 +384,35 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     }
 }
 
+/// A process-wide serial for isolating the durable store of each
+/// `tool_runtime` fixture.
+///
+/// Since Issue #63 every canonical commit (assistant/tool/context facts)
+/// appends to the conversation's durable Message Ledger, so two loop tests
+/// that reuse the same `conversation_id` in one process must not share one
+/// durable database file. The serial makes each fixture's storage roots
+/// unique without changing the sibling workspace/artifact layout.
+static TOOL_RUNTIME_SERIAL: AtomicU64 = AtomicU64::new(0);
+
+/// The isolated sibling storage roots of one `tool_runtime` fixture.
+fn tool_runtime_dir(conversation_id: &str) -> std::path::PathBuf {
+    let serial = TOOL_RUNTIME_SERIAL.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "rustx-tool-runtime-{conversation_id}-{}-{serial}",
+        std::process::id()
+    ))
+}
+
 /// A conversation tool runtime over a unique temporary workspace.
 ///
-/// Fake tools never touch the workspace, so M3/M4 tests share one runtime
-/// per conversation id; native-tool tests use isolated temporary workspaces.
-/// The artifact root is a sibling of the workspace root, never nested
-/// inside it.
+/// Fake tools never touch the workspace, but the durable store now holds the
+/// full canonical Message Ledger, so every fixture gets its own storage roots
+/// (see [`tool_runtime_dir`]); native-tool tests use isolated temporary
+/// workspaces. The artifact root is a sibling of the workspace root, never
+/// nested inside it.
 #[must_use]
 pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::ConversationToolRuntime {
-    let dir = std::env::temp_dir().join(format!(
-        "rustx-tool-runtime-{conversation_id}-{}",
-        std::process::id()
-    ));
+    let dir = tool_runtime_dir(conversation_id);
     let _ = std::fs::create_dir_all(dir.join("workspace"));
     rustx::tools::runtime::ConversationToolRuntime::new(
         rustx::runtime::identity::ConversationId::new(conversation_id),
@@ -413,10 +430,7 @@ pub fn tool_runtime_with_mailbox(
     mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
 ) -> rustx::tools::runtime::ConversationToolRuntime {
     use rustx::tools::runtime::ConversationRuntimeConfig;
-    let dir = std::env::temp_dir().join(format!(
-        "rustx-tool-runtime-{conversation_id}-{}",
-        std::process::id()
-    ));
+    let dir = tool_runtime_dir(conversation_id);
     let _ = std::fs::create_dir_all(dir.join("workspace"));
     rustx::tools::runtime::ConversationToolRuntime::from_config(
         rustx::runtime::identity::ConversationId::new(conversation_id),

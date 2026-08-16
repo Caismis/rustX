@@ -93,10 +93,12 @@
 //! runtime inbound notification: a timestamped
 //! [`UserMessageBlock`] with
 //! [`UserSource::Runtime`] through the owning
-//! [`ConversationInboundMailbox`]. Registry notification state prevents
-//! duplicate publication. On publication failure the
-//! authoritative terminal registry state is retained and the failure is
-//! reported without rolling the execution back.
+//! [`ConversationInboundMailbox`]. The durable terminal inbound obtains
+//! ownership **before** the record becomes terminal (Issue #63, Finding 3):
+//! `finish` durably accepts the notification first and only then commits the
+//! terminal lifecycle. A durable acceptance failure keeps the record
+//! non-terminal and records the failure, so an observable terminal settlement
+//! always implies the terminal inbound already committed durably.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -345,10 +347,15 @@ pub struct BackgroundResources {
 }
 
 /// The per-execution publication state of the terminal inbound message.
+///
+/// The durable terminal inbound must obtain ownership **before** the record
+/// becomes terminal (Issue #63, Finding 3): `finish` durably accepts the
+/// terminal notification first and only then commits the terminal lifecycle
+/// with `Published`. A durable acceptance failure keeps the record
+/// non-terminal and records `Failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NotificationState {
     Pending,
-    Publishing,
     Published,
     Failed,
 }
@@ -814,6 +821,14 @@ impl ConversationBackgroundRegistry {
     /// A terminal transition may claim at most one runtime inbound
     /// publication; duplicate settlement calls are idempotent no-ops.
     ///
+    /// The durable terminal inbound commits **before** the terminal lifecycle
+    /// (Issue #63, Finding 3): the terminal candidate is computed first, the
+    /// notification is durably accepted, and only then is the record exposed
+    /// as terminal. A durable acceptance failure leaves the record
+    /// non-terminal and records the failure, so an observable terminal
+    /// settlement always implies the terminal inbound already committed
+    /// durably.
+    ///
     /// When cancellation intent already owns settlement (`Cancelling`), a
     /// later normal executor return cannot contradict the registry winner:
     /// the stored terminal result is canonicalized to `Cancelled` with the
@@ -825,12 +840,17 @@ impl ConversationBackgroundRegistry {
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
-        let notification = {
-            let record = &mut state.records[index];
+        // Issue #63 (Finding 3): compute the terminal candidate **without**
+        // committing the lifecycle, durably accept the terminal inbound
+        // notification, and only then commit the terminal lifecycle. The
+        // observable terminal settlement therefore implies the terminal
+        // inbound already obtained durable ownership.
+        let candidate = {
+            let record = &state.records[index];
             if record.lifecycle.is_terminal() {
                 return;
             }
-            let (settled, stored) = match record.lifecycle {
+            match record.lifecycle {
                 BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
                     match result.status {
                         ToolExecutionStatus::Success => {
@@ -864,26 +884,21 @@ impl ConversationBackgroundRegistry {
                 BackgroundLifecycle::Succeeded
                 | BackgroundLifecycle::Failed
                 | BackgroundLifecycle::Cancelled => return,
-            };
-            record.lifecycle = settled;
-            record.result = Some(stored.clone());
-            if record.notification != NotificationState::Pending {
-                Self::observe_record(&state, index);
-                return;
             }
-            record.notification = NotificationState::Publishing;
-            terminal_inbound_message(
-                execution_id,
-                &record.tool_name,
-                settled,
-                &stored.artifacts,
-                self.resources.clock.now(),
-            )
         };
+        let (settled, stored) = candidate;
+        let notification = terminal_inbound_message(
+            execution_id,
+            &state.records[index].tool_name,
+            settled,
+            &stored.artifacts,
+            self.resources.clock.now(),
+        );
         // The background terminal notification uses the same durable
         // acceptance owner as every other inbound producer (Issue #63), with
         // a deterministic producer correlation so a retry with the same
         // committed correlation can never publish a duplicate notification.
+        // Durable acceptance commits **before** the terminal lifecycle.
         let correlation = format!("background-terminal:{}", execution_id.as_str());
         match self
             .resources
@@ -891,12 +906,15 @@ impl ConversationBackgroundRegistry {
             .enqueue_correlated(notification, correlation)
         {
             Ok(_) => {
-                state.records[index].notification = NotificationState::Published;
+                let record = &mut state.records[index];
+                record.lifecycle = settled;
+                record.result = Some(stored);
+                record.notification = NotificationState::Published;
             }
             Err(_error) => {
-                // The authoritative terminal registry state is retained;
-                // the execution is never rolled back to active. The
-                // notification failure is recorded and reported.
+                // The terminal inbound did not obtain durable ownership, so
+                // the record must NOT become terminal. The active lifecycle
+                // is retained and the failure is recorded so it is observable.
                 state.records[index].notification = NotificationState::Failed;
             }
         }
@@ -1184,6 +1202,7 @@ mod tests {
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
         BackgroundResources, ConversationBackgroundRegistry,
     };
+    use crate::durable::inbox::InboundStore;
     use crate::events::RecordingEventSink;
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::inbound::ConversationInboundMailbox;
@@ -1244,6 +1263,52 @@ mod tests {
             _dir: dir,
             registry,
             mailbox,
+        }
+    }
+
+    /// A background registry over an explicit file-backed durable store, so a
+    /// test can inject acceptance faults and reopen the database.
+    struct FileRegistry {
+        _dir: tempfile::TempDir,
+        registry: ConversationBackgroundRegistry,
+        store: Arc<crate::durable::SqliteInboundStore>,
+        store_path: std::path::PathBuf,
+    }
+
+    impl FileRegistry {
+        fn store_path(&self) -> &std::path::Path {
+            &self.store_path
+        }
+    }
+
+    fn file_registry(conversation_id: &str) -> FileRegistry {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let conversation = ConversationId::new(conversation_id);
+        let store_path = artifacts.join("inbound.db");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::open(conversation.clone(), &store_path)
+                .expect("store"),
+        );
+        let mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let registry = ConversationBackgroundRegistry::new(
+            conversation.clone(),
+            BackgroundResources {
+                mailbox,
+                workspace: Workspace::new(&workspace_root).expect("workspace"),
+                artifacts: ArtifactStore::new(conversation, &artifacts).expect("artifacts"),
+                clock: Arc::new(crate::runtime::SystemClock),
+                event_sink: None,
+            },
+        );
+        FileRegistry {
+            _dir: dir,
+            registry,
+            store,
+            store_path,
         }
     }
 
@@ -1529,6 +1594,123 @@ mod tests {
                 .select_pending_batch()
                 .expect("select")
                 .is_none()
+        );
+    }
+
+    /// Issue #63 (Finding 3): a durable terminal inbound acceptance failure
+    /// must not leave a falsely completed terminal record — the record stays
+    /// non-terminal and no durable correlation/pending record exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_acceptance_failure_leaves_record_non_terminal_and_nothing_durable() {
+        let fixture = file_registry("conv-bg-fault");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+
+        // Inject a durable acceptance failure into the terminal notification.
+        fixture.store.arm_fail_next_accept_commit();
+        // Invoke the settlement boundary directly (the runner is gated
+        // before its own settlement).
+        fixture.registry.finish(&execution_id, &success());
+
+        // The record must not become falsely terminal, and nothing durable
+        // was committed.
+        let snapshot = fixture.registry.snapshot(&execution_id).expect("record");
+        assert_eq!(
+            snapshot.state,
+            BackgroundLifecycle::Running,
+            "the record must not become falsely terminal on acceptance failure"
+        );
+        assert!(
+            fixture.store.load_pending().expect("load").is_empty(),
+            "no durable pending record survives the failed acceptance"
+        );
+        assert!(
+            fixture.store.load_canonical().expect("load").is_empty(),
+            "no durable canonical record survives the failed acceptance"
+        );
+
+        // Release the gated runner: its own settlement retries and succeeds
+        // through the same correlation seam.
+        release.send_replace(true);
+        let terminal = fixture
+            .registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+    }
+
+    /// Issue #63 (Finding 3): successful terminal settlement implies the
+    /// terminal inbound already obtained durable ownership, and that durable
+    /// delivery survives a reopen (process restart).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn successful_terminal_settlement_implies_durable_inbound_ownership() {
+        let fixture = file_registry("conv-bg-durable");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+        release.send_replace(true);
+        let terminal = fixture
+            .registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .expect("terminal");
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        // The durable terminal inbound is owned before the terminal registry
+        // state: it is durably pending, awaiting safe-boundary adoption.
+        assert_eq!(
+            fixture.store.load_pending().expect("load").len(),
+            1,
+            "exactly one durable terminal delivery"
+        );
+        // A second connection over the same database file (the process
+        // restart boundary) observes the same durable delivery.
+        let reopened = crate::durable::SqliteInboundStore::open(
+            ConversationId::new("conv-bg-durable"),
+            fixture.store_path(),
+        )
+        .expect("reopen");
+        assert_eq!(
+            reopened.load_pending().expect("load").len(),
+            1,
+            "the durable terminal delivery survives restart"
         );
     }
 

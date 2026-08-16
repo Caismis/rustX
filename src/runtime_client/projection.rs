@@ -391,6 +391,12 @@ impl RuntimeClientProjection {
                 self.snapshot.shutting_down = true;
                 vec![RuntimeClientEvent::RuntimeShutdown]
             }
+            ConversationObservation::DurableFailure { .. } => {
+                // The durable-authority failure is a runtime-internal fact;
+                // it is surfaced through the observation stream (and recorded
+                // in the coordinator state) but has no client-facing event.
+                Vec::new()
+            }
         }
     }
 
