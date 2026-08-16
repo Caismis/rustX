@@ -1091,10 +1091,13 @@ fn containment_signal(
     let _ = write_frame(upstream, MSG_SIGNAL_ATTEMPT, &payload);
     match contain_group(pgid) {
         crate::runtime::supervised_unit::ContainmentOutcome::Failed(error) => Err(error),
-        // `Contained` and, on macOS, `NothingLive` both proceed: terminality
-        // is decided by the group-scoped gate plus the macOS absence probe,
-        // never by this signal's result alone.
-        _ => Ok(()),
+        // `Contained` (live member signaled, or the group is already gone)
+        // and, on macOS, `NothingLive` (only zombies remain) both proceed:
+        // the group-scoped gate and the macOS absence probe — never this
+        // signal's result alone — decide terminality.
+        crate::runtime::supervised_unit::ContainmentOutcome::Contained => Ok(()),
+        #[cfg(target_os = "macos")]
+        crate::runtime::supervised_unit::ContainmentOutcome::NothingLive => Ok(()),
     }
 }
 

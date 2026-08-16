@@ -110,6 +110,7 @@ pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
 
 /// The bounded macOS window in which the group-absence probe must reach
 /// `ESRCH` after the fallback containment signal.
+#[cfg(target_os = "macos")]
 pub(crate) const GROUP_ABSENCE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The deadline after which a missing terminal-ack frame is ignored (the

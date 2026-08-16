@@ -658,7 +658,9 @@ fn containment_signal(stream: &mut ControlStream, pgid: i32) -> Result<(), Strin
         // and, on macOS, `NothingLive` (only zombies remain) both proceed:
         // the group-scoped gate and the macOS absence probe — never this
         // signal's result alone — decide terminality.
-        _ => Ok(()),
+        crate::runtime::supervised_unit::ContainmentOutcome::Contained => Ok(()),
+        #[cfg(target_os = "macos")]
+        crate::runtime::supervised_unit::ContainmentOutcome::NothingLive => Ok(()),
     }
 }
 
@@ -1490,6 +1492,7 @@ mod anchor_reaping_tests {
     /// `MSG_ALL_CHILDREN_REAPED` terminal frame while the owned group may
     /// still be live.
     #[test]
+    #[allow(clippy::too_many_lines)] // one coherent deterministic fixture
     fn failed_containment_signal_never_reports_terminal() {
         let dir = tempfile::tempdir().expect("temp dir");
         let barrier_dir = dir.path().join("barrier");
