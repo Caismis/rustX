@@ -311,3 +311,210 @@ describe("real rustx child integration", { skip: SKIP }, () => {
     await assert.rejects(session.modelGet());
   });
 });
+
+// ---------------------------------------------------------------------------
+// Repeated compaction over the real stdio transport (Issue #27)
+// ---------------------------------------------------------------------------
+
+const COMPACTION_SESSION_JSON = JSON.stringify({
+  conversationId: "conv-tui-compaction",
+  agentId: "agent-tui-compaction",
+  model: { model: "fixture/integration-model" },
+  context: { reserveTokens: 8_192, keepRecentTokens: 256 },
+});
+
+const TUI_TURN_ONE = "tui compaction: turn one";
+const TUI_TURN_TWO = "tui compaction: turn two";
+const TUI_TURN_THREE = "tui compaction: turn three";
+const FILLER_ONE_MARKER = "tui-compaction-filler-one-marker-39c1";
+const FILLER_TWO_MARKER = "tui-compaction-filler-two-marker-84e2";
+const SUMMARY_ONE_TEXT =
+  "tui summary one: the assistant produced filler report one.";
+const SUMMARY_TWO_TEXT =
+  "tui summary two: the assistant produced filler report two.";
+
+/**
+ * Awaits one exact condition with a wall-clock deadlock bound.
+ *
+ * The compaction turns stream ~200 KB through two hops (emulator -> child ->
+ * client), which the event-loop-only `until` exhausts before; the condition
+ * itself stays the exact ordering signal and the deadline only fails a
+ * genuine stall.
+ */
+async function awaitCondition(
+  condition: () => boolean,
+  what: string,
+): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error(`${what} never became true`);
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
+
+/**
+ * The small-window catalog of the compaction leg: a 56k-token window with an
+ * 8k reserve crosses the soft input limit on the emulator's scripted ~200 KB
+ * fillers by construction — the same sizing the Rust conformance suite uses.
+ */
+function compactionModelsJson(baseUrl: string): string {
+  return JSON.stringify({
+    providers: {
+      fixture: {
+        baseUrl,
+        apiKey: `$${CREDENTIAL_VARIABLE}`,
+        models: [
+          {
+            id: "integration-model",
+            protocol: "openai_chat_completions",
+            contextWindow: 56_000,
+            maxOutputTokens: 1024,
+            capabilities: {
+              inputModalities: ["text"],
+              outputModalities: ["text"],
+              toolCalls: true,
+              reasoning: false,
+            },
+            compat: { chatReasoningReplay: "omit" },
+          },
+        ],
+      },
+    },
+  });
+}
+
+describe("real rustx child repeated compaction", { skip: SKIP }, () => {
+  let harness: Harness | undefined;
+
+  before(async () => {
+    const provider = await ProviderEmulator.start("tui_compaction");
+    const root = mkdtempSync(join(tmpdir(), "rustx-tui-compaction-"));
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(
+      join(root, "models.json"),
+      compactionModelsJson(provider.url("/v1")),
+    );
+    writeFileSync(join(root, "session.json"), COMPACTION_SESSION_JSON);
+
+    const child = ChildRuntimeProcess.spawn({
+      binary: BINARY,
+      paths: {
+        models: join(root, "models.json"),
+        session: join(root, "session.json"),
+        workspace,
+        runtimeRoot: join(root, "private"),
+      },
+      env: { ...process.env, [CREDENTIAL_VARIABLE]: CREDENTIAL_VALUE },
+    });
+
+    const connection = new RuntimeClientConnection({
+      input: child.stdout,
+      output: child.stdin,
+    });
+    void child
+      .wait()
+      .then((exit) =>
+        connection.reportProcessExit(exit.code, exit.signal, exit.spawnError),
+      );
+
+    const session = new RuntimeClientSession({ connection });
+    harness = { child, connection, session, provider };
+  });
+
+  after(async () => {
+    if (harness === undefined) {
+      return;
+    }
+    harness.child.closeStdin();
+    await harness.child.waitOrTerminate(10_000);
+    await harness.provider.finish();
+  });
+
+  it("commits two compactions across three turns, observed over real stdio", async () => {
+    assert.ok(harness);
+    const { session, provider } = harness;
+    // The settled-phase signal alone is ambiguous across turns (a settled
+    // attempt keeps reporting "settled" until the next attempt starts), so
+    // per-turn settlement is observed through the committed assistant count.
+    const committedAssistants = () =>
+      (session.state?.transcript ?? []).filter(
+        (entry) =>
+          entry.kind === "committed" && entry.message.role === "assistant",
+      ).length;
+
+    await session.attach();
+    assert.equal(session.state?.context.compaction_count, 0);
+
+    await session.submitInbound([{ type: "text", text: TUI_TURN_ONE }]);
+    await awaitCondition(() => committedAssistants() === 1, "turn one committed");
+    assert.equal(
+      session.state?.context.compaction_count,
+      0,
+      "the filling turn never compacts",
+    );
+
+    await session.submitInbound([{ type: "text", text: TUI_TURN_TWO }]);
+    await awaitCondition(
+      () => (session.state?.context.compaction_count ?? 0) >= 1,
+      "compaction #1 committed",
+    );
+    await awaitCondition(() => committedAssistants() === 2, "turn two committed");
+    assert.equal(session.state?.context.compaction_count, 1);
+    assert.equal(session.state?.context.latest_compaction?.generation, 1);
+
+    await session.submitInbound([{ type: "text", text: TUI_TURN_THREE }]);
+    await awaitCondition(
+      () => (session.state?.context.compaction_count ?? 0) >= 2,
+      "compaction #2 committed",
+    );
+    await awaitCondition(() => committedAssistants() === 3, "turn three committed");
+    assert.equal(session.state?.context.compaction_count, 2);
+    assert.equal(session.state?.context.latest_compaction?.generation, 2);
+
+    // The recorded wire: five requests; retired bytes never returned to the
+    // provider, and the second summary's span is the already-compacted
+    // surface.
+    const requests = await provider.requests();
+    assert.equal(requests.length, 5);
+    const bodies = requests.map((request) => JSON.stringify(request.body));
+    assert.ok(bodies[0]?.includes(TUI_TURN_ONE));
+    assert.ok(
+      bodies[1]?.includes(FILLER_ONE_MARKER) &&
+        !bodies[1]?.includes(FILLER_TWO_MARKER),
+    );
+    assert.ok(
+      bodies[2]?.includes(SUMMARY_ONE_TEXT) &&
+        bodies[2]?.includes(TUI_TURN_TWO) &&
+        !bodies[2]?.includes(FILLER_ONE_MARKER),
+      "the first rewritten surface reached the provider",
+    );
+    assert.ok(
+      bodies[3]?.includes(SUMMARY_ONE_TEXT) &&
+        bodies[3]?.includes(FILLER_TWO_MARKER) &&
+        !bodies[3]?.includes(FILLER_ONE_MARKER),
+      "the second compaction's span is the already-compacted surface",
+    );
+    assert.ok(
+      bodies[4]?.includes(SUMMARY_TWO_TEXT) &&
+        bodies[4]?.includes(TUI_TURN_THREE) &&
+        !bodies[4]?.includes(FILLER_ONE_MARKER) &&
+        !bodies[4]?.includes(FILLER_TWO_MARKER) &&
+        !bodies[4]?.includes(SUMMARY_ONE_TEXT),
+      "the second rewritten surface carries exactly the second summary",
+    );
+
+    // The projection carries the continuous truth: both canonical summaries
+    // and both retired fillers remain visible as committed history.
+    const transcript = JSON.stringify(session.state?.transcript ?? []);
+    assert.ok(transcript.includes(SUMMARY_ONE_TEXT));
+    assert.ok(transcript.includes(SUMMARY_TWO_TEXT));
+    assert.ok(
+      transcript.includes(FILLER_ONE_MARKER),
+      "the retired filler stays a committed transcript fact",
+    );
+    assert.ok(transcript.includes(FILLER_TWO_MARKER));
+  });
+});

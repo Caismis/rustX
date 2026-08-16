@@ -76,6 +76,12 @@ const SKILL_BODY_MARKER: &str = "skill-body-marker-a17c";
 const COMPACTION_MARKER: &str = "compaction-filler-marker-93be";
 const SUMMARY_TEXT: &str = "conformance summary: the assistant produced one long report.";
 
+const TURN_THREE: &str = "conformance: turn three";
+const FILLER_ONE_MARKER: &str = "compaction-filler-one-marker-51f0";
+const FILLER_TWO_MARKER: &str = "compaction-filler-two-marker-b27d";
+const SUMMARY_ONE_TEXT: &str = "conformance summary one: the assistant produced filler report one.";
+const SUMMARY_TWO_TEXT: &str = "conformance summary two: the assistant produced filler report two.";
+
 /// The compaction window and reserve.
 ///
 /// The emulator's scripted turn-one reply is ~200 KB, which the frozen
@@ -827,6 +833,226 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
         );
         emulator.finish().await;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario F2 — repeated compaction through the real provider boundary
+// ---------------------------------------------------------------------------
+
+/// Two committed compactions through the real provider boundary, on both
+/// summary-model policies (Issue #27).
+///
+/// Where Scenario F proves one compaction, this scenario proves the
+/// composition: the second compaction operates on the already-compacted
+/// surface, its summary input retires the still-active first summary, and
+/// retired bytes never reach the provider again — asserted externally on the
+/// recorded wire bodies and internally on the canonical ledger, the frozen
+/// request snapshots, and their historical reconstructions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// The composed compaction proof is one scenario observed end to end; keeping
+// it together preserves the request ordering that is the whole point.
+#[allow(clippy::too_many_lines)]
+async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies() {
+    for (scenario, summary_model, expected_summary_model) in [
+        ("compaction_twice_session_summary", None, CHAT_MODEL),
+        (
+            "compaction_twice_explicit_summary",
+            Some(format!("emulator/{SUMMARY_MODEL}")),
+            SUMMARY_MODEL,
+        ),
+    ] {
+        let Some(emulator) = ProviderEmulator::start(scenario).await else {
+            return;
+        };
+        let setup = Setup {
+            context_window: COMPACTION_CONTEXT_WINDOW,
+            reserve_tokens: COMPACTION_RESERVE_TOKENS,
+            keep_recent_tokens: 256,
+            summary_model,
+            ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+        };
+        let driver = Driver::start(&emulator, &setup).await;
+
+        driver.submit(TURN_ONE);
+        let (_, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{scenario}: the filling turn completes: {outcome:?}"
+        );
+
+        driver.submit(TURN_TWO);
+        let (events_two, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{scenario}: {outcome:?}"
+        );
+        assert!(
+            events_two
+                .iter()
+                .any(|event| matches!(event, RuntimeClientEvent::ContextCompacted { .. })),
+            "{scenario}: compaction #1 committed: {events_two:?}"
+        );
+
+        driver.submit(TURN_THREE);
+        let (events_three, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{scenario}: {outcome:?}"
+        );
+
+        // Exactly two committed compactions, in generation order.
+        let generations: Vec<u64> = events_two
+            .iter()
+            .chain(&events_three)
+            .filter_map(|event| match event {
+                RuntimeClientEvent::ContextCompacted { context, .. } => context
+                    .latest_compaction
+                    .as_ref()
+                    .map(|view| view.generation),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            generations,
+            [1, 2],
+            "{scenario}: two compaction generations in order"
+        );
+
+        let (snapshot, _) = driver.host().snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.context.compaction_count, 2,
+            "{scenario}: exactly two compactions"
+        );
+        assert_eq!(
+            snapshot
+                .context
+                .latest_compaction
+                .as_ref()
+                .expect("the committed compaction metadata")
+                .generation,
+            2
+        );
+
+        // Both summaries are canonical ledger facts; both retired fillers
+        // remain committed ledger bytes.
+        let summaries: Vec<_> = snapshot
+            .messages
+            .iter()
+            .filter(|message| {
+                matches!(
+                    message,
+                    MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
+                )
+            })
+            .collect();
+        assert_eq!(
+            summaries.len(),
+            2,
+            "{scenario}: two canonical compaction summaries"
+        );
+        let ledger = serde_json::to_string(&snapshot.messages).expect("serialize the ledger");
+        assert!(
+            ledger.contains(FILLER_ONE_MARKER) && ledger.contains(FILLER_TWO_MARKER),
+            "{scenario}: the ledger retains both retired fillers verbatim"
+        );
+        assert!(ledger.contains(SUMMARY_ONE_TEXT) && ledger.contains(SUMMARY_TWO_TEXT));
+
+        // The wire: five requests, each exactly what the scenario asserts.
+        let requests = emulator.requests().await;
+        assert_eq!(
+            requests.len(),
+            5,
+            "{scenario}: three turns plus two summaries"
+        );
+        assert_eq!(
+            requests[1]["model"],
+            serde_json::json!(expected_summary_model),
+            "{scenario}: summary #1 used the configured summary model"
+        );
+        assert_eq!(
+            requests[3]["model"],
+            serde_json::json!(expected_summary_model),
+            "{scenario}: summary #2 used the configured summary model"
+        );
+        let bodies: Vec<String> = requests.iter().map(body_text).collect();
+        assert!(bodies[0].contains(TURN_ONE));
+        assert!(bodies[1].contains(FILLER_ONE_MARKER) && !bodies[1].contains(FILLER_TWO_MARKER));
+        assert!(
+            bodies[2].contains(SUMMARY_ONE_TEXT)
+                && bodies[2].contains(TURN_TWO)
+                && !bodies[2].contains(FILLER_ONE_MARKER),
+            "{scenario}: the first rewritten surface replaced the retired history"
+        );
+        assert!(
+            bodies[3].contains(SUMMARY_ONE_TEXT)
+                && bodies[3].contains(FILLER_TWO_MARKER)
+                && !bodies[3].contains(FILLER_ONE_MARKER),
+            "{scenario}: the second compaction's span is the already-compacted surface"
+        );
+        assert!(
+            bodies[4].contains(SUMMARY_TWO_TEXT)
+                && bodies[4].contains(TURN_THREE)
+                && !bodies[4].contains(FILLER_ONE_MARKER)
+                && !bodies[4].contains(FILLER_TWO_MARKER)
+                && !bodies[4].contains(SUMMARY_ONE_TEXT),
+            "{scenario}: the second rewritten surface carries exactly the second summary"
+        );
+
+        // The frozen request snapshots reconstruct the three primary
+        // requests through the real provider path, after both compactions.
+        await_history_len(&driver, 3).await;
+        let history = driver.host().request_history();
+        let snapshots = history.snapshots();
+        assert_eq!(
+            snapshots.len(),
+            3,
+            "{scenario}: three frozen primary requests"
+        );
+        let reconstructed: Vec<String> = snapshots
+            .iter()
+            .map(|snapshot| {
+                let request = driver
+                    .host()
+                    .reconstruct_request(&snapshot.identity)
+                    .expect("settled historical request reconstructs");
+                serde_json::to_string(&request.messages).expect("serialize reconstructed messages")
+            })
+            .collect();
+        assert!(
+            reconstructed[0].contains(TURN_ONE) && !reconstructed[0].contains(FILLER_ONE_MARKER),
+            "{scenario}: R1 reconstructs the pre-filler surface (the filler is its response)"
+        );
+        assert!(
+            reconstructed[1].contains(SUMMARY_ONE_TEXT)
+                && reconstructed[1].contains(TURN_TWO)
+                && !reconstructed[1].contains(FILLER_ONE_MARKER),
+            "{scenario}: R2 reconstructs the first rewritten surface"
+        );
+        assert!(
+            reconstructed[2].contains(SUMMARY_TWO_TEXT)
+                && reconstructed[2].contains(TURN_THREE)
+                && !reconstructed[2].contains(FILLER_ONE_MARKER)
+                && !reconstructed[2].contains(SUMMARY_ONE_TEXT),
+            "{scenario}: R3 reconstructs the second rewritten surface"
+        );
+
+        emulator.finish().await;
+    }
+}
+
+/// Waits for the post-settlement transfer of frozen request facts to the
+/// runtime-owned append-only history.
+async fn await_history_len(driver: &Driver, expected: usize) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if driver.host().request_history().snapshots().len() == expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("request history transfer must settle");
 }
 
 // ---------------------------------------------------------------------------

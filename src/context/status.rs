@@ -313,9 +313,11 @@ struct RegisteredStatusProvider {
 /// The composer samples its clock exactly once per `compose` invocation:
 /// one request preparation composes one status snapshot, and the composed
 /// `AgentStatus` is then rendered once and reused throughout that
-/// preparation's compaction planning and application. A new provider
-/// invocation (a `ContextWindowExceeded` compact-and-retry) begins a new
-/// request preparation and composes a fresh snapshot.
+/// preparation's compaction planning and application. An overflow
+/// compact-and-retry (`ContextWindowExceeded`) never begins a new request
+/// preparation and never recomposes status: the retry reuses the one
+/// admitted context generation, and the already-committed status fact stays
+/// canonical.
 pub struct AgentStatusComposer {
     clock: Arc<dyn AgentStatusClock>,
     providers: Vec<RegisteredStatusProvider>,
