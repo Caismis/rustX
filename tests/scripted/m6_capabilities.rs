@@ -1274,7 +1274,8 @@ async fn background_execution_retains_its_dispatching_environment() {
         .expect("prepare");
     let outcome = conversation
         .background
-        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new());
+        .commit_dispatch(prepared, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
         panic!("accepted");
     };
@@ -1343,7 +1344,8 @@ async fn background_execution_retains_its_dispatching_environment() {
         .expect("prepare");
     let outcome2 = conversation
         .background
-        .commit_dispatch(prepared2, &rustx::runtime::CancellationSignal::new());
+        .commit_dispatch(prepared2, &rustx::runtime::CancellationSignal::new())
+        .expect("dispatch commits");
     let BackgroundDispatchOutcome::Accepted {
         execution_id: id2, ..
     } = outcome2

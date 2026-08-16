@@ -42,7 +42,7 @@ rustx --models /path/to/models.json \
       --runtime-root /path/to/private-runtime
 ```
 
-stdout carries protocol records only; every diagnostic goes to stderr, and a startup configuration failure exits non-zero having written zero bytes to stdout. A client owns the child-process lifecycle and nothing else — the process itself owns the session model, tool runtime, capability coordinator, context policy, and Runtime Client host.
+stdout carries protocol records only; every diagnostic goes to stderr, and a startup configuration failure exits non-zero having written zero bytes to stdout. A client owns the child-process lifecycle and nothing else — the process itself owns the session model, tool runtime, capability coordinator, context policy, and the conversation runtime coordinator, with the Runtime Client host as its projection/control adapter.
 
 For a complete copyable model/session/Python-tool configuration, see
 [`examples/local-runtime/README.md`](examples/local-runtime/README.md).

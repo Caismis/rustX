@@ -11,6 +11,7 @@ use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationErr
 use crate::capabilities::snapshot::CapabilitySnapshot;
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
 use crate::runtime::process_runner::RunnerBackedProcessRunner;
+use crate::runtime::types::ConversationLifecycle;
 use crate::skills::environments::{
     EnvironmentStore, RunnerBackedSkillEnvironmentBackend, SkillEnvironmentBackend,
 };
@@ -48,6 +49,18 @@ struct CoordinatorState {
     active_attempts: u64,
     /// The next environment staging sequence (never enters any digest).
     _next_staging: AtomicU64,
+    /// The shared activation lifecycle of the claiming conversation
+    /// runtime (Issue #61).
+    ///
+    /// Set by [`CapabilityCoordinator::claim_conversation_runtime`] and
+    /// read by `commit`, both under this state lock — so it can never
+    /// disagree with the `coordinator_claimed` atomic. This is **not**
+    /// another activation authority: the capability keeps no activation
+    /// state of its own, and active/inactive is answered by the lifecycle
+    /// itself, the same handle the mailbox, the background registry, and
+    /// the coordinator observe. `None` = standalone/unclaimed, which
+    /// commits unconditionally.
+    conversation_lifecycle: Option<ConversationLifecycle>,
 }
 
 /// The conversation/capability-owner coordination state.
@@ -76,6 +89,9 @@ struct CoordinatorInner {
     /// `ConversationToolRuntime` binding this is claimed once and never
     /// released, and every clone shares it.
     runtime_client_bound: AtomicBool,
+    /// Claimed by the one conversation runtime coordinator of this
+    /// identity.
+    coordinator_claimed: AtomicBool,
     /// Test-only commit-boundary synchronization hook.
     #[cfg(test)]
     commit_hook: Mutex<Option<Arc<test_sync::CommitBoundaryHook>>>,
@@ -246,10 +262,12 @@ impl CapabilityCoordinator {
                     snapshot: initial_snapshot,
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
+                    conversation_lifecycle: None,
                 }),
                 condvar: Condvar::new(),
                 observer: Mutex::new(None),
                 runtime_client_bound: AtomicBool::new(false),
+                coordinator_claimed: AtomicBool::new(false),
                 #[cfg(test)]
                 commit_hook: Mutex::new(None),
             }),
@@ -268,11 +286,63 @@ impl CapabilityCoordinator {
             .is_ok()
     }
 
+    /// Releases a Runtime Client binding claimed by a host construction
+    /// that then failed.
+    ///
+    /// This exists only so a rejected `RuntimeClientHost::new` (whose
+    /// observation bridge install failed after the claim) leaves no trace;
+    /// it is never called on host drop, and a successfully constructed
+    /// host never releases its binding.
+    pub(crate) fn release_runtime_client_claim(&self) {
+        self.inner
+            .runtime_client_bound
+            .store(false, Ordering::Release);
+    }
+
     /// Whether this coordinator identity is already bound to a Runtime
     /// Client host.
     #[must_use]
     pub fn is_runtime_client_bound(&self) -> bool {
         self.inner.runtime_client_bound.load(Ordering::Acquire)
+    }
+
+    /// Claims the one-time conversation-runtime-coordinator binding of this
+    /// coordinator identity, together with the claiming runtime's shared
+    /// activation lifecycle.
+    ///
+    /// Returns `true` for the one claim that wins and `false` for every
+    /// later claim on any clone. Never reset by dropping the bound
+    /// coordinator.
+    ///
+    /// The claim and the lifecycle attachment share the capability state
+    /// lock — the same boundary `commit` reads them under — so a
+    /// runtime-owned `commit` can never observe a claimed coordinator
+    /// without its lifecycle. A standalone (unclaimed) coordinator keeps no
+    /// lifecycle and commits unconditionally.
+    pub(crate) fn claim_conversation_runtime(&self, lifecycle: &ConversationLifecycle) -> bool {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
+        if self
+            .inner
+            .coordinator_claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        state.conversation_lifecycle = Some(lifecycle.clone());
+        drop(state);
+        true
+    }
+
+    /// Whether this coordinator identity is already bound to a conversation
+    /// runtime coordinator.
+    #[must_use]
+    pub fn is_conversation_runtime_bound(&self) -> bool {
+        self.inner.coordinator_claimed.load(Ordering::Acquire)
     }
 
     /// The current active capability snapshot.
@@ -447,6 +517,21 @@ impl CapabilityCoordinator {
     /// rejected as stale; an identical candidate is a no-op that returns
     /// the current snapshot without fabricating a new revision.
     ///
+    /// # Lifecycle (Issue #61)
+    ///
+    /// Once a `ConversationRuntime` owns this coordinator, live capability
+    /// mutation follows the runtime lifecycle: a commit while the owning
+    /// runtime is inactive is refused with
+    /// [`CapabilityCommitError::ConversationInactive`] and changes nothing.
+    /// The startup commit performed *before* the conversation runtime is
+    /// constructed (the coordinator is unclaimed then) remains allowed, and
+    /// after `ConversationRuntime::activate` commits follow the normal
+    /// quiescence rules. The gate is observed under this same
+    /// synchronization boundary, so a commit linearizes cleanly against
+    /// activation: a commit that observes the pre-activation state is
+    /// refused, one that observes the post-activation state is a real
+    /// post-activation transition.
+    ///
     /// # MCP invalidation linearization
     ///
     /// The final epoch validation and the snapshot swap happen under the
@@ -471,9 +556,11 @@ impl CapabilityCoordinator {
     ///
     /// # Errors
     ///
-    /// Returns [`CapabilityCommitError::Busy`] while an attempt lease is
-    /// active and [`CapabilityCommitError::StaleCandidate`] for an obsolete
-    /// base revision.
+    /// Returns [`CapabilityCommitError::ConversationInactive`] while the
+    /// owning conversation runtime is inactive,
+    /// [`CapabilityCommitError::Busy`] while an attempt lease is active and
+    /// [`CapabilityCommitError::StaleCandidate`] for an obsolete base
+    /// revision.
     ///
     /// # Panics
     ///
@@ -499,6 +586,20 @@ impl CapabilityCoordinator {
             .clone()
         {
             hook.enter();
+        }
+        // The runtime-owned activation gate: observed under this same
+        // boundary, so the commit linearizes cleanly against the shared
+        // lifecycle transition (`ConversationLifecycle::activate`). The
+        // capability stores no activation state of its own — the lifecycle
+        // handle attached by the claim *is* the runtime ownership, and
+        // active/inactive is answered by the lifecycle itself, the same
+        // authority the mailbox, the background registry, and the
+        // coordinator observe. An unclaimed (standalone) coordinator
+        // commits unconditionally.
+        if let Some(lifecycle) = &state.conversation_lifecycle
+            && !lifecycle.is_active()
+        {
+            return Err(CapabilityCommitError::ConversationInactive);
         }
         if candidate.base_revision != state.revision {
             return Err(CapabilityCommitError::StaleCandidate {
@@ -601,25 +702,36 @@ impl CapabilityCoordinator {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 
-    /// Installs the read-only state observer of the coordinator.
+    /// Installs the observer and captures the active snapshot as one
+    /// atomic coordinator section.
     ///
-    /// The observer fires at every actual capability activation while the
-    /// coordinator synchronization boundary is held. Installation is owned
-    /// by the Runtime Client boundary (Issue #37); exactly one observer is
-    /// expected, and a later installation replaces an earlier one.
-    ///
-    /// Installation is crate-private: it is a runtime coordination seam,
-    /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` is what guarantees a single
-    /// installation, so no external caller can replace the Runtime Client
-    /// observer.
+    /// This is the capability half of the Issue #61 adapter bootstrap
+    /// handshake: installation and the snapshot capture share the one
+    /// capability state synchronization boundary (the same section a
+    /// commit holds while firing the observer), so an activation either
+    /// linearizes before the section (its snapshot is the returned seed
+    /// and no observation was fired — the observer did not exist yet) or
+    /// after it (the installed observer fires it into the bridge queue).
+    /// No activation can be lost between the seed and the live
+    /// observation stream and none can be applied twice.
     ///
     /// # Panics
     ///
-    /// Panics only if the observer lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
-    pub(crate) fn install_observer(&self, observer: Arc<dyn CapabilityObserver>) {
+    /// Panics only if the capability state lock or the observer lock is
+    /// poisoned.
+    pub(crate) fn install_observer_and_snapshot(
+        &self,
+        observer: Arc<dyn CapabilityObserver>,
+    ) -> Arc<CapabilitySnapshot> {
+        // Lock order: capability state lock -> observer lock, the same
+        // order `commit` uses when it fires the observer.
+        let state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
         *self.inner.observer.lock().expect("observer lock") = Some(observer);
+        state.snapshot.clone()
     }
 
     /// The shared MCP invalidation state (test observability). Only

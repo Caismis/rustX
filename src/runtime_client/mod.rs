@@ -4,7 +4,7 @@
 //! # Architecture
 //!
 //! ```text
-//! canonical runtime state / internal RuntimeEvent
+//! ConversationRuntime semantic facts/observations (Issue #61)
 //!                 |
 //!                 v
 //!  deterministic Runtime Client projection
@@ -21,6 +21,14 @@
 //! > All authoritative execution and conversation state originates from
 //! > rustX Runtime. External clients observe projections of that state;
 //! > they never become a second authority.
+//!
+//! Issue #61 extracted the conversation runtime coordinator
+//! ([`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime))
+//! from this boundary: the coordinator owns conversation/session/admission
+//! authority, and [`RuntimeClientHost`](host::RuntimeClientHost) is the
+//! projection + control + attachment adapter over it. A conversation runs
+//! the exact same admission/execution path with zero Runtime Client
+//! attachments.
 //!
 //! The internal [`RuntimeEvent`](crate::events::types::RuntimeEvent)
 //! vocabulary is an execution-fact vocabulary, **not** the wire contract.
@@ -39,9 +47,12 @@
 //!   semantic protocol entry point: it dispatches every v1 request,
 //!   `initialize` included, so a transport stays a framing adapter and
 //!   never owns negotiation or attachment admission.
-//! - [`RuntimeClientHost`](host::RuntimeClientHost) coordinates
-//!   admission and the current-attempt handle; `AgentExecution` remains
-//!   the attempt settlement authority.
+//! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
+//!   control + attachment adapter over the conversation runtime: it owns
+//!   the projection (snapshot read model, cursor allocation, bounded
+//!   replay, subscribers), the one-active-attachment v1 policy, and
+//!   protocol adaptation. `AgentExecution` remains the attempt settlement
+//!   authority and the conversation runtime remains the admission owner.
 //! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
 //!   the one linearization owner of the externally visible read model,
 //!   cursor allocation, event publication, bounded replay, and
@@ -74,7 +85,6 @@ pub mod endpoint;
 pub mod event;
 pub mod host;
 pub mod projection;
-pub mod request_history;
 pub mod snapshot;
 pub mod transport;
 pub mod types;
@@ -86,10 +96,13 @@ pub use attachment::RuntimeAttachment;
 pub use endpoint::RuntimeClientEndpoint;
 pub use event::{RuntimeClientAttemptFailure, RuntimeClientEvent, RuntimeClientOutcome};
 pub use host::{
-    EventDelivery, EventSubscription, HostConstructionError, RuntimeClientContextConfig,
-    RuntimeClientHost, RuntimeClientHostConfig,
+    EventDelivery, EventSubscription, HostConstructionError, RuntimeClientHost,
+    RuntimeClientHostConfig,
 };
-pub use request_history::{RequestHistory, RequestHistoryError};
+// `RequestHistory` is runtime-owned semantic state (Issue #61); the Runtime
+// Client boundary re-exports it because the host serves it to clients, but
+// the type never lives under the projection read model.
+pub use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 pub use snapshot::{
     AgentStatusView, CapabilityView, ForegroundToolExecution, ForegroundToolState,
     InFlightAssistantMessage, InFlightBlock, InboundDiagnostics, InboundDrainView, InboundItemView,

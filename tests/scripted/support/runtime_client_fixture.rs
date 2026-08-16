@@ -2,10 +2,11 @@
 //!
 //! Every Runtime Client integration test needs the same construction: a
 //! scripted model, a tool registry, a committed capability coordinator over
-//! a temporary workspace, a context engine, and the host itself. That
-//! construction was duplicated per test file; it lives here once so the
-//! Issue #37 semantic tests and the Issue #38 transport-independent
-//! conformance scenarios build identical runtimes.
+//! a temporary workspace, a context engine, the conversation runtime
+//! coordinator, and the Runtime Client host adapter. That construction was
+//! duplicated per test file; it lives here once so the Issue #37 semantic
+//! tests and the Issue #38 transport-independent conformance scenarios
+//! build identical runtimes.
 //!
 //! This module is fixture construction only. It knows nothing about
 //! transports, drivers, or scenarios.
@@ -19,10 +20,11 @@ use rustx::context::{
 };
 use rustx::message::types::MessageBlock;
 use rustx::model::session::SessionModelState;
-use rustx::runtime::identity::{AgentId, ConversationId};
-use rustx::runtime_client::{
-    RuntimeClientContextConfig, RuntimeClientHost, RuntimeClientHostConfig,
+use rustx::runtime::conversation_runtime::{
+    ConversationContextConfig, ConversationRuntime, RuntimeConversationConfig,
 };
+use rustx::runtime::identity::{AgentId, ConversationId};
+use rustx::runtime_client::{RuntimeClientHost, RuntimeClientHostConfig};
 use rustx::tools::executor::ToolRegistry;
 
 use super::fake::{FakeModel, FakeStep};
@@ -33,8 +35,10 @@ type WorkspaceFixture = Box<dyn FnOnce(&Path)>;
 /// One Runtime Client runtime under test, plus the deterministic handles a
 /// test drives it with.
 pub struct RuntimeClientFixture {
-    /// The runtime under test.
+    /// The runtime under test (the Runtime Client host adapter).
     pub host: RuntimeClientHost,
+    /// The conversation runtime coordinator under the adapter.
+    pub runtime: ConversationRuntime,
     /// The scripted model driving attempts.
     pub model: Arc<FakeModel>,
     /// The workspace backing the tool runtime and capability coordinator.
@@ -242,11 +246,13 @@ impl RuntimeClientFixtureBuilder {
         let session_model = self
             .session_model
             .unwrap_or_else(|| scripted_session_model(adapter));
-        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+        // The conversation runtime coordinator owns the semantic state; the
+        // Runtime Client host is the projection/control adapter over it.
+        let runtime = ConversationRuntime::new(RuntimeConversationConfig {
             agent_id: AgentId::new("agent-a"),
             model: session_model,
             timezone: None,
-            context: RuntimeClientContextConfig {
+            context: ConversationContextConfig {
                 policy: self.context_policy,
                 estimator,
                 status_composer: self.composer,
@@ -255,11 +261,19 @@ impl RuntimeClientFixtureBuilder {
             capability: coordinator,
             clock: None,
             initial_messages: self.initial_messages,
+        })
+        .expect("conversation runtime");
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
             replay_limit: self.replay_limit,
         })
         .expect("runtime client host");
+        // The explicit Issue #61 lifecycle boundary: the host bound over
+        // the inert runtime, so semantic execution may begin now.
+        runtime.activate();
         RuntimeClientFixture {
             host,
+            runtime,
             model,
             workspace,
         }

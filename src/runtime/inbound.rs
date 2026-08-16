@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
+use crate::runtime::types::ConversationLifecycle;
 
 /// The read-only observation seam of the conversation inbound mailbox.
 ///
@@ -182,6 +183,16 @@ pub enum MailboxError {
         /// The conversation the mailbox actually belongs to.
         actual: ConversationId,
     },
+    /// The mailbox is owned by a conversation runtime that has not been
+    /// activated yet, so the conversation accepts no inbound work.
+    ///
+    /// See [`ConversationInboundMailbox::bind_inactive`]: this is the
+    /// Issue #61 activation contract, and it is what makes the pending
+    /// seed of the Runtime Client bootstrap handshake provably frozen.
+    ConversationInactive {
+        /// The conversation that has not been activated.
+        conversation_id: ConversationId,
+    },
     /// The capability lease and tool runtime do not share the same
     /// conversation/workspace ownership domain.
     CapabilityOwnershipMismatch {
@@ -213,6 +224,10 @@ impl fmt::Display for MailboxError {
                 f,
                 "mailbox belongs to conversation {actual}, expected {expected}"
             ),
+            Self::ConversationInactive { conversation_id } => write!(
+                f,
+                "conversation {conversation_id} is not activated and accepts no inbound"
+            ),
             Self::CapabilityOwnershipMismatch {
                 capability_conversation,
                 runtime_conversation,
@@ -230,8 +245,30 @@ impl fmt::Display for MailboxError {
 
 impl Error for MailboxError {}
 
-/// The internal synchronized state of one conversation mailbox.
+/// The runtime ownership binding of one conversation mailbox (Issue #61).
+///
+/// A mailbox with no conversation runtime bound over it is an ordinary
+/// standalone coordination contract and always accepts inbound. Once a
+/// [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
+/// claims its owning tool runtime, the mailbox carries that runtime's
+/// shared activation lifecycle
+/// ([`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)):
+/// an inactive conversation accepts no inbound work, so the pending queue
+/// is provably frozen while the optional Runtime Client host binds.
+///
+/// The mailbox stores **no activation state of its own**: runtime ownership
+/// is the presence of the lifecycle handle, and active/inactive is answered
+/// by the lifecycle itself. The mailbox and the background registry (which
+/// reads this same gate) therefore observe exactly the same activation
+/// decision as the capability coordinator and the coordinator.
+/// [`ConversationInboundMailbox::bind_inactive`] is part of the
+/// tool-runtime ownership transfer and always receives a fresh `Inactive`
+/// lifecycle; the `Inactive -> Active` transition happens only through
+/// [`ConversationLifecycle::activate`], never through the mailbox.
 struct MailboxState {
+    /// The shared activation lifecycle of the conversation runtime that
+    /// owns this mailbox, when one does. `None` = standalone/unbound.
+    lifecycle: Option<ConversationLifecycle>,
     /// The last successfully allocated inbound sequence (0 = none yet).
     last_sequence: u64,
     /// The pending, not-yet-drained items in enqueue order.
@@ -251,6 +288,16 @@ impl core::fmt::Debug for MailboxState {
         #[cfg(not(test))]
         let probe: Option<&str> = None;
         f.debug_struct("MailboxState")
+            .field(
+                "lifecycle",
+                &self.lifecycle.as_ref().map(|lifecycle| {
+                    if lifecycle.is_active() {
+                        "runtime-owned/active"
+                    } else {
+                        "runtime-owned/inactive"
+                    }
+                }),
+            )
             .field("last_sequence", &self.last_sequence)
             .field("pending_len", &self.pending.len())
             .field(
@@ -497,6 +544,13 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
 pub struct ConversationInboundMailbox {
     conversation_id: ConversationId,
     state: Arc<Mutex<MailboxState>>,
+    /// The shared admission wake handle: every successful enqueue notifies
+    /// it, so an idle conversation coordinator (Issue #61) wakes and admits
+    /// the asynchronous inbound without any client request. The wake
+    /// carries no payload and stores one permit even with no waiter, so an
+    /// enqueue between two waits is never missed. The wake is leaf-only:
+    /// the coordinator waits on it and never notifies it.
+    wake: Arc<tokio::sync::Notify>,
 }
 
 impl ConversationInboundMailbox {
@@ -506,38 +560,122 @@ impl ConversationInboundMailbox {
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
+                lifecycle: None,
                 last_sequence: 0,
                 pending: VecDeque::new(),
                 observer: None,
                 #[cfg(test)]
                 probe: None,
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
-    /// Installs the read-only fact observer of the mailbox.
+    /// Installs the observer and captures the currently pending items as
+    /// one atomic mailbox section.
     ///
-    /// The observer fires at the mailbox linearization points (item
-    /// published, batch detached) while the mailbox synchronization
-    /// boundary is held. Installation is owned by the Runtime Client
-    /// boundary (Issue #37); exactly one observer is expected, and a later
-    /// installation replaces an earlier one.
+    /// This is the mailbox half of the Issue #61 adapter bootstrap
+    /// handshake: because installation and the pending-item snapshot share
+    /// the one mailbox synchronization boundary, an enqueue either
+    /// linearizes before the section (its item is in the returned pending
+    /// seed and no observation was fired — the observer did not exist yet)
+    /// or after it (the installed observer fires it into the bridge
+    /// queue). No enqueue can be lost between the seed and the live
+    /// observation stream and none can be applied twice.
     ///
-    /// Installation is crate-private: it is a runtime coordination seam,
-    /// not a public extension point. The one-time Runtime Client binding
-    /// claimed by `RuntimeClientHost::new` is what guarantees a single
-    /// installation, so no external caller can replace the Runtime Client
-    /// observer.
+    /// The handshake runs while the owning conversation runtime is still
+    /// inactive, so the captured pending queue additionally cannot move
+    /// after this section: [`ConversationInboundMailbox::enqueue`] refuses
+    /// an inactive conversation.
     ///
     /// # Panics
     ///
-    /// Panics only if the mailbox lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
-    pub(crate) fn install_observer(&self, observer: Arc<dyn InboundObserver>) {
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn install_observer_and_pending(
+        &self,
+        observer: Arc<dyn InboundObserver>,
+    ) -> Vec<InboundItem> {
+        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        debug_assert!(
+            state
+                .lifecycle
+                .as_ref()
+                .is_some_and(|lifecycle| !lifecycle.is_active()),
+            "the bootstrap handshake runs only while the owning runtime is inactive"
+        );
+        state.observer = Some(observer);
+        state.pending.iter().cloned().collect()
+    }
+
+    /// Marks this mailbox as owned by a conversation runtime that has not
+    /// been activated yet: inbound is refused until the owning runtime's
+    /// shared lifecycle transitions to `Active`.
+    ///
+    /// This is part of the tool-runtime ownership transfer (Issue #61),
+    /// called under the background registry synchronization boundary by
+    /// [`ConversationToolRuntime::claim_conversation_runtime_inactive`](crate::tools::runtime::ConversationToolRuntime::claim_conversation_runtime_inactive),
+    /// and always receives a fresh `Inactive` lifecycle. The mailbox keeps
+    /// no activation state of its own: the lifecycle handle *is* the
+    /// runtime ownership, and activation is answered by the lifecycle
+    /// itself.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn bind_inactive(&self, lifecycle: &ConversationLifecycle) {
         self.state
             .lock()
             .expect("inbound mailbox lock poisoned")
-            .observer = Some(observer);
+            .lifecycle = Some(lifecycle.clone());
+    }
+
+    /// Reverts [`ConversationInboundMailbox::bind_inactive`] back to the
+    /// standalone unbound state.
+    ///
+    /// This exists only for the transactional rollback of a failed
+    /// [`ConversationRuntime::new`](crate::runtime::conversation_runtime::ConversationRuntime::new):
+    /// the tool-runtime ownership transfer is one unit, so a construction
+    /// that fails *after* the transfer (for example on the capability
+    /// claim) restores the mailbox to its exact previous standalone state.
+    /// It is never called on runtime drop, and a successfully constructed
+    /// runtime never unbinds its mailbox.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    pub(crate) fn unbind(&self) {
+        self.state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .lifecycle = None;
+    }
+
+    /// Whether a conversation runtime owns this mailbox and its shared
+    /// lifecycle has not transitioned to `Active` yet.
+    ///
+    /// This is the runtime-owned inactive gate other runtime-owned
+    /// subsystems consult (for example the background registry's dispatch
+    /// commit) while holding their own synchronization boundary. The
+    /// ownership handle transitions under the mailbox lock at the runtime's
+    /// ownership transfer ([`ConversationInboundMailbox::bind_inactive`]
+    /// and its rollback [`ConversationInboundMailbox::unbind`]); the
+    /// activation decision itself is the shared lifecycle's
+    /// `Inactive -> Active` transition, so a reader under its own lock
+    /// section observes one of the two stable states and the decision
+    /// linearizes against activation: a runtime-owned inactive observation
+    /// refuses the commit, a runtime-owned active observation means
+    /// activation already committed.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the mailbox lock is poisoned.
+    #[must_use]
+    pub(crate) fn is_bound_inactive(&self) -> bool {
+        let state = self.state.lock().expect("inbound mailbox lock poisoned");
+        state
+            .lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| !lifecycle.is_active())
     }
 
     /// Creates an inbound mailbox with test-only synchronization hooks
@@ -549,11 +687,13 @@ impl ConversationInboundMailbox {
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
+                lifecycle: None,
                 last_sequence: 0,
                 pending: VecDeque::new(),
                 observer: None,
                 probe: Some(probe),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -561,6 +701,17 @@ impl ConversationInboundMailbox {
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
+    }
+
+    /// The shared admission wake handle of this mailbox.
+    ///
+    /// Every successful enqueue notifies it at its publication linearization
+    /// point. The conversation coordinator (Issue #61) parks its admission
+    /// worker on this handle, so idle asynchronous inbound wakes the
+    /// runtime without a client request. The handle is crate-private: it is
+    /// a runtime coordination seam, not a public extension point.
+    pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.wake)
     }
 
     /// Enqueues one ordinary inbound message.
@@ -579,7 +730,9 @@ impl ConversationInboundMailbox {
     ///
     /// Returns [`MailboxError::CompactionSummaryNotEligible`] for a
     /// compaction summary, [`MailboxError::MissingTimestamp`] for an
-    /// ordinary message without a persisted timestamp, and
+    /// ordinary message without a persisted timestamp,
+    /// [`MailboxError::ConversationInactive`] when a conversation runtime
+    /// owns this mailbox and has not been activated, and
     /// [`MailboxError::SequenceExhausted`] when the sequence space is
     /// exhausted. A failed enqueue consumes no sequence.
     ///
@@ -595,6 +748,15 @@ impl ConversationInboundMailbox {
             return Err(MailboxError::MissingTimestamp);
         }
         let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+        if state
+            .lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| !lifecycle.is_active())
+        {
+            return Err(MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            });
+        }
         let sequence = state
             .last_sequence
             .checked_add(1)
@@ -621,6 +783,12 @@ impl ConversationInboundMailbox {
                 .expect("the enqueued item was just published");
             observer.on_enqueued(item);
         }
+        // The admission wake fires at the same linearization point as the
+        // publication, so an idle coordinator admits the item without any
+        // client request. `notify_one` stores one permit even with no
+        // waiter, so an enqueue between two coordinator waits is never
+        // missed.
+        self.wake.notify_one();
         Ok(InboundSequence(sequence))
     }
 
@@ -728,6 +896,32 @@ mod tests {
         assert_eq!(
             mailbox.enqueue(human("m1", "hi")).expect("enqueue").get(),
             1
+        );
+    }
+
+    /// A mailbox claimed by an inactive conversation runtime (Issue #61)
+    /// refuses inbound with the typed error and consumes no sequence; the
+    /// shared lifecycle's activation transition restores admission.
+    #[test]
+    fn enqueue_is_refused_while_the_owning_runtime_is_inactive() {
+        let mailbox = mailbox();
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        mailbox.bind_inactive(&lifecycle);
+        assert_eq!(
+            mailbox.enqueue(human("m1", "early")),
+            Err(MailboxError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-1"),
+            })
+        );
+        assert_eq!(mailbox.drain(), None, "no pending item exists");
+        assert!(lifecycle.activate(), "the first lifecycle transition wins");
+        assert_eq!(
+            mailbox
+                .enqueue(human("m2", "after activation"))
+                .expect("enqueue")
+                .get(),
+            1,
+            "the refused enqueue consumed no sequence"
         );
     }
 
@@ -933,6 +1127,7 @@ mod tests {
         let mailbox = ConversationInboundMailbox {
             conversation_id: ConversationId::new("conv-1"),
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
+                lifecycle: None,
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
                 observer: None,
@@ -943,6 +1138,7 @@ mod tests {
                     enqueue_resume: None,
                 }),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         };
         mailbox.enqueue(human("m1", "A")).expect("enqueue A");
 
@@ -995,6 +1191,7 @@ mod tests {
         let mailbox = ConversationInboundMailbox {
             conversation_id: ConversationId::new("conv-1"),
             state: Arc::new(std::sync::Mutex::new(super::MailboxState {
+                lifecycle: None,
                 last_sequence: 0,
                 pending: std::collections::VecDeque::new(),
                 observer: None,
@@ -1005,6 +1202,7 @@ mod tests {
                     enqueue_resume: Some(resume_rx),
                 }),
             })),
+            wake: Arc::new(tokio::sync::Notify::new()),
         };
 
         let enqueueing = mailbox.clone();

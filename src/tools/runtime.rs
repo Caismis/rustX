@@ -50,8 +50,11 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::SystemClock;
 use crate::runtime::identity::ConversationId;
 use crate::runtime::inbound::ConversationInboundMailbox;
+use crate::runtime::types::ConversationLifecycle;
 use crate::tools::artifacts::{ArtifactError, ArtifactStore};
-use crate::tools::background::{BackgroundResources, ConversationBackgroundRegistry};
+use crate::tools::background::{
+    BackgroundOwnershipClaimError, BackgroundResources, ConversationBackgroundRegistry,
+};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::workspace::{Workspace, WorkspaceError};
 
@@ -106,6 +109,43 @@ impl core::fmt::Display for ConversationRuntimeError {
 }
 
 impl std::error::Error for ConversationRuntimeError {}
+
+/// A failure of the one
+/// `ConversationToolRuntime -> ConversationRuntime` ownership transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationRuntimeClaimError {
+    /// The tool runtime identity is already bound to a conversation
+    /// runtime.
+    AlreadyBound,
+    /// The tool runtime is not pristine: its background plane already holds
+    /// a prepared dispatch or a committed execution record.
+    ///
+    /// This identity already contains staged or committed background work
+    /// and therefore cannot become the inactive semantic base of a new
+    /// `ConversationRuntime`. Nothing was consumed: no coordinator claim,
+    /// no mailbox transition, and the staged/committed background state
+    /// keeps its standalone semantics (the caller may commit or drop a
+    /// prepared dispatch, and a fresh claim may be attempted once the
+    /// background plane is pristine again).
+    NotQuiescent,
+}
+
+impl core::fmt::Display for ConversationRuntimeClaimError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyBound => write!(
+                f,
+                "the conversation tool runtime identity is already bound to a conversation runtime"
+            ),
+            Self::NotQuiescent => write!(
+                f,
+                "the conversation tool runtime background plane is not pristine: it already contains prepared or committed background work and cannot become the inactive semantic base of a new conversation runtime"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConversationRuntimeClaimError {}
 
 /// The bounded construction-time configuration of one conversation tool
 /// runtime.
@@ -175,12 +215,12 @@ pub struct ConversationToolRuntime {
 /// identity.
 ///
 /// A [`ConversationToolRuntime`] is the canonical mailbox/background
-/// identity of a conversation, and a Runtime Client host is the conversation
-/// coordinator over it: canonical history, the current-attempt slot, the
-/// projection and its cursor domain, attachment state, and the inbound and
-/// attempt identity counters all live in that one host. Two hosts over one
-/// runtime identity would therefore be two coordinators over one
-/// authoritative runtime.
+/// identity of a conversation, and a Runtime Client host is the
+/// projection/control/attachment adapter over the `ConversationRuntime`
+/// that coordinates it (Issue #61): the runtime owns canonical history,
+/// the current-attempt slot, attempt admission, and the model authority;
+/// the host owns only the client projection. Two hosts over one runtime
+/// identity would still be two adapters over one authoritative runtime.
 ///
 /// The binding is claimed once and never released. It is deliberately
 /// **not** a lease: it is not reset when the bound host is dropped, because
@@ -190,7 +230,16 @@ pub struct ConversationToolRuntime {
 /// `ConversationToolRuntime` identity.
 #[derive(Debug, Default)]
 struct RuntimeClientBinding {
+    /// Claimed by the one Runtime Client host of this identity.
     bound: AtomicBool,
+    /// Claimed by the one conversation runtime coordinator of this
+    /// identity.
+    ///
+    /// The coordinator claim commits inside the background registry
+    /// ownership-transfer section ([`ConversationToolRuntime::claim_conversation_runtime_inactive`]),
+    /// so it linearizes atomically against the background dispatch
+    /// ownership commit.
+    coordinator_claimed: AtomicBool,
 }
 
 impl ConversationToolRuntime {
@@ -291,7 +340,10 @@ impl ConversationToolRuntime {
             artifacts,
             environment,
             background,
-            runtime_client: Arc::new(RuntimeClientBinding::default()),
+            runtime_client: Arc::new(RuntimeClientBinding {
+                bound: AtomicBool::new(false),
+                coordinator_claimed: AtomicBool::new(false),
+            }),
         })
     }
 
@@ -312,7 +364,8 @@ impl ConversationToolRuntime {
 
     /// Releases a claim taken by a host construction that then failed.
     ///
-    /// This exists only so a rejected `RuntimeClientHost::new` leaves no
+    /// This exists only so a rejected `RuntimeClientHost::new` (or a
+    /// rejected `ConversationRuntime` construction, Issue #61) leaves no
     /// trace; it is never called on host drop, and a successfully
     /// constructed host never releases its binding.
     pub(crate) fn release_runtime_client_claim(&self) {
@@ -324,6 +377,88 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn is_runtime_client_bound(&self) -> bool {
         self.runtime_client.bound.load(Ordering::Acquire)
+    }
+
+    /// Performs the one `ConversationToolRuntime -> ConversationRuntime`
+    /// ownership transfer, leaving the tool runtime **inactive and
+    /// inert**.
+    ///
+    /// The transfer is one real synchronization contract, implemented at
+    /// the background registry synchronization boundary (see
+    /// [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
+    ///
+    /// ```text
+    /// require a pristine background plane (no prepared dispatch,
+    ///     no committed record)
+    /// claim the one-time coordinator binding of this identity
+    /// bind the canonical mailbox runtime-owned with the shared
+    ///     Inactive lifecycle
+    /// ```
+    ///
+    /// Because the registry lock is the same boundary the background
+    /// dispatch ownership commit linearizes at, either a standalone
+    /// background commit wins first (this transfer is then refused
+    /// [`ConversationRuntimeClaimError::NotQuiescent`]) or this transfer
+    /// wins first (a later commit is refused with
+    /// [`BackgroundDispatchError::ConversationInactive`](crate::tools::background::BackgroundDispatchError::ConversationInactive)).
+    /// A `ConversationRuntime` can therefore never be constructed over a
+    /// tool runtime that already contains staged or committed background
+    /// work, and once `ConversationRuntime::new` succeeds the runtime is
+    /// semantically inert until `activate()`.
+    ///
+    /// The `lifecycle` is the
+    /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// composed by the `ConversationRuntime` being constructed; it is
+    /// shared with the mailbox, the capability coordinator, and the
+    /// coordinator itself, so activation (`Inactive -> Active`) is one
+    /// transition every runtime-owned semantic boundary observes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationRuntimeClaimError::AlreadyBound`] when this
+    /// runtime identity is already bound to a conversation runtime and
+    /// [`ConversationRuntimeClaimError::NotQuiescent`] when the background
+    /// plane is not pristine. On either failure nothing is consumed: no
+    /// coordinator claim, no mailbox transition, and no capability claim.
+    pub(crate) fn claim_conversation_runtime_inactive(
+        &self,
+        lifecycle: &ConversationLifecycle,
+    ) -> Result<(), ConversationRuntimeClaimError> {
+        match self.background.claim_conversation_runtime_inactive(
+            &self.runtime_client.coordinator_claimed,
+            lifecycle,
+        ) {
+            Ok(()) => Ok(()),
+            Err(BackgroundOwnershipClaimError::AlreadyClaimed) => {
+                Err(ConversationRuntimeClaimError::AlreadyBound)
+            }
+            Err(BackgroundOwnershipClaimError::NotQuiescent) => {
+                Err(ConversationRuntimeClaimError::NotQuiescent)
+            }
+        }
+    }
+
+    /// Releases an ownership transfer taken by a `ConversationRuntime`
+    /// construction that then failed.
+    ///
+    /// This exists only for transactional construction: a rejected
+    /// `ConversationRuntime::new` (for example one whose capability claim
+    /// failed after this transfer) restores the mailbox to its exact
+    /// previous standalone state and clears the coordinator claim. It is
+    /// never called on runtime drop, and a successfully constructed
+    /// runtime never releases its ownership.
+    pub(crate) fn release_conversation_runtime_claim(&self) {
+        self.background
+            .release_conversation_runtime_claim(&self.runtime_client.coordinator_claimed);
+    }
+
+    /// Whether this runtime identity is already bound to a conversation
+    /// runtime coordinator.
+    #[must_use]
+    pub fn is_conversation_runtime_bound(&self) -> bool {
+        self.runtime_client
+            .coordinator_claimed
+            .load(Ordering::Acquire)
     }
 
     /// The owning conversation.

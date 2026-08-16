@@ -30,9 +30,9 @@
 //! Nothing in the normal projection/compaction path enumerates the Ledger.
 //!
 //! There is exactly **one** mutable conversation-state authority at a time.
-//! Between attempts `RuntimeClientHost` owns the `ConversationState`; while
+//! Between attempts the conversation runtime coordinator owns the
+//! `ConversationState`; while
 //! an attempt runs, `AgentExecution` owns it; settlement transfers it back.
-//! (The full `ConversationRuntime` extraction belongs to Issue #61.)
 
 pub mod ledger;
 pub mod structure;

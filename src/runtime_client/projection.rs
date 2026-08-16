@@ -25,9 +25,9 @@
 //! ```
 //!
 //! Fold, cursor allocation, and publication happen under one
-//! synchronization boundary (the owning [`RuntimeClientHost`] state lock),
-//! so the snapshot/cursor invariant holds by synchronization, never by
-//! timing luck:
+//! synchronization boundary (the Runtime Client host's projection state
+//! lock), so the snapshot/cursor invariant holds by synchronization, never
+//! by timing luck:
 //!
 //! > The returned snapshot describes authoritative Runtime Client state at
 //! > cursor C. A subscription/resume after C observes every subsequently
@@ -103,7 +103,8 @@ use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, ConversationId, ToolCallId};
-use crate::runtime::inbound::{InboundBatch, InboundItem};
+use crate::runtime::inbound::InboundItem;
+use crate::runtime::observation::ConversationObservation;
 use crate::tools::background::BackgroundExecutionSnapshot;
 use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 
@@ -113,63 +114,6 @@ use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 /// expired cursor fails with `resync_required` and the client repairs with
 /// a fresh snapshot. This is an in-memory bound, never a durability claim.
 pub const RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT: usize = 4096;
-
-/// One authoritative runtime observation feeding the projection.
-///
-/// The observation union carries every external state change the
-/// projection folds. It is the single entry point of the projection: no
-/// call site folds state directly.
-#[derive(Debug, Clone)]
-pub(crate) enum Observation {
-    /// One canonical internal runtime fact of an attempt.
-    Event {
-        /// The emitting attempt.
-        attempt_id: AttemptId,
-        /// The canonical fact.
-        event: RuntimeEvent,
-    },
-    /// One canonical message commit (the loop's commit observation seam;
-    /// the internal committed-message events reference identity only).
-    Committed {
-        /// The committing attempt, when one is active.
-        attempt_id: Option<AttemptId>,
-        /// The committed canonical message.
-        block: MessageBlock,
-    },
-    /// One composed Agent Status observation.
-    Status(AgentStatusObservation),
-    /// One mailbox enqueue (authoritative item + sequence).
-    InboundEnqueued(InboundItem),
-    /// One mailbox finite drain (authoritative batch).
-    InboundDrained(InboundBatch),
-    /// One background registry transition snapshot.
-    Background(BackgroundExecutionSnapshot),
-    /// One activated capability set.
-    Capability(CapabilityView),
-    /// The coordinator admitted an attempt (before the loop started).
-    AttemptAdmitted {
-        /// The admitted attempt.
-        attempt_id: AttemptId,
-    },
-    /// The admitted attempt froze its immutable model snapshot.
-    ///
-    /// Published under the same lock acquisition as `AttemptAdmitted`, so
-    /// the attempt read model always carries the model it actually runs
-    /// with.
-    AttemptModelFrozen {
-        /// The admitted attempt.
-        attempt_id: AttemptId,
-        /// The frozen model view.
-        model: Box<AttemptModelView>,
-    },
-    /// The authoritative session model configuration changed.
-    SessionModelChanged {
-        /// The redacted session model state after the update.
-        model: Box<SessionModelView>,
-    },
-    /// The runtime accepted shutdown.
-    Shutdown,
-}
 
 /// One registered subscriber of the observation stream.
 ///
@@ -214,13 +158,16 @@ pub(crate) enum SubscriberPoll {
     Exhausted,
 }
 
-/// The projection state guarded by the owning host's one synchronization
-/// boundary.
+/// The projection state guarded by the Runtime Client host's one
+/// synchronization boundary.
 ///
-/// This struct owns no lock: the [`RuntimeClientHost`]
+/// This struct owns no lock: the Runtime Client host
 /// ([`crate::runtime_client::host::RuntimeClientHost`]) guards exactly one
-/// instance with its state lock, making that lock the one linearization
-/// owner of every externally visible transition.
+/// instance with its projection state lock, making that lock the one
+/// linearization owner of every externally visible transition. The
+/// conversation runtime (Issue #61) publishes observations into the shared
+/// leaf queue; every acquisition of this lock drains that queue first, so
+/// the projection folds the coordinator's commits in order.
 pub(crate) struct RuntimeClientProjection {
     /// The cursor of the last published event (0 = nothing published yet).
     cursor: RuntimeClientCursor,
@@ -289,6 +236,42 @@ impl RuntimeClientProjection {
         self.probe = Some(probe);
     }
 
+    /// Seeds the projection from the runtime-owned bootstrap snapshot.
+    ///
+    /// The conversation runtime captured every fact of this snapshot at
+    /// one global cut `R` while it was still inactive (see
+    /// `ConversationRuntime::install_observation_bridge`); this method
+    /// owns the translation of the semantic source types into the client
+    /// snapshot read model.
+    ///
+    /// **Nothing here publishes and nothing here allocates a cursor.**
+    /// The seed *is* the state at cursor 0 — canonical history, session
+    /// model, the startup capability snapshot, and pending inbound — all
+    /// installed as snapshot state rather than replayed through
+    /// [`RuntimeClientProjection::apply`], so state that existed before
+    /// the bootstrap cut can never fabricate a live event. The background
+    /// seed is provably empty by the ownership-transfer invariant (a
+    /// `ConversationRuntime` is constructed only over a pristine
+    /// tool-runtime background plane, and the transfer then refuses
+    /// dispatch commits while its mailbox is bound inactive) and is still
+    /// installed from the same seed for one coherent cut. Every
+    /// transition after `R` arrives through the live observation stream
+    /// and gets the first real cursor.
+    pub(crate) fn bootstrap(
+        &mut self,
+        seed: &crate::runtime::conversation_runtime::RuntimeBootstrapSnapshot,
+    ) {
+        self.snapshot.shutting_down = seed.shutting_down;
+        self.snapshot.inbound.pending =
+            seed.inbound_pending.iter().map(inbound_item_view).collect();
+        for existing in &seed.background {
+            upsert_background(&mut self.snapshot.background, background_view(existing));
+        }
+        // An inactive runtime has never admitted an attempt, composed an
+        // Agent Status, or compacted, so `attempt`, `status`, and
+        // `context` keep their empty initial values by construction.
+    }
+
     /// Applies one authoritative observation: fold the snapshot read
     /// model, publish the resulting events, and deliver to subscribers.
     ///
@@ -296,7 +279,7 @@ impl RuntimeClientProjection {
     /// allocation, replay retention, and delivery share the caller's
     /// synchronization boundary, so no caller may partially apply an
     /// observation.
-    pub(crate) fn apply(&mut self, observation: Observation) {
+    pub(crate) fn apply(&mut self, observation: ConversationObservation) {
         if self.exhausted {
             return;
         }
@@ -311,10 +294,12 @@ impl RuntimeClientProjection {
     /// Folds one observation into the read model and returns the external
     /// events the observation publishes.
     #[allow(clippy::too_many_lines)]
-    fn fold(&mut self, observation: Observation) -> Vec<RuntimeClientEvent> {
+    fn fold(&mut self, observation: ConversationObservation) -> Vec<RuntimeClientEvent> {
         match observation {
-            Observation::Event { attempt_id, event } => self.fold_event(&attempt_id, &event),
-            Observation::Committed { attempt_id, block } => {
+            ConversationObservation::Event { attempt_id, event } => {
+                self.fold_event(&attempt_id, &event)
+            }
+            ConversationObservation::Committed { attempt_id, block } => {
                 if matches!(block, MessageBlock::Assistant(_))
                     && let Some(attempt) = &mut self.snapshot.attempt
                 {
@@ -326,7 +311,7 @@ impl RuntimeClientProjection {
                     message: block,
                 }]
             }
-            Observation::Status(observation) => {
+            ConversationObservation::Status(observation) => {
                 let view = status_view(&observation);
                 self.snapshot.status = Some(view.clone());
                 vec![RuntimeClientEvent::AgentStatusComposed {
@@ -336,17 +321,14 @@ impl RuntimeClientProjection {
                     status: view,
                 }]
             }
-            Observation::InboundEnqueued(item) => {
-                self.snapshot.inbound.pending.push(InboundItemView {
-                    sequence: item.sequence(),
-                    message: item.message().clone(),
-                });
+            ConversationObservation::InboundEnqueued(item) => {
+                self.snapshot.inbound.pending.push(inbound_item_view(&item));
                 vec![RuntimeClientEvent::InboundEnqueued {
                     sequence: item.sequence(),
                     message: item.message().clone(),
                 }]
             }
-            Observation::InboundDrained(batch) => {
+            ConversationObservation::InboundDrained(batch) => {
                 self.snapshot.inbound.pending.clear();
                 self.snapshot.inbound.last_drain = Some(InboundDrainView {
                     watermark: batch.watermark(),
@@ -362,16 +344,19 @@ impl RuntimeClientProjection {
                         .collect(),
                 }]
             }
-            Observation::Background(snapshot) => {
+            ConversationObservation::Background(snapshot) => {
                 let view = background_view(&snapshot);
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
             }
-            Observation::Capability(capabilities) => {
+            ConversationObservation::Capability(snapshot) => {
+                // The projection owns the translation of the authoritative
+                // capability snapshot into the client capability view.
+                let capabilities = capability_view(&snapshot);
                 self.snapshot.capabilities = capabilities.clone();
                 vec![RuntimeClientEvent::CapabilityPublished { capabilities }]
             }
-            Observation::AttemptAdmitted { attempt_id } => {
+            ConversationObservation::AttemptAdmitted { attempt_id } => {
                 // The model is folded by the `AttemptModelFrozen`
                 // observation the admission path publishes immediately
                 // after this one, under the same lock acquisition.
@@ -387,7 +372,7 @@ impl RuntimeClientProjection {
                 });
                 Vec::new()
             }
-            Observation::AttemptModelFrozen { attempt_id, model } => {
+            ConversationObservation::AttemptModelFrozen { attempt_id, model } => {
                 if let Some(attempt) = self
                     .snapshot
                     .attempt
@@ -398,11 +383,11 @@ impl RuntimeClientProjection {
                 }
                 Vec::new()
             }
-            Observation::SessionModelChanged { model } => {
+            ConversationObservation::SessionModelChanged { model } => {
                 self.snapshot.model = (*model).clone();
                 vec![RuntimeClientEvent::SessionModelChanged { model }]
             }
-            Observation::Shutdown => {
+            ConversationObservation::Shutdown => {
                 self.snapshot.shutting_down = true;
                 vec![RuntimeClientEvent::RuntimeShutdown]
             }
@@ -1196,6 +1181,14 @@ fn client_failure(failure: &AttemptFailure) -> RuntimeClientAttemptFailure {
     }
 }
 
+/// One pending inbound item of the diagnostics view.
+fn inbound_item_view(item: &InboundItem) -> InboundItemView {
+    InboundItemView {
+        sequence: item.sequence(),
+        message: item.message().clone(),
+    }
+}
+
 /// Projects one authoritative background registry snapshot into the
 /// external Runtime Client shape.
 pub(crate) fn background_view(
@@ -1315,7 +1308,7 @@ pub(crate) fn status_view(observation: &AgentStatusObservation) -> AgentStatusVi
 
 #[cfg(test)]
 mod tests {
-    use super::{Observation, RuntimeClientProjection, SubscriberPoll};
+    use super::{RuntimeClientProjection, SubscriberPoll};
     use crate::agent::{
         AgentExecution, AgentExecutionObserver, AgentExecutionRequest, AgentStatusObservation,
     };
@@ -1339,6 +1332,7 @@ mod tests {
         AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
+    use crate::runtime::observation::ConversationObservation;
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
     use crate::runtime_client::snapshot::{
@@ -1382,7 +1376,7 @@ mod tests {
     }
 
     fn apply_event(projection: &mut RuntimeClientProjection, event: RuntimeEvent) {
-        projection.apply(Observation::Event {
+        projection.apply(ConversationObservation::Event {
             attempt_id: attempt(),
             event,
         });
@@ -1488,7 +1482,7 @@ mod tests {
                     .push(CompactionOrderFact::RuntimeCompactionCompleted);
             }
             let mut projection = self.projection.lock().expect("projection lock");
-            projection.apply(Observation::Event {
+            projection.apply(ConversationObservation::Event {
                 attempt_id: attempt_id.clone(),
                 event: event.clone(),
             });
@@ -1506,7 +1500,7 @@ mod tests {
                     .push(CompactionOrderFact::SummaryLedgerCommitted);
             }
             let mut projection = self.projection.lock().expect("projection lock");
-            projection.apply(Observation::Committed {
+            projection.apply(ConversationObservation::Committed {
                 attempt_id: Some(attempt_id.clone()),
                 block: block.clone(),
             });
@@ -1515,7 +1509,7 @@ mod tests {
 
         fn observe_status(&self, observation: &AgentStatusObservation) {
             let mut projection = self.projection.lock().expect("projection lock");
-            projection.apply(Observation::Status(observation.clone()));
+            projection.apply(ConversationObservation::Status(observation.clone()));
             self.drain_client_events(&mut projection);
         }
     }
@@ -2009,7 +2003,7 @@ mod tests {
     #[test]
     fn shutdown_folds_into_the_snapshot_and_publishes_the_runtime_fact() {
         let mut projection = projection();
-        projection.apply(Observation::Shutdown);
+        projection.apply(ConversationObservation::Shutdown);
 
         let events = collect(&mut projection, RuntimeClientCursor::new(0));
         assert_eq!(events.len(), 1);
@@ -2169,7 +2163,7 @@ mod tests {
                 text: "hello world".to_owned(),
             })],
         });
-        projection.apply(Observation::Committed {
+        projection.apply(ConversationObservation::Committed {
             attempt_id: Some(attempt()),
             block: committed.clone(),
         });
@@ -2530,7 +2524,7 @@ mod tests {
         let _ = (first, second);
         // The authoritative items fold through the enqueue observations.
         for entry in drained.items() {
-            projection.apply(Observation::InboundEnqueued(entry.clone()));
+            projection.apply(ConversationObservation::InboundEnqueued(entry.clone()));
         }
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.inbound.pending.len(), 2);
@@ -2543,7 +2537,7 @@ mod tests {
 
         // The finite drain of the same batch clears the pending view and
         // records the watermark.
-        projection.apply(Observation::InboundDrained(drained));
+        projection.apply(ConversationObservation::InboundDrained(drained));
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert!(snapshot.inbound.pending.is_empty());
         let last_drain = snapshot.inbound.last_drain.expect("drain recorded");
@@ -2576,30 +2570,36 @@ mod tests {
     fn background_observations_fold_in_allocation_order() {
         use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundLifecycle};
         let mut projection = projection();
-        projection.apply(Observation::Background(BackgroundExecutionSnapshot {
-            execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
-            tool_id: ToolId::new("tool-bg"),
-            tool_name: "bg".to_owned(),
-            state: BackgroundLifecycle::Running,
-            progress: None,
-            result: None,
-        }));
-        projection.apply(Observation::Background(BackgroundExecutionSnapshot {
-            execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
-            tool_id: ToolId::new("tool-bg"),
-            tool_name: "bg".to_owned(),
-            state: BackgroundLifecycle::Succeeded,
-            progress: None,
-            result: Some(success_result()),
-        }));
-        projection.apply(Observation::Background(BackgroundExecutionSnapshot {
-            execution_id: crate::runtime::identity::ToolExecutionId::new("exec_2"),
-            tool_id: ToolId::new("tool-bg"),
-            tool_name: "bg".to_owned(),
-            state: BackgroundLifecycle::Starting,
-            progress: None,
-            result: None,
-        }));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::Running,
+                progress: None,
+                result: None,
+            },
+        ));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_1"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::Succeeded,
+                progress: None,
+                result: Some(success_result()),
+            },
+        ));
+        projection.apply(ConversationObservation::Background(
+            BackgroundExecutionSnapshot {
+                execution_id: crate::runtime::identity::ToolExecutionId::new("exec_2"),
+                tool_id: ToolId::new("tool-bg"),
+                tool_name: "bg".to_owned(),
+                state: BackgroundLifecycle::Starting,
+                progress: None,
+                result: None,
+            },
+        ));
         let (snapshot, _) = projection.snapshot().expect("snapshot");
         assert_eq!(snapshot.background.len(), 2);
         assert_eq!(snapshot.background[0].execution_id.as_str(), "exec_1");

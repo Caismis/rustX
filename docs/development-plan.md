@@ -530,6 +530,154 @@ Implemented in the current architecture:
   `ToolResultObservationFailed`, and `DeferredContextRejected`, each
   preserving exactly one terminal event.
 
+## Milestone 7.75 — Conversation runtime coordination extraction (Issue #61)
+
+Implemented in the current architecture:
+
+- `ConversationRuntime` (`src/runtime/conversation_runtime.rs`) is the
+  semantic conversation coordinator: session model authority, attempt-id
+  allocation, the current-attempt slot, attempt admission, between-attempt
+  `ConversationState`, `RequestHistory` (now `src/runtime/request_history.rs`),
+  the shutdown gate, the mailbox/admission relationship, and settlement
+  handoff. It installs no client-bound observation seams, so a conversation
+  executes identically with zero Runtime Client attachments and with no
+  Runtime Client host at all (headless composition is the same
+  `AgentExecution`/Context Assembly/ToolRuntime/Capability/provider path).
+- `RuntimeClientHost` is the projection + control + attachment adapter over
+  the coordinator: it owns the projection read model (snapshot/cursor/
+  bounded replay/subscribers), the one-active-attachment policy, and
+  protocol adaptation, and it forwards control (`model_set`, `shutdown`,
+  `cancel_current_attempt`, background queries) to the coordinator. It no
+  longer owns canonical conversation/session/admission state.
+- One admission authority: every ordinary inbound producer (human submit
+  through the Runtime Client, runtime/agent inbound, background terminal
+  notifications) publishes into the conversation inbound mailbox; the
+  mailbox's shared wake handle notifies the coordinator's admission worker,
+  so an idle asynchronous enqueue is admitted without any client request.
+  `admit_next_attempt` owns the admission linearization (idle + gate
+  observation, finite drain, canonical commit, attempt-id allocation, model
+  freeze, current-attempt publication) under the one coordinator lock.
+- Runtime-owned observation contract: `src/runtime/observation.rs` defines
+  `ConversationObservation` (semantic source types only) and the leaf
+  `PendingObservations` queue. There is exactly **one** fold of that
+  vocabulary — the Runtime Client projection — and the runtime keeps no
+  mirrored client read model. The runtime never imports Runtime Client
+  projection/snapshot types.
+- Observation handoff: the coordinator publishes semantic observations into
+  a shared leaf queue; every projection lock acquisition drains it first, so
+  `snapshot + cursor C` remains linearizable and `resume(after C)` observes
+  every later projected fact or fails explicitly with `resync_required`
+  (Issue #37 invariant preserved across the split).
+- Runtime lifecycle: `ConversationRuntime::new` constructs the runtime
+  **inactive** through one `ConversationToolRuntime -> ConversationRuntime`
+  ownership transfer: under the background registry lock it requires a
+  pristine background plane (no prepared dispatch, no committed record),
+  claims the one-time coordinator binding, and binds the canonical mailbox
+  runtime-owned with a fresh `Inactive` shared lifecycle at one
+  linearization point — so a standalone background commit
+  either wins first (construction fails typed with
+  `ConversationRuntimeError::ToolRuntimeNotQuiescent` and consumes
+  nothing) or loses to the transfer (a later commit fails
+  `BackgroundDispatchError::ConversationInactive`). The inactive phase is
+  then structurally inert, not merely documented: the mailbox refuses
+  inbound, `model_set` fails typed with
+  `ModelUpdateError::Inactive`, `shutdown` fails typed with
+  `ShutdownError::Inactive`, the background registry refuses
+  `commit_dispatch` with `BackgroundDispatchError::ConversationInactive`,
+  and the capability coordinator refuses a runtime-owned `commit` with
+  `CapabilityCommitError::ConversationInactive` — all consuming nothing.
+  Activation has **one authoritative lifecycle state**: the shared
+  `ConversationLifecycle` token composed by the runtime, read by the
+  mailbox (runtime ownership is the handle itself), the background
+  registry (through its mailbox), the capability coordinator (attached at
+  its claim), and the coordinator itself. `ConversationRuntime::activate`
+  performs the single `Inactive -> Active` transition of that one token
+  under the one coordinator lock — the activation linearization point —
+  and the one winning caller spawns the admission worker and performs the
+  initial admission kick; concurrent calls are idempotent. No
+  subsystem-specific intermediate activation state exists, so background
+  and capability commits can never disagree about whether the
+  conversation is active. The ownership transfer
+  (`standalone -> runtime-owned/inactive`) and activation
+  (`inactive -> active`) are two distinct commit points.
+  A `RuntimeClientHost` may then optionally bind;
+  `ConversationRuntime::activate` is the one explicit composition boundary
+  after which semantic execution may begin. Binding a client host is a
+  pre-activation decision — a late bind fails with the typed
+  `HostConstructionError::RuntimeAlreadyActivated` — while Runtime Client
+  *attachments* remain fully dynamic afterwards. Headless runtimes
+  (Issue #60 subagents, every zero-client regression) never construct a
+  host at all.
+- One global bootstrap cut: `ConversationRuntime::install_observation_bridge`
+  runs entirely under the one coordinator lock over an inert runtime,
+  installing the queue and every subsystem seam and capturing the seed as
+  `coordinator facts → background → mailbox → capability (= the cut R)`.
+  Every earlier authority is provably frozen across `[T0, R]` — coordinator
+  facts by the held lock, background because the ownership transfer
+  requires a pristine plane and the registry refuses `commit_dispatch`
+  while its mailbox is bound inactive, the mailbox
+  because an inactive conversation refuses `enqueue`, and capability
+  because a runtime-owned `commit` is refused before activation — so the
+  combined seed is one real global state, not four independent cuts. The
+  projection installs every seeded fact as snapshot state: bootstrap
+  publishes nothing and allocates no cursor, so the first
+  `RuntimeClientCursor` always belongs to a real post-activation
+  transition. `RuntimeClientHost::new` performs all
+  fallible work before/at the binding claim, releases the claim if the
+  handshake fails, and never leaves a claimed-but-invalid binding.
+- Identity claims: one conversation runtime coordinator per
+  `ConversationToolRuntime` identity — claimed by the ownership transfer
+  at coordinator construction, transactional on failure — and
+  one Runtime Client host per coordinator (claim at host construction);
+  both are one-time lifetime bindings with typed already-bound rejections.
+- Two-layer production composition: `LocalConversationCore` assembles the
+  semantic composition (catalog, session model, tool runtime, capability,
+  context) once and constructs the `ConversationRuntime` inactive;
+  `LocalConversationRuntime::compose` (interactive) binds the Runtime
+  Client host then activates, and `HeadlessConversationRuntime::compose`
+  (headless) activates the same core with no host ever constructed. Both
+  final paths return already-active runtimes.
+- Deterministic regressions: headless full turn (no attachment), headless
+  real tool cycle (ToolCall → canonical ToolResult → second model turn →
+  terminal settlement, zero attachments), idle async wakeup, async-wake vs
+  client-submit race, enqueue-vs-settlement race,
+  enqueue-during-active-attempt, safe-boundary tool-batch structure,
+  snapshot/cursor linearization races, model-update freeze at admission,
+  capability revision immutability, attachment independence, one
+  human+runtime admission path, lifecycle regressions (interactive
+  pre-activation bind, headless activation, typed rejection of a late host
+  bind, attach/detach/reattach after activation), inactive-runtime
+  regressions (model_set, shutdown, background dispatch commit, and
+  capability commit while inactive are all refused typed and consume
+  nothing; cursor 0 stays stable until activation; the first cursor
+  belongs to a real post-activation transition), activation regressions
+  (an activation-gate test parks `activate` before the lifecycle
+  transition and proves both sides: while parked, background commit,
+  capability commit, and mailbox enqueue all observe `Inactive` and are
+  refused typed; after the transition the same operations follow the
+  normal active semantics; a real-time ordered cross-subsystem regression
+  parks a background commit after it has observed `Active` at the
+  registry ownership-commit boundary and proves a capability commit that
+  begins afterwards — and one that begins after the background completed —
+  cannot observe a stale `Inactive`; a host-bind-vs-activate race proves
+  the host binds with the bootstrap seed at cursor 0 while `activate` is
+  parked before the transition; concurrent `activate` calls are
+  idempotent — one CAS winner, one worker, exactly one attempt from one
+  inbound item), ownership-transfer
+  regressions (a tool runtime with a committed background record or a
+  prepared dispatch is rejected typed `ToolRuntimeNotQuiescent` with no
+  claim consumed, the mailbox left standalone, and the staged/committed
+  work keeping its standalone semantics; both race interleavings of the
+  transfer against `commit_dispatch` at the commit boundary hook —
+  background wins and the construction fails typed, transfer wins and the
+  commit fails `ConversationInactive`; a failed capability claim rolls the
+  transfer back to the exact standalone state), production-composition
+  regressions (interactive and headless resolve the same semantic
+  composition; a real headless turn runs with no host; the interactive
+  path still runs over the same composition), and
+  construction-outside-Tokio rejection — all with gates/barriers/
+  Notify/watch, never sleeps.
+
 Intentionally absent (no concrete native owner or consumer):
 `PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
 replacement or retroactive blocking, pre-tool argument or identity
@@ -630,8 +778,10 @@ The spawnable local runtime *process* and its composition ownership already
 exist (Issue #42): `LocalConversationRuntime::compose` builds one conversation
 session — session model authority, `ConversationToolRuntime`, native
 registry, `CapabilityCoordinator` (prepared and committed before serving),
-  context policy/Surface pieces, one `RuntimeClientHost` — and serves its
-endpoint over the Issue #38 stdio/JSONL transport with a protocol-only stdout.
+  context policy/Surface pieces, one `ConversationRuntime` (Issue #61, the
+  semantic conversation coordinator), and one `RuntimeClientHost`
+  projection/control adapter over it — and serves its endpoint over the
+  Issue #38 stdio/JSONL transport with a protocol-only stdout.
 Model catalog and session configuration are explicit file paths.
 
 M10 productizes that established seam. It owns configuration discovery and

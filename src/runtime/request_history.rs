@@ -5,11 +5,17 @@
 //! the frozen non-history [`RequestSnapshot`] values that were admitted by
 //! the Agent Loop. It is intentionally an append-only runtime coordination
 //! seam, not a second transcript or a persistence framework.
+//!
+//! The type is runtime-owned semantic state (Issue #61): the conversation
+//! runtime coordinator appends settled attempt snapshots under its own
+//! lock and serves read-only clones. It is **not** Runtime Client
+//! projection state and never lives in the projection read model; the
+//! Runtime Client adapter reads and reconstructs through the runtime.
 
 use crate::conversation::ConversationState;
 use crate::model::{ModelRequest, RequestIdentity, RequestReconstructionError, RequestSnapshot};
 
-/// The in-memory historical request-fact owner of one Runtime Client host.
+/// The in-memory historical request-fact owner of one conversation runtime.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RequestHistory {
     snapshots: Vec<RequestSnapshot>,
@@ -25,7 +31,8 @@ pub enum RequestHistoryError {
     /// deduplication.
     DuplicateIdentity(RequestIdentity),
     /// Historical Surface ownership is temporarily unavailable while the
-    /// host has moved the single `ConversationState` into a running attempt.
+    /// runtime has moved the single `ConversationState` into a running
+    /// attempt.
     ConversationUnavailable,
     /// The retained snapshot could not hydrate its referenced Surface
     /// revision.
