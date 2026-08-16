@@ -4,7 +4,10 @@
 //! portable, so every test is `#[cfg(unix)]`. Tests use controlled
 //! temporary workspaces and deterministic subprocess fixtures; wall-clock
 //! waits appear only as the configured TERM grace period and as deadlock
-//! guards — never as the proof of a concurrency invariant.
+//! guards — never as the proof of a concurrency invariant. The two tests
+//! that inspect `/proc` and prove Linux orphan-adoption behavior are
+//! additionally Linux-only; macOS runs the shared process-group lifecycle
+//! suite.
 
 #![cfg(unix)]
 #![allow(clippy::similar_names)] // scripted fixture names are intentionally similar
@@ -573,7 +576,9 @@ async fn bash_shell_exit_with_descendant_holding_the_pipe_still_times_out() {
 /// finish while the owned process group is still alive. Shell-parent exit
 /// must still not settle the invocation: the tool returns `TimedOut`, the
 /// owned process group is quiescent, and the recorded descendant PID is
-/// provably gone.
+/// provably gone. This proof uses Linux `/proc` diagnostics and the Linux
+/// child-subreaper path.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bash_redirected_descendant_does_not_settle_and_is_terminated() {
     let fixture = native_fixture();
@@ -654,7 +659,9 @@ async fn bash_natural_descendant_completion_settles_success() {
 /// invocation must remain active while the supervisor still owns B —
 /// settlement is gated on the supervisor's kernel child-wait terminal
 /// state, never on an observational process scan — and only the invocation
-/// timeout settles it.
+/// timeout settles it. This proof uses Linux `/proc` diagnostics and the
+/// Linux child-subreaper path.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn bash_descendant_replacement_keeps_the_invocation_active() {
     let fixture = native_fixture();
@@ -710,6 +717,7 @@ async fn bash_descendant_replacement_keeps_the_invocation_active() {
 /// Polls the owned process group with the same non-destructive `killpg`
 /// probe the production logic uses (the authoritative OS state), with a
 /// strict deadlock guard.
+#[cfg(target_os = "linux")]
 async fn wait_for_group_death(pgid: i32) {
     use nix::errno::Errno;
     use nix::sys::signal::killpg;
@@ -726,6 +734,7 @@ async fn wait_for_group_death(pgid: i32) {
 
 /// Polls a specific process until it is provably gone (the signal-0 probe
 /// returns `ESRCH`), with a strict deadlock guard.
+#[cfg(target_os = "linux")]
 async fn wait_for_process_death(pid: i32) {
     use nix::errno::Errno;
     use nix::sys::signal::kill;
