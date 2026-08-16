@@ -8,6 +8,7 @@ pub mod agent;
 pub mod capabilities;
 pub mod context;
 pub mod conversation;
+pub mod durable;
 pub mod events;
 pub mod local_runtime;
 pub mod message;

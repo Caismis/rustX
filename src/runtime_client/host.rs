@@ -3096,7 +3096,10 @@ mod tests {
             .enqueue(inbound_text("msg-after", "still authoritative"))
             .expect("the mailbox remains authoritative without a runtime");
         assert_eq!(sequence.get(), 1);
-        let batch = mailbox.drain().expect("the drain still works");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("the select still works");
         assert_eq!(batch.items().len(), 1);
 
         // Authoritative background transition: same.
@@ -4014,8 +4017,8 @@ mod tests {
             .collect();
         assert_eq!(
             inbound_ids,
-            vec!["conv-host-async-1", "conv-host-inbound-1"],
-            "both producers sequence through one mailbox in order"
+            vec!["conv-host-async-1", "conv-host-inbound-2"],
+            "both producers sequence through one durable sequence domain in order"
         );
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(

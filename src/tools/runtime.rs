@@ -45,6 +45,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::durable::SqliteInboundStore;
+use crate::durable::inbox::InboundStore;
 use crate::events::RuntimeEventSink;
 use crate::runtime::RuntimeClock;
 use crate::runtime::SystemClock;
@@ -82,6 +84,8 @@ pub enum ConversationRuntimeError {
         /// The conversation the configured mailbox belongs to.
         actual: ConversationId,
     },
+    /// The durable Pending Inbound Inbox could not be opened.
+    DurableInbound(String),
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -103,6 +107,10 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the configured mailbox belongs to conversation {actual}, but this \
                  conversation tool runtime is being constructed for {expected}",
+            ),
+            Self::DurableInbound(message) => write!(
+                f,
+                "the durable pending inbound inbox could not be opened: {message}",
             ),
         }
     }
@@ -197,18 +205,27 @@ impl ConversationRuntimeConfig {
 /// so Glob/Grep cannot accidentally surface runtime artifact internals. The
 /// conversation background registry is constructed exactly once and never
 /// replaced.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConversationToolRuntime {
     conversation_id: ConversationId,
     workspace: Workspace,
     artifacts: ArtifactStore,
     environment: ToolEnvironment,
+    inbound_store: Arc<dyn InboundStore>,
     background: ConversationBackgroundRegistry,
     /// The one-time Runtime Client binding of this runtime identity.
     ///
     /// Shared by every clone, so cloning a runtime handle never creates a
     /// second bindable identity.
     runtime_client: Arc<RuntimeClientBinding>,
+}
+
+impl core::fmt::Debug for ConversationToolRuntime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ConversationToolRuntime")
+            .field("conversation_id", &self.conversation_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The one-time Runtime Client binding of one `ConversationToolRuntime`
@@ -297,27 +314,34 @@ impl ConversationToolRuntime {
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
     ) -> Result<Self, ConversationRuntimeError> {
-        // The mailbox identity is validated before any resource binding:
-        // the runtime construction boundary owns this invariant, so a
-        // mailbox of another conversation can never enter the registry or
-        // any other runtime resource.
-        let mailbox = match config.mailbox {
-            Some(mailbox) => {
+        let workspace =
+            Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
+        let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
+            .map_err(ConversationRuntimeError::Artifacts)?;
+        validate_disjoint_storage(workspace.root(), &artifacts_root)?;
+        // The durable Pending Inbound Inbox (Issue #63) lives in the
+        // runtime-private artifact root; a configured mailbox carries its
+        // own store and is validated against this conversation.
+        let (mailbox, inbound_store): (ConversationInboundMailbox, Arc<dyn InboundStore>) =
+            if let Some(mailbox) = config.mailbox {
                 if mailbox.conversation_id() != &conversation_id {
                     return Err(ConversationRuntimeError::MailboxConversationMismatch {
                         expected: conversation_id.clone(),
                         actual: mailbox.conversation_id().clone(),
                     });
                 }
-                mailbox
-            }
-            None => ConversationInboundMailbox::new(conversation_id.clone()),
-        };
-        let workspace =
-            Workspace::new(&config.workspace_root).map_err(ConversationRuntimeError::Workspace)?;
-        let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
-            .map_err(ConversationRuntimeError::Artifacts)?;
-        validate_disjoint_storage(workspace.root(), &artifacts_root)?;
+                let store = mailbox.store();
+                (mailbox, store)
+            } else {
+                let store = Arc::new(
+                    SqliteInboundStore::open(
+                        conversation_id.clone(),
+                        &artifacts_root.join("durable-inbound.db"),
+                    )
+                    .map_err(|error| ConversationRuntimeError::DurableInbound(error.to_string()))?,
+                );
+                (ConversationInboundMailbox::over_store(store.clone()), store)
+            };
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
         let clock = config
@@ -339,6 +363,7 @@ impl ConversationToolRuntime {
             workspace,
             artifacts,
             environment,
+            inbound_store,
             background,
             runtime_client: Arc::new(RuntimeClientBinding {
                 bound: AtomicBool::new(false),
@@ -501,12 +526,22 @@ impl ConversationToolRuntime {
     /// The canonical conversation inbound mailbox.
     ///
     /// Background terminal notifications are published into exactly this
-    /// mailbox, and an `AgentExecution` over this runtime drains exactly
-    /// this mailbox at every safe boundary: one conversation has one
+    /// mailbox, and an `AgentExecution` over this runtime selects/adopts
+    /// exactly this mailbox at every safe boundary: one conversation has one
     /// canonical inbound ordering domain.
     #[must_use]
     pub fn mailbox(&self) -> ConversationInboundMailbox {
         self.background.resources().mailbox.clone()
+    }
+
+    /// The durable Pending Inbound Inbox of this conversation.
+    ///
+    /// The conversation runtime coordinator and the mailbox share this one
+    /// store: acceptance, sequence allocation, pending state, and canonical
+    /// adoption all commit through it. There is no second allocator or
+    /// queue.
+    pub(crate) fn inbound_store(&self) -> Arc<dyn InboundStore> {
+        Arc::clone(&self.inbound_store)
     }
 }
 

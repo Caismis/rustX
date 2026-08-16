@@ -120,26 +120,43 @@ A turn consists of one model response plus all tool calls and corresponding tool
 
 Inbound asynchronous messages may be accepted at any time but may enter model context only at a safe turn boundary.
 
-## Conversation inbound mailbox (Issue #22)
+## Conversation inbound boundary (Issue #22 / #63)
 
-The conversation inbound mailbox is an in-memory runtime coordination
-contract, never durable storage and never canonical history:
+The conversation inbound boundary has one durable authority and one
+process-local coordination seam:
 
-- one conversation inbound sequence domain (`InboundSequence`), shared by
-  every producer provenance (Human, Runtime, Agent, Fleet, ExternalSystem);
-  it is not the Event Journal sequence and is never allocated from it;
-- sequence allocation and enqueue publication are atomically visible under
-  one mailbox lock: no allocated-but-unpublished sequence ever exists;
+```text
+Pending Inbound Inbox   = accepted / not-yet-adopted inbound durability
+ConversationInboundMailbox = process-local wakeup / coordination only
+Message Ledger          = adopted canonical conversational facts
+```
+
+- one durable per-conversation inbound sequence domain (`InboundSequence`),
+  owned by the Pending Inbound Inbox and shared by every producer provenance
+  (Human, Runtime, Agent, Fleet, ExternalSystem); it is not the Event
+  Journal sequence and is never allocated from it, and no producer or
+  process-local mailbox may allocate a competing range;
+- acceptance is the one linearization point: sequence allocation, pending
+  persistence, and producer correlation/idempotency state commit in one
+  durable transaction, and producer success is returned only after that
+  commit. A failed acceptance exposes no successful sequence, no pending
+  record, and no correlation;
 - the mailbox accepts only ordinary inbound messages
   (`InboundKind::Message`) that carry their persisted UTC timestamp;
-  runtime compaction summaries are rejected at enqueue;
-- a safe-boundary drain performs exactly one finite watermark-bounded
-  snapshot: all items at or below the watermark are consumed together, and
-  post-watermark arrivals are deferred to the next batch;
-- one message still produces one one-item batch, and every drained item
+  runtime compaction summaries are rejected at acceptance;
+- a safe-boundary selection performs exactly one finite watermark-bounded
+  non-destructive snapshot; adoption then atomically appends the selected
+  messages to the durable canonical prefix and removes their pending
+  records in one transaction, so post-watermark arrivals are deferred to
+  the next batch and a crash can never observe a pending record without its
+  canonical commit nor a canonical message that remains independently
+  re-adoptable;
+- one message still produces one one-item batch, and every adopted item
   becomes its own distinct canonical `UserMessageBlock` in inbound sequence
   order — never concatenated, never delivered through an intermediate
-  single-message request;
+  single-message request, and each adopted item keeps its stable
+  accepted identity (message id, sequence, provenance, timestamp) rather
+  than regenerating one at adoption or recovery;
 - no drain may split an incomplete foreground tool-result batch: the safe
   boundary occurs only after every tool result of the turn is committed;
 - cancellation before batch selection leaves the mailbox untouched; a

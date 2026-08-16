@@ -2520,7 +2520,10 @@ mod tests {
         let second = mailbox.enqueue(item("m2")).expect("enqueue");
 
         let mut projection = projection();
-        let drained = mailbox.drain().expect("batch");
+        let drained = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("batch");
         let _ = (first, second);
         // The authoritative items fold through the enqueue observations.
         for entry in drained.items() {

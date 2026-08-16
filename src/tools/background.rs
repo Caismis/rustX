@@ -880,7 +880,16 @@ impl ConversationBackgroundRegistry {
                 self.resources.clock.now(),
             )
         };
-        match self.resources.mailbox.enqueue(notification) {
+        // The background terminal notification uses the same durable
+        // acceptance owner as every other inbound producer (Issue #63), with
+        // a deterministic producer correlation so a retry with the same
+        // committed correlation can never publish a duplicate notification.
+        let correlation = format!("background-terminal:{}", execution_id.as_str());
+        match self
+            .resources
+            .mailbox
+            .enqueue_correlated(notification, correlation)
+        {
             Ok(_) => {
                 state.records[index].notification = NotificationState::Published;
             }
@@ -1503,13 +1512,24 @@ mod tests {
             },
             "the stored terminal result agrees with the registry winner"
         );
-        let batch = fixture.mailbox.drain().expect("one terminal batch");
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("one terminal batch");
         assert_eq!(
             batch.items().len(),
             1,
             "exactly one terminal inbound publication"
         );
-        assert!(fixture.mailbox.drain().is_none());
+        let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
+        assert!(
+            fixture
+                .mailbox
+                .select_pending_batch()
+                .expect("select")
+                .is_none()
+        );
     }
 
     /// Oversized multibyte progress cannot panic or strand the execution:

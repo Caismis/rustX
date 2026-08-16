@@ -249,8 +249,9 @@ use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilityS
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
+use crate::durable::inbox::InboundDraft;
 use crate::events::types::RuntimeEvent;
-use crate::message::types::{MessageBlock, UserContentBlock};
+use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{
     AttemptModelSnapshot, SessionModelConfig, SessionModelState, SessionModelView,
@@ -319,6 +320,8 @@ pub enum ConversationRuntimeError {
     /// would silently never admit anything. Construction therefore fails
     /// explicitly instead of creating a partially active coordinator.
     NoExecutionRuntime,
+    /// The durable Pending Inbound Inbox failed a storage operation.
+    Storage(String),
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -348,6 +351,9 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the conversation runtime requires a Tokio execution runtime at construction"
             ),
+            Self::Storage(message) => {
+                write!(f, "the durable pending inbound inbox failed: {message}")
+            }
         }
     }
 }
@@ -457,8 +463,6 @@ struct CoordinatorState {
     shutting_down: bool,
     /// The next attempt identity sequence.
     next_attempt_seq: u64,
-    /// The next submitted-inbound message identity sequence.
-    next_inbound_seq: u64,
 }
 
 /// The runtime admission worker's wake boundary.
@@ -997,7 +1001,17 @@ impl RuntimeInner {
         if !self.lifecycle.is_active() || state.shutting_down || state.current_attempt.is_some() {
             return;
         }
-        let Some(batch) = self.mailbox.drain() else {
+        // Selection freezes the finite watermark (non-destructive): an
+        // acceptance that linearizes after this point can never join the
+        // selected batch.
+        let Some(batch) = self.mailbox.select_pending_batch().ok().flatten() else {
+            return;
+        };
+        // Canonical adoption: the durable ledger append and the pending
+        // removal commit in one transaction. On failure the selected items
+        // remain durably pending (crash-before-adoption semantics) and the
+        // next admission re-attempts them.
+        let Ok(adopted) = self.mailbox.adopt_pending_batch(&batch) else {
             return;
         };
         // Ownership transfer: the coordinator hands its conversation state
@@ -1008,12 +1022,11 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        let mut fresh_ids = Vec::with_capacity(batch.items().len());
-        for item in batch.into_items() {
-            let block = MessageBlock::User(item.into_message());
+        let mut fresh_ids = Vec::with_capacity(adopted.len());
+        for block in adopted {
             let message_id = conversation
                 .commit(block.clone())
-                .expect("a mailbox-assigned inbound identity is unique");
+                .expect("a durably-adopted inbound identity is unique");
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
@@ -1021,7 +1034,7 @@ impl RuntimeInner {
             fresh_ids.push(message_id);
         }
         let fresh = FreshInboundTurn::new(fresh_ids)
-            .expect("a drained mailbox batch forms one fresh inbound turn");
+            .expect("an adopted inbox batch forms one fresh inbound turn");
         let attempt_id = AttemptId::new(format!(
             "{}-attempt-{}",
             self.conversation_id, state.next_attempt_seq
@@ -1153,12 +1166,21 @@ impl ConversationRuntime {
         // admission, where there is no caller left to report to.
         validate_context_policy(&config.context.policy, &config.model.snapshot())
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
-        // The bootstrap conversation state is built here, in the fallible
-        // section: a rejected bootstrap leaves no runtime behind.
-        let conversation = ConversationState::from_messages(config.initial_messages.clone())
-            .map_err(|error| {
-                ConversationRuntimeError::InvalidInitialConversation(error.to_string())
-            })?;
+        // The bootstrap conversation state is built from the durable
+        // canonical prefix: the initial messages are seeded exactly once,
+        // and on recovery the previously-adopted inbound is loaded on top.
+        // The store is the one crash-recoverable prefix of the Message
+        // Ledger; a rejected bootstrap leaves no runtime behind.
+        let store = config.tool_runtime.inbound_store();
+        store
+            .seed_canonical(&config.initial_messages)
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let canonical = store
+            .load_canonical()
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let conversation = ConversationState::from_messages(canonical).map_err(|error| {
+            ConversationRuntimeError::InvalidInitialConversation(error.to_string())
+        })?;
         // Activation spawns the admission worker, and a runtime with no
         // worker would silently never admit anything. The execution
         // runtime is required — and captured — here, still in the fallible
@@ -1238,7 +1260,6 @@ impl ConversationRuntime {
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
-                next_inbound_seq: 0,
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
@@ -1432,19 +1453,21 @@ impl ConversationRuntime {
 
     /// Submits one ordinary inbound user message.
     ///
-    /// The runtime owns authoritative metadata: the message identity, the
+    /// The durable Pending Inbound Inbox owns authoritative metadata: the
+    /// message identity (deterministic from the allocated sequence), the
     /// inbound sequence, the persisted timestamp, and the provenance are
-    /// all runtime-assigned. Success means accepted/published, never
-    /// assistant-finished: the runtime wake gate admits the next attempt
-    /// when the runtime is idle, and while an attempt is running the message
-    /// waits in the authoritative mailbox for the next safe-boundary drain.
+    /// all owner-assigned and commit in one durable acceptance transaction.
+    /// Success means durably accepted, never assistant-finished: the runtime
+    /// wake gate admits the next attempt when the runtime is idle, and while
+    /// an attempt is running the message stays durably pending for the next
+    /// safe-boundary adoption.
     ///
     /// # Errors
     ///
     /// Returns [`InboundAdmissionError::Inactive`] before activation,
     /// [`InboundAdmissionError::Shutdown`] after shutdown,
     /// [`InboundAdmissionError::EmptyContent`] for empty content, and
-    /// [`InboundAdmissionError::Mailbox`] for a mailbox admission failure.
+    /// [`InboundAdmissionError::Mailbox`] for a durable acceptance failure.
     pub fn submit_inbound(
         &self,
         content: Vec<UserContentBlock>,
@@ -1452,38 +1475,34 @@ impl ConversationRuntime {
         if content.is_empty() {
             return Err(InboundAdmissionError::EmptyContent);
         }
-        let (message_id, timestamp) = {
-            let mut state = self.inner.lock_state();
+        {
+            let state = self.inner.lock_state();
             if !self.inner.lifecycle.is_active() {
                 return Err(InboundAdmissionError::Inactive);
             }
             if state.shutting_down {
                 return Err(InboundAdmissionError::Shutdown);
             }
-            state.next_inbound_seq = state.next_inbound_seq.saturating_add(1);
-            (
-                MessageId::new(format!(
-                    "{}-inbound-{}",
-                    self.inner.conversation_id, state.next_inbound_seq
-                )),
-                self.inner.clock.now(),
-            )
-        };
-        let message = crate::message::types::UserMessageBlock {
-            id: message_id.clone(),
-            content,
-            source: crate::message::types::UserSource::Human,
-            kind: crate::message::types::InboundKind::Message,
-            timestamp: Some(timestamp),
-        };
-        let sequence = self
+        }
+        // The durable acceptance linearization point: the sequence, the
+        // deterministic message identity, the pending record, and (when a
+        // producer supplies one) the correlation commit here before success
+        // is returned.
+        let accepted = self
             .inner
             .mailbox
-            .enqueue(message)
+            .accept_draft(InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content,
+                timestamp: self.inner.clock.now(),
+                correlation: None,
+            })
             .map_err(InboundAdmissionError::Mailbox)?;
         Ok(InboundAdmission {
-            message_id,
-            inbound_sequence: sequence,
+            message_id: accepted.message_id,
+            inbound_sequence: accepted.sequence,
         })
     }
 
@@ -2061,7 +2080,7 @@ mod tests {
     };
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
     use crate::message::content::TextBlock;
-    use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+    use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::identity::{AgentId, ConversationId};
     use crate::runtime::observation::ConversationObservation;
@@ -2532,7 +2551,9 @@ mod tests {
             })
             .collect();
         assert_eq!(inbound[0], "conv-headless-async-1");
-        assert!(inbound.contains(&"conv-headless-inbound-1"));
+        // The client submit is the second item of the one durable sequence
+        // domain, so its deterministic identity derives from sequence 2.
+        assert!(inbound.contains(&"conv-headless-inbound-2"));
         // Exactly one finite drain was observed, carrying both messages in
         // mailbox order.
         let drained: Vec<_> = observations
@@ -2544,6 +2565,72 @@ mod tests {
             .collect();
         assert_eq!(drained.len(), 1, "one finite inbound batch");
         assert_eq!(drained[0].items().len(), 2, "both messages in one batch");
+    }
+
+    /// Durable pending inbound accepted before the runtime exists (for
+    /// example by a crashed process) drives admission on recovery without a
+    /// new client request (Issue #63 recovery seam).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn recovered_durable_pending_drives_admission_without_a_client_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+
+        // First process: accept one inbound item durably, then die before
+        // any adoption.
+        {
+            let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+                ConversationId::new("conv-headless"),
+                &workspace,
+                &artifacts,
+            )
+            .expect("tool runtime");
+            let store = tool_runtime.inbound_store();
+            store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("recovered"),
+                    timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                        .expect("parse")
+                        .with_timezone(&chrono::Utc),
+                    correlation: None,
+                })
+                .expect("durable acceptance");
+        }
+
+        // Second process: reconstruct the runtime over the same durable
+        // store and activate. The recovered pending item drives admission by
+        // itself, without any new submit.
+        let (runtime, model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+        runtime.activate();
+        let ledger = await_settled_ledger(&runtime).await;
+        let inbound: Vec<&str> = ledger
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::User(user) if user.kind == InboundKind::Message => {
+                    Some(user.id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inbound,
+            vec!["conv-headless-inbound-1"],
+            "the recovered pending item is adopted exactly once"
+        );
+        assert_eq!(model.requests().len(), 1, "one admitted attempt");
+        assert!(
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .select_pending_batch()
+                .expect("select")
+                .is_none(),
+            "no pending record remains after recovery adoption"
+        );
     }
 
     /// Waits until an observation satisfying the predicate reaches the

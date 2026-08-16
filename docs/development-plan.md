@@ -731,10 +731,12 @@ Implement interfaces for:
 
 - Runtime event writer
 - Message Ledger and Conversation Surface durability
+- Durable Pending Inbound Inbox (Issue #63, the M8a slice — implemented)
 
 Development backend:
 
-- JSONL / filesystem storage is acceptable for local validation.
+- SQLite (`rusqlite`, bundled) for the durable inbound/canonical prefix;
+  JSONL / filesystem storage remains acceptable for other local validation.
 
 Semantics:
 
@@ -743,10 +745,26 @@ Semantics:
 - Stable event sequence numbers
 - Crash reconciliation
 - Unresolved tool-call handling
+- Acceptance linearization (durable before producer success) and
+  canonical-adoption linearization (atomic inbox→ledger transfer) for
+  accepted inbound work — see Issue #63.
 
 Exit criteria:
 
 - A local session can be reconstructed from durable facts after process restart.
+
+### Issue #63 (M8a) — implemented
+
+The durable Pending Inbound Inbox (`src/durable`) is the one authority for
+accepted-but-not-yet-adopted inbound: the per-conversation
+`InboundSequence` allocator, the acceptance transaction, the finite
+watermark selection, and the atomic canonical-adoption transaction.
+`ConversationInboundMailbox` is reduced to process-local wakeup/coordination;
+background terminal notifications converge on the same acceptance seam with
+a deterministic producer correlation. The durable store is the
+crash-recoverable prefix of the Message Ledger (initial messages + adopted
+inbound); full #11 durability of every canonical domain remains a later
+milestone.
 
 ## Milestone 9 — Cancellation and runtime supervision
 

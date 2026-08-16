@@ -809,32 +809,32 @@ impl<'a> AgentExecution<'a> {
     }
 
     /// The mailbox-specific safe boundary: exactly one finite inbound
-    /// mailbox snapshot after the current turn is structurally complete.
+    /// snapshot after the current turn is structurally complete.
     ///
-    /// This function is mailbox-owned semantics only, separate from the
+    /// This function is inbound-boundary semantics only, separate from the
     /// generic Agent Loop cancellation checkpoint (which lives in `run()`
     /// before every model turn). The conversation tool runtime owns the one
-    /// canonical mailbox of the conversation; the loop drains exactly that
-    /// mailbox, so background terminal notifications always enter the same
-    /// mailbox the Agent Loop drains. With no pending items the snapshot
-    /// observes no mailbox state and the function returns `Ok(false)`.
-    /// Cancellation wins before batch selection: when cancellation is
-    /// already observable, no drain happens, all pending items stay in the
-    /// mailbox, and the attempt settles cancelled. Otherwise one atomic
-    /// drain is performed and, once drained, the complete batch is
-    /// appended synchronously as distinct canonical `UserMessageBlock`
-    /// values in inbound sequence order — the batch is never partially
-    /// consumed and never requeued. The whole drained batch becomes one
-    /// new [`FreshInboundTurn`] in sequence order, so the next model
-    /// request receives exactly one Agent Status snapshot targeting the
-    /// final drained message (the highest-sequence item). If cancellation
-    /// becomes observable only after the append, the batch stays canonical
-    /// and the generic pre-next-turn checkpoint prevents any further model
-    /// turn.
+    /// canonical mailbox/durable inbox of the conversation; the loop selects
+    /// and adopts exactly that boundary, so background terminal
+    /// notifications always enter the same durable path the Agent Loop
+    /// adopts. With no pending items the snapshot observes no state and the
+    /// function returns `Ok(false)`.
     ///
-    /// Returns `Ok(true)` when one complete batch was appended, `Ok(false)`
-    /// when the snapshot observed an empty mailbox, and the attempt
-    /// terminal when cancellation was observable before the snapshot.
+    /// Cancellation wins before selection: when cancellation is already
+    /// observable, no selection/adoption happens, all pending items stay
+    /// durably pending, and the attempt settles cancelled. Otherwise one
+    /// finite watermark is selected and atomically adopted into the durable
+    /// canonical ledger, then the complete batch is appended synchronously
+    /// as distinct canonical `UserMessageBlock` values in inbound sequence
+    /// order — the batch is never partially consumed and never requeued. The
+    /// whole adopted batch becomes one new [`FreshInboundTurn`] in sequence
+    /// order, so the next model request receives exactly one Agent Status
+    /// snapshot targeting the final adopted message (the highest-sequence
+    /// item).
+    ///
+    /// Returns `Ok(true)` when one complete batch was adopted, `Ok(false)`
+    /// when the snapshot observed an empty inbox, and the attempt terminal
+    /// when cancellation was observable before the snapshot.
     fn safe_boundary_drain(&mut self) -> Result<bool, Terminal> {
         let mailbox = self.tool_runtime.mailbox();
         if self.cancellation.is_cancelled() {
@@ -842,12 +842,36 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
-        let Some(batch) = mailbox.drain() else {
+        // Selection freezes the finite watermark (non-destructive): an
+        // acceptance that linearizes after this point can never join the
+        // selected batch.
+        let Some(batch) = mailbox
+            .select_pending_batch()
+            .map_err(|error| Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: format!(
+                            "the durable pending inbound inbox cannot be selected: {error}"
+                        ),
+                    },
+                },
+            })?
+        else {
             return Ok(false);
         };
-        let mut message_ids = Vec::with_capacity(batch.items().len());
-        for item in batch.into_items() {
-            let block = MessageBlock::User(item.into_message());
+        // Canonical adoption: the durable ledger append and the pending
+        // removal commit in one transaction.
+        let adopted = mailbox
+            .adopt_pending_batch(&batch)
+            .map_err(|error| Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: format!("a selected inbound batch cannot be adopted: {error}"),
+                    },
+                },
+            })?;
+        let mut message_ids = Vec::with_capacity(adopted.len());
+        for block in adopted {
             match self.commit_canonical(&block) {
                 Ok(message_id) => message_ids.push(message_id),
                 Err(error) => {
@@ -3498,8 +3522,8 @@ mod tests {
             "the drained batch appears exactly once in canonical history"
         );
         assert!(
-            mailbox.drain().is_none(),
-            "the appended batch is consumed from the mailbox and never requeued"
+            mailbox.select_pending_batch().expect("select").is_none(),
+            "the adopted batch is consumed from the durable inbox and never requeued"
         );
     }
 
@@ -3575,113 +3599,40 @@ mod tests {
     /// a loaded runner can produce.
     const LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
 
-    /// Receives one mailbox-probe token without occupying a Tokio worker
-    /// thread, returning the receiver for the next step.
+    /// Exact deterministic proof for the background terminal inbound.
     ///
-    /// The wait is exact: no bound participates in the ordering proof. The
-    /// only bounded waits in this test are the outer liveness guards around
-    /// the attempt and the controller.
-    async fn recv_probe_token(
-        receiver: std::sync::mpsc::Receiver<()>,
-        what: &'static str,
-    ) -> std::sync::mpsc::Receiver<()> {
-        tokio::task::spawn_blocking(move || {
-            receiver.recv().unwrap_or_else(|error| {
-                panic!("{what}: the probe channel closed before the token arrived ({error})")
-            });
-            receiver
-        })
-        .await
-        .expect("probe receive task")
-    }
-
-    /// Exact mailbox-boundary proof for the background terminal inbound.
-    ///
-    /// The production finite-snapshot contract under test:
+    /// The production finite-watermark contract under test (Issue #63):
     ///
     /// ```text
-    /// once a safe-boundary drain committed its finite snapshot under the
-    /// mailbox mutex (watermark selected, items detached), an inbound whose
-    /// enqueue linearizes after that snapshot can never join that batch
+    /// once a safe-boundary selection froze its finite watermark, an inbound
+    /// whose durable acceptance linearizes after that selection can never
+    /// join the selected batch — it belongs to the next safe boundary
     /// ```
     ///
-    /// The test constructs the exact happens-before chain deterministically;
-    /// "post-first-snapshot" alone does not imply "pre-second-snapshot", so
-    /// both sides of the ordering are proven explicitly:
+    /// The test constructs the exact happens-before chain using only the
+    /// test-only continuation-boundary pause and the parking background
+    /// executor; no sleep or scheduler-timing assumption participates in the
+    /// proof:
     ///
     /// ```text
-    /// [human] enqueued and published before the attempt starts
-    /// turn 1 dispatches the parking background tool
-    /// safe-boundary drain #1 commits snapshot [human] (observed through
-    ///   drain_snapshot while the drain still holds the mailbox mutex) —
-    ///   the first finite batch is fixed forever at this point
-    /// background runner started → released → its terminal enqueue can only
-    ///   block on the mailbox mutex drain #1 still owns
-    /// drain #1 released → batch [human] appended, turn 1 completes
-    /// Agent Loop parks at the test-only continuation boundary before
-    ///   turn 2 — no further drain can occur while it is parked
-    /// terminal enqueue owns the mailbox mutex (enqueue_computed observed):
-    ///   provably after drain #1 released it and before any later drain
-    /// terminal published (enqueue_resume → pending.push_back)
-    /// Agent Loop released → turn 2 → request #2 ([human], no terminal)
-    /// safe-boundary drain #2 commits snapshot [terminal]
-    /// turn 3 → request #3 observes the terminal
+    /// [human] durably accepted before the attempt starts (sequence 1)
+    /// turn 1 (continuation) dispatches the parking background tool
+    /// turn 1 completes → safe-boundary selection/adoption #1 commits
+    ///   [human] (sequence 1) — the first finite batch is frozen forever
+    /// Agent Loop parks at the continuation boundary before turn 2
+    /// background runner settled → terminal durably accepted (sequence 2)
+    ///   — provably after adoption #1 (the loop is parked)
+    /// Agent Loop released → turn 2 request observes [human], no terminal
+    /// turn 2 completes → adoption #2 commits [terminal] (sequence 2)
+    /// turn 3 request observes the terminal exactly once
     /// ```
-    ///
-    /// `enqueue_computed` is not the publication linearization point: the
-    /// item becomes pending only at `pending.push_back` under the same
-    /// mutex. What `enqueue_computed` proves is mutex ownership — the
-    /// terminal enqueue acquired the same mailbox mutex after drain #1
-    /// released it, so no later drain can overtake it while it is parked.
-    /// No sleep or scheduler-timing assumption participates in the proof.
-    ///
-    /// # Why the controller receives through the blocking pool
-    ///
-    /// The mailbox probe hooks fire *inside* the mailbox mutex critical
-    /// section, so their channels are necessarily synchronous. Two of the
-    /// parties that send those tokens — the Agent Loop's safe-boundary
-    /// drain and the detached background runner's terminal enqueue — park
-    /// on those channels from Tokio tasks, which blocks their worker
-    /// threads for the duration of each handshake. If the controller also
-    /// waited synchronously from a Tokio task, it would occupy a third
-    /// worker while waiting for a task that still needs one, making
-    /// progress a function of how much CPU the runtime happens to get. Each
-    /// controller receive therefore runs on the blocking pool via
-    /// [`recv_probe_token`], and every step waits exactly rather than for a
-    /// bounded time.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
-        use crate::runtime::inbound::MailboxProbe;
-        use std::sync::mpsc::sync_channel;
-        // One snapshot token per non-empty drain (two: [human], then
-        // [terminal]) and one release token per parked drain; the final
-        // empty drain returns before the probe hooks fire. One
-        // computed/resume token pair per enqueue (human + terminal).
-        let (snapshot_tx, snapshot_rx) = sync_channel(2);
-        let (release_tx, release_rx) = sync_channel(2);
-        let (computed_tx, computed_rx) = sync_channel(1);
-        let (resume_tx, resume_rx) = sync_channel(1);
-        let mailbox = crate::runtime::inbound::ConversationInboundMailbox::with_probe(
-            ConversationId::new("conv-1"),
-            MailboxProbe {
-                drain_snapshot: Some(snapshot_tx),
-                drain_release: Some(release_rx),
-                enqueue_computed: Some(computed_tx),
-                enqueue_resume: Some(resume_rx),
-            },
-        );
-        // The human message is enqueued through the probe: sequence 1 is
-        // computed and published only after the test releases the enqueue.
-        let enqueueing = mailbox.clone();
-        let human_task = tokio::task::spawn_blocking(move || {
-            enqueueing
-                .enqueue(inbound_message("msg-human", "hello"))
-                .expect("enqueue human")
-        });
-        let computed_rx = recv_probe_token(computed_rx, "human enqueue sequence computed").await;
-        resume_tx.send(()).expect("release the human enqueue");
-        human_task.await.expect("human enqueue task");
+        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+        mailbox
+            .enqueue(inbound_message("msg-human", "hello"))
+            .expect("accept the human message");
 
         let call = ToolCall {
             id: ToolCallId::new("call-bg"),
@@ -3721,48 +3672,36 @@ mod tests {
             .expect("register bg tool");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
+        let background = tool_runtime.background().clone();
         let (pause, mut pause_reached, pause_release) = ContinuationBoundaryPause::install();
         let controller = tokio::spawn(async move {
-            // 1. Drain #1 committed its finite snapshot [human] and is
-            //    parked inside its critical section, still holding the
-            //    mailbox mutex. The first batch is fixed forever.
-            let snapshot_rx = recv_probe_token(snapshot_rx, "first drain snapshot committed").await;
-            // 2. The detached background runner is provably started; settle
-            //    it. Its terminal enqueue can only block on the mailbox
-            //    mutex that drain #1 still owns.
+            // 1. The detached background runner is provably started.
             tokio::time::timeout(LIVENESS_GUARD, started.wait_for(|started| *started))
                 .await
                 .expect("bg runner start wait exceeded liveness guard")
                 .expect("bg runner started");
-            release.send_replace(true);
-            // 3. Release drain #1: the [human] batch is appended, turn 1
-            //    completes, and the loop reaches the continuation boundary.
-            release_tx.send(()).expect("release the first drain");
-            // 4. The Agent Loop is parked after turn 1 and before turn 2:
-            //    no further mailbox drain can occur until it is released.
-            pause_reached
-                .wait_for(|reached| *reached)
+            // 2. Turn 1 completed and adoption #1 committed [human]; the
+            //    loop is parked before turn 2, so no later selection can
+            //    run until it is released.
+            tokio::time::timeout(LIVENESS_GUARD, pause_reached.wait_for(|reached| *reached))
                 .await
+                .expect("continuation wait exceeded liveness guard")
                 .expect("continuation boundary reached");
-            // 5. The terminal enqueue owns the mailbox mutex: its sequence
-            //    is computed and the item is not yet published. This is
-            //    provably after drain #1 released the mutex (step 3) and
-            //    before any later drain (the loop is parked, step 4).
-            let _computed_rx =
-                recv_probe_token(computed_rx, "terminal enqueue owns the mailbox mutex").await;
-            // 6. Publish the terminal under that mutex, pre-buffer the
-            //    release token for drain #2, and release the Agent Loop:
-            //    the next safe-boundary drain must now observe [terminal].
-            resume_tx.send(()).expect("publish the terminal inbound");
-            release_tx.send(()).expect("release the second drain");
+            // 3. Settle the runner: its terminal inbound is durably accepted
+            //    after adoption #1 already froze the first finite batch. The
+            //    registry terminal observation proves the durable enqueue
+            //    completed (finish publishes before notifying state).
+            release.send_replace(true);
+            background
+                .wait_until_terminal(&crate::runtime::identity::ToolExecutionId::new("exec_1"))
+                .await
+                .expect("the terminal state is durably published");
+            // 4. Release the boundary twice: turn 2 runs and adopts
+            //    [terminal] at its own safe boundary; turn 3 then observes
+            //    the terminal as its fresh inbound.
             pause_release
                 .send(())
-                .expect("release the continuation boundary");
-            // 7. Drain #2 committed its finite snapshot [terminal]; release
-            //    the second continuation boundary (parked after turn 2) so
-            //    the terminal-observing turn can run.
-            let _snapshot_rx =
-                recv_probe_token(snapshot_rx, "second drain snapshot committed").await;
+                .expect("release the first continuation boundary");
             pause_release
                 .send(())
                 .expect("release the second continuation boundary");
@@ -3830,6 +3769,9 @@ mod tests {
             terminal_occurrences, 1,
             "the terminal inbound is drained and committed exactly once"
         );
-        assert!(mailbox.drain().is_none(), "the mailbox is drained");
+        assert!(
+            mailbox.select_pending_batch().expect("select").is_none(),
+            "the durable inbox is drained"
+        );
     }
 }

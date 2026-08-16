@@ -1,35 +1,34 @@
-//! Conversation inbound mailbox: deterministic runtime-owned batching.
+//! The conversation inbound boundary: process-local coordination over the
+//! durable Pending Inbound Inbox (Issue #63).
 //!
 //! This module owns the narrow runtime coordination contract for
 //! asynchronous user-role messages arriving while an agent attempt is
-//! running. The mailbox is a per-conversation in-memory queue with a shared
-//! inbound sequence domain, an atomic enqueue (sequence allocation and
-//! publication under one synchronization boundary), and an atomic finite
-//! drain producing one watermark-bounded [`InboundBatch`].
-//!
-//! Ownership boundaries:
+//! running. Since Issue #63 it is **coordination only**:
 //!
 //! ```text
-//! mailbox         = coordination (this module)
-//! canonical history = durable conversation truth (message ledger semantics)
-//! Event Journal   = execution facts
+//! ConversationInboundMailbox   = process-local wakeup / batching coordination
+//! Pending Inbound Inbox        = accepted / not-yet-adopted durability
+//! Message Ledger               = adopted canonical conversational facts
+//! Conversation Surface         = current model-visible ordering
+//! Event Journal                = execution facts
 //! ```
 //!
-//! The mailbox is **not** canonical conversation history, not the Event
-//! Journal, not a Message Ledger persistence backend, not Agent Status, not
-//! a background-execution registry, and not a scheduler. Once a drained
-//! ordinary inbound message is appended to canonical history by the agent
-//! loop, canonical history becomes the authoritative conversation record of
-//! that message. Mailbox persistence and crash recovery remain later
-//! milestone work.
+//! The mailbox no longer owns [`InboundSequence`] allocation and no longer
+//! holds a process-local payload queue: the durable
+//! [`InboundStore`](crate::durable::inbox::InboundStore) owns the accepted
+//! pending state and the one per-conversation sequence domain. The mailbox
+//! is the narrow acceptance/publisher seam that validates eligibility and
+//! lifecycle, durably accepts through the store, then publishes the
+//! process-local wake and observation. A crash may destroy the mailbox
+//! without destroying accepted inbound work; the wake is a liveness
+//! optimization, never the source of truth.
 //!
 //! The mailbox accepts only [`InboundKind::Message`] with a persisted
 //! [`UserMessageBlock::timestamp`]; a runtime-provided derived compaction
 //! summary is not new asynchronous work and is rejected. All `UserSource`
 //! provenance shares the same ordering domain, so Human, Runtime, Agent,
-//! Fleet, and `ExternalSystem` producers sequence through one mailbox.
+//! Fleet, and `ExternalSystem` producers sequence through one store.
 
-use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
@@ -37,27 +36,25 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::durable::inbox::{AcceptedInbound, InboundDraft, InboundStore, InboundStoreError};
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::types::ConversationLifecycle;
 
-/// The read-only observation seam of the conversation inbound mailbox.
+/// The read-only observation seam of the conversation inbound boundary.
 ///
-/// A mailbox fact observer receives the authoritative enqueue/drain facts
-/// at their mailbox linearization points. The callbacks fire while the
-/// mailbox synchronization boundary is held (immediately after the item is
-/// published / the batch is detached), so the observed order is exactly
-/// the mailbox linearization order. An observer must never call back into
-/// the mailbox and must never mutate mailbox state; the Runtime Client
-/// projection (Issue #37) treats each callback as one projection fold
-/// under its own synchronization boundary.
+/// A mailbox fact observer receives the authoritative accept/adopt facts at
+/// their linearization points. `on_enqueued` fires after durable acceptance
+/// commits; `on_drained` fires after the durable canonical adoption commits.
+/// An observer must never call back into the mailbox and must never mutate
+/// mailbox state; the Runtime Client projection (Issue #37) treats each
+/// callback as one projection fold under its own synchronization boundary.
 pub trait InboundObserver: Send + Sync {
-    /// Observes one published enqueue: the item is pending under its
-    /// mailbox-assigned sequence.
+    /// Observes one durably accepted item under its assigned sequence.
     fn on_enqueued(&self, item: &InboundItem);
 
-    /// Observes one committed finite drain: the batch (watermark, count,
-    /// and items) is detached and no longer pending.
+    /// Observes one committed finite adoption batch (watermark, count, and
+    /// items), no longer pending.
     fn on_drained(&self, batch: &InboundBatch);
 }
 
@@ -66,13 +63,24 @@ pub trait InboundObserver: Send + Sync {
 /// The sequence identifies one item of the conversation's inbound ordering
 /// domain. It is **not**
 /// [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
-/// and is never allocated from the Event Journal sequence; the mailbox owns
-/// allocation, and the first successful enqueue of a mailbox receives `1`.
+/// and is never allocated from the Event Journal sequence; the durable
+/// Pending Inbound Inbox owns allocation, and the first successful
+/// acceptance of a conversation receives `1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct InboundSequence(u64);
 
 impl InboundSequence {
+    /// Creates a sequence from a raw value.
+    ///
+    /// This is the reconstruction constructor used by the durable Pending
+    /// Inbound Inbox when it reloads committed sequences; it is deliberately
+    /// separate from allocation, which only the store performs.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
     /// Returns the raw sequence value.
     #[must_use]
     pub const fn get(self) -> u64 {
@@ -86,12 +94,12 @@ impl fmt::Display for InboundSequence {
     }
 }
 
-/// One enqueued inbound message with its mailbox-assigned sequence.
+/// One accepted inbound item with its durable sequence.
 ///
 /// The item preserves, through the canonical [`UserMessageBlock`] plus the
 /// sequence: message id, [`UserSource`](crate::message::types::UserSource),
 /// [`InboundKind`], timestamp, content/payload, the original message
-/// boundary, and the inbound sequence. Construction is mailbox-owned, so an
+/// boundary, and the inbound sequence. Construction is store-owned, so an
 /// item cannot be fabricated with an arbitrary sequence.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundItem {
@@ -100,7 +108,7 @@ pub struct InboundItem {
 }
 
 impl InboundItem {
-    /// The mailbox-assigned inbound sequence of the item.
+    /// The durable inbound sequence of the item.
     #[must_use]
     pub fn sequence(&self) -> InboundSequence {
         self.sequence
@@ -119,14 +127,14 @@ impl InboundItem {
     }
 }
 
-/// One atomic finite drain of the conversation mailbox.
+/// One finite watermark-bounded pending batch.
 ///
 /// A batch is non-empty, belongs to exactly one [`ConversationId`], contains
 /// items in strictly increasing [`InboundSequence`] order, and its watermark
 /// equals the sequence of the final/highest selected item; no item sequence
-/// exceeds the watermark. One pending message still produces a one-item
-/// batch, and every item remains a separate canonical `UserMessageBlock`.
-/// An empty mailbox produces `None`, never an empty batch.
+/// exceeds the watermark. One pending item still produces a one-item batch,
+/// and every item remains a separate canonical `UserMessageBlock`. An empty
+/// inbox produces `None`, never an empty batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InboundBatch {
     conversation_id: ConversationId,
@@ -162,7 +170,7 @@ impl InboundBatch {
 
 /// A mailbox API validation failure.
 ///
-/// These are API-level validation errors of the conversation mailbox
+/// These are API-level validation errors of the conversation inbound
 /// contract; they are not `RuntimeEvent` protocol expansion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MailboxError {
@@ -172,8 +180,8 @@ pub enum MailboxError {
     /// An ordinary inbound message must carry its persisted UTC timestamp;
     /// no wall-clock time is fabricated by the mailbox.
     MissingTimestamp,
-    /// The conversation inbound sequence space is exhausted; the mailbox
-    /// fails explicitly instead of wrapping to zero.
+    /// The conversation inbound sequence space is exhausted; the durable
+    /// inbox fails explicitly instead of wrapping to zero.
     SequenceExhausted,
     /// The mailbox belongs to a different conversation than the operation
     /// that tried to bind it.
@@ -205,6 +213,14 @@ pub enum MailboxError {
         /// The tool runtime's canonical Workspace.
         runtime_workspace: PathBuf,
     },
+    /// The durable Pending Inbound Inbox rejected the operation.
+    Inbox(InboundStoreError),
+}
+
+impl From<InboundStoreError> for MailboxError {
+    fn from(error: InboundStoreError) -> Self {
+        Self::Inbox(error)
+    }
 }
 
 impl fmt::Display for MailboxError {
@@ -239,6 +255,7 @@ impl fmt::Display for MailboxError {
                 capability_workspace.display(),
                 runtime_workspace.display(),
             ),
+            Self::Inbox(error) => error.fmt(f),
         }
     }
 }
@@ -253,40 +270,23 @@ impl Error for MailboxError {}
 /// claims its owning tool runtime, the mailbox carries that runtime's
 /// shared activation lifecycle
 /// ([`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)):
-/// an inactive conversation accepts no inbound work, so the pending queue
-/// is provably frozen while the optional Runtime Client host binds.
+/// an inactive conversation accepts no inbound work.
 ///
 /// The mailbox stores **no activation state of its own**: runtime ownership
 /// is the presence of the lifecycle handle, and active/inactive is answered
-/// by the lifecycle itself. The mailbox and the background registry (which
-/// reads this same gate) therefore observe exactly the same activation
-/// decision as the capability coordinator and the coordinator.
-/// [`ConversationInboundMailbox::bind_inactive`] is part of the
-/// tool-runtime ownership transfer and always receives a fresh `Inactive`
-/// lifecycle; the `Inactive -> Active` transition happens only through
-/// [`ConversationLifecycle::activate`], never through the mailbox.
+/// by the lifecycle itself.
 struct MailboxState {
     /// The shared activation lifecycle of the conversation runtime that
     /// owns this mailbox, when one does. `None` = standalone/unbound.
     lifecycle: Option<ConversationLifecycle>,
-    /// The last successfully allocated inbound sequence (0 = none yet).
-    last_sequence: u64,
-    /// The pending, not-yet-drained items in enqueue order.
-    pending: VecDeque<InboundItem>,
     /// The read-only fact observer, installed by the owning runtime client
-    /// boundary (Issue #37). It fires while the mailbox lock is held.
+    /// boundary (Issue #37). It fires after the durable acceptance/adoption
+    /// linearization points.
     observer: Option<Arc<dyn InboundObserver>>,
-    /// Test-only synchronization hooks for controlled race tests.
-    #[cfg(test)]
-    probe: Option<MailboxProbe>,
 }
 
 impl core::fmt::Debug for MailboxState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        #[cfg(test)]
-        let probe = self.probe.as_ref().map(|_| "<mailbox probe>");
-        #[cfg(not(test))]
-        let probe: Option<&str> = None;
         f.debug_struct("MailboxState")
             .field(
                 "lifecycle",
@@ -298,44 +298,12 @@ impl core::fmt::Debug for MailboxState {
                     }
                 }),
             )
-            .field("last_sequence", &self.last_sequence)
-            .field("pending_len", &self.pending.len())
             .field(
                 "observer",
                 &self.observer.as_ref().map(|_| "<inbound observer>"),
             )
-            .field("probe", &probe)
             .finish()
     }
-}
-
-/// Test-only synchronization hooks.
-///
-/// Every hook fires while the mailbox lock is held, so tests can establish
-/// exact linearization points: `drain_snapshot` fires after the drain
-/// established its watermark and detached the items, `drain_release`
-/// unblocks a drain parked inside its critical section (so a competing
-/// enqueue provably contends against that section), `enqueue_computed`
-/// fires after the next sequence was computed and before the item is
-/// published, and `enqueue_resume` unblocks a paused enqueue. Each hook is
-/// optional so a test installs exactly the hooks it controls. All signals
-/// are `std` channels because the mailbox synchronization boundary is a
-/// `std` mutex; the pause parks the OS thread, so the race tests run on a
-/// multi-threaded runtime. These hooks exist only under `#[cfg(test)]`.
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct MailboxProbe {
-    /// Fires while the drain critical section is still held, after the
-    /// watermark was established and the items detached.
-    pub(crate) drain_snapshot: Option<std::sync::mpsc::SyncSender<()>>,
-    /// A receiver whose token unblocks a drain parked inside its critical
-    /// section.
-    pub(crate) drain_release: Option<std::sync::mpsc::Receiver<()>>,
-    /// Fires while the enqueue critical section is still held, after the
-    /// sequence was computed and before the item is published.
-    pub(crate) enqueue_computed: Option<std::sync::mpsc::SyncSender<()>>,
-    /// A receiver whose token unblocks a paused enqueue.
-    pub(crate) enqueue_resume: Option<std::sync::mpsc::Receiver<()>>,
 }
 
 /// The explicit execution-domain identity of one fresh inbound turn.
@@ -529,64 +497,75 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
     }
 }
 
-/// The conversation-owned inbound mailbox.
+/// The conversation-owned inbound boundary.
 ///
-/// The mailbox is bound to exactly one [`ConversationId`], is cheap to
-/// clone, and is shared by concurrent runtime/human producers while one
-/// `AgentExecution` borrows or holds the same conversation mailbox. All
-/// operations are synchronous and bounded: sequence allocation and queue
-/// publication happen under one small `std::sync::Mutex` critical section,
-/// so no allocated-but-unpublished sequence is ever visible to a drain.
-///
-/// No global registry and no distributed queue exist; the mailbox is a pure
-/// in-memory runtime coordination contract.
-#[derive(Clone, Debug)]
+/// The mailbox is bound to exactly one [`ConversationId`] (the durable
+/// store's conversation), is cheap to clone, and is shared by concurrent
+/// runtime/human producers while one `AgentExecution` borrows or holds the
+/// same conversation. Acceptance, selection, and adoption all pass through
+/// the one durable store; the mailbox owns validation, lifecycle gating,
+/// observation, and the process-local wake.
+#[derive(Clone)]
 pub struct ConversationInboundMailbox {
     conversation_id: ConversationId,
     state: Arc<Mutex<MailboxState>>,
-    /// The shared admission wake handle: every successful enqueue notifies
-    /// it, so an idle conversation coordinator (Issue #61) wakes and admits
-    /// the asynchronous inbound without any client request. The wake
+    store: Arc<dyn InboundStore>,
+    /// The shared admission wake handle: every successful acceptance
+    /// notifies it, so an idle conversation coordinator (Issue #61) wakes and
+    /// admits the asynchronous inbound without any client request. The wake
     /// carries no payload and stores one permit even with no waiter, so an
-    /// enqueue between two waits is never missed. The wake is leaf-only:
+    /// acceptance between two waits is never missed. The wake is leaf-only:
     /// the coordinator waits on it and never notifies it.
     wake: Arc<tokio::sync::Notify>,
 }
 
 impl ConversationInboundMailbox {
-    /// Creates a new inbound mailbox bound to one conversation.
+    /// Creates a fresh inbound boundary over one conversation backed by an
+    /// in-memory durable inbox.
+    ///
+    /// This is the standalone/test convenience constructor: it uses the same
+    /// durable-store API as production, just over an in-memory `SQLite`
+    /// database, so acceptance, sequence allocation, and adoption semantics
+    /// are identical. Production wiring uses
+    /// [`ConversationInboundMailbox::over_store`] with a file-backed store.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the in-memory `SQLite` database cannot be opened,
+    /// which is unreachable for an in-memory database.
     #[must_use]
     pub fn new(conversation_id: ConversationId) -> Self {
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(conversation_id)
+                .expect("an in-memory durable inbox always opens"),
+        );
+        Self::over_store(store)
+    }
+
+    /// Creates an inbound boundary over one durable inbound store.
+    #[must_use]
+    pub fn over_store(store: Arc<dyn InboundStore>) -> Self {
+        let conversation_id = store.conversation_id().clone();
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
                 lifecycle: None,
-                last_sequence: 0,
-                pending: VecDeque::new(),
                 observer: None,
-                #[cfg(test)]
-                probe: None,
             })),
+            store,
             wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
     /// Installs the observer and captures the currently pending items as
-    /// one atomic mailbox section.
+    /// one atomic boundary.
     ///
     /// This is the mailbox half of the Issue #61 adapter bootstrap
-    /// handshake: because installation and the pending-item snapshot share
-    /// the one mailbox synchronization boundary, an enqueue either
-    /// linearizes before the section (its item is in the returned pending
-    /// seed and no observation was fired — the observer did not exist yet)
-    /// or after it (the installed observer fires it into the bridge
-    /// queue). No enqueue can be lost between the seed and the live
+    /// handshake. Because an inactive conversation refuses acceptance, the
+    /// durable pending set is frozen across the handshake; the observer is
+    /// installed first and the pending seed is then read from the durable
+    /// store, so no acceptance can be lost between the seed and the live
     /// observation stream and none can be applied twice.
-    ///
-    /// The handshake runs while the owning conversation runtime is still
-    /// inactive, so the captured pending queue additionally cannot move
-    /// after this section: [`ConversationInboundMailbox::enqueue`] refuses
-    /// an inactive conversation.
     ///
     /// # Panics
     ///
@@ -595,29 +574,37 @@ impl ConversationInboundMailbox {
         &self,
         observer: Arc<dyn InboundObserver>,
     ) -> Vec<InboundItem> {
-        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
-        debug_assert!(
-            state
-                .lifecycle
-                .as_ref()
-                .is_some_and(|lifecycle| !lifecycle.is_active()),
-            "the bootstrap handshake runs only while the owning runtime is inactive"
-        );
-        state.observer = Some(observer);
-        state.pending.iter().cloned().collect()
+        {
+            let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
+            debug_assert!(
+                state
+                    .lifecycle
+                    .as_ref()
+                    .is_some_and(|lifecycle| !lifecycle.is_active()),
+                "the bootstrap handshake runs only while the owning runtime is inactive"
+            );
+            state.observer = Some(observer);
+        }
+        // The durable store is the pending authority; the mailbox keeps no
+        // process-local queue that could drift from it.
+        self.store
+            .load_pending()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| InboundItem {
+                sequence: item.sequence,
+                message: item.message,
+            })
+            .collect()
     }
 
     /// Marks this mailbox as owned by a conversation runtime that has not
     /// been activated yet: inbound is refused until the owning runtime's
     /// shared lifecycle transitions to `Active`.
     ///
-    /// This is part of the tool-runtime ownership transfer (Issue #61),
-    /// called under the background registry synchronization boundary by
-    /// [`ConversationToolRuntime::claim_conversation_runtime_inactive`](crate::tools::runtime::ConversationToolRuntime::claim_conversation_runtime_inactive),
-    /// and always receives a fresh `Inactive` lifecycle. The mailbox keeps
-    /// no activation state of its own: the lifecycle handle *is* the
-    /// runtime ownership, and activation is answered by the lifecycle
-    /// itself.
+    /// This is part of the tool-runtime ownership transfer (Issue #61). The
+    /// mailbox keeps no activation state of its own: the lifecycle handle
+    /// *is* the runtime ownership.
     ///
     /// # Panics
     ///
@@ -632,14 +619,6 @@ impl ConversationInboundMailbox {
     /// Reverts [`ConversationInboundMailbox::bind_inactive`] back to the
     /// standalone unbound state.
     ///
-    /// This exists only for the transactional rollback of a failed
-    /// [`ConversationRuntime::new`](crate::runtime::conversation_runtime::ConversationRuntime::new):
-    /// the tool-runtime ownership transfer is one unit, so a construction
-    /// that fails *after* the transfer (for example on the capability
-    /// claim) restores the mailbox to its exact previous standalone state.
-    /// It is never called on runtime drop, and a successfully constructed
-    /// runtime never unbinds its mailbox.
-    ///
     /// # Panics
     ///
     /// Panics only if the mailbox lock is poisoned.
@@ -653,19 +632,6 @@ impl ConversationInboundMailbox {
     /// Whether a conversation runtime owns this mailbox and its shared
     /// lifecycle has not transitioned to `Active` yet.
     ///
-    /// This is the runtime-owned inactive gate other runtime-owned
-    /// subsystems consult (for example the background registry's dispatch
-    /// commit) while holding their own synchronization boundary. The
-    /// ownership handle transitions under the mailbox lock at the runtime's
-    /// ownership transfer ([`ConversationInboundMailbox::bind_inactive`]
-    /// and its rollback [`ConversationInboundMailbox::unbind`]); the
-    /// activation decision itself is the shared lifecycle's
-    /// `Inactive -> Active` transition, so a reader under its own lock
-    /// section observes one of the two stable states and the decision
-    /// linearizes against activation: a runtime-owned inactive observation
-    /// refuses the commit, a runtime-owned active observation means
-    /// activation already committed.
-    ///
     /// # Panics
     ///
     /// Panics only if the mailbox lock is poisoned.
@@ -678,53 +644,29 @@ impl ConversationInboundMailbox {
             .is_some_and(|lifecycle| !lifecycle.is_active())
     }
 
-    /// Creates an inbound mailbox with test-only synchronization hooks
-    /// installed. Only available under `#[cfg(test)]`; never used by
-    /// production code.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_probe(conversation_id: ConversationId, probe: MailboxProbe) -> Self {
-        Self {
-            conversation_id,
-            state: Arc::new(Mutex::new(MailboxState {
-                lifecycle: None,
-                last_sequence: 0,
-                pending: VecDeque::new(),
-                observer: None,
-                probe: Some(probe),
-            })),
-            wake: Arc::new(tokio::sync::Notify::new()),
-        }
-    }
-
     /// The conversation this mailbox belongs to.
     #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
     }
 
+    /// The durable Pending Inbound Inbox this mailbox coordinates over.
+    pub(crate) fn store(&self) -> Arc<dyn InboundStore> {
+        Arc::clone(&self.store)
+    }
+
     /// The shared admission wake handle of this mailbox.
-    ///
-    /// Every successful enqueue notifies it at its publication linearization
-    /// point. The conversation coordinator (Issue #61) parks its admission
-    /// worker on this handle, so idle asynchronous inbound wakes the
-    /// runtime without a client request. The handle is crate-private: it is
-    /// a runtime coordination seam, not a public extension point.
     pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.wake)
     }
 
-    /// Enqueues one ordinary inbound message.
+    /// Enqueues one ordinary inbound message through the durable acceptance
+    /// owner.
     ///
     /// The message must be an [`InboundKind::Message`] carrying a persisted
-    /// [`UserMessageBlock::timestamp`]. Sequence allocation and publication
-    /// into the pending queue happen under the same synchronization
-    /// boundary: the next sequence is checked, the item is constructed and
-    /// pushed, and only then is the sequence committed, so a drain can never
-    /// observe an allocated-but-unpublished sequence. The first successful
-    /// enqueue receives sequence `1` and successful enqueues advance
-    /// strictly monotonically with checked arithmetic; exhaustion fails
-    /// explicitly instead of wrapping.
+    /// [`UserMessageBlock::timestamp`]. Sequence allocation and pending
+    /// persistence commit in one durable transaction before success is
+    /// returned; only after that commit does the process-local wake fire.
     ///
     /// # Errors
     ///
@@ -733,114 +675,158 @@ impl ConversationInboundMailbox {
     /// ordinary message without a persisted timestamp,
     /// [`MailboxError::ConversationInactive`] when a conversation runtime
     /// owns this mailbox and has not been activated, and
-    /// [`MailboxError::SequenceExhausted`] when the sequence space is
-    /// exhausted. A failed enqueue consumes no sequence.
+    /// [`MailboxError::Inbox`] for a durable acceptance failure. A failed
+    /// acceptance consumes no sequence.
     ///
     /// # Panics
     ///
-    /// Panics only if the mailbox lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
+    /// Panics only if the mailbox lock is poisoned.
     pub fn enqueue(&self, message: UserMessageBlock) -> Result<InboundSequence, MailboxError> {
         if message.kind == InboundKind::CompactionSummary {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
-        if message.timestamp.is_none() {
-            return Err(MailboxError::MissingTimestamp);
-        }
-        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
-        if state
-            .lifecycle
-            .as_ref()
-            .is_some_and(|lifecycle| !lifecycle.is_active())
-        {
-            return Err(MailboxError::ConversationInactive {
-                conversation_id: self.conversation_id.clone(),
-            });
-        }
-        let sequence = state
-            .last_sequence
-            .checked_add(1)
-            .ok_or(MailboxError::SequenceExhausted)?;
-        let item = InboundItem {
-            sequence: InboundSequence(sequence),
-            message,
-        };
-        #[cfg(test)]
-        if let Some(probe) = &state.probe {
-            if let Some(computed) = &probe.enqueue_computed {
-                let _ = computed.send(());
-            }
-            if let Some(resume) = &probe.enqueue_resume {
-                let _ = resume.recv();
-            }
-        }
-        state.pending.push_back(item);
-        state.last_sequence = sequence;
-        if let Some(observer) = &state.observer {
-            let item = state
-                .pending
-                .back()
-                .expect("the enqueued item was just published");
-            observer.on_enqueued(item);
-        }
-        // The admission wake fires at the same linearization point as the
-        // publication, so an idle coordinator admits the item without any
-        // client request. `notify_one` stores one permit even with no
-        // waiter, so an enqueue between two coordinator waits is never
-        // missed.
-        self.wake.notify_one();
-        Ok(InboundSequence(sequence))
+        let timestamp = message.timestamp.ok_or(MailboxError::MissingTimestamp)?;
+        let accepted = self.accept_draft(InboundDraft {
+            message_id: Some(message.id),
+            source: message.source,
+            kind: message.kind,
+            content: message.content,
+            timestamp,
+            correlation: None,
+        })?;
+        Ok(accepted.sequence)
     }
 
-    /// Atomically drains one finite batch of the currently pending items.
+    /// Enqueues one producer-correlated ordinary inbound message through the
+    /// durable acceptance owner (exactly-once producer retry semantics).
     ///
-    /// Under the mailbox lock: an empty mailbox returns `None`; otherwise
-    /// the watermark is established as the highest sequence currently
-    /// present, exactly the currently pending items through that watermark
-    /// are detached, and one non-empty [`InboundBatch`] is returned. Because
-    /// enqueue uses the same lock, an enqueue occurring after this
-    /// operation's linearization point can never extend the batch; an
-    /// arrival after the watermark waits for the next drain.
+    /// A retry with the same committed `correlation` resolves to the same
+    /// acceptance without allocating a second sequence.
     ///
-    /// One safe agent-loop boundary performs at most one finite drain; the
-    /// drain never re-inspects the queue for newly arriving items.
+    /// # Errors
+    ///
+    /// Returns the same [`MailboxError`] variants as
+    /// [`ConversationInboundMailbox::enqueue`].
+    pub fn enqueue_correlated(
+        &self,
+        message: UserMessageBlock,
+        correlation: String,
+    ) -> Result<InboundSequence, MailboxError> {
+        if message.kind == InboundKind::CompactionSummary {
+            return Err(MailboxError::CompactionSummaryNotEligible);
+        }
+        let timestamp = message.timestamp.ok_or(MailboxError::MissingTimestamp)?;
+        let accepted = self.accept_draft(InboundDraft {
+            message_id: Some(message.id),
+            source: message.source,
+            kind: message.kind,
+            content: message.content,
+            timestamp,
+            correlation: Some(correlation),
+        })?;
+        Ok(accepted.sequence)
+    }
+
+    /// The one durable acceptance linearization point: validate the draft,
+    /// durably accept it, then publish the process-local observation and
+    /// wake.
+    ///
+    /// Producer success may be reported only after this method returns `Ok`,
+    /// which happens only after the durable transaction commits. The wake is
+    /// a liveness optimization that fires strictly after that commit.
+    pub(crate) fn accept_draft(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, MailboxError> {
+        if draft.kind == InboundKind::CompactionSummary {
+            return Err(MailboxError::CompactionSummaryNotEligible);
+        }
+        {
+            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            if state
+                .lifecycle
+                .as_ref()
+                .is_some_and(|lifecycle| !lifecycle.is_active())
+            {
+                return Err(MailboxError::ConversationInactive {
+                    conversation_id: self.conversation_id.clone(),
+                });
+            }
+        }
+        let accepted = self.store.accept_inbound(draft)?;
+        {
+            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            let item = InboundItem {
+                sequence: accepted.sequence,
+                message: accepted.message.clone(),
+            };
+            if let Some(observer) = &state.observer {
+                observer.on_enqueued(&item);
+            }
+        }
+        self.wake.notify_one();
+        Ok(accepted)
+    }
+
+    /// Selects the currently pending items as one finite watermark-bounded
+    /// batch, without consuming them.
+    ///
+    /// Selection is a durable read: it never mutates the Pending Inbound
+    /// Inbox, so a crash after selection leaves the items pending. Adoption
+    /// is the separate [`ConversationInboundMailbox::adopt_pending_batch`]
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Inbox`] on a durable read failure.
+    pub fn select_pending_batch(&self) -> Result<Option<InboundBatch>, MailboxError> {
+        let Some(batch) = self.store.select_pending_batch()? else {
+            return Ok(None);
+        };
+        Ok(Some(InboundBatch {
+            conversation_id: self.conversation_id.clone(),
+            watermark: batch.watermark,
+            items: batch
+                .items
+                .into_iter()
+                .map(|item| InboundItem {
+                    sequence: item.sequence,
+                    message: item.message,
+                })
+                .collect(),
+        }))
+    }
+
+    /// Atomically adopts the selected batch into the durable canonical
+    /// message ledger and removes the pending records.
+    ///
+    /// This is the canonical-adoption linearization point: the durable
+    /// append and the pending removal share one transaction, so a crash can
+    /// never observe a pending record whose canonical message is absent nor
+    /// a canonical message that remains independently re-adoptable. The
+    /// returned messages are the adopted canonical `User` messages in strict
+    /// sequence order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Inbox`] on a durable adoption failure, in
+    /// which case the selected items remain pending and recoverable.
     ///
     /// # Panics
     ///
-    /// Panics only if the mailbox lock is poisoned, which would mean a
-    /// previous operation panicked while holding the lock.
-    #[must_use]
-    pub fn drain(&self) -> Option<InboundBatch> {
-        let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
-        let watermark = state.pending.back().map(|item| item.sequence)?;
-        let items = state.pending.drain(..).collect::<Vec<_>>();
-        debug_assert!(
-            items.iter().all(|item| item.sequence <= watermark),
-            "no batch item may exceed the watermark"
-        );
-        debug_assert!(
-            items.last().is_some_and(|item| item.sequence == watermark),
-            "the watermark is the highest selected sequence"
-        );
-        #[cfg(test)]
-        if let Some(probe) = &state.probe {
-            if let Some(snapshot) = &probe.drain_snapshot {
-                let _ = snapshot.send(());
-            }
-            if let Some(release) = &probe.drain_release {
-                let _ = release.recv();
+    /// Panics only if the mailbox lock is poisoned.
+    pub fn adopt_pending_batch(
+        &self,
+        batch: &InboundBatch,
+    ) -> Result<Vec<MessageBlock>, MailboxError> {
+        let adopted = self.store.adopt_pending_batch(batch.watermark())?;
+        {
+            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            if let Some(observer) = &state.observer {
+                observer.on_drained(batch);
             }
         }
-        let batch = InboundBatch {
-            conversation_id: self.conversation_id.clone(),
-            watermark,
-            items,
-        };
-        if let Some(observer) = &state.observer {
-            observer.on_drained(&batch);
-        }
-        drop(state);
-        Some(batch)
+        Ok(adopted)
     }
 }
 
@@ -848,8 +834,9 @@ impl ConversationInboundMailbox {
 mod tests {
     use super::{
         ConversationInboundMailbox, FreshInboundError, FreshInboundTurn, InboundSequence,
-        MailboxError, MailboxProbe,
+        InitialTurnTrigger, MailboxError,
     };
+    use crate::durable::sqlite::SqliteInboundStore;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -857,7 +844,6 @@ mod tests {
     use crate::runtime::identity::{ConversationId, MessageId};
     use chrono::{DateTime, TimeZone, Utc};
     use std::sync::Arc;
-    use std::sync::mpsc::sync_channel;
 
     fn fixed_time() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0)
@@ -889,21 +875,18 @@ mod tests {
         ConversationInboundMailbox::new(ConversationId::new("conv-1"))
     }
 
-    /// The first successful enqueue receives sequence 1.
+    /// The first successful acceptance receives sequence 1.
     #[test]
-    fn first_enqueue_receives_sequence_one() {
+    fn first_acceptance_receives_sequence_one() {
         let mailbox = mailbox();
-        assert_eq!(
-            mailbox.enqueue(human("m1", "hi")).expect("enqueue").get(),
-            1
-        );
+        assert_eq!(mailbox.enqueue(human("m1", "hi")).expect("accept").get(), 1);
     }
 
     /// A mailbox claimed by an inactive conversation runtime (Issue #61)
     /// refuses inbound with the typed error and consumes no sequence; the
     /// shared lifecycle's activation transition restores admission.
     #[test]
-    fn enqueue_is_refused_while_the_owning_runtime_is_inactive() {
+    fn acceptance_is_refused_while_the_owning_runtime_is_inactive() {
         let mailbox = mailbox();
         let lifecycle = crate::runtime::types::ConversationLifecycle::new();
         mailbox.bind_inactive(&lifecycle);
@@ -913,32 +896,32 @@ mod tests {
                 conversation_id: ConversationId::new("conv-1"),
             })
         );
-        assert_eq!(mailbox.drain(), None, "no pending item exists");
+        assert!(mailbox.select_pending_batch().expect("select").is_none());
         assert!(lifecycle.activate(), "the first lifecycle transition wins");
         assert_eq!(
             mailbox
                 .enqueue(human("m2", "after activation"))
-                .expect("enqueue")
+                .expect("accept")
                 .get(),
             1,
-            "the refused enqueue consumed no sequence"
+            "the refused acceptance consumed no sequence"
         );
     }
 
-    /// Subsequent successful enqueues strictly increment.
+    /// Subsequent successful acceptances strictly increment.
     #[test]
-    fn enqueues_strictly_increment() {
+    fn acceptances_strictly_increment() {
         let mailbox = mailbox();
-        let first = mailbox.enqueue(human("m1", "a")).expect("enqueue a");
-        let second = mailbox.enqueue(runtime("m2", "b")).expect("enqueue b");
-        let third = mailbox.enqueue(human("m3", "c")).expect("enqueue c");
+        let first = mailbox.enqueue(human("m1", "a")).expect("accept a");
+        let second = mailbox.enqueue(runtime("m2", "b")).expect("accept b");
+        let third = mailbox.enqueue(human("m3", "c")).expect("accept c");
         assert_eq!(first.get(), 1);
         assert_eq!(second.get(), 2);
         assert_eq!(third.get(), 3);
         assert!(first < second && second < third);
     }
 
-    /// Human and Runtime producers share the same sequence domain.
+    /// Human and Runtime producers share the same durable sequence domain.
     #[test]
     fn human_and_runtime_share_one_sequence_domain() {
         let mailbox = mailbox();
@@ -950,9 +933,9 @@ mod tests {
         assert_eq!(human_seq_2.get(), 3);
     }
 
-    /// A failed enqueue consumes no sequence.
+    /// A failed acceptance consumes no sequence.
     #[test]
-    fn failed_enqueue_consumes_no_sequence() {
+    fn failed_acceptance_consumes_no_sequence() {
         let mailbox = mailbox();
         assert_eq!(
             mailbox
@@ -974,51 +957,56 @@ mod tests {
                 .to_string(),
             "an ordinary inbound message requires its persisted timestamp"
         );
-        let first = mailbox.enqueue(human("m3", "ok")).expect("enqueue");
+        let first = mailbox.enqueue(human("m3", "ok")).expect("accept");
         assert_eq!(first.get(), 1, "no sequence was consumed by failures");
     }
 
-    /// The sequence cannot wrap on exhaustion: the mailbox fails explicitly.
+    /// The durable sequence domain cannot wrap: exhaustion fails explicitly.
     #[test]
     fn sequence_exhaustion_fails_explicitly() {
-        let mailbox = mailbox();
-        mailbox.state.lock().expect("mailbox lock").last_sequence = u64::MAX;
-        assert_eq!(
-            mailbox.enqueue(human("m1", "late")).expect_err("exhausted"),
-            MailboxError::SequenceExhausted
-        );
-        assert_eq!(
-            mailbox.enqueue(human("m2", "later")).expect_err("still"),
-            MailboxError::SequenceExhausted
-        );
+        let store =
+            SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory store");
+        // Force the counter to the max value directly in the database.
+        store.force_next_sequence_for_test(i64::MAX);
+        let mailbox = ConversationInboundMailbox::over_store(Arc::new(store));
+        assert!(matches!(
+            mailbox.enqueue(human("m1", "late")),
+            Err(MailboxError::Inbox(_))
+        ));
     }
 
-    /// An empty mailbox drains to None, never an empty batch.
+    /// An empty inbox selects to None, never an empty batch.
     #[test]
-    fn empty_mailbox_drains_to_none() {
+    fn empty_inbox_selects_to_none() {
         let mailbox = mailbox();
-        assert_eq!(mailbox.drain(), None);
+        assert_eq!(mailbox.select_pending_batch().expect("select"), None);
     }
 
     /// One pending item produces a one-item batch.
     #[test]
     fn one_pending_item_produces_one_item_batch() {
         let mailbox = mailbox();
-        mailbox.enqueue(human("m1", "single")).expect("enqueue");
-        let batch = mailbox.drain().expect("one batch");
+        mailbox.enqueue(human("m1", "single")).expect("accept");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("one batch");
         assert_eq!(batch.items().len(), 1);
         assert_eq!(batch.watermark(), InboundSequence(1));
     }
 
-    /// Multiple items drain strictly sequence-ordered with a correct
-    /// watermark, and a later drain is empty.
+    /// Selection is non-destructive and strictly sequence-ordered with a
+    /// correct watermark; adoption consumes exactly the selected batch.
     #[test]
-    fn drain_orders_items_and_clears_the_queue() {
+    fn selection_orders_items_and_adoption_consumes_them() {
         let mailbox = mailbox();
         mailbox.enqueue(human("m1", "a")).expect("a");
         mailbox.enqueue(runtime("m2", "b")).expect("b");
         mailbox.enqueue(human("m3", "c")).expect("c");
-        let batch = mailbox.drain().expect("one batch");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("one batch");
         assert_eq!(batch.watermark(), InboundSequence(3));
         let sequences: Vec<u64> = batch
             .items()
@@ -1026,38 +1014,58 @@ mod tests {
             .map(|item| item.sequence().get())
             .collect();
         assert_eq!(sequences, vec![1, 2, 3]);
-        assert!(
-            batch
-                .items()
-                .iter()
-                .all(|item| item.sequence() <= batch.watermark()),
-            "no item sequence may exceed the watermark"
-        );
         assert_eq!(batch.conversation_id(), &ConversationId::new("conv-1"));
-        assert_eq!(
-            mailbox.drain(),
-            None,
-            "a complete drain empties the mailbox"
+        // Selection is non-destructive: the batch is still pending.
+        let again = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("still there");
+        assert_eq!(again.watermark(), InboundSequence(3));
+        // Adoption transfers exactly the watermark and removes the records.
+        let adopted = mailbox.adopt_pending_batch(&batch).expect("adopt");
+        assert_eq!(adopted.len(), 3);
+        assert!(
+            mailbox.select_pending_batch().expect("select").is_none(),
+            "adoption consumes the selected pending batch"
         );
     }
 
-    /// Batch membership follows the drain's linearization point: an enqueue
-    /// after the drain completes waits for the next batch.
+    /// Batch membership follows the selection watermark: an acceptance after
+    /// the selection is excluded from the selected batch and belongs to the
+    /// next selection.
     #[test]
-    fn arrival_after_drain_waits_for_the_next_batch() {
+    fn arrival_after_selection_belongs_to_the_next_batch() {
         let mailbox = mailbox();
         mailbox.enqueue(human("m1", "a")).expect("a");
         mailbox.enqueue(human("m2", "b")).expect("b");
-        let first = mailbox.drain().expect("first batch");
+        let first = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("first batch");
         assert_eq!(first.watermark(), InboundSequence(2));
         mailbox.enqueue(runtime("m3", "c")).expect("c");
-        let second = mailbox.drain().expect("second batch");
+        // The selected watermark did not move; the new item is in the next
+        // selection.
+        let second = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("second batch");
         assert_eq!(second.watermark(), InboundSequence(3));
         assert_eq!(
             second.items()[0].sequence().get(),
-            3,
-            "the post-watermark arrival opens the next batch"
+            1,
+            "selection is non-destructive: prior items are still pending"
         );
+        // Adopt the first watermark only: item 3 remains pending.
+        let adopted = mailbox.adopt_pending_batch(&first).expect("adopt first");
+        assert_eq!(adopted.len(), 2);
+        let remaining = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("remaining");
+        assert_eq!(remaining.watermark(), InboundSequence(3));
+        assert_eq!(remaining.items().len(), 1);
+        assert_eq!(remaining.items()[0].message().id, MessageId::new("m3"));
     }
 
     /// The item preserves every piece of the canonical inbound message
@@ -1066,8 +1074,11 @@ mod tests {
     fn metadata_is_preserved_exactly() {
         let mailbox = mailbox();
         let original = human("msg-inbound-7", "deploy it");
-        let sequence = mailbox.enqueue(original.clone()).expect("enqueue");
-        let batch = mailbox.drain().expect("batch");
+        let sequence = mailbox.enqueue(original.clone()).expect("accept");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("batch");
         let item = &batch.items()[0];
         assert_eq!(item.sequence(), sequence);
         assert_eq!(item.message().id, MessageId::new("msg-inbound-7"));
@@ -1109,124 +1120,6 @@ mod tests {
         );
         assert!(mailbox.enqueue(human("ok-1", "fine")).is_ok());
         assert!(mailbox.enqueue(runtime("ok-2", "fine")).is_ok());
-    }
-
-    /// Race A — arrival after the drain snapshot: the drain's watermark is
-    /// established before a competing enqueue completes, so the enqueue
-    /// joins the next batch. The drain parks inside its critical section,
-    /// so the enqueue provably begins against (and blocks on) that section:
-    /// the drain cannot release the lock before the test releases it.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn race_a_arrival_after_snapshot_never_extends_the_batch() {
-        let (drain_tx, drain_rx) = sync_channel(1);
-        // Capacity 2: one token releases the parked drain's critical
-        // section, and a second token is consumed by the final verification
-        // drain of the test — the probe parks every drain, so every drain
-        // needs its release token.
-        let (release_tx, release_rx) = sync_channel(2);
-        let mailbox = ConversationInboundMailbox {
-            conversation_id: ConversationId::new("conv-1"),
-            state: Arc::new(std::sync::Mutex::new(super::MailboxState {
-                lifecycle: None,
-                last_sequence: 0,
-                pending: std::collections::VecDeque::new(),
-                observer: None,
-                probe: Some(MailboxProbe {
-                    drain_snapshot: Some(drain_tx),
-                    drain_release: Some(release_rx),
-                    enqueue_computed: None,
-                    enqueue_resume: None,
-                }),
-            })),
-            wake: Arc::new(tokio::sync::Notify::new()),
-        };
-        mailbox.enqueue(human("m1", "A")).expect("enqueue A");
-
-        let draining = mailbox.clone();
-        let drain_task = tokio::task::spawn_blocking(move || draining.drain());
-        // The drain holds the mailbox lock, established its watermark for A,
-        // detached the item, and parked inside its critical section.
-        // Exact: the counterparty is a blocking-pool task, so this waits
-        // for the linearization point itself rather than for a bound.
-        drain_rx.recv().expect("drain snapshot established");
-        // B attempts to enqueue while the drain is still parked inside its
-        // critical section: B's enqueue can only ever acquire the lock after
-        // the drain releases it, so it provably blocks against that section
-        // and joins the next batch after the snapshot.
-        let enqueueing = mailbox.clone();
-        let enqueue_task = tokio::task::spawn_blocking(move || {
-            enqueueing.enqueue(human("m2", "B")).expect("enqueue B")
-        });
-        // Release the drain: the critical section ends, the batch with A is
-        // returned, and only then can B's enqueue proceed. The second token
-        // stays buffered for the final verification drain below.
-        release_tx.send(()).expect("release the drain");
-        release_tx
-            .send(())
-            .expect("release the final verification drain");
-        let first = drain_task
-            .await
-            .expect("drain task")
-            .expect("first batch must contain A");
-        let sequence_b = enqueue_task.await.expect("enqueue task");
-        let second = mailbox.drain().expect("second batch must contain B");
-
-        assert_eq!(first.items().len(), 1);
-        assert_eq!(first.watermark(), InboundSequence(1));
-        assert_eq!(first.items()[0].message().id, MessageId::new("m1"));
-        assert_eq!(sequence_b, InboundSequence(2));
-        assert_eq!(second.items().len(), 1);
-        assert_eq!(second.watermark(), InboundSequence(2));
-        assert_eq!(second.items()[0].message().id, MessageId::new("m2"));
-    }
-
-    /// Race B — no allocated-but-unpublished sequence: while the enqueue
-    /// holds the mailbox lock after computing its sequence and before
-    /// publishing the item, a competing drain cannot observe the allocated
-    /// sequence; after publication the drain contains the complete item.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn race_b_no_allocated_but_unpublished_sequence() {
-        let (computed_tx, computed_rx) = sync_channel(1);
-        let (resume_tx, resume_rx) = sync_channel(1);
-        let mailbox = ConversationInboundMailbox {
-            conversation_id: ConversationId::new("conv-1"),
-            state: Arc::new(std::sync::Mutex::new(super::MailboxState {
-                lifecycle: None,
-                last_sequence: 0,
-                pending: std::collections::VecDeque::new(),
-                observer: None,
-                probe: Some(MailboxProbe {
-                    drain_snapshot: None,
-                    drain_release: None,
-                    enqueue_computed: Some(computed_tx),
-                    enqueue_resume: Some(resume_rx),
-                }),
-            })),
-            wake: Arc::new(tokio::sync::Notify::new()),
-        };
-
-        let enqueueing = mailbox.clone();
-        let enqueue_task = tokio::task::spawn_blocking(move || {
-            enqueueing.enqueue(human("m1", "item")).expect("enqueue")
-        });
-        // The enqueue is inside its critical section: sequence 1 computed,
-        // item not yet published.
-        // Exact: the counterparty is a blocking-pool task, so this waits
-        // for the linearization point itself rather than for a bound.
-        computed_rx.recv().expect("enqueue sequence computed");
-        let draining = mailbox.clone();
-        let drain_task = tokio::task::spawn_blocking(move || draining.drain());
-        // Release the enqueue: it publishes the item and releases the lock.
-        // The drain must then see the complete published item, never a
-        // watermark referencing an absent sequence.
-        resume_tx.send(()).expect("resume enqueue");
-        let sequence = enqueue_task.await.expect("enqueue task");
-        let batch = drain_task.await.expect("drain task").expect("batch");
-        assert_eq!(sequence, InboundSequence(1));
-        assert_eq!(batch.watermark(), InboundSequence(1));
-        assert_eq!(batch.items().len(), 1);
-        assert_eq!(batch.items()[0].sequence(), InboundSequence(1));
-        assert_eq!(mailbox.drain(), None, "the queue holds no hidden item");
     }
 
     /// A fresh inbound turn is non-empty, ordered, and duplicate-free.
@@ -1334,9 +1227,9 @@ mod tests {
         );
     }
 
-    /// Canonical ordering: a mailbox-drained A/B batch history with the
-    /// drained-batch fresh turn `[A, B]` remains valid even when earlier
-    /// canonical messages (for example a committed Assistant turn) intervene.
+    /// Canonical ordering: a selected A/B batch history with the
+    /// batch fresh turn `[A, B]` remains valid even when earlier canonical
+    /// messages (for example a committed Assistant turn) intervene.
     #[test]
     fn drained_batch_order_remains_valid_in_mixed_history() {
         use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
@@ -1384,7 +1277,6 @@ mod tests {
     /// disable switch.
     #[test]
     fn initial_turn_trigger_is_explicit() {
-        use super::InitialTurnTrigger;
         let fresh = InitialTurnTrigger::FreshInbound(
             FreshInboundTurn::new(vec![MessageId::new("m-1")]).expect("valid turn"),
         );

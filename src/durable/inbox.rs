@@ -1,0 +1,210 @@
+//! Backend-independent domain semantics of the durable Pending Inbound Inbox.
+//!
+//! This module owns the domain vocabulary and the [`InboundStore`] trait,
+//! which is the one durable authority boundary every inbound producer (and
+//! the conversation coordinator's safe-boundary adoption) speaks through.
+//! There is deliberately no generic repository, queue, CRUD, or storage
+//! strategy trait: the operations are the rustX semantic transitions a
+//! `PostgreSQL` backend must reproduce exactly.
+
+use chrono::{DateTime, Utc};
+
+use crate::message::types::{
+    InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+};
+use crate::runtime::identity::{ConversationId, MessageId};
+use crate::runtime::inbound::InboundSequence;
+
+/// A producer-supplied draft of one inbound item, before acceptance.
+///
+/// The producer supplies destination content/provenance/correlation and, for
+/// producers that own their message identity (for example a background
+/// execution terminal notification), an explicit [`MessageId`]. When the
+/// producer owns no stable identity, the acceptance owner allocates a
+/// deterministic message id from the allocated [`InboundSequence`].
+#[derive(Debug, Clone)]
+pub struct InboundDraft {
+    /// The producer-supplied stable message identity, when the producer owns
+    /// one. `None` means the acceptance owner allocates a deterministic id.
+    pub message_id: Option<MessageId>,
+    /// Provenance of the inbound work.
+    pub source: UserSource,
+    /// The typed inbound kind. The ordinary inbound seam accepts only
+    /// [`InboundKind::Message`]; a compaction summary is not new work.
+    pub kind: InboundKind,
+    /// The bounded canonical content.
+    pub content: Vec<UserContentBlock>,
+    /// The persisted producer timestamp. Never fabricated by the owner.
+    pub timestamp: DateTime<Utc>,
+    /// Producer correlation/idempotency identity. When present, a retry with
+    /// the same correlation returns the same acceptance exactly once.
+    pub correlation: Option<String>,
+}
+
+/// The committed result of one successful acceptance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcceptedInbound {
+    /// The durable per-conversation inbound sequence allocated by the owner.
+    pub sequence: InboundSequence,
+    /// The stable message identity the item becomes canonical under.
+    pub message_id: MessageId,
+    /// The persisted canonical inbound message.
+    pub message: UserMessageBlock,
+    /// Whether this acceptance was an idempotent correlation retry of an
+    /// already-committed acceptance (no new sequence was allocated).
+    pub retried: bool,
+}
+
+/// One accepted-but-not-yet-adopted durable pending item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingInboundItem {
+    /// The durable inbound sequence.
+    pub sequence: InboundSequence,
+    /// The stable message identity.
+    pub message_id: MessageId,
+    /// The persisted canonical inbound message.
+    pub message: UserMessageBlock,
+    /// The producer correlation, when one was supplied.
+    pub correlation: Option<String>,
+}
+
+/// One finite watermark-bounded pending batch.
+///
+/// A batch is non-empty, its items are in strictly increasing
+/// [`InboundSequence`] order, and its watermark equals the highest selected
+/// sequence. Items accepted after the watermark belong to the next batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingBatch {
+    /// The conversation the batch belongs to.
+    pub conversation_id: ConversationId,
+    /// The watermark: the highest selected inbound sequence.
+    pub watermark: InboundSequence,
+    /// The selected items in strict sequence order.
+    pub items: Vec<PendingInboundItem>,
+}
+
+/// A durable inbox contract violation or storage failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InboundStoreError {
+    /// The per-conversation inbound sequence space is exhausted.
+    SequenceExhausted,
+    /// A producer-supplied message identity is already committed to the
+    /// durable pending/canonical domain.
+    DuplicateMessageId(MessageId),
+    /// The acceptance owner requires non-empty inbound content.
+    EmptyContent,
+    /// The underlying storage rejected the operation.
+    Storage(String),
+}
+
+impl core::fmt::Display for InboundStoreError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::SequenceExhausted => write!(f, "the inbound sequence space is exhausted"),
+            Self::DuplicateMessageId(id) => {
+                write!(
+                    f,
+                    "message {id} is already committed to the durable inbound domain"
+                )
+            }
+            Self::EmptyContent => write!(f, "inbound content must not be empty"),
+            Self::Storage(message) => write!(f, "durable inbound storage failed: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for InboundStoreError {}
+
+/// The backend-independent durable authority of the Pending Inbound Inbox.
+///
+/// One store instance is bound to exactly one [`ConversationId`] (the same
+/// one-conversation boundary the conversation runtime owns). Implementations
+/// must hold the following invariants:
+///
+/// - [`InboundStore::accept_inbound`] is the acceptance linearization point:
+///   sequence allocation, pending persistence, and correlation state commit
+///   in one transaction. No success is reported before the commit, and a
+///   failed acceptance exposes no sequence, no pending record, and no
+///   correlation.
+/// - [`InboundStore::select_pending_batch`] is non-destructive: it returns a
+///   finite watermark snapshot without removing any pending record.
+/// - [`InboundStore::adopt_pending_batch`] is the canonical-adoption
+///   linearization point: it appends the selected messages to the durable
+///   canonical ledger and removes their pending records in one transaction,
+///   so a crash can never observe a pending record whose canonical message is
+///   absent, nor a canonical message that remains independently re-adoptable.
+pub trait InboundStore: Send + Sync + 'static {
+    /// The conversation this store is the durable inbound authority of.
+    fn conversation_id(&self) -> &ConversationId;
+
+    /// Accepts one inbound item durably.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::EmptyContent`] for empty content,
+    /// [`InboundStoreError::SequenceExhausted`] when the sequence domain is
+    /// exhausted, [`InboundStoreError::DuplicateMessageId`] when a
+    /// producer-supplied identity collides, and
+    /// [`InboundStoreError::Storage`] on a backend failure.
+    fn accept_inbound(&self, draft: InboundDraft) -> Result<AcceptedInbound, InboundStoreError>;
+
+    /// Selects the currently pending items as one finite watermark-bounded
+    /// batch, without consuming them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, InboundStoreError>;
+
+    /// Atomically adopts every pending item through `watermark` into the
+    /// durable canonical message ledger, in strict sequence order, returning
+    /// the adopted canonical messages.
+    ///
+    /// Adoption and pending removal share one transaction. Adopting an empty
+    /// (or already-adopted) watermark returns an empty vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::Storage`] when the adoption transaction
+    /// fails; on failure the selected items remain pending and recoverable.
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+    ) -> Result<Vec<MessageBlock>, InboundStoreError>;
+
+    /// Loads every accepted-but-not-yet-adopted pending item in strict
+    /// sequence order (recovery/bootstrap seam).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, InboundStoreError>;
+
+    /// Seeds the durable canonical prefix with the conversation's initial
+    /// canonical messages.
+    ///
+    /// Idempotent: a store whose canonical ledger is already non-empty is
+    /// left unchanged (the caller re-supplies the same deterministic initial
+    /// messages across restarts). This is the bootstrap that makes
+    /// [`InboundStore::load_canonical`] the complete crash-recoverable
+    /// canonical prefix rather than only the adopted inbound suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::Storage`] when the seed transaction fails.
+    fn seed_canonical(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
+
+    /// Loads the durable canonical message ledger in commit order (the
+    /// crash-recoverable prefix of the Message Ledger).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
+    fn load_canonical(&self) -> Result<Vec<MessageBlock>, InboundStoreError>;
+}
+
+/// Convenience: the canonical [`MessageBlock`] for one accepted item.
+#[must_use]
+pub fn canonical_block(message: &UserMessageBlock) -> MessageBlock {
+    MessageBlock::User(message.clone())
+}
