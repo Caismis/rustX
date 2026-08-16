@@ -4977,6 +4977,10 @@ mod tests {
             "the refused commit published no record"
         );
         assert!(!*started.borrow(), "the rolled-back runner never began");
+        assert!(
+            adapter.requests().is_empty(),
+            "the rejected pre-activation inbound never starts a model request"
+        );
 
         // A capability commit on the runtime-owned coordinator is refused
         // typed: the active revision stays the startup one.
@@ -5107,11 +5111,6 @@ mod tests {
             registry.all_snapshots().len(),
             1,
             "one background record settles once"
-        );
-        assert_eq!(
-            adapter.requests().len(),
-            0,
-            "the rejected pre-activation inbound never runs"
         );
     }
 
