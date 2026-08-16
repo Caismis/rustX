@@ -1066,13 +1066,15 @@ group-scoped `ECHILD` as a whole-group terminal proof. Instead:
   zombie-only group as `EPERM`, which is indistinguishable from an
   unauthorized live member, so neither is ever treated as a terminal fact.)
 
-A command that deliberately creates a new session can leave the macOS
-process group before containment, and a lost outer supervisor may not leave
-a waitable anchor; those cases are reported as unproven rather than
-converted into a false terminal proof. macOS terminal settlement therefore
-proves the group was actively terminated — not that every member was
-reaped, which rustX cannot prove on macOS. `/proc` is never the source of
-truth for ownership or quiescence on either platform.
+A command that deliberately creates a new session leaves the macOS
+process group and thereby exits rustX's ownership domain: rustX does not
+track, contain, reap, or wait for such a descendant, and settlement of the
+owned group does not imply it terminated. A lost outer supervisor that
+leaves no waitable anchor is reported as unproven rather than converted
+into a false terminal proof. macOS terminal settlement therefore proves the
+owned process group was actively terminated — not that every descendant
+was reaped, which rustX cannot prove on macOS. `/proc` is never the source
+of truth for ownership or quiescence on either platform.
 
 **The inner supervisor pid is an ownership anchor with exactly one
 reaping owner.** The outer supervisor's dedicated anchor path is the only

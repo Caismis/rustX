@@ -242,8 +242,9 @@ Bash requirements:
   cancellation lifecycle but has no equivalent seccomp or orphan-adoption
   primitive, so it proves terminality by escalating to the outer's fallback
   containment `SIGKILL` and probing the group absent (`killpg(pgid, 0)` ->
-  `ESRCH`); deliberate session escapes and lost-anchor cases remain
-  explicitly unproven.
+  `ESRCH`); a descendant that deliberately leaves the group exits rustX's
+  ownership domain and is never claimed contained or reaped, while a lost
+  anchor remains explicitly unproven.
 - Target-ABI seccomp policy: membership syscall numbers come from the
   compiled Linux target's libc constants; x86-64 rejects the x32 syscall
   namespace explicitly because it shares `AUDIT_ARCH_X86_64`

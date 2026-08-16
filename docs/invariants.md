@@ -732,7 +732,10 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   fallback containment `SIGKILL` and proves the group absent with a bounded
   `killpg(pgid, 0)` probe reaching `ESRCH`. The injected EXIT `wait` wrapper
   is a best-effort convenience for ordinary background jobs, never an
-  ownership boundary. A deliberate macOS `setsid(2)` escape or a supervisor
+  ownership boundary. A descendant that deliberately calls
+  `setsid(2)`/`setpgid(2)` leaves that boundary and exits rustX's ownership
+  domain: it is not tracked, contained, reaped, or waited for, and
+  settlement of the owned group does not imply it terminated. A supervisor
   loss without a waitable anchor is reported as unproven, never as a
   fabricated terminal result.
 - **The `START` gate consumes only `START`.** The Bash inner supervisor's
@@ -795,10 +798,11 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   (an outer reaper-of-last-resort plus an inner session/group leader that
   spawns `/bin/bash`). Linux enables child-subreaper reparenting for
   descendants that outlive the shell; macOS has no equivalent, so a
-  descendant that outlives the shell is reparented to launchd and is
-  contained by the outer's fallback `SIGKILL` rather than claimed reaped.
-  `/proc` enumeration is never the source of truth for process ownership or
-  quiescence.
+  descendant that outlives the shell but remains in the invocation group is
+  reparented to launchd and is still contained by the outer's fallback
+  `SIGKILL` rather than claimed reaped. A descendant that deliberately
+  leaves the group is outside that ownership domain. `/proc` enumeration is
+  never the source of truth for process ownership or quiescence.
 - Bash ownership commits at the successful `/bin/bash` spawn, after the
   inner has created the invocation session/group and installed the
   platform's membership policy. The inner first reports its retained anchor and waits

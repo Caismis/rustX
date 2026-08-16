@@ -86,9 +86,11 @@
 //! and `TimedOut` alike — is terminal with respect to the invocation-owned
 //! process group. Linux also proves that no descendant can escape that
 //! group. macOS has the same normal group cancellation path, but a command
-//! that deliberately creates a new session is outside the group guarantee;
-//! process-control failures remain explicit and are never treated as proof
-//! of physical settlement.
+//! that deliberately creates a new session leaves the invocation process
+//! group and exits rustX's ownership domain: it is not tracked, contained,
+//! reaped, or waited for, and settlement of the owned group does not imply
+//! it terminated; process-control failures remain explicit and are never
+//! treated as proof of physical settlement.
 //!
 //! # Output capture
 //!

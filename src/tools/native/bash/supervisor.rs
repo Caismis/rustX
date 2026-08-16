@@ -48,9 +48,10 @@
 //! settlement on exactly the processes that remain in that group. Ordinary
 //! shell descendants remain owned while they stay in the group.
 //!
-//! # Fixed invocation process group
+//! # Fixed invocation process group (Linux)
 //!
-//! **Membership is immutable for Bash descendants.** The inner supervisor
+//! **On Linux, membership is immutable for Bash descendants.** The inner
+//! supervisor
 //! installs a narrow inherited seccomp policy (see
 //! `enforce_fixed_group_membership` between its own `setsid()` setup and
 //! the `/bin/bash` spawn: `setsid(2)` and `setpgid(2)` are rejected with
@@ -73,6 +74,13 @@
 //! A failure to install it is
 //! a pre-ownership setup failure: no bash tree is spawned and the
 //! invocation settles as an explicit `Failed`.
+//!
+//! macOS has no fixed-membership primitive:
+//! `enforce_fixed_group_membership` is a successful no-op there, the
+//! invocation process group remains the ownership boundary, and a
+//! descendant may legally leave it via `setsid(2)`/`setpgid(2)`. A
+//! descendant that does so exits rustX's macOS ownership domain (see
+//! below).
 //!
 //! # Reaping domain vs settlement gate
 //!
@@ -146,7 +154,7 @@
 //! rustX's own waits (the outer's direct reap and the catastrophic
 //! adoption path) are documented in the Bash tool.
 //!
-//! The fixed-membership invariant is what makes `ECHILD` from these
+//! On Linux, the fixed-membership invariant is what makes `ECHILD` from these
 //! group-scoped waits a **complete** terminal proof. `waitid(P_PGID)`
 //! alone is only an observation of the waiting process's children: an
 //! in-group grandchild hidden behind an ancestor that left the group would
@@ -249,8 +257,10 @@
 //!   reported as unproven rather than converted into terminality.
 //!
 //! A macOS command that deliberately leaves the group (`setsid`/`setpgid`)
-//! before containment is outside rustX's macOS proof; that limitation is
-//! documented and is never claimed as contained.
+//! exits rustX's ownership domain: rustX does not track, contain, reap, or
+//! wait for that escaped descendant, and settlement of the owned group does
+//! not imply the escaped process terminated. This boundary is documented
+//! and is never claimed as containment.
 
 use std::process::{Command, Stdio};
 
@@ -532,10 +542,12 @@ fn run_outer() -> i32 {
                 // once this returns ECHILD — the inner anchor itself is a
                 // member and is released (reaped) by this group-scoped
                 // wait, which happens strictly after any fallback
-                // containment signal. With membership immutable for bash
-                // descendants, every in-group process is always a matching
-                // child here, so ECHILD is exactly the empty invocation
-                // group.
+                // containment signal. On Linux, where membership is
+                // immutable for bash descendants, every in-group process is
+                // always a matching child here, so ECHILD is exactly the
+                // empty invocation group. On macOS `ECHILD` only proves no
+                // waitable group child remains, and the group's absence is
+                // proven independently below.
                 match waitid(
                     Id::PGid(Pid::from_raw(inner_pid)),
                     WaitPidFlag::WNOHANG | WaitPidFlag::WEXITED,
@@ -688,9 +700,11 @@ fn contain_after_abnormal_exit(stream: &mut ControlStream, pgid: i32) -> InnerAn
 /// parent, the reaper of its own child domain, and the IPC peer that
 /// performs the `TERM` -> grace -> `KILL` sequence on its own group. Its
 /// terminal gate is the group-scoped wait on the invocation process group:
-/// with membership immutable for bash descendants, `ECHILD` there means the
-/// shell and every owned member are reaped — the invocation group contains
-/// only this supervisor itself.
+/// on Linux, where membership is immutable for bash descendants, `ECHILD`
+/// there means the shell and every owned member are reaped — the invocation
+/// group contains only this supervisor itself. On macOS `ECHILD` only means
+/// "no waitable group child remains", so the inner escalates to the outer's
+/// fallback containment instead.
 #[allow(clippy::too_many_lines)] // one coherent session/spawn/reap/terminate pipeline
 fn run_inner() -> i32 {
     let mut stream = ControlStream;
@@ -737,11 +751,14 @@ fn run_inner() -> i32 {
         ));
         return INNER_EXIT_NORMAL;
     }
-    // The fixed-membership restriction: from this point on, this process,
-    // bash, and every descendant are structurally prevented from changing
-    // process-group/session membership (setsid/setpgid are rejected). This
-    // is what makes the group-scoped terminal wait complete. An install
-    // failure is a pre-ownership setup failure: no bash tree exists yet.
+    // The fixed-membership restriction. On Linux, from this point on, this
+    // process, bash, and every descendant are structurally prevented from
+    // changing process-group/session membership (setsid/setpgid are
+    // rejected), which is what makes the group-scoped terminal wait
+    // complete. On macOS this is a no-op: no fixed-membership primitive
+    // exists, the invocation PGID remains the ownership boundary, and a
+    // descendant may legally leave it. An install failure is a
+    // pre-ownership setup failure: no bash tree exists yet.
     if let Err(error) = enforce_fixed_group_membership() {
         let _ = stream.write_preownership_failure(&format!(
             "cannot install the fixed process-group membership restriction: {error}"
@@ -870,10 +887,11 @@ fn run_inner() -> i32 {
             }
         }
         // The owned-group gate: the kernel-mediated terminal condition of
-        // the invocation process group. Because membership is immutable for
-        // bash descendants (setsid/setpgid are rejected by the inherited
-        // filter), every in-group process other than this supervisor is a
-        // bash descendant that can never leave the group: while bash lives,
+        // the invocation process group. On Linux, because membership is
+        // immutable for bash descendants (setsid/setpgid are rejected by
+        // the inherited filter), every in-group process other than this
+        // supervisor is a bash descendant that can never leave the group:
+        // while bash lives,
         // bash itself is a matching child and blocks the gate, and when an
         // in-group ancestor exits, the kernel reparents its in-group
         // children directly into this supervisor's child domain. ECHILD

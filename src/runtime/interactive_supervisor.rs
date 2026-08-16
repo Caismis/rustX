@@ -1203,10 +1203,12 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
         return INNER_EXIT_NORMAL;
     }
-    // The fixed-membership restriction: from this point on, this process,
-    // the server, and every descendant are structurally prevented from
-    // changing process-group/session membership (setsid/setpgid are
-    // rejected). An install failure is a pre-ownership setup failure.
+    // The fixed-membership restriction. On Linux, from this point on, this
+    // process, the server, and every descendant are structurally prevented
+    // from changing process-group/session membership (setsid/setpgid are
+    // rejected). On macOS this is a no-op: the unit PGID remains the
+    // ownership boundary, and a descendant may legally leave it. An install
+    // failure is a pre-ownership setup failure.
     if let Err(error) = enforce_fixed_group_membership() {
         let _ = write_frame(
             &mut control,
@@ -1302,8 +1304,8 @@ pub fn run_inner(arguments: &[String]) -> i32 {
             }
         }
         // The owned-group gate: the kernel-mediated terminal condition of
-        // the unit process group. Because membership is immutable for
-        // server descendants, every in-group process other than this
+        // the unit process group. On Linux, because membership is immutable
+        // for server descendants, every in-group process other than this
         // supervisor is a server descendant that can never leave the group;
         // ECHILD therefore means no process other than this supervisor
         // remains in the unit group — the complete terminal state.

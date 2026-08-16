@@ -12,7 +12,10 @@
 //! - on Linux, an inherited seccomp filter rejects `setsid(2)`/`setpgid(2)`
 //!   with `EPERM`, so no owned descendant can escape the unit's
 //!   process-group/session; macOS has the process-group lifecycle but no
-//!   equivalent seccomp restriction;
+//!   equivalent seccomp restriction, so the unit owns only the processes
+//!   that remain in its process group and a descendant that deliberately
+//!   leaves that group is outside the ownership domain (not tracked,
+//!   contained, reaped, or waited for);
 //! - on Linux, the runtime child-subreaper prerequisite is installed before
 //!   the unit spawns (`crate::runtime::process_supervision`) and re-established
 //!   inside each supervisor process so orphaned descendants reparent into

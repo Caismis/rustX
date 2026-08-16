@@ -14,10 +14,13 @@ not claim they do:
   supervisor-loss descendants.
 - **macOS** — a dedicated session/process group with a native libc `waitid`
   adapter and direct-child reaping. macOS has no child-subreaper and no
-  seccomp fixed-membership primitive, so rustX proves terminality by
-  actively signaling the retained group; a descendant that leaves the group
-  or a lost waitable anchor is reported as unproven, never as a fabricated
-  terminal result.
+  seccomp fixed-membership primitive, so rustX owns the invocation
+  process-group domain and proves it absent by actively signaling the
+  retained group and then probing `killpg(pgid, 0)` to `ESRCH`. A descendant
+  that deliberately leaves that group exits rustX's ownership domain: it is
+  not tracked, contained, reaped, or waited for, and settlement of the owned
+  group does not imply it terminated. A lost waitable anchor remains
+  explicitly unproven, never a fabricated terminal result.
 
 > Status: pre-alpha. The architecture is intentionally allowed to break before 1.0 when a cleaner abstraction is available.
 
