@@ -1,4 +1,4 @@
-//! The per-invocation Bash process supervisor (Linux).
+//! The per-invocation Bash process supervisor for Linux and macOS.
 //!
 //! Each Bash invocation owns one small supervisor composed of two
 //! processes:
@@ -214,25 +214,25 @@
 //! commit frame is conservatively treated as possible ownership. There is
 //! no generic IPC framework.
 //!
-//! # Platform assumption
+//! # Platform behavior
 //!
-//! The subreaper mechanism is Linux-specific (`PR_SET_CHILD_SUBREAPER`),
-//! and the fixed-membership restriction uses the Linux `seccomp`/`prctl`
-//! primitives. The crate already requires `/bin/bash`; the lifecycle
-//! contract is claimed only on Linux (`x86_64`, `aarch64`, and `riscv64`
-//! are supported; building for any other architecture is a compile-time
-//! error). On unsupported systems the supervisor reports an explicit setup
-//! failure, which settles the invocation as `Failed` — the same contract
-//! is never silently weakened.
+//! Linux uses `PR_SET_CHILD_SUBREAPER` plus the fixed-membership seccomp
+//! filter, so group-scoped `ECHILD` is a complete descendant proof even when
+//! Bash backgrounds work. macOS has neither primitive; it uses the same
+//! `setsid`/process-group/`waitid` lifecycle and wraps Bash with an EXIT
+//! `wait` so ordinary background jobs remain children of the shell until the
+//! group settles. A macOS supervisor-loss path that cannot retain a waitable
+//! anchor is reported as unproven rather than converted into terminality.
 
 use std::process::{Command, Stdio};
 
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
-use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, read, write};
 
+use crate::runtime::process_wait::{Id, waitid};
 use crate::runtime::supervised_unit::{
     FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
     MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
@@ -591,6 +591,8 @@ fn containment_signal(stream: &mut ControlStream, pgid: i32) {
         .ok();
     match killpg(Pid::from_raw(pgid), Signal::SIGKILL) {
         Ok(()) | Err(Errno::ESRCH) => {}
+        #[cfg(target_os = "macos")]
+        Err(Errno::EPERM) => {}
         Err(error) => {
             let _ = stream.write_failure(&format!(
                 "cannot contain the owned invocation group: {error}"
@@ -695,12 +697,20 @@ fn run_inner() -> i32 {
         let _ = stream.write_preownership_failure("injected bash spawn failure");
         return INNER_EXIT_NORMAL;
     }
+    // macOS does not provide Linux's child-subreaper reparenting. Keep the
+    // normal Bash job domain attached to the shell parent so background jobs
+    // are waited for before the shell reports its own exit; Linux retains the
+    // original command bytes and uses subreaper adoption for descendants.
+    #[cfg(target_os = "macos")]
+    let shell_command = format!("trap 'wait' EXIT\n{command}");
+    #[cfg(not(target_os = "macos"))]
+    let shell_command = command;
     let fail_wait = std::env::var(FAIL_WAIT_ENV).is_ok();
     let fail_signal = std::env::var(FAIL_SIGNAL_ENV).is_ok();
     let force_anchor_loss = std::env::var(FORCE_ANCHOR_LOSS_ENV).is_ok();
     let bash = match Command::new("/bin/bash")
         .arg("-c")
-        .arg(&command)
+        .arg(&shell_command)
         .stdin(Stdio::null())
         .spawn()
     {

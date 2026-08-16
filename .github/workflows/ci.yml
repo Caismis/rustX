@@ -11,8 +11,12 @@ permissions:
 
 jobs:
   quality:
-    name: Format, lint, and test
-    runs-on: ubuntu-latest
+    name: Format, lint, and test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
 
     steps:

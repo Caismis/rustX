@@ -12,11 +12,12 @@
 //! history, not the Event Journal, not a scheduler, supervisor, or
 //! persistent service layer. General runtime supervision, persistent
 //! process management, recovery services, and broader capability
-//! coordination remain future work. M5 implements only the narrow
-//! internal process-supervision capability required for Bash catastrophic
-//! supervisor-loss recovery (`crate::runtime::process_supervision`:
-//! one-time activation of Linux child-subreaper mode). That is
-//! coordination infrastructure, not a generic process manager and not a
+//! coordination remain future work. M5 implements only the narrow internal
+//! process-supervision capability required for Bash catastrophic
+//! supervisor-loss recovery (`crate::runtime::process_supervision`): Linux
+//! uses one-time child-subreaper activation; macOS uses its direct
+//! process-group path without an equivalent orphan-adoption primitive. That
+//! is coordination infrastructure, not a generic process manager and not a
 //! public runtime API.
 
 pub mod cancellation;
@@ -36,7 +37,31 @@ pub(crate) mod interactive_process;
 /// `interactive-supervisor` bin and from tests via self-exec; they are
 /// documented-hidden binary entry points, never runtime API.
 #[doc(hidden)]
+#[cfg(unix)]
 pub mod interactive_supervisor;
+/// Non-Unix interactive supervisor entry points are intentionally unavailable
+/// because the runtime's process-unit implementation uses Unix process
+/// groups and Unix-domain control sockets.
+#[doc(hidden)]
+#[cfg(not(unix))]
+pub mod interactive_supervisor {
+    /// The control socket environment variable used by the Unix supervisor.
+    pub const RUSTX_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_CONTROL";
+
+    /// Non-Unix platforms cannot provide the supervisor's process-group
+    /// ownership proof.
+    pub fn run_outer(_arguments: &[String]) -> i32 {
+        eprintln!("interactive supervisor requires Unix process supervision");
+        1
+    }
+
+    /// Non-Unix platforms cannot provide the supervisor's process-group
+    /// ownership proof.
+    pub fn run_inner(_arguments: &[String]) -> i32 {
+        eprintln!("interactive supervisor requires Unix process supervision");
+        1
+    }
+}
 /// The runtime-owned semantic observation contract (Issue #61): the
 /// observation vocabulary and the leaf pending-observation queue. Runtime
 /// Client projection types never appear here; the Runtime Client adapter
@@ -49,11 +74,15 @@ pub(crate) mod observation;
 /// subprocess hierarchy. Internal coordination only — it is not part of
 /// the public runtime API.
 pub(crate) mod process_runner;
-/// The runtime-level Linux process-supervision capability: the one-time
-/// activation of the process-wide child-subreaper primitive used by Bash
-/// catastrophic fallback. Internal coordination only — it is not part of
-/// the public runtime API.
+/// The runtime-level Linux/macOS process-supervision prerequisite used by
+/// Bash catastrophic fallback. Internal coordination only — it is not part
+/// of the public runtime API.
 pub(crate) mod process_supervision;
+/// The platform adapter for the `waitid` primitive. Linux uses `nix`'s
+/// implementation; macOS uses its libc implementation because `nix` does not
+/// currently expose `waitid` on Apple targets.
+#[cfg(unix)]
+pub(crate) mod process_wait;
 /// The runtime-owned retained provider-neutral request facts (Issue #61):
 /// immutable settled request snapshots, appended by the conversation
 /// runtime coordinator at attempt settlement. Not client projection state.

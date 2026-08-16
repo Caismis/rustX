@@ -4,10 +4,10 @@
 //!
 //! ```text
 //! rustX
-//!   └─ interactive outer supervisor (rustX child; subreaper; reaper of
+//!   └─ interactive outer supervisor (rustX child; Linux subreaper/reaper of
 //!      last resort; frame relay between rustX and the inner)
 //!        └─ interactive inner (outer child; setsid -> session/group leader;
-//!                             subreaper; server parent; orphan reaper;
+//!                             Linux subreaper; server parent; orphan reaper;
 //!                             IPC peer)
 //!             └─ MCP stdio server
 //!                  └─ descendants
@@ -21,10 +21,9 @@
 //!   the server and every descendant that stays in the group live in that
 //!   one unit-owned group;
 //! - the inner installs the shared fixed-membership restriction
-//!   (`supervised_unit::enforce_fixed_group_membership`)
-//!   before the server spawn, so `setsid(2)`/`setpgid(2)` escape attempts
-//!   fail deterministically with `EPERM` for the server and every
-//!   descendant;
+//!   (`supervised_unit::enforce_fixed_group_membership`) before the server
+//!   spawn. Linux rejects `setsid(2)`/`setpgid(2)` with `EPERM`; macOS keeps
+//!   the dedicated process group but cannot provide that seccomp guarantee;
 //! - `TERM` -> grace -> `KILL` is issued by the inner with `killpg` against
 //!   **its own process group**, whose numeric id is its own pid — provably
 //!   allocated exactly while the inner lives, so no foreign process group
@@ -42,8 +41,9 @@
 //!   (`INNER_EXIT_CONTAINMENT`), the outer issues the one fallback
 //!   containment `SIGKILL` while the anchor is still retained, then
 //!   releases the anchor through the gate;
-//! - when the outer itself is lost, rustX (already the child-subreaper
-//!   prerequisite) runs the shared adopted-anchor emergency containment;
+//! - when the outer itself is lost, Linux rustX runs the shared adopted-anchor
+//!   emergency containment; macOS has no orphan-adoption primitive and
+//!   reports terminality as unproven if the anchor is no longer waitable;
 //! - supervisor control traffic uses private Unix sockets, fully separate
 //!   from the server's business stdin/stdout protocol pair.
 //!
@@ -126,9 +126,10 @@ use std::time::Instant;
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::Signal;
-use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid, waitpid};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
+use crate::runtime::process_wait::{Id, waitid};
 use crate::runtime::supervised_unit::{
     FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL, MSG_ALL_CHILDREN_REAPED,
     MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,

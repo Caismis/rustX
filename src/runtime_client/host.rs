@@ -5110,8 +5110,8 @@ mod tests {
         );
         assert_eq!(
             adapter.requests().len(),
-            1,
-            "the one admitted inbound runs once"
+            0,
+            "the rejected pre-activation inbound never runs"
         );
     }
 

@@ -112,6 +112,7 @@ fn process_alive(pid: i32) -> bool {
 /// (test-only fixture-topology inspection; `/proc` is never the
 /// production ownership authority).
 #[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn pgrp_of(pid: i32) -> Option<i32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let close = stat.rfind(')')?;
@@ -332,7 +333,7 @@ async fn redirected_descendant_does_not_escape_the_owned_domain() {
 /// provably alive at that boundary; only then does cancellation become
 /// observable. The result is `Cancelled` and the owned group is
 /// terminated.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
     let (dir, artifacts, workspace) = fixture();
@@ -404,7 +405,7 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
 /// settled while the descendant is alive; once the descendant exits
 /// naturally and the supervisor reaps it, the shell's natural
 /// successful exit settles the invocation as `Success`.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn natural_success_requires_terminal_child_ownership() {
     let (dir, artifacts, workspace) = fixture();
@@ -658,7 +659,7 @@ async fn sigterm_handler_setup_failure_settles_as_an_explicit_failed_result() {
 /// outer supervisor, which terminates the owned group; `Failed` is
 /// returned only after the descendant and the group are provably gone.
 /// No test-side process control follows the result.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn wait_failure_settles_as_an_explicit_failed_result() {
     let (dir, artifacts, workspace) = fixture();
@@ -1034,7 +1035,7 @@ async fn cancellation_signals_only_target_the_owned_group() {
 /// old `/proc` walk could not prove: settlement is gated on the
 /// supervisor's kernel child-wait terminal state, not on an
 /// observational membership scan.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn descendant_replacement_keeps_the_invocation_active_until_reaped() {
     let (dir, artifacts, workspace) = fixture();
@@ -1295,7 +1296,7 @@ async fn setsid_escape_attempt_cancels_with_the_owned_group() {
 /// result may become terminal while any process still belongs to the
 /// invocation-owned process group. At the exact shell-exit boundary the
 /// test proves the fixture topology before evaluating settlement.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn hidden_group_descendant_cannot_be_hidden_by_a_setsid_escape_attempt() {
     let (dir, artifacts, workspace) = fixture();

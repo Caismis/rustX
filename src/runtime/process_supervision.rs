@@ -1,12 +1,12 @@
-//! The runtime-level Linux process-supervision capability.
+//! The runtime-level process-supervision capability.
 //!
-//! This module owns the activation of rustX's process-wide child-subreaper
-//! capability (`PR_SET_CHILD_SUBREAPER`). It is the runtime coordination
-//! layer's one kernel-coordination primitive for catastrophic Bash
-//! supervisor-loss recovery: when a Bash supervisor unit is lost, kernel
-//! reparenting routes its orphaned invocation descendants to the runtime
-//! process, where Bash catastrophic containment can still retain the inner
-//! anchor and prove the invocation group terminal.
+//! On Linux this module activates rustX's process-wide child-subreaper
+//! capability (`PR_SET_CHILD_SUBREAPER`), which lets catastrophic Bash
+//! supervisor-loss recovery retain orphaned invocation descendants. macOS has
+//! no equivalent process-wide subreaper primitive; its normal path remains
+//! supported through direct-child ownership and process-group supervision,
+//! while the Linux-only orphan-adoption proof is not available after an outer
+//! supervisor is lost.
 //!
 //! # Contract — capability activation, not generic reaping
 //!
@@ -44,9 +44,11 @@
 //!   is requested;
 //! - the first consultation performs the `prctl` exactly once per runtime
 //!   process; every later consultation observes the same result;
-//! - a failed activation is remembered and fails every later consultation:
-//!   Bash fallback containment must never be assumed after the runtime has
-//!   once failed to become a subreaper;
+//! - on Linux, a failed activation is remembered and fails every later
+//!   consultation: Bash fallback containment must never be assumed after the
+//!   runtime has once failed to become a subreaper;
+//! - on macOS, consultation is an explicit successful no-op because the
+//!   normal supervisor path does not require a process-wide subreaper;
 //! - activation failure remains a pre-ownership setup failure: no
 //!   supervisor unit, no `START`, no Bash, an explicit `Failed` result;
 //! - the mode is never toggled per invocation and never disabled.
@@ -69,9 +71,10 @@ use std::sync::OnceLock;
 #[cfg(target_os = "linux")]
 static CHILD_SUBREAPER: OnceLock<Result<(), String>> = OnceLock::new();
 
-/// Ensures the runtime process has the Linux child-subreaper capability:
-/// the kernel routing primitive that makes catastrophic Bash supervisor-
-/// loss adoption possible.
+/// Ensures the runtime has the platform's process-supervision prerequisite.
+/// On Linux this installs the child-subreaper capability; on macOS the
+/// normal process-group lifecycle needs no process-wide setup and this is a
+/// successful no-op.
 ///
 /// See the module documentation for the capability-activation contract,
 /// the Bash-only M5 production scope, and the lazy one-time initialization
@@ -82,9 +85,8 @@ static CHILD_SUBREAPER: OnceLock<Result<(), String>> = OnceLock::new();
 ///
 /// # Errors
 ///
-/// Returns the `prctl` failure of the first (and only) activation attempt,
-/// sticky for the process lifetime; on non-Linux platforms it always fails
-/// because the subreaper mechanism does not exist there.
+/// Returns the `prctl` failure of the first (and only) Linux activation
+/// attempt, sticky for the process lifetime. macOS returns `Ok(())`.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // one scalar prctl syscall, no pointer arguments
 pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
@@ -103,12 +105,20 @@ pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
         .clone()
 }
 
-/// The non-Linux consultation: the lifecycle contract is claimed only
-/// where the kernel provides the subreaper mechanism, so every Bash
-/// invocation fails as a pre-ownership setup failure.
-#[cfg(not(target_os = "linux"))]
+/// macOS has no child-subreaper equivalent. The direct supervisor path and
+/// process-group lifecycle remain operational, but catastrophic recovery
+/// after the outer supervisor is lost cannot use Linux orphan adoption.
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
-    Err("Bash fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
+    Ok(())
+}
+
+/// Other platforms are outside the supported Unix process-supervision
+/// boundary.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
+    Err("Bash process supervision requires Linux or macOS".to_owned())
 }
 
 #[cfg(test)]

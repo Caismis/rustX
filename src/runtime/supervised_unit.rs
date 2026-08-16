@@ -7,15 +7,17 @@
 //! same physical ownership guarantees:
 //!
 //! - one kernel-mediated terminal proof: the group-scoped wait
-//!   (`waitid(Id::PGid)` returning `ECHILD`) is complete only because
-//!   membership is immutable for unit descendants;
-//! - the fixed-membership restriction: an inherited seccomp filter rejects
-//!   `setsid(2)`/`setpgid(2)` with `EPERM`, so no owned descendant can
-//!   escape the unit's process group/session;
-//! - the runtime child-subreaper prerequisite, installed before the unit
-//!   spawns (`crate::runtime::process_supervision`) and re-established
+//!   (`waitid(Id::PGid)` returning `ECHILD`), with the platform-specific
+//!   wait adapter in [`crate::runtime::process_wait`];
+//! - on Linux, an inherited seccomp filter rejects `setsid(2)`/`setpgid(2)`
+//!   with `EPERM`, so no owned descendant can escape the unit's
+//!   process-group/session; macOS has the process-group lifecycle but no
+//!   equivalent seccomp restriction;
+//! - on Linux, the runtime child-subreaper prerequisite is installed before
+//!   the unit spawns (`crate::runtime::process_supervision`) and re-established
 //!   inside each supervisor process so orphaned descendants reparent into
-//!   the unit's reaping domain;
+//!   the unit's reaping domain; macOS has no equivalent orphan-adoption
+//!   primitive;
 //! - the single-reaper anchor discipline: the inner supervisor pid is the
 //!   structural ownership anchor with exactly one reaping owner, and
 //!   fallback containment signals are issued only while the anchor is
@@ -23,9 +25,10 @@
 //! - `TERM` -> grace -> `KILL` against the inner leader's own process
 //!   group, whose numeric id is the inner's pid — provably allocated while
 //!   signaling is legal;
-//! - catastrophic fallback containment (adopted-anchor retention with
+//! - Linux catastrophic fallback containment (adopted-anchor retention with
 //!   `WNOWAIT`, one anchored `SIGKILL`, group-scoped `ECHILD` release) when
-//!   the inner supervisor or control chain fails;
+//!   the inner supervisor or control chain fails; macOS reports an
+//!   unavailable anchor as unproven instead of claiming that proof;
 //! - one frame protocol (`[u32 LE length][kind][payload]`) for all
 //!   supervisor control traffic, separate from the unit's business I/O.
 //!
@@ -109,16 +112,12 @@ pub(crate) const TERM_GRACE: Duration = Duration::from_secs(2);
 /// owner may have disappeared; terminality was already proven).
 pub(crate) const TERMINAL_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// `PR_SET_CHILD_SUBREAPER`: orphaned descendants of the owned child
-/// reparent into this process's child domain instead of being rediscovered
-/// from `/proc`.
-///
-/// This is one of the narrowly scoped production OS shims shared by both
-/// supervisor units: subreaper setup, SIGTERM handler installation,
-/// `PR_SET_NO_NEW_PRIVS`, and seccomp filter installation. Linux-only: the
-/// lifecycle contract is claimed only where the kernel provides the
-/// subreaper mechanism.
+/// Enables the supervisor's orphan-reaping capability where the platform
+/// provides one. Linux uses `PR_SET_CHILD_SUBREAPER`; macOS has no equivalent
+/// process-wide primitive, so its normal lifecycle relies on the direct shell
+/// parent waiting for its background jobs and on process-group signaling.
 #[allow(unsafe_code)]
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn become_child_subreaper() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -130,9 +129,13 @@ pub(crate) fn become_child_subreaper() -> Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("the supervisor unit requires Linux (PR_SET_CHILD_SUBREAPER)".to_owned())
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        Err("the supervisor unit requires Linux or macOS process supervision".to_owned())
     }
 }
 
@@ -303,13 +306,14 @@ fn membership_restriction_program() -> [libc::sock_filter; 8] {
     ]
 }
 
-/// Installs the fixed-membership restriction: `PR_SET_NO_NEW_PRIVS` plus a
-/// `seccomp` filter that rejects `setpgid(2)` and `setsid(2)` with
-/// `EPERM`. The filter is inherited by the owned child and every
-/// descendant across `fork`/`exec`; with `no_new_privs` set, a descendant
-/// can only stack *more* restrictive filters, never remove this one, and
-/// no privilege gain can bypass it. An install failure is a pre-ownership
-/// setup failure: no owned process tree exists yet.
+/// Installs the fixed-membership restriction on Linux: `PR_SET_NO_NEW_PRIVS`
+/// plus a `seccomp` filter that rejects `setpgid(2)` and `setsid(2)` with
+/// `EPERM`. The filter is inherited by the owned child and every descendant
+/// across `fork`/`exec`; with `no_new_privs` set, a descendant can only stack
+/// more restrictive filters, never remove this one. The macOS implementation
+/// is an explicit successful no-op because macOS has no equivalent primitive;
+/// its normal process-group path remains usable but does not claim immutable
+/// membership.
 #[cfg(all(
     target_os = "linux",
     any(
@@ -358,15 +362,40 @@ pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
         target_arch = "riscv64"
     )
 )))]
+#[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
-    Err("supervised lifecycle requires Linux on x86_64, aarch64, or riscv64".to_owned())
+    // macOS has no seccomp equivalent in the current dependency/runtime
+    // boundary. The supervisor still creates a dedicated session/process
+    // group and uses group-scoped waits, while the shell command wrapper keeps
+    // ordinary background jobs attached to the shell's wait lifecycle.
+    Ok(())
 }
 
-/// Signals one owned process group. `ESRCH` is a terminal no-op; any other
-/// failure is explicit.
+#[cfg(not(any(
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    ),
+    target_os = "macos"
+)))]
+pub(crate) fn enforce_fixed_group_membership() -> Result<(), String> {
+    Err("supervised lifecycle requires Linux or macOS process supervision".to_owned())
+}
+
+/// Signals one owned process group. `ESRCH` is a terminal no-op. macOS can
+/// report `EPERM` when a retained group contains only zombies, which is also
+/// terminal for the supervisor's already-owned group; Linux keeps other
+/// failures explicit.
 pub(crate) fn signal_group(pgid: i32, signal: Signal) -> Result<(), String> {
     match killpg(Pid::from_raw(pgid), signal) {
         Ok(()) | Err(Errno::ESRCH) => Ok(()),
+        #[cfg(target_os = "macos")]
+        Err(Errno::EPERM) => Ok(()),
         Err(error) => Err(format!("cannot signal the owned process group: {error}")),
     }
 }
@@ -403,7 +432,7 @@ impl FrameReader {
     /// The bytes this reader still owns: the surplus that a lifecycle phase
     /// transition must never discard. Test-only observation of the
     /// ownership invariant itself; the supervisors only ever feed and pop.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn buffered(&self) -> &[u8] {
         &self.buf
     }
@@ -468,23 +497,27 @@ pub(crate) enum EmergencyContainment {
 
 /// Catastrophic fallback after the unit's outer supervisor has been reaped.
 ///
-/// rustX is a subreaper, so the dead outer's unit descendants are now rustX
-/// children. The inner leader is retained with `WNOWAIT` before its numeric
-/// identity is used for `killpg`; this is the same ABA-proof anchor used by
-/// the normal outer path. Only after the group-scoped child wait reaches
-/// `ECHILD` is the anchor identity released and terminality proven.
+/// On Linux, rustX is a subreaper, so the dead outer's unit descendants are
+/// now rustX children. The inner leader is retained with `WNOWAIT` before its
+/// numeric identity is used for `killpg`; this is the same ABA-proof anchor
+/// used by the normal outer path. Only after the group-scoped child wait
+/// reaches `ECHILD` is the anchor identity released and terminality proven.
+/// On macOS the inner is not adopted by rustX after outer loss, so this
+/// function returns [`EmergencyContainment::AnchorUnavailable`] when that
+/// anchor is not waitable.
 ///
 /// The anchor is matched only by pid; the unit group only by its retained
 /// pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists here, so
 /// unrelated adopted children are never consumed.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn emergency_contain_group(
     pgid: i32,
     anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
+    use crate::runtime::process_wait::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
-    use nix::sys::wait::{Id, WaitPidFlag, WaitStatus, waitid};
+    use nix::sys::wait::{WaitPidFlag, WaitStatus};
     #[cfg(not(test))]
     let _ = anchor_unavailable;
 
@@ -542,12 +575,12 @@ pub(crate) fn emergency_contain_group(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(crate) fn emergency_contain_group(
     _pgid: i32,
     _anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
-    Err("fallback containment requires Linux PR_SET_CHILD_SUBREAPER".to_owned())
+    Err("fallback containment requires Linux or macOS process supervision".to_owned())
 }
 
 #[cfg(all(

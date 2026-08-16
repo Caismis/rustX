@@ -2,6 +2,9 @@
 
 rustX is a standalone Rust execution runtime for durable, tool-using LLM agents.
 
+The runtime's native process supervision is supported on Linux and macOS.
+Windows is outside the supported target set.
+
 > Status: pre-alpha. The architecture is intentionally allowed to break before 1.0 when a cleaner abstraction is available.
 
 ## Goals

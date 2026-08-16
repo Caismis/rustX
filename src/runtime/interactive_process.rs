@@ -4,8 +4,10 @@
 //! The driver is the physical settlement owner of the interactive
 //! supervisor unit:
 //!
-//! - the runtime child-subreaper prerequisite is established before the
-//!   supervisor unit spawns;
+//! - the runtime process-supervision prerequisite is established before the
+//!   supervisor unit spawns: Linux enables child-subreaper adoption, while
+//!   macOS uses the direct process-group lifecycle and has no equivalent
+//!   orphan-adoption primitive;
 //! - once the supervisor spawn succeeds, the runtime-owned driver task
 //!   immediately owns physical settlement; a later handshake/control setup
 //!   error (accept failure, connection loss) transfers into an explicit
@@ -16,8 +18,9 @@
 //! - the direct supervisor child is reaped before physical settlement is
 //!   published;
 //! - the unit's terminal event is the outer supervisor's authoritative
-//!   `AllChildrenReaped` report; control-channel loss before it escalates
-//!   to the shared adopted-anchor emergency containment;
+//!   `AllChildrenReaped` report; Linux control-channel loss before it
+//!   escalates to shared adopted-anchor containment, while macOS reports
+//!   terminality as unproven if the lost outer leaves no waitable anchor;
 //! - `AnchorReady` is the commit point of the unit's identity. Before it,
 //!   the outer may already have spawned a pre-anchor inner whose identity
 //!   rustX never received, so once the startup gate has opened, bare
@@ -766,9 +769,11 @@ mod interactive_tests {
     use std::time::{Duration, Instant};
 
     use super::{InteractiveProcessSpec, InteractiveTestControl, SupervisedInteractiveProcess};
+    #[cfg(target_os = "linux")]
+    use crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV;
     use crate::runtime::interactive_supervisor::{
         ANCHOR_PID_FILE_ENV, FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV, FAIL_SIGNAL_ENV,
-        INNER_EXIT_BEFORE_CONNECT_ENV, INNER_STALL_BEFORE_ANCHOR_ENV, OUTER_FAIL_ENV,
+        INNER_EXIT_BEFORE_CONNECT_ENV, OUTER_FAIL_ENV,
     };
     use crate::runtime::process_runner::MAX_PROCESS_OUTPUT_BYTES;
 
@@ -838,6 +843,7 @@ mod interactive_tests {
 
     /// The live process-group id of `pid` (field 5 of `/proc/<pid>/stat`,
     /// counted after the parenthesized command name).
+    #[cfg(target_os = "linux")]
     fn proc_pgid(pid: i32) -> Option<i32> {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         let close = stat.rfind(')')?;
@@ -880,6 +886,7 @@ mod interactive_tests {
             .unwrap_or_else(|_| panic!("{description}"))
     }
 
+    #[cfg(target_os = "linux")]
     fn python_available() -> bool {
         ["/usr/local/bin/python3", "/usr/bin/python3", "/bin/python3"]
             .iter()
@@ -924,6 +931,7 @@ mod interactive_tests {
     ///
     /// The `reached` marker is what makes this non-vacuous: an absent escape
     /// marker only proves containment if the attempt actually executed.
+    #[cfg(target_os = "linux")]
     async fn assert_escape_is_denied(call: &str) {
         let fixture = Fixture::new();
         let reached = fixture.path("reached");
@@ -960,6 +968,7 @@ mod interactive_tests {
     }
 
     /// Quotes one argument for `/bin/sh -c` as a single-quoted word.
+    #[cfg(target_os = "linux")]
     fn shell_single_quote(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
     }
@@ -967,6 +976,7 @@ mod interactive_tests {
     /// A `setsid` escape attempt fails deterministically with EPERM (the
     /// shared fixed-membership restriction): the attempt provably runs, the
     /// syscall is denied, and nothing leaves the owned group.
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn setsid_escape_attempt_fails_deterministically() {
         if !python_available() {
@@ -977,6 +987,7 @@ mod interactive_tests {
     }
 
     /// A `setpgid` escape attempt fails deterministically with EPERM.
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn setpgid_escape_attempt_fails_deterministically() {
         if !python_available() {
@@ -1156,6 +1167,7 @@ mod interactive_tests {
     /// report `AnchorUnavailable`. The driver must publish an explicit
     /// unproven-terminality settlement — never `PhysicallySettled` — and no
     /// process-group signal may be issued against the unproven numeric id.
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unavailable_emergency_anchor_never_publishes_physical_settlement() {
         let fixture = Fixture::new();
@@ -1435,6 +1447,7 @@ mod interactive_tests {
     /// so rustX never learned the unit's identity. Losing the control
     /// channel here is never a physical settlement: there is no anchor to
     /// contain and no proof that the pre-anchor inner is gone.
+    #[cfg(target_os = "linux")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn outer_lost_before_the_anchor_is_terminality_unproven() {
         let fixture = Fixture::new();
