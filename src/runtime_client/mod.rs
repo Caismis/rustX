@@ -68,8 +68,9 @@
 //!
 //! - one active attachment per runtime instance;
 //! - detach is never cancellation;
-//! - bounded in-memory replay (no Event Journal, no persistence, no
-//!   crash-safe resume claims — M8 owns durability);
+//! - bounded in-memory projection replay (the durable Event Journal and
+//!   current Surface bootstrap remain `ConversationStore` authorities; the
+//!   client cursor/cache is never recovery input);
 //! - no WebSocket (Issue #36), no TUI (Issue #39), no M9 cancellation
 //!   hierarchy, no AG-UI adapter implementation.
 //!

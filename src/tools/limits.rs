@@ -32,6 +32,18 @@ pub const MAX_GREP_LINE_BYTES: usize = 512;
 /// The maximum length of one progress message text.
 pub const MAX_PROGRESS_MESSAGE_BYTES: usize = 512;
 
+/// The maximum number of progress observations one active foreground tool
+/// call retains before structural settlement.
+///
+/// Each retained observation is already payload-bounded by
+/// [`bound_tool_progress`]; this constant bounds their count. Once the bound
+/// is reached, the first `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1`
+/// observations are pinned and the final slot tracks the newest observation,
+/// so retained progress always ends with the most recent executor state and
+/// the retained count never exceeds this bound, even while a misbehaving
+/// executor reports without pause.
+pub const MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL: usize = 128;
+
 /// The per-stream bounded preview retained for Bash stdout/stderr/combined.
 pub const BASH_STREAM_PREVIEW_BYTES: usize = 16 * 1024;
 

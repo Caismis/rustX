@@ -33,15 +33,17 @@
 //!  ↓
 //! continuation (or proactive compaction / compact-and-retry on overflow)
 //!  ↓
-//! exactly one terminal RuntimeEvent
+//! terminal settlement candidate → durable terminal RuntimeEvent when commit succeeds
 //! ```
 //!
 //! Ownership: the loop owns execution semantics, message assembly, tool
 //! execution, continuation state, cancellation observation, context assembly,
 //! request admission/snapshots, fresh-inbound lifecycle, safe-boundary inbound
-//! consumption, lifecycle-extension coordination, and the runtime event trace.
-//! The adapter owns provider protocol translation only. No provider protocol
-//! concept appears in this module.
+//! consumption, and lifecycle-extension coordination. The durable
+//! `ConversationStore` owns canonical facts and the Event Journal; the loop
+//! keeps only bounded active execution state and the current conversation
+//! working set. The adapter owns provider protocol translation only. No
+//! provider protocol concept appears in this module.
 //!
 //! The typed lifecycle seams of Issue #56 live on the required immutable
 //! [`AttemptLifecycle`]: exactly one [`PreStepPolicy`] evaluation per primary
@@ -79,8 +81,11 @@ use crate::context::{
     MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
     render_effective_system_prompt, validate_user_message_proposal,
 };
-use crate::conversation::{CompactionRecord, ConversationError, ConversationState};
-use crate::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
+use crate::conversation::{ConversationError, ConversationState};
+use crate::durable::{CompactionCommitInput, ConversationStore};
+use crate::events::types::{
+    AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
+};
 use crate::message::types::{AssistantMessageBlock, MessageBlock, ToolMessageBlock};
 use crate::model::adapter::ModelEventStream;
 use crate::model::error::{ModelError, ModelErrorKind};
@@ -91,7 +96,7 @@ use crate::model::snapshot::{RequestIdentity, RequestSnapshot};
 use crate::model::types::{ModelRequest, ModelUsage};
 use crate::runtime::continuation::ProviderContinuationState;
 use crate::runtime::identity::{
-    AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId, TurnId,
+    AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
 use crate::runtime::types::{CancellationReason, RuntimeError};
@@ -164,34 +169,58 @@ pub struct AgentExecutionRequest {
     pub model: AttemptModelSnapshot,
 }
 
+/// The durable authority stage that failed while an attempt was executing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableFailureKind {
+    /// A canonical Message Ledger/Surface commit failed.
+    CanonicalCommit,
+    /// The immutable request-start snapshot/event transaction failed.
+    RequestStart,
+    /// The atomic compaction transition failed.
+    Compaction,
+    /// A standalone or terminal Event Journal append failed.
+    EventJournal,
+}
+
+impl DurableFailureKind {
+    /// The stable coordinator diagnostic name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CanonicalCommit => "canonical_commit",
+            Self::RequestStart => "request_start",
+            Self::Compaction => "compaction",
+            Self::EventJournal => "event_journal",
+        }
+    }
+}
+
 /// The deterministic result of one attempt execution.
 ///
-/// The recorded [`RuntimeEvent`] trace is the authoritative execution
-/// record; the platform-level outcome maps one-to-one with the single
-/// terminal event, and the committed messages are the final conversation
-/// state of the attempt. The terminal execution state is the state-machine
-/// settlement that produced the terminal event: they always represent the
-/// same settlement boundary.
+/// The `outcome` field is the execution state-machine settlement candidate;
+/// it remains meaningful when the final terminal Event Journal append fails,
+/// in which case no terminal fact is published and `durable_failure_kind` is
+/// `EventJournal`.
 ///
-/// `conversation` is the authoritative conversation state handed back to
-/// the host: the Message Ledger holding every committed fact of the attempt
-/// (drained inbound User messages, committed Assistant messages, committed Tool
-/// messages, and any committed runtime compaction summary) plus the
-/// Conversation Surface at its final revision.
+/// `conversation` is the bounded current working state handed back to the
+/// host: active Ledger bodies and the current Conversation Surface. The
+/// complete append-only Ledger and historical Surface revisions remain in the
+/// durable `ConversationStore` and are read there on demand.
 #[derive(Debug, PartialEq)]
 pub struct AgentExecutionResult {
     /// The executed attempt.
     pub attempt_id: AttemptId,
-    /// The one-to-one platform outcome of the single terminal event.
+    /// The platform outcome of the execution settlement candidate. For a
+    /// normally settled attempt it is also the outcome of the one committed
+    /// terminal event; a terminal Event Journal failure can leave that event
+    /// absent while this value remains available to the coordinator.
     pub outcome: AttemptOutcome,
     /// The terminal state-machine settlement that produced the terminal
     /// event: [`ExecutionState::Completed`] for successful settlement and
     /// [`ExecutionState::Failed`] for failure and cancellation settlement.
     pub terminal_state: ExecutionState,
-    /// The ordered runtime event trace, ending with exactly one terminal
-    /// event.
-    pub events: Vec<RuntimeEvent>,
-    /// The authoritative conversation state, transferred back to the host.
+    /// The bounded current conversation read model, transferred back to the
+    /// runtime. Historical durable facts remain in `ConversationStore`.
     pub conversation: ConversationState,
     /// The durable-authority failure the attempt encountered, when one
     /// caused or contributed to its failure settlement (Issue #63).
@@ -204,19 +233,19 @@ pub struct AgentExecutionResult {
     /// durable commit installed nothing — but the durable authority itself
     /// is marked failed.
     pub durable_failure: Option<String>,
-    /// Frozen provider-neutral snapshots for every actual primary request,
-    /// including a bounded overflow retry when one occurred.
-    pub request_snapshots: Vec<RequestSnapshot>,
+    /// The typed durable stage associated with [`Self::durable_failure`].
+    pub durable_failure_kind: Option<DurableFailureKind>,
 }
 
 impl AgentExecutionResult {
-    /// The committed Message Ledger records of the settled attempt, in
-    /// commit order.
+    /// The hot committed message bodies available in the settled attempt, in
+    /// current Surface order. After a durable restart this is the current
+    /// Surface working set; use the `ConversationStore` for Ledger commit order
+    /// and retired history.
     ///
-    /// This is the explicit audit/read path of the settled conversation: it
-    /// enumerates the Ledger for a caller that actually asked for the
-    /// complete committed history. The engine's normal projection and
-    /// compaction paths never enumerate it.
+    /// This explicitly enumerates the hot Ledger read model. The engine's
+    /// normal projection and compaction paths never enumerate the durable
+    /// historical Ledger; callers needing retired history page the store.
     #[must_use]
     pub fn messages(&self) -> &[MessageBlock] {
         self.conversation.ledger().audit_records()
@@ -228,12 +257,6 @@ impl AgentExecutionResult {
     pub fn active_ids(&self) -> &[MessageId] {
         self.conversation.active_ids()
     }
-
-    /// The frozen request boundaries in provider-request order.
-    #[must_use]
-    pub fn request_snapshots(&self) -> &[RequestSnapshot] {
-        &self.request_snapshots
-    }
 }
 
 /// One agent attempt execution.
@@ -242,24 +265,28 @@ impl AgentExecutionResult {
 /// attempt cancellation signal, and owns the attempt capability lease, the
 /// mandatory M4 context runtime, the conversation tool runtime (whose
 /// canonical mailbox the loop drains), the execution state machine, the
-/// committed history, the retained continuation state, the pending fresh
-/// inbound trigger, and the runtime event trace.
+/// bounded current read model, the retained continuation state, and the
+/// pending fresh inbound trigger.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
     cancellation: &'a AgentCancellation,
     tool_runtime: &'a ConversationToolRuntime,
+    /// The conversation-level durable authority. Tool execution receives
+    /// only the mailbox capability; canonical/request/event durability is
+    /// owned by the conversation execution plane.
+    store: std::sync::Arc<dyn ConversationStore>,
     state: ExecutionStateMachine,
     /// The attempt's owned conversation state: the single mutable
     /// conversation authority for the attempt's lifetime.
     conversation: ConversationState,
-    events: Vec<RuntimeEvent>,
     /// The durable-authority failure encountered by this attempt, when
     /// any (Issue #63): carried into [`AgentExecutionResult`] so the
     /// coordinator never returns to a false healthy durability state
     /// after an active-attempt durable failure, regardless of how the
     /// terminal outcome itself is classified.
     durable_failure: Option<String>,
+    durable_failure_kind: Option<DurableFailureKind>,
     pending_continuation: Option<ProviderContinuationState>,
     /// The committed Assistant message that established the pending
     /// continuation, when one is pending.
@@ -295,15 +322,13 @@ pub struct AgentExecution<'a> {
     deferred_context: Vec<DeferredContextProposal>,
     /// Per-attempt context-generation allocator owned by the Agent Loop.
     context_generation_serial: u64,
-    /// Historical frozen request boundaries.
-    request_snapshots: Vec<RequestSnapshot>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
     /// The optional live observation seam: when attached, every emitted
     /// runtime fact, every committed canonical message, and every composed
     /// Agent Status is observed at its commit linearization point. The
-    /// attempt-local ordered `events` trace remains the authoritative
-    /// record regardless of attachment.
+    /// durable Event Journal remains the historical authority regardless of
+    /// attachment.
     observer: Option<&'a dyn AgentExecutionObserver>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
@@ -350,14 +375,7 @@ struct ModelInvocation {
 
 /// The committed result of one successful compaction: the derived record
 /// plus the measurements the completion event reports.
-struct CompletedCompaction {
-    /// The derived record of the applied compaction.
-    record: CompactionRecord,
-    /// The pre-compaction measurement, preserving its provenance.
-    tokens_before: crate::runtime::types::TokenMeasurement,
-    /// The deterministic estimate of the rebuilt request context.
-    estimated_tokens_after: u64,
-}
+struct CompletedCompaction;
 
 /// The terminal outcome of the whole attempt.
 enum Terminal {
@@ -366,16 +384,32 @@ enum Terminal {
     Failed { failure: AttemptFailure },
 }
 
+impl Terminal {
+    /// Projects the execution state-machine settlement candidate without
+    /// requiring a durable terminal event to exist.
+    fn outcome(&self) -> AttemptOutcome {
+        match self {
+            Self::Completed { finish_reason } => AttemptOutcome::Completed {
+                finish_reason: finish_reason.clone(),
+            },
+            Self::Cancelled { reason } => AttemptOutcome::Cancelled { reason: *reason },
+            Self::Failed { failure } => AttemptOutcome::Failed {
+                error: failure.clone(),
+            },
+        }
+    }
+}
+
 /// A canonical commit failure in the attempt loop.
 ///
 /// The prepare → durable → install canonical-commit seam (Issue #63, Finding
 /// 2) has two fallible phases: the in-memory preparation/validation (a
 /// [`ConversationError`]) and the durable Message Ledger append (an
-/// [`InboundStoreError`]). The install phase is infallible after both.
+/// [`ConversationStoreError`]). The install phase is infallible after both.
 #[derive(Debug)]
 enum CanonicalCommitError {
     Conversation(ConversationError),
-    Durable(crate::durable::inbox::InboundStoreError),
+    Durable(crate::durable::inbox::ConversationStoreError),
 }
 
 impl core::fmt::Display for CanonicalCommitError {
@@ -447,6 +481,52 @@ impl<'a> AgentExecution<'a> {
                 actual: tool_runtime.conversation_id().clone(),
             });
         }
+        let store = tool_runtime.durable_store();
+        Self::new_bound(
+            request,
+            capability,
+            cancellation,
+            context_runtime,
+            tool_runtime,
+            store,
+            lifecycle,
+        )
+    }
+
+    /// Completes construction over the full authority obtained from the
+    /// conversation tool runtime's single composition binding. This helper
+    /// is private so callers cannot pair an arbitrary store with a mailbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::ConversationMismatch`] when the request and
+    /// tool runtime belong to different conversations, and
+    /// [`MailboxError::Durable`] when the supplied authority belongs to a
+    /// different conversation, cannot load its current head, or cannot
+    /// initialize the standalone fixture history.
+    fn new_bound(
+        request: AgentExecutionRequest,
+        capability: AttemptCapabilityLease,
+        cancellation: &'a AgentCancellation,
+        context_runtime: ContextRuntime,
+        tool_runtime: &'a ConversationToolRuntime,
+        store: std::sync::Arc<dyn ConversationStore>,
+        lifecycle: AttemptLifecycle,
+    ) -> Result<Self, MailboxError> {
+        if tool_runtime.conversation_id() != &request.conversation_id {
+            return Err(MailboxError::ConversationMismatch {
+                expected: request.conversation_id.clone(),
+                actual: tool_runtime.conversation_id().clone(),
+            });
+        }
+        if store.conversation_id() != &request.conversation_id {
+            return Err(MailboxError::Durable(
+                crate::durable::ConversationStoreError::ConversationIdMismatch {
+                    stored: store.conversation_id().clone(),
+                    requested: request.conversation_id.clone(),
+                },
+            ));
+        }
         let snapshot = capability.snapshot();
         if snapshot.conversation_id() != tool_runtime.conversation_id()
             || snapshot.workspace_root() != tool_runtime.workspace().root()
@@ -460,15 +540,30 @@ impl<'a> AgentExecution<'a> {
         }
         let mut request = request;
         let conversation = core::mem::take(&mut request.conversation);
+        // Standalone execution fixtures may provide a fresh store rather than
+        // constructing a ConversationRuntime first. Initialize that store
+        // once from the supplied current facts; normal runtime construction
+        // has already established the immutable bootstrap identity.
+        let head = store
+            .load_head()
+            .map_err(|error| MailboxError::Durable(error.clone()))?;
+        if head.revision == crate::conversation::SurfaceRevision::INITIAL
+            && head.active_message_ids.is_empty()
+        {
+            store
+                .initialize(conversation.ledger().audit_records())
+                .map_err(MailboxError::Durable)?;
+        }
         Ok(Self {
             conversation,
             request,
             capability,
             cancellation,
             tool_runtime,
+            store,
             state: ExecutionStateMachine::new(),
-            events: Vec::new(),
             durable_failure: None,
+            durable_failure_kind: None,
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
@@ -477,7 +572,6 @@ impl<'a> AgentExecution<'a> {
             lifecycle,
             deferred_context: Vec::new(),
             context_generation_serial: 0,
-            request_snapshots: Vec::new(),
             observed: None,
             last_request_fingerprint: None,
             observer: None,
@@ -496,26 +590,25 @@ impl<'a> AgentExecution<'a> {
     /// committed canonical messages, and composed Agent Status at their
     /// commit linearization points, and it never influences execution. It
     /// must be attached before [`AgentExecution::run`] to observe the whole
-    /// attempt; attaching is optional, and the attempt-local ordered event
-    /// trace in the result is recorded regardless.
+    /// attempt; attaching is optional, and the durable Event Journal remains
+    /// available for historical reads regardless.
     pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
         self.observer = Some(observer);
     }
 
-    /// Runs the attempt to its single terminal outcome.
+    /// Runs the attempt to its execution settlement candidate.
     ///
     /// The execution state machine is the settlement authority: the machine
     /// is settled (`complete()` for success, `fail()` for failure and
     /// cancellation) immediately before the single attempt terminal
-    /// `RuntimeEvent` is emitted, so the terminal event and the terminal
-    /// state represent the same settlement boundary.
+    /// `RuntimeEvent` is attempted. A terminal Event Journal append failure
+    /// does not fabricate an event; the result reports that durable failure
+    /// separately.
     ///
     /// # Panics
     ///
-    /// Panics only when the loop violates its own invariants (the state
-    /// machine rejects the settlement, an attempt that never settles, or a
-    /// terminal event that does not map to an outcome); these are
-    /// unreachable by construction.
+    /// Panics only when the loop violates its own state-machine invariants;
+    /// a durable terminal write failure is an explicit result, not a panic.
     pub async fn run(mut self) -> AgentExecutionResult {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
@@ -523,6 +616,12 @@ impl<'a> AgentExecution<'a> {
         let terminal = if let Err(error) = self.state.start() {
             Terminal::Failed {
                 failure: AttemptFailure::Runtime { error },
+            }
+        } else if let Some(message) = self.durable_failure.clone() {
+            Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
             }
         } else {
             // The attempt's explicit fresh inbound trigger is pending until
@@ -582,17 +681,14 @@ impl<'a> AgentExecution<'a> {
         };
         self.settle(&terminal);
         self.emit_terminal(&terminal);
-        let terminal_event = self.events.last().expect("terminal event emitted");
-        let outcome =
-            AttemptOutcome::from_terminal_event(terminal_event).expect("terminal maps to outcome");
+        let outcome = terminal.outcome();
         AgentExecutionResult {
             attempt_id: self.request.attempt_id,
             outcome,
             terminal_state: self.state.state(),
-            events: self.events,
             conversation: self.conversation,
             durable_failure: self.durable_failure,
-            request_snapshots: self.request_snapshots,
+            durable_failure_kind: self.durable_failure_kind,
         }
     }
 
@@ -617,14 +713,18 @@ impl<'a> AgentExecution<'a> {
         let assistant_message_id =
             MessageId::new(format!("{}-agent-{}", self.request.attempt_id, self.turn));
         self.emit(RuntimeEvent::TurnStarted);
+        if let Some(message) = self.durable_failure.clone() {
+            return Some(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            });
+        }
 
         let request = match self.prepare_model_request().await {
             Ok(request) => request,
             Err(terminal) => return Some(terminal),
         };
-        self.emit(RuntimeEvent::ModelRequestStarted {
-            model: request.model().to_owned(),
-        });
         let mut invocation = match self
             .consume_invocation(request, &assistant_message_id)
             .await
@@ -718,6 +818,9 @@ impl<'a> AgentExecution<'a> {
             finish_reason: finish_reason.clone(),
             usage: reported_usage.clone(),
         });
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return Some(terminal);
+        }
         // A provider-reported input measurement applies only to the
         // exact projection the completed request used.
         if let Some(usage) = &reported_usage
@@ -766,6 +869,9 @@ impl<'a> AgentExecution<'a> {
         }
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
+            if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                return Some(terminal);
+            }
             // Safe boundary for a completed no-tool turn: the attempt may
             // settle only when the boundary snapshot observes no eligible
             // inbound work. A drained batch keeps the attempt running for
@@ -929,6 +1035,21 @@ impl<'a> AgentExecution<'a> {
                 }
             }
         }
+        let fresh = FreshInboundTurn::new(
+            prepared
+                .iter()
+                .map(|commit| commit.message_id().clone())
+                .collect(),
+        )
+        .map_err(|error| Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::ContractViolation {
+                    message: format!(
+                        "a selected inbound batch cannot form a fresh inbound turn: {error}"
+                    ),
+                },
+            },
+        })?;
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction. A durable adoption failure is
         // a durable-authority failure (Issue #63): the settled result
@@ -938,26 +1059,15 @@ impl<'a> AgentExecution<'a> {
                 self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
             );
         }
-        let mut message_ids = Vec::with_capacity(prepared.len());
         for commit in prepared {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
             let block = commit.message().clone();
-            let message_id = self.conversation.install_prepared(commit);
+            self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
                 observer.observe_committed(&self.request.attempt_id, &block);
             }
-            message_ids.push(message_id);
         }
-        let fresh = FreshInboundTurn::new(message_ids).map_err(|error| Terminal::Failed {
-            failure: AttemptFailure::Runtime {
-                error: RuntimeError::ContractViolation {
-                    message: format!(
-                        "a drained mailbox batch cannot form a fresh inbound turn: {error}"
-                    ),
-                },
-            },
-        })?;
         self.pending_fresh_inbound = Some(fresh);
         Ok(true)
     }
@@ -996,6 +1106,13 @@ impl<'a> AgentExecution<'a> {
     /// generation, so the policy is evaluated exactly once per primary step.
     #[allow(clippy::too_many_lines)]
     async fn prepare_model_request(&mut self) -> Result<ModelRequest, Terminal> {
+        if let Some(message) = self.durable_failure.clone() {
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            });
+        }
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -1249,19 +1366,44 @@ impl<'a> AgentExecution<'a> {
             accepted.generation.clone(),
             request.continuation.clone(),
         );
-        let reconstructed = snapshot.reconstruct(&self.conversation).map_err(|error| {
-            Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::Internal,
-                error.to_string(),
-            ))
-        })?;
+        let started = self
+            .store
+            .persist_request_start(&snapshot, Utc::now())
+            .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
+                self.durable_failure = Some(format!(
+                    "request start could not be committed durably: {error}"
+                ));
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error.to_string(),
+                ))
+            })?;
+        let reconstructed = self
+            .store
+            .reconstruct_model_request(&snapshot.request_id)
+            .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
+                self.durable_failure = Some(format!(
+                    "durable request reconstruction failed after start: {error}"
+                ));
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error.to_string(),
+                ))
+            })?;
         if reconstructed != request {
+            self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
+            self.durable_failure = Some(
+                "durable request reconstruction differs from the live provider-neutral request"
+                    .to_owned(),
+            );
             return Err(Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
                 "frozen provider-neutral request differs from historical reconstruction",
             )));
         }
-        self.request_snapshots.push(snapshot);
+        self.record_persisted_event(started);
         self.last_request_fingerprint = Some(projection.fingerprint());
         Ok(request)
     }
@@ -1403,12 +1545,35 @@ impl<'a> AgentExecution<'a> {
         error: &dyn core::fmt::Display,
     ) -> Terminal {
         let message = format!("{context}: {error}");
+        self.durable_failure_kind = Some(DurableFailureKind::CanonicalCommit);
         self.durable_failure = Some(message.clone());
         Terminal::Failed {
             failure: AttemptFailure::Runtime {
                 error: RuntimeError::DurableStore { message },
             },
         }
+    }
+
+    fn durable_failure_terminal_from_state(&self) -> Option<Terminal> {
+        self.durable_failure
+            .clone()
+            .map(|message| Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            })
+    }
+
+    /// Converts an already-recorded Event Journal failure into the canonical
+    /// commit error used by the tool-batch path. This keeps the active attempt
+    /// from continuing into a semantic write after an event could not be
+    /// persisted.
+    fn durable_failure_commit_error(&self) -> Option<CanonicalCommitError> {
+        self.durable_failure.clone().map(|message| {
+            CanonicalCommitError::Durable(crate::durable::inbox::ConversationStoreError::Storage(
+                message,
+            ))
+        })
     }
 
     /// Maps one canonical commit failure to its honest terminal: a durable
@@ -1483,11 +1648,17 @@ impl<'a> AgentExecution<'a> {
             });
         }
         self.emit(RuntimeEvent::CompactionStarted);
+        if let Some(message) = self.durable_failure.clone() {
+            return Err(self.compaction_failure(
+                &ContextError::new(ContextErrorKind::Internal, message),
+                overflow,
+            ));
+        }
         match self
             .run_compaction(must_cover_through, fresh_inbound, effective_system_prompt)
             .await
         {
-            Ok(completed) => {
+            Ok(_completed) => {
                 // The semantic commit already happened: the summary is a
                 // Ledger fact and the new Surface revision exists. The
                 // opaque provider continuation is now known to be
@@ -1497,13 +1668,8 @@ impl<'a> AgentExecution<'a> {
                 self.pending_continuation = None;
                 self.continuation_owner = None;
                 self.observed = None;
-                self.emit(RuntimeEvent::CompactionCompleted {
-                    generation: completed.record.generation,
-                    summary_message_id: completed.record.summary_message_id.clone(),
-                    surface_revision: completed.record.surface_revision,
-                    tokens_before: completed.tokens_before,
-                    estimated_tokens_after: completed.estimated_tokens_after,
-                });
+                // `commit_compaction` persisted and returned the exact
+                // completion fact before this branch became observable.
             }
             // Cancellation never becomes a compaction failure: no
             // `CompactionFailed` event is emitted and the attempt settles
@@ -1522,8 +1688,8 @@ impl<'a> AgentExecution<'a> {
     /// progress, fit-check, and commit.
     ///
     /// The **semantic commit / linearization point** of compaction is the
-    /// single call to `ConversationState::commit_compaction`. Before it the
-    /// old Ledger, the old Surface, and the old continuation semantics are
+    /// single `ConversationStore::commit_compaction` transaction. Before it
+    /// the old Ledger, the old Surface, and the old continuation semantics are
     /// authoritative; after it the canonical
     /// `User(Runtime / CompactionSummary)` message exists in the Ledger, a
     /// new Surface revision exists in which that summary replaces the
@@ -1536,6 +1702,7 @@ impl<'a> AgentExecution<'a> {
     /// semantic commit: once cancellation is observable, no summary, no
     /// canonical summary append, and no Surface rewrite happen, so no
     /// half-committed state can exist.
+    #[allow(clippy::too_many_lines)]
     async fn run_compaction(
         &mut self,
         must_cover_through: Option<&MessageId>,
@@ -1618,23 +1785,39 @@ impl<'a> AgentExecution<'a> {
             }
             Err(error) => return Err(error),
         }
-        if let Err(error) = self
-            .tool_runtime
-            .inbound_store()
-            .append_canonical(&summary_block)
-        {
-            // A durable compaction-summary commit failure is a
-            // durable-authority failure (Issue #63): the terminal is
-            // classified as a compaction failure (it is one), and the
-            // durable failure is additionally recorded on the execution so
-            // the settled result carries it to the coordinator — the
-            // runtime must not return to a false healthy durability state.
-            self.durable_failure = Some(format!(
-                "the compaction summary cannot be committed durably: {error}"
-            ));
+        let (durable_revision, durable_generation, persisted_event) =
+            match self.store.commit_compaction(CompactionCommitInput {
+                summary: prepared.summary().clone(),
+                span: prepared.span().clone(),
+                expected_revision: prepared.expected_revision(),
+                tokens_before: plan.estimated_before,
+                estimated_tokens_after: projection.estimated_input.input_tokens,
+                attempt_id: Some(self.request.attempt_id.clone()),
+                turn_id: Some(TurnId::new(self.turn.to_string())),
+                timestamp: Utc::now(),
+            }) {
+                Ok(result) => result,
+                Err(error) => {
+                    // A durable compaction-summary commit failure is a
+                    // durable-authority failure (Issue #11): the terminal is
+                    // classified as a compaction failure and the owning
+                    // runtime is marked unhealthy.
+                    self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                    self.durable_failure = Some(format!(
+                        "the compaction transition cannot be committed durably: {error}"
+                    ));
+                    return Err(ContextError::new(
+                        ContextErrorKind::Internal,
+                        error.to_string(),
+                    ));
+                }
+            };
+        if durable_revision != prepared.expected_revision().next() {
+            self.durable_failure =
+                Some("durable compaction returned an unexpected Surface revision".to_owned());
             return Err(ContextError::new(
                 ContextErrorKind::Internal,
-                error.to_string(),
+                "durable compaction revision differs from prepared transition",
             ));
         }
         let record = self.conversation.install_prepared_compaction(prepared);
@@ -1643,11 +1826,14 @@ impl<'a> AgentExecution<'a> {
         if let Some(observer) = self.observer {
             observer.observe_committed(&self.request.attempt_id, &summary_block);
         }
-        Ok(CompletedCompaction {
+        debug_assert_eq!(record.generation, durable_generation);
+        self.record_persisted_event(persisted_event);
+        let _ = (
             record,
-            tokens_before: plan.estimated_before,
-            estimated_tokens_after: projection.estimated_input.input_tokens,
-        })
+            plan.estimated_before,
+            projection.estimated_input.input_tokens,
+        );
+        Ok(CompletedCompaction)
     }
 
     /// Emits `CompactionFailed` with the diagnostic and returns the
@@ -1668,6 +1854,9 @@ impl<'a> AgentExecution<'a> {
         self.emit(RuntimeEvent::CompactionFailed {
             error: error.message.clone(),
         });
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return terminal;
+        }
         match overflow {
             Some(overflow) => Terminal::Failed {
                 failure: AttemptFailure::Model {
@@ -1781,6 +1970,9 @@ impl<'a> AgentExecution<'a> {
             attempt_number: retry_number,
             retry_delay_ms: None,
         });
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return Err(terminal);
+        }
         let retry_message_id = MessageId::new(format!(
             "{}-agent-{}-retry-{}",
             self.request.attempt_id, self.turn, retry_number
@@ -1789,9 +1981,6 @@ impl<'a> AgentExecution<'a> {
             Ok(request) => request,
             Err(terminal) => return Err(terminal),
         };
-        self.emit(RuntimeEvent::ModelRequestStarted {
-            model: request.model().to_owned(),
-        });
         self.consume_invocation(request, &retry_message_id).await
     }
 
@@ -1831,6 +2020,9 @@ impl<'a> AgentExecution<'a> {
                     self.emit(RuntimeEvent::ModelRequestFailed {
                         error: error.clone(),
                     });
+                    if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                        return Err(terminal);
+                    }
                     stream_terminal = Some(StreamTerminal::Failed {
                         error: error.clone(),
                     });
@@ -1838,6 +2030,9 @@ impl<'a> AgentExecution<'a> {
                 _ => {
                     if stream_terminal.is_none() {
                         self.emit_model_event(&event, assistant_message_id);
+                        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                            return Err(terminal);
+                        }
                     }
                 }
             }
@@ -1851,6 +2046,9 @@ impl<'a> AgentExecution<'a> {
                 },
             });
         };
+        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+            return Err(terminal);
+        }
         Ok(stream_terminal)
     }
 
@@ -1933,6 +2131,9 @@ impl<'a> AgentExecution<'a> {
                             tool_call_id: slots[index].call.id.clone(),
                             tool_id: slots[index].tool_id.clone(),
                         });
+                        if let Some(error) = self.durable_failure_commit_error() {
+                            return Err(error);
+                        }
                         let invocation = slots[index]
                             .prepared
                             .as_ref()
@@ -1959,6 +2160,9 @@ impl<'a> AgentExecution<'a> {
                                 tool_id: slot.tool_id.clone(),
                             });
                         }
+                    }
+                    if let Some(error) = self.durable_failure_commit_error() {
+                        return Err(error);
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
                     for (slot_index, slot) in slots[index..end].iter().enumerate() {
@@ -2034,6 +2238,9 @@ impl<'a> AgentExecution<'a> {
             let result = slot.result.clone().expect("every call slot settles");
             for event in &slot.progress {
                 self.emit(event.clone());
+                if let Some(error) = self.durable_failure_commit_error() {
+                    return Err(error);
+                }
             }
             if slot.started {
                 self.emit(RuntimeEvent::ToolExecutionCompleted {
@@ -2041,6 +2248,9 @@ impl<'a> AgentExecution<'a> {
                     tool_id: slot.tool_id.clone(),
                     result: result.clone(),
                 });
+                if let Some(error) = self.durable_failure_commit_error() {
+                    return Err(error);
+                }
             }
             let block = MessageBlock::Tool(ToolMessageBlock {
                 id: MessageId::new(format!(
@@ -2080,6 +2290,9 @@ impl<'a> AgentExecution<'a> {
             })
             .collect();
         self.emit(RuntimeEvent::TurnCompleted);
+        if let Some(error) = self.durable_failure_commit_error() {
+            return Err(error);
+        }
         Ok(settled)
     }
 
@@ -2295,19 +2508,14 @@ impl<'a> AgentExecution<'a> {
         invocation: &ToolInvocation,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        let buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let reporter = BufferProgressReporter {
-            call_id: invocation.call_id.clone(),
-            tool_id: invocation.tool_id.clone(),
-            buffer: buffer.clone(),
-        };
+        let buffer =
+            ForegroundProgressBuffer::new(invocation.call_id.clone(), invocation.tool_id.clone());
         let context = ToolExecutionContext {
             conversation_id: &self.request.conversation_id,
             execution_id: None,
             cancellation: self.cancellation.signal(),
             workspace: self.tool_runtime.workspace(),
-            progress: &reporter,
+            progress: &buffer,
             artifacts: self.tool_runtime.artifacts(),
             environment: self.capability.snapshot().effective_environment(),
         };
@@ -2325,7 +2533,7 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             };
         }
-        let progress_events = std::mem::take(&mut *buffer.lock().expect("progress buffer lock"));
+        let progress_events = buffer.take();
         (result, progress_events)
     }
 
@@ -2420,11 +2628,10 @@ impl<'a> AgentExecution<'a> {
     /// Every canonical commit of the attempt — drained inbound user
     /// messages (through [`AgentExecution::safe_boundary_drain`]), committed
     /// Assistant messages, committed Tool messages, admitted context facts —
-    /// goes through here. The durable Message Ledger append happens through
-    /// the same seam the pending-inbox adoption uses, so the durable Ledger
-    /// remains the exact ordered prefix of the authoritative in-memory
-    /// Message Ledger (Issue #63, Finding 2). Independent ledger/surface
-    /// mutations do not exist in this module.
+    /// goes through here. The durable Message Ledger append and Surface
+    /// advancement happen through one `ConversationStore` transition; the
+    /// bounded hot state installs only the validated current working result
+    /// and never becomes a second historical transcript.
     fn commit_canonical(
         &mut self,
         block: &MessageBlock,
@@ -2434,15 +2641,26 @@ impl<'a> AgentExecution<'a> {
         // binds the exact message.
         let prepared = self.conversation.prepare_commit(block)?;
         // Durable append through the canonical Message Ledger seam.
-        self.tool_runtime
-            .inbound_store()
-            .append_canonical(prepared.message())
-            .map_err(CanonicalCommitError::Durable)?;
+        let persisted_event = if let Some(event) = Self::canonical_event(block) {
+            Some(
+                self.store
+                    .append_canonical_with_event(prepared.message(), self.event_envelope(event))
+                    .map_err(CanonicalCommitError::Durable)?,
+            )
+        } else {
+            self.store
+                .append_canonical(prepared.message())
+                .map_err(CanonicalCommitError::Durable)?;
+            None
+        };
         // Infallible install: the identity was validated above and the
         // attempt holds exclusive ownership of the conversation state.
         let message_id = self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
             observer.observe_committed(&self.request.attempt_id, block);
+        }
+        if let Some(event) = persisted_event {
+            self.record_persisted_event(event);
         }
         Ok(message_id)
     }
@@ -2462,15 +2680,34 @@ impl<'a> AgentExecution<'a> {
         for block in blocks {
             prepared.push(self.conversation.prepare_commit(block)?);
         }
-        self.tool_runtime
-            .inbound_store()
-            .append_canonical_batch(blocks)
+        let events = blocks
+            .iter()
+            .map(|block| {
+                Self::canonical_event(block).ok_or_else(|| {
+                    CanonicalCommitError::Durable(
+                        crate::durable::inbox::ConversationStoreError::InvalidReference(
+                            "a ToolResult batch contains a non-tool message".to_owned(),
+                        ),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let envelopes = events
+            .into_iter()
+            .map(|event| self.event_envelope(event))
+            .collect::<Vec<_>>();
+        let persisted_events = self
+            .store
+            .append_canonical_batch_with_events(blocks, &envelopes)
             .map_err(CanonicalCommitError::Durable)?;
         for (prepared, block) in prepared.into_iter().zip(blocks) {
             self.conversation.install_prepared(prepared);
             if let Some(observer) = self.observer {
                 observer.observe_committed(&self.request.attempt_id, block);
             }
+        }
+        for event in persisted_events {
+            self.record_persisted_event(event);
         }
         Ok(())
     }
@@ -2535,15 +2772,73 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
+    fn canonical_event(block: &MessageBlock) -> Option<RuntimeEvent> {
+        match block {
+            MessageBlock::Assistant(message) => Some(RuntimeEvent::AssistantMessageCommitted {
+                message_id: message.id.clone(),
+            }),
+            MessageBlock::Tool(message) => Some(RuntimeEvent::ToolMessageCommitted {
+                message_id: message.id.clone(),
+                tool_call_id: message.tool_call_id.clone(),
+            }),
+            MessageBlock::System(_) | MessageBlock::User(_) => None,
+        }
+    }
+
+    fn event_envelope(&self, event: RuntimeEvent) -> RuntimeEventEnvelope {
+        // Attempt lifecycle facts are attempt-level facts, not events in the
+        // model turn that just completed. Keeping their turn identity empty
+        // lets the durable Journal enforce turn terminality without treating
+        // the enclosing attempt lifecycle as a contradictory turn fact.
+        let turn_id = if matches!(
+            &event,
+            RuntimeEvent::AttemptStarted { .. }
+                | RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+        ) {
+            None
+        } else {
+            Some(TurnId::new(self.turn.to_string()))
+        };
+        RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(""),
+            sequence: 0,
+            conversation_id: self.request.conversation_id.clone(),
+            attempt_id: Some(self.request.attempt_id.clone()),
+            turn_id,
+            timestamp: Utc::now(),
+            event,
+        }
+    }
+
+    fn record_persisted_event(&self, envelope: RuntimeEventEnvelope) {
+        let event = envelope.event;
+        if let Some(observer) = self.observer {
+            observer.observe_event(&self.request.attempt_id, &event);
+        }
+    }
+
     fn emit(&mut self, event: RuntimeEvent) {
         debug_assert!(
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
         );
-        if let Some(observer) = self.observer {
-            observer.observe_event(&self.request.attempt_id, &event);
+        if self.durable_failure.is_some() {
+            return;
         }
-        self.events.push(event);
+        match self.store.append_event(self.event_envelope(event)) {
+            Ok(envelope) => self.record_persisted_event(envelope),
+            Err(error) => {
+                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+                self.durable_failure = Some(format!(
+                    "runtime event could not be persisted before publication: {error}"
+                ));
+            }
+        }
     }
 
     fn emit_terminal(&mut self, terminal: &Terminal) {
@@ -2563,10 +2858,18 @@ impl<'a> AgentExecution<'a> {
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         self.terminal_emitted = true;
-        if let Some(observer) = self.observer {
-            observer.observe_event(&self.request.attempt_id, &event);
+        match self.store.append_event(self.event_envelope(event)) {
+            Ok(envelope) => self.record_persisted_event(envelope),
+            Err(error) => {
+                // The execution state machine has settled, but the durable
+                // Event Journal has not. The uncommitted candidate must never
+                // enter the persisted-event projection or observer stream.
+                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+                self.durable_failure = Some(format!(
+                    "terminal event could not be persisted before publication: {error}"
+                ));
+            }
         }
-        self.events.push(event);
     }
 }
 
@@ -2667,28 +2970,72 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     }
 }
 
-/// The foreground progress reporter of one execution: progress facts are
-/// normalized through the one shared UTF-8-safe bound
+/// The bounded foreground progress buffer of one active tool call.
+///
+/// One foreground invocation owns exactly one buffer. The executor's
+/// progress reports are normalized through the one shared UTF-8-safe bound
 /// ([`bound_tool_progress`], the same normalization the background registry
-/// uses), buffered per slot, and become canonical `ToolExecutionProgress`
-/// events at batch commit, before their completion event.
-struct BufferProgressReporter {
+/// uses) and retained under the explicit tool-plane cardinality bound
+/// [`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`]. Once the bound is reached,
+/// the first `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1` observations are
+/// pinned and the final slot tracks the newest observation, so retained
+/// progress always ends with the most recent executor state and the buffer
+/// never exceeds the bound while the executor is still running.
+///
+/// The buffer is transient current-execution state: only the retained
+/// observations become canonical `ToolExecutionProgress` Event Journal facts
+/// at batch commit, before their completion event. Coalesced observations
+/// never cross the durable execution-fact commit point.
+struct ForegroundProgressBuffer {
     call_id: ToolCallId,
     tool_id: ToolId,
-    buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>>,
+    events: std::sync::Mutex<Vec<RuntimeEvent>>,
 }
 
-impl ProgressReporter for BufferProgressReporter {
+impl ForegroundProgressBuffer {
+    /// An empty bounded buffer for one foreground invocation.
+    fn new(call_id: ToolCallId, tool_id: ToolId) -> Self {
+        Self {
+            call_id,
+            tool_id,
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Drains the retained progress events in observation order, newest
+    /// last. Called exactly once, when the invocation structurally settles.
+    fn take(&self) -> Vec<RuntimeEvent> {
+        std::mem::take(&mut *self.events.lock().expect("progress buffer lock"))
+    }
+
+    /// The number of retained observations; test-only invariant probe.
+    #[cfg(test)]
+    fn retained_len(&self) -> usize {
+        self.events.lock().expect("progress buffer lock").len()
+    }
+}
+
+impl ProgressReporter for ForegroundProgressBuffer {
     fn report(&self, progress: ToolProgress) {
         let bounded = crate::tools::limits::bound_tool_progress(progress);
-        self.buffer.lock().expect("progress buffer lock").push(
-            RuntimeEvent::ToolExecutionProgress {
-                tool_call_id: self.call_id.clone(),
-                tool_id: self.tool_id.clone(),
-                execution_id: None,
-                progress: bounded,
-            },
-        );
+        let event = RuntimeEvent::ToolExecutionProgress {
+            tool_call_id: self.call_id.clone(),
+            tool_id: self.tool_id.clone(),
+            execution_id: None,
+            progress: bounded,
+        };
+        let mut events = self.events.lock().expect("progress buffer lock");
+        if events.len() < crate::tools::limits::MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            events.push(event);
+        } else {
+            // At capacity the earliest observations are pinned and the final
+            // slot tracks the newest observation: first
+            // `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1` progress events,
+            // then the latest progress event.
+            *events
+                .last_mut()
+                .expect("the foreground progress bound is positive") = event;
+        }
     }
 }
 
@@ -2790,12 +3137,15 @@ mod test_sync {
 #[cfg(test)]
 mod tests {
     use crate::conversation::ConversationState;
+    use crate::durable::inbox::ConversationStore;
+    use crate::events::types::{AttemptOutcome, RuntimeEvent};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;
     use tokio::sync::watch;
 
+    use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
     use crate::message::types::{
         ContentBlockIndex, ContextKind, InboundKind, MessageBlock, UserContentBlock,
         UserMessageBlock, UserSource,
@@ -2808,23 +3158,156 @@ mod tests {
     use crate::model::types::{ModelProtocol, ModelRequest};
     use crate::runtime::cancellation::CancellationSignal;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
     };
-    use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
+    use crate::runtime::inbound::InitialTurnTrigger;
     use crate::runtime::types::CancellationReason;
     use crate::scripted_suites::support::model::scripted_session_model;
-    use crate::tools::executor::{ToolExecutor, ToolRegistry};
+    use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
+    use crate::tools::limits::{
+        MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES,
+    };
     use crate::tools::types::{
         ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     };
 
     use super::{
-        AgentExecution, AgentExecutionRequest,
+        AgentExecution, AgentExecutionRequest, ForegroundProgressBuffer,
         test_sync::{AdmissionPause, ContinuationBoundaryPause},
     };
     use crate::agent::cancellation::AgentCancellation;
     use crate::context::ContextRuntime;
+
+    /// An empty bounded foreground progress buffer for one scripted call.
+    fn foreground_buffer() -> ForegroundProgressBuffer {
+        ForegroundProgressBuffer::new(ToolCallId::new("call-1"), ToolId::new("tool-1"))
+    }
+
+    /// Reports one numbered progress observation through the reporter seam,
+    /// exactly as an executor would.
+    fn report_progress(buffer: &ForegroundProgressBuffer, index: usize) {
+        buffer.report(crate::tools::types::ToolProgress {
+            message: Some(format!("progress {index}")),
+            completed: None,
+            total: None,
+        });
+    }
+
+    /// Drains the retained progress messages in observation order.
+    fn retained_messages(buffer: &ForegroundProgressBuffer) -> Vec<String> {
+        buffer
+            .take()
+            .iter()
+            .map(|event| match event {
+                RuntimeEvent::ToolExecutionProgress { progress, .. } => {
+                    progress.message.clone().expect("numbered progress message")
+                }
+                other => {
+                    panic!("the foreground progress buffer retains only progress events: {other:?}")
+                }
+            })
+            .collect()
+    }
+
+    /// Exact bound: reporting exactly `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`
+    /// observations retains every one of them in observation order, and the
+    /// retained count never exceeds the bound while reporting.
+    #[test]
+    fn foreground_progress_buffer_retains_the_exact_bound() {
+        let buffer = foreground_buffer();
+        for index in 0..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the retained count never exceeds the bound"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        assert_eq!(messages.len(), MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL);
+        for (index, message) in messages.iter().enumerate() {
+            assert_eq!(message, &format!("progress {index}"));
+        }
+    }
+
+    /// One over the bound: the first `MAX - 1` observations are pinned and
+    /// the final slot tracks the newest observation, so the retained count
+    /// stays exactly at the bound and ends with the latest progress.
+    #[test]
+    fn foreground_progress_buffer_one_over_the_bound_keeps_first_prefix_plus_latest() {
+        let buffer = foreground_buffer();
+        for index in 0..=MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the retained count never exceeds the bound"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        let mut expected: Vec<String> = (0..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1)
+            .map(|index| format!("progress {index}"))
+            .collect();
+        expected.push(format!(
+            "progress {MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL}"
+        ));
+        assert_eq!(
+            messages, expected,
+            "the overflow policy is deterministic: first MAX-1 pinned, newest last"
+        );
+    }
+
+    /// Flood: a misbehaving executor reporting ten times the bound never
+    /// grows the buffer past the bound; the retained prefix stays the
+    /// earliest observations and the final slot is the newest one.
+    #[test]
+    fn foreground_progress_buffer_flood_never_exceeds_the_bound() {
+        const FLOOD: usize = MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL * 10;
+        let buffer = foreground_buffer();
+        for index in 0..FLOOD {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the bound holds during reporting, not only after settlement"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        assert_eq!(messages.len(), MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL);
+        for (index, message) in messages[..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1]
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(message, &format!("progress {index}"));
+        }
+        assert_eq!(
+            messages.last().expect("retained progress"),
+            &format!("progress {}", FLOOD - 1),
+            "the final retained observation is the newest executor state"
+        );
+    }
+
+    /// The canonical shared normalization (message bytes, finite values)
+    /// applies as part of bounded retention; the cardinality bound never
+    /// bypasses or duplicates it.
+    #[test]
+    fn foreground_progress_buffer_applies_canonical_normalization_before_retention() {
+        let buffer = foreground_buffer();
+        buffer.report(crate::tools::types::ToolProgress {
+            message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES + 10)),
+            completed: Some(f64::NAN),
+            total: Some(f64::INFINITY),
+        });
+        let events = buffer.take();
+        assert_eq!(events.len(), 1);
+        let RuntimeEvent::ToolExecutionProgress { progress, .. } = &events[0] else {
+            panic!("the buffer retains a progress event");
+        };
+        assert_eq!(
+            progress.message.as_deref().expect("message").len(),
+            MAX_PROGRESS_MESSAGE_BYTES
+        );
+        assert_eq!(progress.completed, None, "non-finite values are dropped");
+        assert_eq!(progress.total, None, "non-finite values are dropped");
+    }
 
     /// A scripted model adapter: each invocation pops the next event script
     /// and yields it synchronously, recording every request.
@@ -2878,6 +3361,24 @@ mod tests {
                 .unwrap_or_default();
             Box::pin(futures_util::stream::iter(script))
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Mutex<Vec<RuntimeEvent>>,
+    }
+
+    impl AgentExecutionObserver for RecordingObserver {
+        fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+            self.events
+                .lock()
+                .expect("observer event lock")
+                .push(event.clone());
+        }
+
+        fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
+
+        fn observe_status(&self, _observation: &AgentStatusObservation) {}
     }
 
     /// A contributor whose bounded work is explicitly held at an awaited
@@ -2976,13 +3477,13 @@ mod tests {
     /// request, so no compaction ever triggers in these tests.
     /// A conversation tool runtime over a temporary workspace.
     fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
-        tool_runtime_with_mailbox(None)
+        tool_runtime_with_store(None)
     }
 
     /// A conversation tool runtime over a temporary workspace with an
-    /// optional explicitly configured conversation mailbox.
-    fn tool_runtime_with_mailbox(
-        mailbox: Option<ConversationInboundMailbox>,
+    /// optional explicitly configured durable authority.
+    fn tool_runtime_with_store(
+        store: Option<Arc<dyn ConversationStore>>,
     ) -> crate::tools::runtime::ConversationToolRuntime {
         use crate::tools::runtime::ConversationRuntimeConfig;
         let dir = std::env::temp_dir().join(format!(
@@ -2994,7 +3495,7 @@ mod tests {
         crate::tools::runtime::ConversationToolRuntime::from_config(
             ConversationId::new("conv-1"),
             ConversationRuntimeConfig {
-                mailbox,
+                durable_binding: store.map(crate::durable::ConversationStoreBinding::new),
                 ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
             },
         )
@@ -3070,6 +3571,7 @@ mod tests {
             },
             RuntimeEvent::TurnStarted,
             RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
             },
             RuntimeEvent::AssistantMessageStarted {
@@ -3104,6 +3606,9 @@ mod tests {
                 finish_reason: ModelFinishReason::ToolCalls,
                 usage: None,
             },
+            RuntimeEvent::AssistantMessageCommitted {
+                message_id: MessageId::new("attempt-1-agent-1"),
+            },
             RuntimeEvent::ToolExecutionStarted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-alpha"),
@@ -3120,12 +3625,54 @@ mod tests {
                     truncation: None,
                 },
             },
+            RuntimeEvent::ToolMessageCommitted {
+                message_id: MessageId::new("attempt-1-tool-1-call-1"),
+                tool_call_id: ToolCallId::new("call-1"),
+            },
             RuntimeEvent::TurnCompleted,
             RuntimeEvent::AttemptCancelled {
                 attempt_id: AttemptId::new("attempt-1"),
                 reason: CancellationReason::UserRequested,
             },
         ]
+    }
+
+    /// Reads committed Event Journal facts through bounded pages for tests
+    /// that explicitly audit the complete attempt history.
+    fn event_history(store: &dyn ConversationStore) -> Vec<RuntimeEvent> {
+        const PAGE_SIZE: usize = 32;
+        let mut cursor = None;
+        let mut events = Vec::new();
+        loop {
+            let page = store.read_events(cursor, PAGE_SIZE).expect("event page");
+            if page.events.is_empty() {
+                break;
+            }
+            events.extend(page.events.into_iter().map(|envelope| envelope.event));
+            cursor = page.next_sequence;
+        }
+        events
+    }
+
+    /// Reads retained Request Snapshots through bounded pages for tests that
+    /// explicitly audit historical request facts.
+    fn request_snapshot_history(
+        store: &dyn ConversationStore,
+    ) -> Vec<crate::model::RequestSnapshot> {
+        const PAGE_SIZE: usize = 32;
+        let mut cursor = None;
+        let mut snapshots = Vec::new();
+        loop {
+            let page = store
+                .read_request_snapshots(cursor, PAGE_SIZE)
+                .expect("request snapshot page");
+            if page.snapshots.is_empty() {
+                break;
+            }
+            snapshots.extend(page.snapshots);
+            cursor = page.next_sequence;
+        }
+        snapshots
     }
 
     /// Spawns the controller that parks until the continuation boundary,
@@ -3197,6 +3744,321 @@ mod tests {
         assert_eq!(adapter.request_count(), 0, "construction is pre-execution");
         drop(execution);
         assert_eq!(coordinator.active_attempts(), 0);
+    }
+
+    /// The provider boundary is strictly after the durable request-start
+    /// transaction. A deterministic request-start fault therefore leaves no
+    /// started snapshot and the adapter is never called.
+    #[tokio::test]
+    async fn provider_is_not_invoked_before_durable_request_start_commit() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        store.arm_fail_request_start_times(1);
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction")
+        .run()
+        .await;
+
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "provider starts after durable commit"
+        );
+        assert!(result.durable_failure.is_some());
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("request snapshots")
+                .snapshots
+                .is_empty()
+        );
+        assert!(
+            !store
+                .read_events(None, 32)
+                .expect("event journal")
+                .events
+                .iter()
+                .any(|envelope| matches!(envelope.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+    }
+
+    /// A long scripted tool loop grows the durable authorities while the
+    /// active execution retains only its current working state. Event and
+    /// Request Snapshot inspection deliberately walks the store in bounded
+    /// pages; the settlement result has no historical trace collections to
+    /// retain or transfer.
+    #[tokio::test]
+    async fn long_attempt_history_is_durable_and_boundedly_inspectable() {
+        const TOOL_TURNS: usize = 40;
+        const PAGE_SIZE: usize = 7;
+
+        let mut scripts = Vec::with_capacity(TOOL_TURNS + 1);
+        for turn in 0..TOOL_TURNS {
+            let call = ToolCall {
+                id: ToolCallId::new(format!("call-{turn}")),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            };
+            scripts.push(tool_call_script(&call));
+        }
+        scripts.push(vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "final".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ]);
+
+        let adapter = Arc::new(ScriptedAdapter::new(scripts));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(
+                InstantTool::definition("tool-alpha", "alpha"),
+                Arc::new(InstantTool),
+            )
+            .expect("register scripted tool");
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await;
+
+        assert!(matches!(
+            result.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        ));
+        assert_eq!(adapter.request_count(), TOOL_TURNS + 1);
+
+        assert_bounded_event_history(store.as_ref(), PAGE_SIZE, TOOL_TURNS);
+        assert_bounded_request_history(
+            store.as_ref(),
+            PAGE_SIZE,
+            TOOL_TURNS + 1,
+            &adapter.requests(),
+        );
+    }
+
+    fn assert_bounded_event_history(
+        store: &dyn ConversationStore,
+        page_size: usize,
+        minimum_event_count: usize,
+    ) {
+        let mut cursor = None;
+        let mut sequences = Vec::new();
+        let mut pages = 0;
+        let mut last_event = None;
+        loop {
+            let page = store
+                .read_events(cursor, page_size)
+                .expect("event journal page");
+            assert!(page.events.len() <= page_size);
+            if page.events.is_empty() {
+                break;
+            }
+            pages += 1;
+            sequences.extend(page.events.iter().map(|event| event.sequence));
+            last_event = page.events.last().map(|event| event.event.clone());
+            cursor = page.next_sequence;
+        }
+        assert!(pages > 1, "the journal must be inspected in pages");
+        assert!(!sequences.is_empty());
+        assert!(
+            sequences.len() > minimum_event_count,
+            "the long attempt must commit more events than tool turns"
+        );
+        assert!(sequences.windows(2).all(|window| window[0] < window[1]));
+        assert!(matches!(
+            store
+                .read_events(sequences.last().copied(), page_size)
+                .expect("terminal journal page")
+                .events
+                .as_slice(),
+            []
+        ));
+        assert!(matches!(
+            last_event,
+            Some(RuntimeEvent::AttemptCompleted { .. })
+        ));
+    }
+
+    fn assert_bounded_request_history(
+        store: &dyn ConversationStore,
+        page_size: usize,
+        expected_count: usize,
+        provider_requests: &[ModelRequest],
+    ) {
+        let mut cursor = None;
+        let mut snapshots = Vec::new();
+        let mut pages = 0;
+        loop {
+            let page = store
+                .read_request_snapshots(cursor, page_size)
+                .expect("request snapshot page");
+            assert!(page.snapshots.len() <= page_size);
+            if page.snapshots.is_empty() {
+                break;
+            }
+            pages += 1;
+            snapshots.extend(page.snapshots);
+            cursor = page.next_sequence;
+        }
+        assert!(pages > 1, "request history must be inspected in pages");
+        assert_eq!(snapshots.len(), expected_count);
+        assert!(
+            snapshots
+                .windows(2)
+                .all(|window| window[0].request_id != window[1].request_id)
+        );
+        assert!(snapshots.iter().enumerate().all(|(index, snapshot)| {
+            snapshot.identity.turn.as_str() == (index + 1).to_string()
+                && snapshot.identity.retry_number == 0
+        }));
+        for (snapshot, request) in snapshots.iter().zip(provider_requests.iter()) {
+            assert_eq!(
+                store
+                    .reconstruct_model_request(&snapshot.request_id)
+                    .expect("historical request reconstruction"),
+                *request
+            );
+        }
+    }
+
+    /// A terminal Event Journal append is a required durable publication.
+    /// If it fails, the execution settlement candidate remains available to
+    /// the caller, but neither the local event projection nor an observer may
+    /// fabricate the uncommitted terminal fact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        store.arm_fail_next_terminal_event();
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = RecordingObserver::default();
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction");
+        execution.observe(&observer);
+
+        let result = execution.run().await;
+
+        assert!(matches!(
+            result.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        ));
+        assert_eq!(
+            result.durable_failure_kind,
+            Some(super::DurableFailureKind::EventJournal)
+        );
+        assert!(result.durable_failure.is_some());
+        let events = event_history(store.as_ref());
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )),
+            "an uncommitted terminal candidate never enters the local projection"
+        );
+        assert!(
+            !observer
+                .events
+                .lock()
+                .expect("observer event lock")
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    RuntimeEvent::AttemptCompleted { .. }
+                        | RuntimeEvent::AttemptCancelled { .. }
+                        | RuntimeEvent::AttemptTimedOut { .. }
+                        | RuntimeEvent::AttemptLimitExceeded { .. }
+                        | RuntimeEvent::AttemptFailed { .. }
+                )),
+            "publication follows the durable Event Journal commit"
+        );
+        let persisted = store.read_events(None, 64).expect("event journal").events;
+        assert!(
+            persisted
+                .iter()
+                .any(|envelope| matches!(envelope.event, RuntimeEvent::AttemptStarted { .. }))
+        );
+        assert!(
+            !persisted.iter().any(|envelope| matches!(
+                envelope.event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )),
+            "the failed terminal transaction leaves no durable terminal fact"
+        );
+        assert_eq!(store.terminal_event_attempts(), 1);
     }
 
     #[tokio::test]
@@ -3351,6 +4213,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("cancellation controller");
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             invocation_count.load(std::sync::atomic::Ordering::SeqCst),
@@ -3363,7 +4226,7 @@ mod tests {
                 reason: CancellationReason::UserRequested
             }
         ));
-        assert_eq!(result.request_snapshots(), &[]);
+        assert!(snapshots.is_empty());
         assert_eq!(
             result.conversation.revision(),
             crate::conversation::SurfaceRevision::INITIAL
@@ -3443,6 +4306,7 @@ mod tests {
         .run()
         .await;
         controller.await.expect("cancellation controller");
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             invocations.load(std::sync::atomic::Ordering::SeqCst),
@@ -3455,7 +4319,7 @@ mod tests {
                 reason: CancellationReason::UserRequested
             }
         ));
-        assert!(result.request_snapshots().is_empty());
+        assert!(snapshots.is_empty());
         assert_eq!(
             result.conversation.revision(),
             crate::conversation::SurfaceRevision::INITIAL
@@ -3499,13 +4363,14 @@ mod tests {
         .expect("conversation identity matches the tool runtime")
         .run()
         .await;
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert!(matches!(
             result.outcome,
             crate::events::types::AttemptOutcome::Failed { .. }
         ));
         assert_eq!(adapter.request_count(), 1);
-        assert_eq!(result.request_snapshots().len(), 1);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(result.conversation.revision().get(), 2);
         assert!(result.messages().iter().any(|message| {
             matches!(
@@ -3514,8 +4379,9 @@ mod tests {
                     if user.kind == InboundKind::Context(ContextKind::AgentStatus)
             )
         }));
-        let reconstructed = result.request_snapshots()[0]
-            .reconstruct(&result.conversation)
+        let reconstructed = tool_runtime
+            .durable_store()
+            .reconstruct_model_request(&snapshots[0].request_id)
             .expect("historical reconstruction");
         assert_eq!(reconstructed, adapter.requests()[0]);
     }
@@ -3564,6 +4430,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
+        let events = event_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             adapter.request_count(),
@@ -3571,8 +4438,7 @@ mod tests {
             "exactly one model request total: the second model turn never begins"
         );
         assert_eq!(
-            result
-                .events
+            events
                 .iter()
                 .filter(|event| matches!(event, crate::events::types::RuntimeEvent::TurnStarted))
                 .count(),
@@ -3580,8 +4446,7 @@ mod tests {
             "exactly one TurnStarted total"
         );
         assert_eq!(
-            result
-                .events
+            events
                 .iter()
                 .filter(|event| {
                     matches!(
@@ -3594,7 +4459,7 @@ mod tests {
             "exactly one ModelRequestStarted total"
         );
         assert_eq!(
-            result.events,
+            events,
             expected_trace(),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );
@@ -3629,7 +4494,12 @@ mod tests {
                 std::sync::Arc::new(InstantTool),
             )
             .expect("register tool");
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-a", "A"))
             .expect("enqueue A before the attempt");
@@ -3637,7 +4507,6 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
             request(&adapter),
@@ -3655,6 +4524,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
+        let events = event_history(store.as_ref());
 
         assert_eq!(
             adapter.request_count(),
@@ -3662,7 +4532,7 @@ mod tests {
             "no next model turn begins after the drained batch is committed"
         );
         assert_eq!(
-            result.events,
+            events,
             expected_trace(),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );
@@ -3792,7 +4662,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)]
     async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-human", "hello"))
             .expect("accept the human message");
@@ -3834,7 +4709,6 @@ mod tests {
             .register(tool.definition.clone(), Arc::new(tool))
             .expect("register bg tool");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let background = tool_runtime.background().clone();
         let (pause, mut pause_reached, pause_release) = ContinuationBoundaryPause::install();
         let controller = tokio::spawn(async move {

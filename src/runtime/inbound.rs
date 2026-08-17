@@ -15,7 +15,7 @@
 //!
 //! The mailbox no longer owns [`InboundSequence`] allocation and no longer
 //! holds a process-local payload queue: the durable
-//! [`InboundStore`](crate::durable::inbox::InboundStore) owns the accepted
+//! [`ConversationStore`](crate::durable::inbox::ConversationStore) owns the accepted
 //! pending state and the one per-conversation sequence domain. The mailbox
 //! is the narrow acceptance/publisher seam that validates eligibility and
 //! lifecycle, durably accepts through the store, then publishes the
@@ -36,7 +36,11 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::durable::inbox::{AcceptedInbound, InboundDraft, InboundStore, InboundStoreError};
+use crate::durable::inbox::{
+    AcceptedInbound, ConversationInboundCapability, ConversationStore, ConversationStoreError,
+    InboundDraft,
+};
+use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::types::ConversationLifecycle;
@@ -214,12 +218,12 @@ pub enum MailboxError {
         runtime_workspace: PathBuf,
     },
     /// The durable Pending Inbound Inbox rejected the operation.
-    Inbox(InboundStoreError),
+    Durable(ConversationStoreError),
 }
 
-impl From<InboundStoreError> for MailboxError {
-    fn from(error: InboundStoreError) -> Self {
-        Self::Inbox(error)
+impl From<ConversationStoreError> for MailboxError {
+    fn from(error: ConversationStoreError) -> Self {
+        Self::Durable(error)
     }
 }
 
@@ -255,7 +259,7 @@ impl fmt::Display for MailboxError {
                 capability_workspace.display(),
                 runtime_workspace.display(),
             ),
-            Self::Inbox(error) => error.fmt(f),
+            Self::Durable(error) => error.fmt(f),
         }
     }
 }
@@ -509,7 +513,7 @@ fn message_id_of(message: &MessageBlock) -> MessageId {
 pub struct ConversationInboundMailbox {
     conversation_id: ConversationId,
     state: Arc<Mutex<MailboxState>>,
-    store: Arc<dyn InboundStore>,
+    inbound: Arc<dyn ConversationInboundCapability>,
     /// The shared admission wake handle: every successful acceptance
     /// notifies it, so an idle conversation coordinator (Issue #61) wakes and
     /// admits the asynchronous inbound without any client request. The wake
@@ -536,23 +540,37 @@ impl ConversationInboundMailbox {
     #[must_use]
     pub fn new(conversation_id: ConversationId) -> Self {
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(conversation_id)
+            crate::durable::SqliteConversationStore::in_memory(conversation_id)
                 .expect("an in-memory durable inbox always opens"),
         );
         Self::over_store(store)
     }
 
-    /// Creates an inbound boundary over one durable inbound store.
+    /// Creates an inbound boundary over one durable `ConversationStore`
+    /// capability.
     #[must_use]
-    pub fn over_store(store: Arc<dyn InboundStore>) -> Self {
-        let conversation_id = store.conversation_id().clone();
+    pub fn over_store<S>(store: Arc<S>) -> Self
+    where
+        S: ConversationStore,
+    {
+        let inbound: Arc<dyn ConversationInboundCapability> = store;
+        Self::over_inbound_capability(inbound)
+    }
+
+    /// Creates a mailbox over the deliberately narrow inbound capability.
+    ///
+    /// This constructor is used by composition code that has already erased
+    /// the full conversation store from the tool/background plane.
+    #[must_use]
+    pub fn over_inbound_capability(inbound: Arc<dyn ConversationInboundCapability>) -> Self {
+        let conversation_id = inbound.conversation_id().clone();
         Self {
             conversation_id,
             state: Arc::new(Mutex::new(MailboxState {
                 lifecycle: None,
                 observer: None,
             })),
-            store,
+            inbound,
             wake: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -562,10 +580,11 @@ impl ConversationInboundMailbox {
     ///
     /// This is the mailbox half of the Issue #61 adapter bootstrap
     /// handshake. Because an inactive conversation refuses acceptance, the
-    /// durable pending set is frozen across the handshake; the observer is
-    /// installed first and the pending seed is then read from the durable
-    /// store, so no acceptance can be lost between the seed and the live
-    /// observation stream and none can be applied twice.
+    /// durable pending set is frozen across the handshake. The pending seed is
+    /// read before the observer is installed, so a durable read failure leaves
+    /// the mailbox unmodified; the owning runtime's coordinator lock and
+    /// inactive lifecycle prevent an acceptance from occurring between these
+    /// two steps.
     ///
     /// # Panics
     ///
@@ -573,7 +592,20 @@ impl ConversationInboundMailbox {
     pub(crate) fn install_observer_and_pending(
         &self,
         observer: Arc<dyn InboundObserver>,
-    ) -> Vec<InboundItem> {
+    ) -> Result<Vec<InboundItem>, MailboxError> {
+        // The durable store is the pending authority; the mailbox keeps no
+        // process-local queue that could drift from it. Read before mutating
+        // the observer seam so bootstrap fails closed on a corrupt/unavailable
+        // inbox instead of silently starting with an incomplete seed.
+        let pending = self
+            .inbound
+            .load_pending()?
+            .into_iter()
+            .map(|item| InboundItem {
+                sequence: item.sequence,
+                message: item.message,
+            })
+            .collect();
         {
             let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
             debug_assert!(
@@ -585,17 +617,7 @@ impl ConversationInboundMailbox {
             );
             state.observer = Some(observer);
         }
-        // The durable store is the pending authority; the mailbox keeps no
-        // process-local queue that could drift from it.
-        self.store
-            .load_pending()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|item| InboundItem {
-                sequence: item.sequence,
-                message: item.message,
-            })
-            .collect()
+        Ok(pending)
     }
 
     /// Marks this mailbox as owned by a conversation runtime that has not
@@ -650,11 +672,6 @@ impl ConversationInboundMailbox {
         &self.conversation_id
     }
 
-    /// The durable Pending Inbound Inbox this mailbox coordinates over.
-    pub(crate) fn store(&self) -> Arc<dyn InboundStore> {
-        Arc::clone(&self.store)
-    }
-
     /// The shared admission wake handle of this mailbox.
     pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.wake)
@@ -675,7 +692,7 @@ impl ConversationInboundMailbox {
     /// ordinary message without a persisted timestamp,
     /// [`MailboxError::ConversationInactive`] when a conversation runtime
     /// owns this mailbox and has not been activated, and
-    /// [`MailboxError::Inbox`] for a durable acceptance failure. A failed
+    /// [`MailboxError::Durable`] for a durable acceptance failure. A failed
     /// acceptance consumes no sequence.
     ///
     /// # Panics
@@ -753,8 +770,49 @@ impl ConversationInboundMailbox {
                 });
             }
         }
-        let accepted = self.store.accept_inbound(draft)?;
+        let accepted = self.inbound.accept_inbound(draft)?;
+        if !accepted.retried {
+            {
+                let state = self.state.lock().expect("inbound mailbox lock poisoned");
+                let item = InboundItem {
+                    sequence: accepted.sequence,
+                    message: accepted.message.clone(),
+                };
+                if let Some(observer) = &state.observer {
+                    observer.on_enqueued(&item);
+                }
+            }
+            self.wake.notify_one();
+        }
+        Ok(accepted)
+    }
+
+    /// Accepts one inbound item and a dependent execution fact in the same
+    /// durable transaction. This is the narrow background-terminal
+    /// publication capability; callers do not receive the full conversation
+    /// store or a generic transaction handle.
+    pub(crate) fn accept_draft_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), MailboxError> {
+        if draft.kind == InboundKind::CompactionSummary {
+            return Err(MailboxError::CompactionSummaryNotEligible);
+        }
         {
+            let state = self.state.lock().expect("inbound mailbox lock poisoned");
+            if state
+                .lifecycle
+                .as_ref()
+                .is_some_and(|lifecycle| !lifecycle.is_active())
+            {
+                return Err(MailboxError::ConversationInactive {
+                    conversation_id: self.conversation_id.clone(),
+                });
+            }
+        }
+        let (accepted, event) = self.inbound.accept_inbound_with_event(draft, event)?;
+        if !accepted.retried {
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
             let item = InboundItem {
                 sequence: accepted.sequence,
@@ -763,9 +821,9 @@ impl ConversationInboundMailbox {
             if let Some(observer) = &state.observer {
                 observer.on_enqueued(&item);
             }
+            self.wake.notify_one();
         }
-        self.wake.notify_one();
-        Ok(accepted)
+        Ok((accepted, event))
     }
 
     /// Selects the currently pending items as one finite watermark-bounded
@@ -778,9 +836,9 @@ impl ConversationInboundMailbox {
     ///
     /// # Errors
     ///
-    /// Returns [`MailboxError::Inbox`] on a durable read failure.
+    /// Returns [`MailboxError::Durable`] on a durable read failure.
     pub fn select_pending_batch(&self) -> Result<Option<InboundBatch>, MailboxError> {
-        let Some(batch) = self.store.select_pending_batch()? else {
+        let Some(batch) = self.inbound.select_pending_batch()? else {
             return Ok(None);
         };
         Ok(Some(InboundBatch {
@@ -809,7 +867,7 @@ impl ConversationInboundMailbox {
     ///
     /// # Errors
     ///
-    /// Returns [`MailboxError::Inbox`] on a durable adoption failure, in
+    /// Returns [`MailboxError::Durable`] on a durable adoption failure, in
     /// which case the selected items remain pending and recoverable.
     ///
     /// # Panics
@@ -819,7 +877,7 @@ impl ConversationInboundMailbox {
         &self,
         batch: &InboundBatch,
     ) -> Result<Vec<MessageBlock>, MailboxError> {
-        let adopted = self.store.adopt_pending_batch(batch.watermark())?;
+        let adopted = self.inbound.adopt_pending_batch(batch.watermark())?;
         {
             let state = self.state.lock().expect("inbound mailbox lock poisoned");
             if let Some(observer) = &state.observer {
@@ -836,7 +894,7 @@ mod tests {
         ConversationInboundMailbox, FreshInboundError, FreshInboundTurn, InboundSequence,
         InitialTurnTrigger, MailboxError,
     };
-    use crate::durable::sqlite::SqliteInboundStore;
+    use crate::durable::sqlite::SqliteConversationStore;
     use crate::message::content::TextBlock;
     use crate::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -964,14 +1022,14 @@ mod tests {
     /// The durable sequence domain cannot wrap: exhaustion fails explicitly.
     #[test]
     fn sequence_exhaustion_fails_explicitly() {
-        let store =
-            SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory store");
+        let store = SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+            .expect("in-memory store");
         // Force the counter to the max value directly in the database.
         store.force_next_sequence_for_test(i64::MAX);
         let mailbox = ConversationInboundMailbox::over_store(Arc::new(store));
         assert!(matches!(
             mailbox.enqueue(human("m1", "late")),
-            Err(MailboxError::Inbox(_))
+            Err(MailboxError::Durable(_))
         ));
     }
 

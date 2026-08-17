@@ -1,19 +1,27 @@
-//! Backend-independent domain semantics of the durable Pending Inbound Inbox.
+//! Backend-independent semantics of the native durable conversation store.
 //!
-//! This module owns the domain vocabulary and the [`InboundStore`] trait,
-//! which is the one durable authority boundary every inbound producer (and
-//! the conversation coordinator's safe-boundary adoption) speaks through.
+//! This module owns the domain vocabulary and the [`ConversationStore`] trait,
+//! which is the one durable authority boundary for Pending Inbound, the
+//! Message Ledger, Surface revisions, Request Snapshots, Event Journal facts,
+//! and checkpoint metadata.
 //! There is deliberately no generic repository, queue, CRUD, or storage
 //! strategy trait: the operations are the rustX semantic transitions a
 //! `PostgreSQL` backend must reproduce exactly.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 
+use crate::conversation::{SurfaceRevision, SurfaceSpan};
+use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
-use crate::runtime::identity::{ConversationId, MessageId};
+use crate::model::snapshot::RequestSnapshot;
+use crate::model::types::ModelRequest;
+use crate::runtime::identity::{ConversationId, MessageId, RequestId};
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::types::TokenMeasurement;
 
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
@@ -83,9 +91,119 @@ pub struct PendingBatch {
     pub items: Vec<PendingInboundItem>,
 }
 
-/// A durable inbox contract violation or storage failure.
+/// The bounded current working set loaded from the durable Conversation
+/// Surface at runtime bootstrap.
+///
+/// Historical Surface operations remain in the durable store. The runtime
+/// only needs the current active identity order and the immutable head
+/// metadata for its normal hot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InboundStoreError {
+pub struct DurableConversationHead {
+    /// The current immutable Surface revision.
+    pub revision: SurfaceRevision,
+    /// The current compaction generation.
+    pub compaction_generation: u64,
+    /// Current active `MessageIds` in model-visible order.
+    pub active_message_ids: Vec<MessageId>,
+}
+
+/// The semantic input to one atomic canonical compaction transition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactionCommitInput {
+    /// The canonical runtime summary to append to the Ledger.
+    pub summary: UserMessageBlock,
+    /// The inclusive active span to replace.
+    pub span: SurfaceSpan,
+    /// The Surface revision validated by the caller.
+    pub expected_revision: SurfaceRevision,
+    /// The pre-compaction token measurement for the completion fact.
+    pub tokens_before: TokenMeasurement,
+    /// The deterministic estimate after rebuilding the request context.
+    pub estimated_tokens_after: u64,
+    /// The owning attempt, when the transition is executing in an attempt.
+    pub attempt_id: Option<crate::runtime::identity::AttemptId>,
+    /// The owning turn, when the transition is executing in a turn.
+    pub turn_id: Option<crate::runtime::identity::TurnId>,
+    /// The persisted UTC event timestamp.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// A page of durable canonical messages.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanonicalMessagePage {
+    /// Messages in stable Ledger commit order.
+    pub messages: Vec<MessageBlock>,
+    /// The last Ledger position in this page, when non-empty.
+    pub next_position: Option<u64>,
+}
+
+/// A page of durable Event Journal envelopes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventPage {
+    /// Events in stable conversation sequence order.
+    pub events: Vec<RuntimeEventEnvelope>,
+    /// The last event sequence in this page, when non-empty.
+    pub next_sequence: Option<u64>,
+}
+
+/// A bounded page of immutable Request Snapshots.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequestSnapshotPage {
+    /// Snapshots ordered by their durable `ModelRequestStarted` sequence.
+    pub snapshots: Vec<RequestSnapshot>,
+    /// The exclusive cursor for the next page, when this page is non-empty.
+    pub next_sequence: Option<u64>,
+}
+
+/// The one composition-time binding of a conversation's durable authority.
+///
+/// A binding owns the full backend-independent store handle and is the only
+/// production composition object from which the narrow inbound capability is
+/// derived. Keeping those handles together means a mailbox cannot be selected
+/// independently from the full store used by the conversation runtime.
+#[derive(Clone)]
+pub struct ConversationStoreBinding {
+    store: Arc<dyn ConversationStore>,
+}
+
+impl std::fmt::Debug for ConversationStoreBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConversationStoreBinding")
+            .field("conversation_id", self.store.conversation_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConversationStoreBinding {
+    /// Binds one full durable authority for composition.
+    #[must_use]
+    pub fn new(store: Arc<dyn ConversationStore>) -> Self {
+        Self { store }
+    }
+
+    /// The conversation identity enforced by the bound store.
+    #[must_use]
+    pub fn conversation_id(&self) -> &ConversationId {
+        self.store.conversation_id()
+    }
+
+    /// Returns the full authority to the owning conversation runtime.
+    pub(crate) fn full_store(&self) -> Arc<dyn ConversationStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Derives the narrow producer capability from this same authority.
+    pub(crate) fn inbound_capability(&self) -> Arc<dyn ConversationInboundCapability> {
+        Arc::new(StoreInboundCapability {
+            store: Arc::clone(&self.store),
+        })
+    }
+}
+
+/// A `ConversationStore` contract violation or storage failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationStoreError {
     /// The per-conversation inbound sequence space is exhausted.
     SequenceExhausted,
     /// A producer-supplied message identity is already committed to the
@@ -117,11 +235,27 @@ pub enum InboundStoreError {
     /// inferred from the current Ledger: neither a shorter prefix nor an
     /// empty replacement of a non-empty bootstrap is accepted.
     InitialHistoryMismatch,
+    /// The database was created by an incompatible development schema.
+    SchemaVersionMismatch {
+        /// The schema version found in the database.
+        stored: i64,
+        /// The only schema version this build accepts.
+        expected: i64,
+    },
+    /// The database advertises the current version but does not have the
+    /// complete schema shape required by that version.
+    IncompatibleSchema(String),
+    /// A durable reference points at a fact that is not present.
+    InvalidReference(String),
+    /// A requested immutable Request Snapshot does not exist.
+    RequestNotFound(RequestId),
+    /// A lifecycle event violates terminal uniqueness or terminal ordering.
+    TerminalViolation(String),
     /// The underlying storage rejected the operation.
     Storage(String),
 }
 
-impl core::fmt::Display for InboundStoreError {
+impl core::fmt::Display for ConversationStoreError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::SequenceExhausted => write!(f, "the inbound sequence space is exhausted"),
@@ -134,7 +268,7 @@ impl core::fmt::Display for InboundStoreError {
             Self::EmptyContent => write!(f, "inbound content must not be empty"),
             Self::ConversationIdMismatch { stored, requested } => write!(
                 f,
-                "the durable inbox is bound to conversation {stored}, not {requested}"
+                "the durable ConversationStore is bound to conversation {stored}, not {requested}"
             ),
             Self::CorrelationConflict { correlation } => write!(
                 f,
@@ -144,32 +278,87 @@ impl core::fmt::Display for InboundStoreError {
                 f,
                 "the re-supplied initial canonical messages do not equal the durable bootstrap initial-history identity"
             ),
-            Self::Storage(message) => write!(f, "durable inbound storage failed: {message}"),
+            Self::SchemaVersionMismatch { stored, expected } => write!(
+                f,
+                "incompatible durable schema version {stored}; this build requires {expected}"
+            ),
+            Self::IncompatibleSchema(detail) => {
+                write!(f, "incompatible durable schema shape: {detail}")
+            }
+            Self::InvalidReference(message) => write!(f, "invalid durable reference: {message}"),
+            Self::RequestNotFound(request_id) => {
+                write!(f, "request snapshot {request_id} is not present")
+            }
+            Self::TerminalViolation(message) => {
+                write!(f, "invalid terminal lifecycle event: {message}")
+            }
+            Self::Storage(message) => write!(f, "durable ConversationStore failed: {message}"),
         }
     }
 }
 
-impl std::error::Error for InboundStoreError {}
+impl std::error::Error for ConversationStoreError {}
 
-/// The backend-independent durable authority of the Pending Inbound Inbox.
+/// The narrow backend-independent capability used by the Pending Inbound
+/// Inbox and its process-local mailbox.
+///
+/// This capability deliberately exposes no Ledger, Surface, Request Snapshot,
+/// or Event Journal operation. Background/tool code receives this interface
+/// only; the conversation execution plane receives the full
+/// [`ConversationStore`] separately.
+#[allow(clippy::missing_errors_doc)]
+pub trait ConversationInboundCapability: Send + Sync + 'static {
+    /// The conversation this capability serves.
+    fn conversation_id(&self) -> &ConversationId;
+
+    /// Accepts one inbound item durably.
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError>;
+
+    /// Atomically accepts one inbound item and its dependent background fact.
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
+
+    /// Selects a finite pending batch without consuming it.
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
+
+    /// Adopts the selected pending watermark atomically.
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
+
+    /// Reads pending items for bootstrap.
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
+}
+
+/// The backend-independent durable authority of the Pending Inbound Inbox,
+/// Message Ledger, Conversation Surface, Request Snapshots, Event Journal,
+/// and checkpoint metadata.
 ///
 /// One store instance is bound to exactly one [`ConversationId`] (the same
 /// one-conversation boundary the conversation runtime owns). Implementations
 /// must hold the following invariants:
 ///
-/// - [`InboundStore::accept_inbound`] is the acceptance linearization point:
+/// - [`ConversationStore::accept_inbound`] is the acceptance linearization point:
 ///   sequence allocation, pending persistence, and correlation state commit
 ///   in one transaction. No success is reported before the commit, and a
 ///   failed acceptance exposes no sequence, no pending record, and no
 ///   correlation.
-/// - [`InboundStore::select_pending_batch`] is non-destructive: it returns a
+/// - [`ConversationStore::select_pending_batch`] is non-destructive: it returns a
 ///   finite watermark snapshot without removing any pending record.
-/// - [`InboundStore::adopt_pending_batch`] is the canonical-adoption
+/// - [`ConversationStore::adopt_pending_batch`] is the canonical-adoption
 ///   linearization point: it appends the selected messages to the durable
 ///   canonical ledger and removes their pending records in one transaction,
 ///   so a crash can never observe a pending record whose canonical message is
 ///   absent, nor a canonical message that remains independently re-adoptable.
-pub trait InboundStore: Send + Sync + 'static {
+#[allow(clippy::missing_errors_doc)]
+pub trait ConversationStore: Send + Sync + 'static {
     /// The conversation this store is the durable inbound authority of.
     fn conversation_id(&self) -> &ConversationId;
 
@@ -177,20 +366,34 @@ pub trait InboundStore: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::EmptyContent`] for empty content,
-    /// [`InboundStoreError::SequenceExhausted`] when the sequence domain is
-    /// exhausted, [`InboundStoreError::DuplicateMessageId`] when a
+    /// Returns [`ConversationStoreError::EmptyContent`] for empty content,
+    /// [`ConversationStoreError::SequenceExhausted`] when the sequence domain is
+    /// exhausted, [`ConversationStoreError::DuplicateMessageId`] when a
     /// producer-supplied identity collides, and
-    /// [`InboundStoreError::Storage`] on a backend failure.
-    fn accept_inbound(&self, draft: InboundDraft) -> Result<AcceptedInbound, InboundStoreError>;
+    /// [`ConversationStoreError::Storage`] on a backend failure.
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError>;
+
+    /// Atomically accepts one inbound notification and the execution fact
+    /// that grants it durable publication ownership. This specialized
+    /// transition is used by detached background terminal settlement; the
+    /// Event Journal fact references the accepted `MessageId` and is committed
+    /// in the same transaction as the Pending Inbound row.
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
 
     /// Selects the currently pending items as one finite watermark-bounded
     /// batch, without consuming them.
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
-    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, InboundStoreError>;
+    /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
 
     /// Atomically adopts every pending item through `watermark` into the
     /// durable canonical message ledger, in strict sequence order, returning
@@ -201,60 +404,71 @@ pub trait InboundStore: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::Storage`] when the adoption transaction
+    /// Returns [`ConversationStoreError::Storage`] when the adoption transaction
     /// fails; on failure the selected items remain pending and recoverable.
     fn adopt_pending_batch(
         &self,
         watermark: InboundSequence,
-    ) -> Result<Vec<MessageBlock>, InboundStoreError>;
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError>;
 
     /// Loads every accepted-but-not-yet-adopted pending item in strict
     /// sequence order (recovery/bootstrap seam).
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
-    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, InboundStoreError>;
+    /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
 
-    /// Seeds the durable canonical Message Ledger with the conversation's
-    /// initial canonical messages and establishes the immutable bootstrap
-    /// initial-history identity.
-    ///
-    /// The first call atomically commits the initial messages **and** the
-    /// bootstrap identity (exact message count and content digest). Every
-    /// later call — across restarts — must re-supply an initial history
-    /// exactly equal to the original one; a shorter prefix, an empty
-    /// replacement of a non-empty bootstrap, or any content change is
-    /// rejected. An empty initial history is a valid bootstrap and is
-    /// recorded explicitly, so "initialized empty" is never confused with
-    /// "never initialized".
+    /// Initializes the durable Ledger and Surface from one immutable bootstrap
+    /// history and establishes its exact immutable bootstrap identity.
+    /// Reopening verifies the original identity instead of inferring it from
+    /// current rows. The first call atomically commits the initial messages
+    /// and the identity; every later call must re-supply the exact original
+    /// history. An explicitly empty initial history is valid and remains
+    /// distinguishable from an uninitialized store.
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::InitialHistoryMismatch`] when the
-    /// re-supplied initial history does not exactly equal the original
-    /// bootstrap and [`InboundStoreError::Storage`] when the seed
-    /// transaction fails or a canonical Ledger exists without its bootstrap
-    /// identity (fail-closed: the boundary is never guessed).
-    fn seed_canonical(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
+    /// Returns [`ConversationStoreError::InitialHistoryMismatch`] when the
+    /// re-supplied history differs, and [`ConversationStoreError::Storage`]
+    /// when the initialization transaction fails or a canonical Ledger exists
+    /// without its bootstrap identity.
+    fn initialize(&self, messages: &[MessageBlock]) -> Result<(), ConversationStoreError>;
+
+    /// Loads the current Surface head and checkpoint metadata without
+    /// materializing historical revisions.
+    fn load_head(&self) -> Result<DurableConversationHead, ConversationStoreError>;
+
+    /// Resolves the requested `MessageIds` through keyed Ledger reads.
+    fn load_messages(&self, ids: &[MessageId])
+    -> Result<Vec<MessageBlock>, ConversationStoreError>;
+
+    /// Reconstructs one exact historical Surface revision from immutable
+    /// Surface operations.
+    fn reconstruct_surface(
+        &self,
+        revision: SurfaceRevision,
+    ) -> Result<Vec<MessageId>, ConversationStoreError>;
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.
     ///
-    /// This is the canonical-append durability seam every **non-inbound**
-    /// canonical commit goes through (Assistant messages, `ToolResult`s, and
-    /// runtime compaction summaries). It must be called in canonical commit
-    /// order so the durable Ledger remains the exact ordered prefix of the
-    /// authoritative in-memory Message Ledger. Inbound adoption appends its
-    /// selected User messages through [`InboundStore::adopt_pending_batch`]
-    /// instead, so the pending removal and the canonical append share one
-    /// transaction.
+    /// This is the canonical-append durability seam for ordinary
+    /// **non-inbound** commits (Assistant messages, `ToolResult`s, and
+    /// admitted context facts). It must be called in canonical commit order
+    /// so the durable Ledger records the exact committed fact. Inbound
+    /// adoption appends its
+    /// selected User messages through [`ConversationStore::adopt_pending_batch`]
+    /// and compaction summaries use [`ConversationStore::commit_compaction`];
+    /// neither structurally special transition can be split through this
+    /// method. The store remains the historical Ledger authority; hot runtime
+    /// state is only a bounded current read model.
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::DuplicateMessageId`] when the identity is
+    /// Returns [`ConversationStoreError::DuplicateMessageId`] when the identity is
     /// already committed to the durable Ledger and
-    /// [`InboundStoreError::Storage`] on a backend failure.
-    fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError>;
+    /// [`ConversationStoreError::Storage`] on a backend failure.
+    fn append_canonical(&self, message: &MessageBlock) -> Result<(), ConversationStoreError>;
 
     /// Appends a canonical [`MessageBlock`] batch atomically.
     ///
@@ -266,18 +480,178 @@ pub trait InboundStore: Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::DuplicateMessageId`] when an identity is
+    /// Returns [`ConversationStoreError::DuplicateMessageId`] when an identity is
     /// already committed to the durable Ledger and
-    /// [`InboundStoreError::Storage`] on a backend failure.
-    fn append_canonical_batch(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
+    /// [`ConversationStoreError::Storage`] on a backend failure.
+    fn append_canonical_batch(
+        &self,
+        messages: &[MessageBlock],
+    ) -> Result<(), ConversationStoreError>;
+
+    /// Commits a canonical message and its committed-message Event Journal
+    /// fact in one `SQLite` transaction.
+    fn append_canonical_with_event(
+        &self,
+        message: &MessageBlock,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits a structurally atomic canonical batch and all corresponding
+    /// committed-message events in one `SQLite` transaction.
+    fn append_canonical_batch_with_events(
+        &self,
+        messages: &[MessageBlock],
+        events: &[RuntimeEventEnvelope],
+    ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+
+    /// Commits the summary Ledger row, immutable Surface Replace revision,
+    /// checkpoint metadata, and `CompactionCompleted` fact atomically.
+    fn commit_compaction(
+        &self,
+        input: CompactionCommitInput,
+    ) -> Result<(SurfaceRevision, u64, RuntimeEventEnvelope), ConversationStoreError>;
 
     /// Loads the durable canonical Message Ledger in commit order (the
     /// complete crash-recoverable prefix of the Message Ledger).
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::Storage`] on a backend read failure.
-    fn load_canonical(&self) -> Result<Vec<MessageBlock>, InboundStoreError>;
+    /// Returns [`ConversationStoreError::Storage`] on a backend read failure.
+    fn load_canonical(&self) -> Result<Vec<MessageBlock>, ConversationStoreError>;
+
+    /// Reads a bounded Ledger page. A caller can walk history without
+    /// retaining the complete Ledger as hot state.
+    fn load_canonical_page(
+        &self,
+        after_position: Option<u64>,
+        limit: usize,
+    ) -> Result<CanonicalMessagePage, ConversationStoreError>;
+
+    /// Persists/finalizes one actual model request: immutable Request
+    /// Snapshot plus exact `ModelRequestStarted` evidence in one transaction.
+    fn persist_request_start(
+        &self,
+        snapshot: &RequestSnapshot,
+        timestamp: DateTime<Utc>,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Loads one immutable Request Snapshot on demand.
+    fn load_request_snapshot(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<RequestSnapshot, ConversationStoreError>;
+
+    /// Reconstructs a historical provider-neutral request entirely from
+    /// durable Request Snapshot, Surface, and Ledger facts.
+    fn reconstruct_model_request(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<ModelRequest, ConversationStoreError>;
+
+    /// Reads a bounded page of immutable Request Snapshots in durable request
+    /// start order. `after_sequence` is an exclusive Event Journal sequence
+    /// cursor; the returned cursor is the last snapshot's start sequence.
+    fn read_request_snapshots(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<RequestSnapshotPage, ConversationStoreError>;
+
+    /// Appends one standalone execution fact after validating every durable
+    /// reference and lifecycle terminal rule. Canonical-message,
+    /// compaction-completion, request-start, and background-publication facts
+    /// must use their specialized combined transition; this method rejects
+    /// them so a reference event cannot be split from its durable authority.
+    fn append_event(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Reads a bounded Event Journal page in stable sequence order.
+    fn read_events(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<EventPage, ConversationStoreError>;
+}
+
+impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
+    fn conversation_id(&self) -> &ConversationId {
+        ConversationStore::conversation_id(self)
+    }
+
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError> {
+        ConversationStore::accept_inbound(self, draft)
+    }
+
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
+        ConversationStore::accept_inbound_with_event(self, draft, event)
+    }
+
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
+        ConversationStore::select_pending_batch(self)
+    }
+
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        ConversationStore::adopt_pending_batch(self, watermark)
+    }
+
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        ConversationStore::load_pending(self)
+    }
+}
+
+/// Erases the full store behind the narrow capability exposed by one binding.
+/// The wrapper carries the same store handle; it does not create another
+/// durable authority or another identity domain.
+struct StoreInboundCapability {
+    store: Arc<dyn ConversationStore>,
+}
+
+impl ConversationInboundCapability for StoreInboundCapability {
+    fn conversation_id(&self) -> &ConversationId {
+        self.store.conversation_id()
+    }
+
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError> {
+        self.store.accept_inbound(draft)
+    }
+
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
+        self.store.accept_inbound_with_event(draft, event)
+    }
+
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
+        self.store.select_pending_batch()
+    }
+
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.store.adopt_pending_batch(watermark)
+    }
+
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        self.store.load_pending()
+    }
 }
 
 /// Convenience: the canonical [`MessageBlock`] for one accepted item.

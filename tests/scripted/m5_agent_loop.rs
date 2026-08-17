@@ -77,15 +77,12 @@ async fn run(
     model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
-    mailbox: Option<rustx::runtime::inbound::ConversationInboundMailbox>,
 ) -> (
-    AgentExecutionResult,
+    common::DurableExecutionAudit,
     rustx::capabilities::CapabilityCoordinator,
 ) {
-    let tool_runtime = match mailbox {
-        Some(mailbox) => common::tool_runtime_with_mailbox("conv-1", mailbox),
-        None => common::tool_runtime("conv-1"),
-    };
+    let tool_runtime = common::tool_runtime("conv-1");
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let result = AgentExecution::new(
@@ -99,7 +96,10 @@ async fn run(
     .expect("conversation identity matches the tool runtime")
     .run()
     .await;
-    (result, coordinator)
+    (
+        common::durable_agent_result(result, store.as_ref()),
+        coordinator,
+    )
 }
 
 fn started() -> ModelEvent {
@@ -218,7 +218,7 @@ async fn parallel_reversed_completion_keeps_canonical_order() {
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation, None),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run terminates");
@@ -308,7 +308,7 @@ async fn sequential_barrier_blocks_later_calls() {
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation, None),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run terminates");
@@ -393,7 +393,7 @@ async fn parallel_group_then_sequential_barrier() {
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation, None),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run terminates");
@@ -468,7 +468,7 @@ async fn mixed_foreground_background_group_does_not_wait_for_detached_terminal()
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation, None),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run terminates without the detached terminal");
@@ -613,7 +613,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
     });
     let (result, _capability) = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        run(&model, tools, &cancellation, None),
+        run(&model, tools, &cancellation),
     )
     .await
     .expect("run terminates");
@@ -656,7 +656,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         "no next model request starts after cancellation"
     );
     let terminal_events: Vec<&RuntimeEvent> = result
-        .events
+        .event_history
         .iter()
         .filter(|event| {
             matches!(
@@ -669,7 +669,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         .collect();
     assert_eq!(terminal_events.len(), 1);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert_eq!(
@@ -721,7 +721,7 @@ async fn business_schema_violation_is_a_normal_failed_result_slot() {
         .register(definition, Arc::new(tool))
         .expect("register");
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let (result, _capability) = run(&model, tools, &cancellation, None).await;
+    let (result, _capability) = run(&model, tools, &cancellation).await;
     assert!(matches!(
         result.outcome,
         AttemptOutcome::Completed {
@@ -764,7 +764,7 @@ async fn missing_model_selectable_field_is_rejected_without_executor() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let (result, _capability) = run(&model, tools, &cancellation, None).await;
+    let (result, _capability) = run(&model, tools, &cancellation).await;
     let messages = tool_messages(&result);
     assert_eq!(messages.len(), 1);
     assert!(matches!(
@@ -807,7 +807,7 @@ async fn identity_mismatch_is_a_structural_contract_failure() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let (result, _capability) = run(&model, tools, &cancellation, None).await;
+    let (result, _capability) = run(&model, tools, &cancellation).await;
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(
         result.messages().len(),

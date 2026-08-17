@@ -41,7 +41,9 @@ use rustx::model::types::{ModelRequest, ModelUsage};
 use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
-use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
+use rustx::runtime::identity::{
+    AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+};
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::executor::ToolRegistry;
@@ -338,11 +340,7 @@ fn assert_single_terminal(events: &[RuntimeEvent]) -> &RuntimeEvent {
 }
 
 fn assert_outcome(result: &AgentExecutionResult, expected: &AttemptOutcome) {
-    assert_eq!(
-        result.outcome, *expected,
-        "platform outcome mismatch: {:?}",
-        result.events
-    );
+    assert_eq!(result.outcome, *expected, "platform outcome mismatch");
 }
 
 fn assert_trace(events: &[RuntimeEvent], expected: &[RuntimeEvent]) {
@@ -1693,17 +1691,20 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
     );
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert!(
         summarizer.requests().is_empty(),
@@ -1714,13 +1715,13 @@ async fn summary_model_cannot_fit_leaves_execution_uncommitted() {
         1,
         "no overflow retry follows CannotFit"
     );
-    assert!(result.events.iter().any(|event| matches!(
+    assert!(result.event_history.iter().any(|event| matches!(
         event,
         RuntimeEvent::CompactionFailed { error } if error.contains("no complete-message surface span")
     )));
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
     );
@@ -2493,21 +2494,24 @@ async fn proactive_compaction_before_the_next_turn() {
     let runtime = runtime_with(200, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let summary_id_committed = committed_summary(&result).id.clone();
     let (surface_revision, compaction_tokens_before, compaction_estimated_after) = result
-        .events
+        .event_history
         .iter()
         .find_map(|event| match event {
             RuntimeEvent::CompactionCompleted {
@@ -2525,6 +2529,7 @@ async fn proactive_compaction_before_the_next_turn() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2555,6 +2560,9 @@ async fn proactive_compaction_before_the_next_turn() {
                 details: None,
             }),
         },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(1),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
@@ -2563,6 +2571,10 @@ async fn proactive_compaction_before_the_next_turn() {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
             result: success_result("ok"),
+        },
+        RuntimeEvent::ToolMessageCommitted {
+            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            tool_call_id: ToolCallId::new("call-1"),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
@@ -2575,6 +2587,7 @@ async fn proactive_compaction_before_the_next_turn() {
             estimated_tokens_after: compaction_estimated_after,
         },
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2589,14 +2602,17 @@ async fn proactive_compaction_before_the_next_turn() {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(2),
+        },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
             attempt_id: AttemptId::new("attempt-1"),
             finish_reason: ModelFinishReason::Stop,
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -2689,26 +2705,29 @@ async fn below_threshold_runs_without_compaction() {
     let runtime = runtime_with(10_000, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
         "no compaction below the threshold"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -2747,21 +2766,24 @@ async fn overflow_compact_and_retry_succeeds() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let summary_id_committed = committed_summary(&result).id.clone();
     let (surface_revision, compaction_tokens_before, compaction_estimated_after) = result
-        .events
+        .event_history
         .iter()
         .find_map(|event| match event {
             RuntimeEvent::CompactionCompleted {
@@ -2779,6 +2801,7 @@ async fn overflow_compact_and_retry_succeeds() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2805,6 +2828,7 @@ async fn overflow_compact_and_retry_succeeds() {
             retry_delay_ms: None,
         },
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2824,14 +2848,17 @@ async fn overflow_compact_and_retry_succeeds() {
                 details: None,
             }),
         },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: retry_message_id(1),
+        },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
             attempt_id: AttemptId::new("attempt-1"),
             finish_reason: ModelFinishReason::Stop,
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -2906,17 +2933,20 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert_outcome(
         &result,
@@ -2925,14 +2955,14 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         },
     );
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
-    assert_eq!(result.request_snapshots().len(), 2);
+    assert_eq!(result.snapshot_history().len(), 2);
     assert_eq!(
-        result.request_snapshots()[0].context_generation,
-        result.request_snapshots()[1].context_generation
+        result.snapshot_history()[0].context_generation,
+        result.snapshot_history()[1].context_generation
     );
     assert_ne!(
-        result.request_snapshots()[0].surface_revision,
-        result.request_snapshots()[1].surface_revision,
+        result.snapshot_history()[0].surface_revision,
+        result.snapshot_history()[1].surface_revision,
         "compaction changes the retry Surface revision"
     );
 
@@ -2973,7 +3003,7 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
             .count(),
         1
     );
-    for (request, snapshot) in requests.iter().zip(result.request_snapshots()) {
+    for (request, snapshot) in requests.iter().zip(result.snapshot_history()) {
         assert_eq!(
             snapshot
                 .reconstruct(&result.conversation)
@@ -3074,28 +3104,31 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(ToolRegistry::new(), &tool_runtime).await;
     let evaluations = Arc::new(AtomicUsize::new(0));
-    let result = AgentExecution::new(
-        fresh_request(
-            "attempt-1",
-            vec![
-                user("old", "old history"),
-                fresh_user("msg-inbound-1", "fresh inbound"),
-            ],
-            &model,
-        ),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert().with_pre_step_policy(Arc::new(
-            CountingPreStepPolicy {
-                evaluations: Arc::clone(&evaluations),
-            },
-        )),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            fresh_request(
+                "attempt-1",
+                vec![
+                    user("old", "old history"),
+                    fresh_user("msg-inbound-1", "fresh inbound"),
+                ],
+                &model,
+            ),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert().with_pre_step_policy(Arc::new(
+                CountingPreStepPolicy {
+                    evaluations: Arc::clone(&evaluations),
+                },
+            )),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert_outcome(
         &result,
@@ -3111,15 +3144,15 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         "an overflow retry is not a new model-step admission: the pre-step \
          policy is not re-evaluated"
     );
-    assert_eq!(result.request_snapshots().len(), 2);
+    assert_eq!(result.snapshot_history().len(), 2);
     assert_eq!(
-        result.request_snapshots()[0].context_generation,
-        result.request_snapshots()[1].context_generation,
+        result.snapshot_history()[0].context_generation,
+        result.snapshot_history()[1].context_generation,
         "overflow retry reuses the admitted ContextGeneration"
     );
     assert_ne!(
-        result.request_snapshots()[0].surface_revision,
-        result.request_snapshots()[1].surface_revision,
+        result.snapshot_history()[0].surface_revision,
+        result.snapshot_history()[1].surface_revision,
         "successful overflow compaction creates a new historical Surface revision"
     );
     let retry = &model.requests()[1];
@@ -3172,7 +3205,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
         1,
         "dynamic extension context is committed once"
     );
-    for (request, snapshot) in model.requests().iter().zip(result.request_snapshots()) {
+    for (request, snapshot) in model.requests().iter().zip(result.snapshot_history()) {
         assert_eq!(
             snapshot
                 .reconstruct(&result.conversation)
@@ -3205,38 +3238,41 @@ async fn overflow_retry_exhausted_after_one_retry() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let started = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
         .count();
     assert_eq!(started, 2, "exactly two provider requests");
     let retries = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
         .count();
     assert_eq!(retries, 1, "exactly one retry");
     let compactions = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
         .count();
     assert_eq!(compactions, 1, "no second overflow compaction");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Failed {
@@ -3246,7 +3282,7 @@ async fn overflow_retry_exhausted_after_one_retry() {
         },
     );
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptFailed {
             error: AttemptFailure::Model { .. },
             ..
@@ -3278,19 +3314,22 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -3353,19 +3392,22 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -3373,7 +3415,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
         },
     );
     assert!(
-        result.events.iter().all(|event| {
+        result.event_history.iter().all(|event| {
             !matches!(
                 event,
                 RuntimeEvent::ToolExecutionStarted { .. }
@@ -3429,17 +3471,20 @@ async fn overflow_retry_budget_is_per_model_turn() {
     let runtime = runtime_with(500, 0, 0, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let requests = model.requests();
     assert_eq!(
@@ -3448,18 +3493,18 @@ async fn overflow_retry_budget_is_per_model_turn() {
         "two invocations per turn: request + retry"
     );
     let retries = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. }))
         .count();
     assert_eq!(retries, 2, "each turn gets exactly one retry");
     let compactions = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
         .count();
     assert_eq!(compactions, 2, "one compaction per overflow");
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -3504,19 +3549,22 @@ async fn invalid_summary_fails_without_commit_or_retry() {
         let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
         let tool_runtime = common::tool_runtime("conv-1");
         let capability = common::capability_lease(tools, &tool_runtime).await;
-        let result = AgentExecution::new(
-            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-            capability.into_lease(),
-            &cancellation,
-            runtime,
-            &tool_runtime,
-            rustx::agent::AttemptLifecycle::inert(),
-        )
-        .expect("conversation identity matches the tool runtime")
-        .run()
-        .await;
+        let result = common::durable_agent_result(
+            AgentExecution::new(
+                request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+                capability.into_lease(),
+                &cancellation,
+                runtime,
+                &tool_runtime,
+                rustx::agent::AttemptLifecycle::inert(),
+            )
+            .expect("conversation identity matches the tool runtime")
+            .run()
+            .await,
+            tool_runtime.durable_store().as_ref(),
+        );
 
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         assert_outcome(
             &result,
             &AttemptOutcome::Failed {
@@ -3527,21 +3575,21 @@ async fn invalid_summary_fails_without_commit_or_retry() {
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
             "the invalid summary is a compaction failure"
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .all(|event| !matches!(event, RuntimeEvent::CompactionCompleted { .. })),
             "no compaction may be committed"
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .all(|event| !matches!(event, RuntimeEvent::ModelRetryScheduled { .. })),
             "no overflow retry may follow an invalid summary"
@@ -3573,17 +3621,20 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let expected_tail = vec![
         RuntimeEvent::ModelRequestFailed {
@@ -3601,10 +3652,10 @@ async fn compaction_failure_after_overflow_preserves_the_overflow() {
         },
     ];
     assert_eq!(
-        &result.events[result.events.len() - expected_tail.len()..],
+        &result.event_history[result.event_history.len() - expected_tail.len()..],
         &expected_tail
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Failed {
@@ -3710,26 +3761,29 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         .expect("register");
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        fresh_request(
-            "attempt-1",
-            vec![fresh_user("msg-inbound-1", "deploy it")],
-            &model,
-        ),
-        capability.into_lease(),
-        &cancellation,
-        rustx::context::ContextRuntime::with_scripted_summarizer(
-            engine(10_000_000, 0, 0, weighted(10, 10, 10)),
-            Arc::new(FakeContextSummarizer::new(Vec::new())),
-            composer,
-            CompactionBudgets::new(1, 1, 1_000_000),
-        ),
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            fresh_request(
+                "attempt-1",
+                vec![fresh_user("msg-inbound-1", "deploy it")],
+                &model,
+            ),
+            capability.into_lease(),
+            &cancellation,
+            rustx::context::ContextRuntime::with_scripted_summarizer(
+                engine(10_000_000, 0, 0, weighted(10, 10, 10)),
+                Arc::new(FakeContextSummarizer::new(Vec::new())),
+                composer,
+                CompactionBudgets::new(1, 1, 1_000_000),
+            ),
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert_eq!(
         model.requests().len(),
@@ -3737,19 +3791,19 @@ async fn failing_status_provider_is_preparation_failure_not_compaction() {
         "no provider request may be sent when status composition fails"
     );
     let terminals: Vec<&RuntimeEvent> = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::AttemptFailed { .. }))
         .collect();
     assert_eq!(terminals.len(), 1, "exactly one terminal event");
     assert_eq!(
-        result.events.last(),
+        result.event_history.last(),
         Some(terminals[0]),
         "the terminal event is last"
     );
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .all(|event| !matches!(event, RuntimeEvent::CompactionStarted)),
         "no compaction pipeline may start for a preparation failure"
@@ -3806,17 +3860,20 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
     ];
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        fresh_request("attempt-1", initial, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            fresh_request("attempt-1", initial, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime_with(250, 0, 0, weighted(100, 10, 0), summarizer),
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert_eq!(
         model.requests().len(),
@@ -3825,19 +3882,20 @@ async fn proactive_compaction_failure_is_context_compaction_failed() {
     );
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
         "a proactive compaction pipeline must actually start"
     );
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. })),
         "the compaction failure event carries the diagnostic"
     );
-    let RuntimeEvent::AttemptFailed { error, .. } = result.events.last().expect("terminal") else {
+    let RuntimeEvent::AttemptFailed { error, .. } = result.event_history.last().expect("terminal")
+    else {
         panic!("the terminal must be an AttemptFailed");
     };
     let AttemptFailure::Runtime { error } = error else {
@@ -3877,39 +3935,42 @@ async fn no_progress_compaction_fails_without_retry() {
     let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. }))
     );
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. })),
         "no overflow retry after a failed compaction"
     );
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
         "no compaction completion without progress"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Failed {
@@ -3974,16 +4035,17 @@ async fn cancel_before_proactive_compaction() {
         }
         controller_cancellation.cancel();
     });
-    let result = execution.run().await;
+    let result =
+        common::durable_agent_result(execution.run().await, tool_runtime.durable_store().as_ref());
     controller.await.expect("controller task");
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
         "no compaction may begin after cancellation"
@@ -4028,15 +4090,16 @@ async fn cancel_while_summary_generation_is_pending() {
             .expect("summarizer parked");
         controller_cancellation.cancel();
     });
-    let result = execution.run().await;
+    let result =
+        common::durable_agent_result(execution.run().await, tool_runtime.durable_store().as_ref());
     controller.await.expect("controller task");
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert!(
-        !result.events.iter().any(|event| matches!(
+        !result.event_history.iter().any(|event| matches!(
             event,
             RuntimeEvent::CompactionCompleted { .. } | RuntimeEvent::CompactionFailed { .. }
         )),
@@ -4044,13 +4107,13 @@ async fn cancel_while_summary_generation_is_pending() {
     );
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. })),
         "no retry after cancellation"
     );
     let started_requests = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
         .count();
@@ -4070,7 +4133,7 @@ async fn run_continuation_case(
     state: ProviderContinuationState,
     window: u64,
     summarizer: FakeContextSummarizer,
-) -> (AgentExecutionResult, Vec<ModelRequest>) {
+) -> (common::DurableExecutionAudit, Vec<ModelRequest>) {
     let scripted = scripted_call();
     let call_block_index = u32::from(emit_continuation);
     let mut turn1 = vec![
@@ -4102,17 +4165,20 @@ async fn run_continuation_case(
     let runtime = runtime_with(window, 0, 5, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv-1");
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
     let requests = model.requests();
     (result, requests)
 }
@@ -4151,10 +4217,10 @@ async fn continuation_is_preserved_without_compaction() {
             FakeContextSummarizer::new(vec![FakeSummaryStep::Return("s".to_owned())]),
         )
         .await;
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         assert!(
             !result
-                .events
+                .event_history
                 .iter()
                 .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
             "no compaction below the threshold"
@@ -4176,7 +4242,7 @@ async fn continuation_is_invalidated_by_compaction() {
         let summarizer =
             FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
         let (result, requests) = run_continuation_case(true, state.clone(), 200, summarizer).await;
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         assert_eq!(requests.len(), 2);
         assert_eq!(
             requests[1].continuation, None,
@@ -4209,7 +4275,7 @@ async fn no_continuation_is_fabricated() {
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("s".to_owned())]),
     )
     .await;
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].continuation, None);
     assert_eq!(requests[1].continuation, None);
@@ -4458,17 +4524,20 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let mut attempt_request = request("attempt-1", vec![user("msg-user-1", "hi")], 1, &model);
     attempt_request.model = snapshot;
-    let result = AgentExecution::new(
-        attempt_request,
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            attempt_request,
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
 
     let requests = model.requests();
     assert_eq!(requests.len(), 3);
@@ -4482,7 +4551,7 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
         &requests[2].messages[0],
         MessageBlock::User(user) if user.kind == InboundKind::CompactionSummary
     ));
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -4656,24 +4725,27 @@ async fn m4_projection_contains_drained_batch_before_request() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -4682,7 +4754,7 @@ async fn m4_projection_contains_drained_batch_before_request() {
     );
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
         "no compaction below the threshold"
@@ -4734,24 +4806,27 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // proactive compaction while retaining the complete fresh inbound batch.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
     let runtime = runtime_with(350, 0, 0, weighted(100, 10, 0), summarizer);
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         &AttemptOutcome::Completed {
@@ -4762,7 +4837,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // one proactive compaction ran.
     assert_eq!(
         result
-            .events
+            .event_history
             .iter()
             .filter(|event| matches!(event, RuntimeEvent::CompactionStarted))
             .count(),
@@ -4890,7 +4965,8 @@ async fn m4_drain_retains_continuation_without_compaction() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
@@ -4903,25 +4979,27 @@ async fn m4_drain_retains_continuation_without_compaction() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    let result = AgentExecution::new(
-        request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
-        capability.into_lease(),
-        &cancellation,
-        runtime,
-        &tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
-    )
-    .expect("conversation identity matches the tool runtime")
-    .run()
-    .await;
+    let result = common::durable_agent_result(
+        AgentExecution::new(
+            request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
+            capability.into_lease(),
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            rustx::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await,
+        tool_runtime.durable_store().as_ref(),
+    );
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(
         !result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::CompactionStarted)),
         "no compaction below the threshold"

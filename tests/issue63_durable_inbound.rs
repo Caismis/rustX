@@ -10,7 +10,8 @@
 
 use chrono::{DateTime, TimeZone, Utc};
 use rustx::durable::{
-    AcceptedInbound, InboundDraft, InboundStore, InboundStoreError, SqliteInboundStore,
+    AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft,
+    SqliteConversationStore,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -63,10 +64,11 @@ fn agent(text: &str) -> InboundDraft {
 
 /// Opens a file-backed store at a fresh temp path and returns it with the
 /// path retained so the same file can be reopened.
-fn file_store() -> (SqliteInboundStore, std::path::PathBuf) {
+fn file_store() -> (SqliteConversationStore, std::path::PathBuf) {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open store");
+    let store =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open store");
     // Leak the temp dir so the file survives this scope; tests reopen it.
     std::mem::forget(dir);
     (store, path)
@@ -94,7 +96,7 @@ fn accepted_inbound_survives_reopen_before_adoption() {
     drop(store);
 
     let reopened =
-        SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen store");
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen store");
     let pending = reopened.load_pending().expect("load pending");
     assert_eq!(pending.len(), 3);
     assert_eq!(pending[0].message_id, accepted[0].message_id);
@@ -134,7 +136,8 @@ fn mixed_provenance_uses_one_durable_sequence_domain() {
     store.accept_inbound(agent("c")).expect("agent");
     drop(store);
 
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     let pending = reopened.load_pending().expect("load");
     assert_eq!(
         pending.iter().map(|i| i.sequence.get()).collect::<Vec<_>>(),
@@ -151,8 +154,9 @@ fn mixed_provenance_uses_one_durable_sequence_domain() {
 /// selection is excluded from the selected batch and belongs to the next one.
 #[test]
 fn finite_watermark_excludes_post_watermark_arrivals() {
-    let store =
-        Arc::new(SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"));
+    let store = Arc::new(
+        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+    );
     store.accept_inbound(human("A")).expect("A");
     store.accept_inbound(human("B")).expect("B");
     let batch = store
@@ -192,7 +196,8 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
 
     // Crash after the adoption commit: canonical owns both messages exactly
     // once and they are no longer independently re-adoptable.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     assert!(
         reopened.load_pending().expect("load pending").is_empty(),
         "no pending record survives adoption"
@@ -226,8 +231,9 @@ fn adoption_is_atomic_and_exactly_once_across_reopen() {
 /// second semantic delivery.
 #[test]
 fn producer_correlation_retry_is_exactly_once() {
-    let store =
-        Arc::new(SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"));
+    let store = Arc::new(
+        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+    );
     let draft = InboundDraft {
         message_id: Some(MessageId::new("background-exec_1-terminal")),
         source: UserSource::Runtime,
@@ -274,8 +280,9 @@ fn producer_correlation_retry_is_exactly_once() {
 /// or consumed sequence.
 #[test]
 fn failed_acceptance_leaves_nothing() {
-    let store =
-        Arc::new(SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"));
+    let store = Arc::new(
+        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+    );
     // Empty content is rejected before any durable work.
     let empty = InboundDraft {
         content: Vec::new(),
@@ -283,7 +290,7 @@ fn failed_acceptance_leaves_nothing() {
     };
     assert!(matches!(
         store.accept_inbound(empty),
-        Err(InboundStoreError::EmptyContent)
+        Err(ConversationStoreError::EmptyContent)
     ));
     // A producer-supplied duplicate message id is rejected and consumes
     // nothing.
@@ -294,7 +301,7 @@ fn failed_acceptance_leaves_nothing() {
     };
     assert!(matches!(
         store.accept_inbound(duplicate),
-        Err(InboundStoreError::DuplicateMessageId(_))
+        Err(ConversationStoreError::DuplicateMessageId(_))
     ));
     assert_eq!(store.load_pending().expect("load").len(), 1);
     let next = store.accept_inbound(human("next")).expect("next");
@@ -338,22 +345,24 @@ fn store_identity_binds_on_create_and_rejects_a_mismatched_reopen() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
     // First open binds the database to conv-A.
-    let store = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("open");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("open");
     store.accept_inbound(human("hi")).expect("accept");
     drop(store);
     // Reopen as conv-A succeeds with the original data intact.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("reopen");
     assert_eq!(reopened.load_pending().expect("load").len(), 1);
     drop(reopened);
     // Reopen as conv-B is a typed failure.
-    let mismatch = SqliteInboundStore::open(ConversationId::new("conv-B"), &path);
+    let mismatch = SqliteConversationStore::open(ConversationId::new("conv-B"), &path);
     assert!(matches!(
         mismatch,
-        Err(InboundStoreError::ConversationIdMismatch { stored, requested })
+        Err(ConversationStoreError::ConversationIdMismatch { stored, requested })
             if stored == ConversationId::new("conv-A") && requested == ConversationId::new("conv-B")
     ));
     // No mutation: conv-A still owns its accepted pending item.
-    let again = SqliteInboundStore::open(ConversationId::new("conv-A"), &path).expect("reopen A");
+    let again =
+        SqliteConversationStore::open(ConversationId::new("conv-A"), &path).expect("reopen A");
     assert_eq!(
         again.load_pending().expect("load").len(),
         1,
@@ -368,10 +377,10 @@ fn store_identity_binds_on_create_and_rejects_a_mismatched_reopen() {
 fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
     // Initial canonical prefix.
     store
-        .seed_canonical(&[MessageBlock::User(
+        .initialize(&[MessageBlock::User(
             rustx::message::types::UserMessageBlock {
                 id: MessageId::new("msg-user-0"),
                 content: text_blocks("start"),
@@ -401,7 +410,8 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
 
     // Reopen: the durable ledger is the complete ordered prefix, never a
     // filtered subsequence.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     let canonical = reopened.load_canonical().expect("load canonical");
     let ids: Vec<String> = canonical
         .iter()
@@ -428,7 +438,7 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
 /// verifies that the re-supplied bootstrap initial messages equal the
 /// persisted initial prefix instead of silently ignoring a mismatch.
 #[test]
-fn seed_canonical_verifies_the_initial_history() {
+fn initialize_verifies_the_initial_history() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
     let initial = [MessageBlock::User(
@@ -440,18 +450,20 @@ fn seed_canonical_verifies_the_initial_history() {
             timestamp: None,
         },
     )];
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
-    store.seed_canonical(&initial).expect("seed");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    store.initialize(&initial).expect("seed");
     drop(store);
 
     // A matching re-supply is accepted.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
-    reopened.seed_canonical(&initial).expect("matching seed");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    reopened.initialize(&initial).expect("matching seed");
     drop(reopened);
 
     // A mismatched re-supply is a typed failure, not a silent ignore.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
-    let mismatch = reopened.seed_canonical(&[MessageBlock::User(
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let mismatch = reopened.initialize(&[MessageBlock::User(
         rustx::message::types::UserMessageBlock {
             id: MessageId::new("msg-user-OTHER"),
             content: text_blocks("different"),
@@ -462,7 +474,7 @@ fn seed_canonical_verifies_the_initial_history() {
     )]);
     assert!(matches!(
         mismatch,
-        Err(InboundStoreError::InitialHistoryMismatch)
+        Err(ConversationStoreError::InitialHistoryMismatch)
     ));
 }
 
@@ -487,8 +499,8 @@ fn initial_history_identity_is_exact() {
     let original = vec![user("msg-a", "A"), user("msg-b", "B")];
 
     // First bootstrap establishes the identity (and the seed rows).
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
-    store.seed_canonical(&original).expect("first bootstrap");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    store.initialize(&original).expect("first bootstrap");
     // Grow the durable Ledger beyond the bootstrap boundary, exactly as
     // live execution does (adopted inbound, assistant facts, ...).
     store.accept_inbound(human("C")).expect("accept C");
@@ -499,50 +511,52 @@ fn initial_history_identity_is_exact() {
 
     // Reopen with the exact original: accepted even though the Ledger has
     // grown past the bootstrap boundary.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     reopened
-        .seed_canonical(&original)
+        .initialize(&original)
         .expect("the exact original initial history is accepted");
 
     // A shorter prefix is rejected: the boundary is not inferred from the
     // current Ledger.
     assert!(
         matches!(
-            reopened.seed_canonical(&original[..1]),
-            Err(InboundStoreError::InitialHistoryMismatch)
+            reopened.initialize(&original[..1]),
+            Err(ConversationStoreError::InitialHistoryMismatch)
         ),
         "a shorter prefix of the original bootstrap must be rejected"
     );
     // An empty replacement of a non-empty bootstrap is rejected.
     assert!(
         matches!(
-            reopened.seed_canonical(&[]),
-            Err(InboundStoreError::InitialHistoryMismatch)
+            reopened.initialize(&[]),
+            Err(ConversationStoreError::InitialHistoryMismatch)
         ),
         "an empty replacement of a non-empty bootstrap must be rejected"
     );
     // The same identities with changed semantic content are rejected.
     assert!(
         matches!(
-            reopened.seed_canonical(&[user("msg-a", "changed"), user("msg-b", "B")]),
-            Err(InboundStoreError::InitialHistoryMismatch)
+            reopened.initialize(&[user("msg-a", "changed"), user("msg-b", "B")]),
+            Err(ConversationStoreError::InitialHistoryMismatch)
         ),
         "changed content under the same identities must be rejected"
     );
     // A longer re-supply (original plus extra messages) is rejected.
     assert!(
         matches!(
-            reopened.seed_canonical(&[user("msg-a", "A"), user("msg-b", "B"), user("msg-c", "C")]),
-            Err(InboundStoreError::InitialHistoryMismatch)
+            reopened.initialize(&[user("msg-a", "A"), user("msg-b", "B"), user("msg-c", "C")]),
+            Err(ConversationStoreError::InitialHistoryMismatch)
         ),
         "a superset of the original bootstrap must be rejected"
     );
     drop(reopened);
     // The exact original is still accepted after every rejected attempt:
     // a failed validation mutates nothing.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     reopened
-        .seed_canonical(&original)
+        .initialize(&original)
         .expect("rejected validations never consume the identity");
 }
 
@@ -564,23 +578,24 @@ fn empty_initial_history_is_an_explicit_bootstrap_identity() {
     let path = dir.path().join("inbound.db");
 
     // First bootstrap with an explicitly empty initial history.
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
     store
-        .seed_canonical(&[])
+        .initialize(&[])
         .expect("an empty initial history is a valid bootstrap");
     drop(store);
 
     // Reopen: empty matches the recorded empty bootstrap exactly.
-    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let reopened =
+        SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
     reopened
-        .seed_canonical(&[])
+        .initialize(&[])
         .expect("the recorded empty bootstrap accepts an empty re-supply");
     // A non-empty re-supply is rejected: "initialized empty" is not
     // "uninitialized".
     assert!(
         matches!(
-            reopened.seed_canonical(&[user("msg-a", "A")]),
-            Err(InboundStoreError::InitialHistoryMismatch)
+            reopened.initialize(&[user("msg-a", "A")]),
+            Err(ConversationStoreError::InitialHistoryMismatch)
         ),
         "a non-empty re-supply over an empty bootstrap must be rejected"
     );
@@ -593,7 +608,7 @@ fn empty_initial_history_is_an_explicit_bootstrap_identity() {
 fn ledger_without_bootstrap_identity_fails_closed() {
     let dir = tempdir().expect("temp dir");
     let path = dir.path().join("inbound.db");
-    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    let store = SqliteConversationStore::open(ConversationId::new("conv-1"), &path).expect("open");
     // Build canonical content without ever seeding (accepted + adopted
     // inbound appends to the Ledger directly).
     store.accept_inbound(human("A")).expect("accept A");
@@ -606,8 +621,8 @@ fn ledger_without_bootstrap_identity_fails_closed() {
     // bootstrap boundary: it fails closed instead of guessing.
     assert!(
         matches!(
-            store.seed_canonical(&[]),
-            Err(InboundStoreError::Storage(_))
+            store.initialize(&[]),
+            Err(ConversationStoreError::Storage(_))
         ),
         "an orphan canonical Ledger fails closed"
     );
@@ -618,8 +633,9 @@ fn ledger_without_bootstrap_identity_fails_closed() {
 /// the original acceptance.
 #[test]
 fn correlation_conflict_is_rejected_typed() {
-    let store =
-        Arc::new(SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"));
+    let store = Arc::new(
+        SqliteConversationStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"),
+    );
     let base = InboundDraft {
         message_id: Some(MessageId::new("background-exec_1-terminal")),
         source: UserSource::Runtime,
@@ -637,14 +653,14 @@ fn correlation_conflict_is_rejected_typed() {
         .expect_err("conflicting payload must be rejected");
     assert!(matches!(
         conflict,
-        InboundStoreError::CorrelationConflict { ref correlation } if correlation == "background-terminal:exec_1"
+        ConversationStoreError::CorrelationConflict { ref correlation } if correlation == "background-terminal:exec_1"
     ));
     // The original acceptance is unchanged.
     assert_eq!(store.load_pending().expect("load").len(), 1);
 }
 
-/// Issue #63 recovery gate predicate: an incomplete tool turn and a committed
-/// compaction summary both fail closed; a complete tool group is safe.
+/// The remaining restart gate is structural: an incomplete tool turn fails
+/// closed, while durable Surface compaction history is safe to reopen.
 #[test]
 fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
     use rustx::conversation::recovery_safety;
@@ -679,7 +695,9 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         Err(rustx::conversation::RecoverySafetyError::IncompleteToolTurn { .. })
     ));
 
-    // A compaction summary fails closed (Surface Replace is not durable).
+    // Compaction summaries are ordinary durable Ledger facts whose Surface
+    // replacement is validated by the M8 store, so the predicate does not
+    // reject them.
     let summary = MessageBlock::User(rustx::message::types::UserMessageBlock {
         id: MessageId::new("summary-1"),
         content: text_blocks("earlier context"),
@@ -687,8 +705,6 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
         kind: InboundKind::CompactionSummary,
         timestamp: None,
     });
-    assert!(matches!(
-        recovery_safety(&[user("u0"), user("u1"), summary]),
-        Err(rustx::conversation::RecoverySafetyError::CompactionSurfaceNotReconstructable(_))
-    ));
+    recovery_safety(&[user("u0"), user("u1"), summary])
+        .expect("durable Surface history makes compaction restart-safe");
 }

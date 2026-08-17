@@ -24,12 +24,11 @@
 //! artifact root that equals the workspace root, nests inside it, or
 //! contains it (including symlink-resolved overlap).
 //!
-//! # Mailbox identity
+//! # Durable authority binding
 //!
-//! A `ConversationToolRuntime` may only contain resources belonging to its
-//! own [`ConversationId`]. A configured mailbox must belong to the same
-//! conversation as the runtime; a mismatch is rejected at construction,
-//! before the background registry is built, so
+//! A `ConversationToolRuntime` composes one [`ConversationStoreBinding`]. The
+//! narrow mailbox capability is derived from that binding, while the full
+//! store handle is later handed to the owning `ConversationRuntime`, so
 //!
 //! ```text
 //! request.conversation_id
@@ -38,15 +37,14 @@
 //! == background_registry.conversation_id
 //! ```
 //!
-//! holds structurally. An omitted mailbox constructs the canonical mailbox
-//! of the runtime's own conversation.
+//! holds structurally. There is no configuration slot for an independently
+//! selected mailbox and full store.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::durable::SqliteInboundStore;
-use crate::durable::inbox::InboundStore;
+use crate::durable::{ConversationStore, ConversationStoreBinding, SqliteConversationStore};
 use crate::events::RuntimeEventSink;
 use crate::runtime::RuntimeClock;
 use crate::runtime::SystemClock;
@@ -75,17 +73,15 @@ pub enum ConversationRuntimeError {
         /// The canonical artifact root.
         artifacts: PathBuf,
     },
-    /// The configured mailbox belongs to a different conversation: a
-    /// conversation runtime may only bind resources of its own
-    /// [`ConversationId`].
-    MailboxConversationMismatch {
+    /// The durable conversation store could not be opened.
+    DurableConversation(String),
+    /// The configured durable binding belongs to another conversation.
+    DurableConversationMismatch {
         /// The conversation the runtime is being constructed for.
         expected: ConversationId,
-        /// The conversation the configured mailbox belongs to.
+        /// The conversation the binding belongs to.
         actual: ConversationId,
     },
-    /// The durable Pending Inbound Inbox could not be opened.
-    DurableInbound(String),
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -103,14 +99,13 @@ impl core::fmt::Display for ConversationRuntimeError {
                 artifacts.display(),
                 workspace.display()
             ),
-            Self::MailboxConversationMismatch { expected, actual } => write!(
+            Self::DurableConversation(message) => write!(
                 f,
-                "the configured mailbox belongs to conversation {actual}, but this \
-                 conversation tool runtime is being constructed for {expected}",
+                "the durable conversation store could not be opened: {message}",
             ),
-            Self::DurableInbound(message) => write!(
+            Self::DurableConversationMismatch { expected, actual } => write!(
                 f,
-                "the durable pending inbound inbox could not be opened: {message}",
+                "the durable binding belongs to conversation {actual}, but this tool runtime belongs to {expected}",
             ),
         }
     }
@@ -167,11 +162,10 @@ pub struct ConversationRuntimeConfig {
     pub workspace_root: PathBuf,
     /// The runtime-private artifact root, disjoint from the workspace.
     pub artifacts_dir: PathBuf,
-    /// The canonical conversation inbound mailbox; a fresh mailbox bound to
-    /// the conversation is created when omitted. A provided mailbox must
-    /// belong to the same conversation as the runtime being constructed;
-    /// a mismatched mailbox is rejected at construction.
-    pub mailbox: Option<ConversationInboundMailbox>,
+    /// The one durable authority binding. Its narrow inbound capability is
+    /// derived here for the mailbox; the full handle is passed only to the
+    /// owning conversation runtime.
+    pub durable_binding: Option<ConversationStoreBinding>,
     /// The runtime clock stamping terminal inbound messages; the system
     /// clock is used when omitted.
     pub clock: Option<Arc<dyn RuntimeClock>>,
@@ -190,7 +184,7 @@ impl ConversationRuntimeConfig {
         Self {
             workspace_root: workspace_root.as_ref().to_path_buf(),
             artifacts_dir: artifacts_dir.as_ref().to_path_buf(),
-            mailbox: None,
+            durable_binding: None,
             clock: None,
             event_sink: None,
             environment: None,
@@ -211,8 +205,10 @@ pub struct ConversationToolRuntime {
     workspace: Workspace,
     artifacts: ArtifactStore,
     environment: ToolEnvironment,
-    inbound_store: Arc<dyn InboundStore>,
     background: ConversationBackgroundRegistry,
+    /// The one composition-time binding shared by the runtime and its narrow
+    /// mailbox capability.
+    durable_binding: ConversationStoreBinding,
     /// The one-time Runtime Client binding of this runtime identity.
     ///
     /// Shared by every clone, so cloning a runtime handle never creates a
@@ -234,8 +230,9 @@ impl core::fmt::Debug for ConversationToolRuntime {
 /// A [`ConversationToolRuntime`] is the canonical mailbox/background
 /// identity of a conversation, and a Runtime Client host is the
 /// projection/control/attachment adapter over the `ConversationRuntime`
-/// that coordinates it (Issue #61): the runtime owns canonical history,
-/// the current-attempt slot, attempt admission, and the model authority;
+/// that coordinates it (Issue #61): the conversation runtime owns the
+/// full `ConversationStore` durability authority, the current-attempt slot,
+/// attempt admission, and the model authority;
 /// the host owns only the client projection. Two hosts over one runtime
 /// identity would still be two adapters over one authoritative runtime.
 ///
@@ -243,7 +240,7 @@ impl core::fmt::Debug for ConversationToolRuntime {
 /// **not** a lease: it is not reset when the bound host is dropped, because
 /// rebinding a surviving runtime bundle would require a recovery model for
 /// canonical history, pending mailbox projection, and cursor continuity
-/// that pre-M8 does not own. A fresh host requires a fresh
+/// that this host-binding contract does not own. A fresh host requires a fresh
 /// `ConversationToolRuntime` identity.
 #[derive(Debug, Default)]
 struct RuntimeClientBinding {
@@ -293,12 +290,6 @@ impl ConversationToolRuntime {
     /// structurally impossible, so the registry identity and its execution
     /// records are stable for the conversation lifetime.
     ///
-    /// A configured mailbox must belong to the same conversation as the
-    /// runtime itself: a `ConversationToolRuntime` may only contain
-    /// resources belonging to its own [`ConversationId`]. The mismatch is
-    /// rejected here, before the background registry is constructed — never
-    /// deferred to `AgentExecution`.
-    ///
     /// # Errors
     ///
     /// Returns [`ConversationRuntimeError::Workspace`] when the workspace
@@ -307,9 +298,8 @@ impl ConversationToolRuntime {
     /// be prepared,
     /// [`ConversationRuntimeError::OverlappingStorage`] when the artifact
     /// root and the workspace root overlap (directly, nested, or through a
-    /// symlink), and
-    /// [`ConversationRuntimeError::MailboxConversationMismatch`] when the
-    /// configured mailbox belongs to a different conversation.
+    /// symlink), and [`ConversationRuntimeError::DurableConversationMismatch`]
+    /// when a supplied durable binding belongs to another conversation.
     pub fn from_config(
         conversation_id: ConversationId,
         config: ConversationRuntimeConfig,
@@ -319,29 +309,33 @@ impl ConversationToolRuntime {
         let artifacts_root = prepare_artifact_root(&config.artifacts_dir)
             .map_err(ConversationRuntimeError::Artifacts)?;
         validate_disjoint_storage(workspace.root(), &artifacts_root)?;
-        // The durable Pending Inbound Inbox (Issue #63) lives in the
-        // runtime-private artifact root; a configured mailbox carries its
-        // own store and is validated against this conversation.
-        let (mailbox, inbound_store): (ConversationInboundMailbox, Arc<dyn InboundStore>) =
-            if let Some(mailbox) = config.mailbox {
-                if mailbox.conversation_id() != &conversation_id {
-                    return Err(ConversationRuntimeError::MailboxConversationMismatch {
-                        expected: conversation_id.clone(),
-                        actual: mailbox.conversation_id().clone(),
-                    });
-                }
-                let store = mailbox.store();
-                (mailbox, store)
-            } else {
-                let store = Arc::new(
-                    SqliteInboundStore::open(
-                        conversation_id.clone(),
-                        &artifacts_root.join("durable-inbound.db"),
-                    )
-                    .map_err(|error| ConversationRuntimeError::DurableInbound(error.to_string()))?,
-                );
-                (ConversationInboundMailbox::over_store(store.clone()), store)
-            };
+        // Compose the durable authority once. The mailbox receives only the
+        // narrow capability derived from this binding, while the owning
+        // ConversationRuntime later receives the full handle from the same
+        // binding. There is no independent mailbox/store selection point.
+        let durable_binding = if let Some(binding) = config.durable_binding {
+            if binding.conversation_id() != &conversation_id {
+                return Err(ConversationRuntimeError::DurableConversationMismatch {
+                    expected: conversation_id.clone(),
+                    actual: binding.conversation_id().clone(),
+                });
+            }
+            binding
+        } else {
+            let store = Arc::new(
+                SqliteConversationStore::open(
+                    conversation_id.clone(),
+                    &artifacts_root.join("conversation.sqlite"),
+                )
+                .map_err(|error| {
+                    ConversationRuntimeError::DurableConversation(error.to_string())
+                })?,
+            );
+            ConversationStoreBinding::new(store)
+        };
+        let mailbox = ConversationInboundMailbox::over_inbound_capability(
+            durable_binding.inbound_capability(),
+        );
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
         let clock = config
@@ -363,13 +357,22 @@ impl ConversationToolRuntime {
             workspace,
             artifacts,
             environment,
-            inbound_store,
             background,
+            durable_binding,
             runtime_client: Arc::new(RuntimeClientBinding {
                 bound: AtomicBool::new(false),
                 coordinator_claimed: AtomicBool::new(false),
             }),
         })
+    }
+
+    /// Returns the full durable authority composed for this tool runtime.
+    ///
+    /// The method is crate-private: background/tool code receives only
+    /// [`Self::mailbox`], while the owning conversation runtime obtains the
+    /// full handle from the same binding.
+    pub(crate) fn durable_store(&self) -> Arc<dyn ConversationStore> {
+        self.durable_binding.full_store()
     }
 
     /// Claims the one-time Runtime Client binding of this runtime identity.
@@ -533,16 +536,6 @@ impl ConversationToolRuntime {
     pub fn mailbox(&self) -> ConversationInboundMailbox {
         self.background.resources().mailbox.clone()
     }
-
-    /// The durable Pending Inbound Inbox of this conversation.
-    ///
-    /// The conversation runtime coordinator and the mailbox share this one
-    /// store: acceptance, sequence allocation, pending state, and canonical
-    /// adoption all commit through it. There is no second allocator or
-    /// queue.
-    pub(crate) fn inbound_store(&self) -> Arc<dyn InboundStore> {
-        Arc::clone(&self.inbound_store)
-    }
 }
 
 /// Prepares the artifact root: creates it when missing and canonicalizes it
@@ -700,88 +693,70 @@ mod tests {
     }
 
     #[test]
-    fn configuration_binds_resources_exactly_once() {
-        use crate::runtime::inbound::ConversationInboundMailbox;
-        let dir = unique_dir("bind-once");
+    fn one_durable_binding_derives_the_runtime_mailbox() {
+        use crate::durable::{
+            ConversationStore, ConversationStoreBinding, SqliteConversationStore,
+        };
+        let dir = unique_dir("binding");
         fs::create_dir_all(dir.join("workspace")).expect("create");
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+        let store = std::sync::Arc::new(
+            SqliteConversationStore::in_memory(ConversationId::new("conv-A")).expect("store"),
+        );
+        let binding = ConversationStoreBinding::new(store.clone());
         let runtime = ConversationToolRuntime::from_config(
-            ConversationId::new("conv-1"),
+            ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
-                mailbox: Some(mailbox.clone()),
+                durable_binding: Some(binding),
                 ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
             },
         )
         .expect("runtime");
-        // The configured mailbox is the canonical mailbox shared by the
-        // background registry: terminal notifications reach exactly it.
-        assert_eq!(
-            runtime.mailbox().conversation_id(),
-            mailbox.conversation_id()
-        );
-        let enqueued = runtime.background().resources().mailbox.clone();
-        assert_eq!(enqueued.conversation_id(), mailbox.conversation_id());
+
+        assert_eq!(runtime.mailbox().conversation_id(), store.conversation_id());
+        let accepted = runtime
+            .mailbox()
+            .enqueue(crate::message::types::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new("binding-message"),
+                content: vec![crate::message::types::UserContentBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: "same authority".to_owned(),
+                    },
+                )],
+                source: crate::message::types::UserSource::Human,
+                kind: crate::message::types::InboundKind::Message,
+                timestamp: Some(chrono::Utc::now()),
+            })
+            .expect("accept through derived mailbox");
+        assert_eq!(accepted.get(), 1);
+        assert_eq!(store.load_pending().expect("pending").len(), 1);
         fs::remove_dir_all(&dir).expect("remove");
     }
 
-    /// A configured mailbox belonging to the runtime's own conversation is
-    /// accepted, and the constructed runtime exposes exactly that mailbox.
     #[test]
-    fn matching_mailbox_conversation_is_accepted() {
-        use crate::runtime::inbound::ConversationInboundMailbox;
-        let dir = unique_dir("mailbox-match");
+    fn a_binding_for_another_conversation_is_rejected_before_background_setup() {
+        use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
+        let dir = unique_dir("binding-mismatch");
         fs::create_dir_all(dir.join("workspace")).expect("create");
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-A"));
-        let runtime = ConversationToolRuntime::from_config(
-            ConversationId::new("conv-A"),
-            ConversationRuntimeConfig {
-                mailbox: Some(mailbox.clone()),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
-            },
-        )
-        .expect("a matching mailbox must be accepted");
-        // The exposed canonical mailbox is the configured one and belongs to
-        // the runtime's own conversation.
-        assert_eq!(
-            runtime.mailbox().conversation_id(),
-            &ConversationId::new("conv-A")
+        let store = std::sync::Arc::new(
+            SqliteConversationStore::in_memory(ConversationId::new("conv-B")).expect("store"),
         );
-        assert_eq!(
-            runtime.background().resources().mailbox.conversation_id(),
-            &ConversationId::new("conv-A")
-        );
-        fs::remove_dir_all(&dir).expect("remove");
-    }
-
-    /// A configured mailbox belonging to a different conversation is
-    /// rejected at construction: the runtime may only bind resources of its
-    /// own conversation.
-    #[test]
-    fn mismatched_mailbox_conversation_is_rejected() {
-        use crate::runtime::inbound::ConversationInboundMailbox;
-        let dir = unique_dir("mailbox-mismatch");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
-        let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-B"));
         let error = ConversationToolRuntime::from_config(
             ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
-                mailbox: Some(mailbox),
+                durable_binding: Some(ConversationStoreBinding::new(store)),
                 ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
             },
         )
-        .expect_err("a foreign mailbox must be rejected");
-        assert_eq!(
+        .expect_err("a binding for another conversation must be rejected");
+        assert!(matches!(
             error,
-            ConversationRuntimeError::MailboxConversationMismatch {
-                expected: ConversationId::new("conv-A"),
-                actual: ConversationId::new("conv-B"),
-            }
-        );
+            ConversationRuntimeError::DurableConversationMismatch { .. }
+        ));
         fs::remove_dir_all(&dir).expect("remove");
     }
 
-    /// An omitted mailbox constructs the canonical mailbox of the runtime's
-    /// own conversation.
+    /// An omitted binding constructs the canonical file-backed authority and
+    /// derives its mailbox from that same authority.
     #[test]
     fn omitted_mailbox_constructs_the_canonical_conversation_mailbox() {
         let dir = unique_dir("mailbox-omitted");

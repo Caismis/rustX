@@ -151,8 +151,8 @@ pub enum ToolInvocationMode {
 /// replay a tool whose external completion state is unknown: it records an
 /// interrupted/unknown result and lets the model decide the next action.
 /// Automatic replay is allowed only for tools that explicitly declare
-/// themselves idempotent. `Idempotent` is metadata for future recovery
-/// policy (M8), not permission to invent replay behavior in this milestone.
+/// themselves idempotent. `Idempotent` is metadata for the future #12
+/// recovery policy, not permission to invent replay behavior in M8.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolReplayPolicy {

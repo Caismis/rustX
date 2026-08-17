@@ -6,8 +6,9 @@
 //! spooling so large subprocess output never has to be held entirely in
 //! memory. The mapping from `ArtifactId` to physical path stays internal;
 //! [`FileReference`](crate::message::content::FileReference) remains the
-//! model/runtime reference. Conversation-lifetime retention is sufficient;
-//! durable recovery and a database are M8.
+//! model/runtime reference. Conversation-lifetime retention is sufficient for
+//! the current tool-plane contract; artifact recovery/database authority is
+//! outside Issue #11.
 
 use std::fs::File;
 use std::io::Write;

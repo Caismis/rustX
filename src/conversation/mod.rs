@@ -29,10 +29,11 @@
 //!
 //! Nothing in the normal projection/compaction path enumerates the Ledger.
 //!
-//! There is exactly **one** mutable conversation-state authority at a time.
-//! Between attempts the conversation runtime coordinator owns the
-//! `ConversationState`; while
-//! an attempt runs, `AgentExecution` owns it; settlement transfers it back.
+//! There is exactly **one** mutable hot conversation-state read model at a
+//! time. Between attempts the conversation runtime coordinator owns the
+//! `ConversationState`; while an attempt runs, `AgentExecution` owns it;
+//! settlement transfers it back. The durable `ConversationStore` remains the
+//! authority for retired Ledger facts and historical Surface revisions.
 
 pub mod ledger;
 pub mod structure;
@@ -47,7 +48,7 @@ pub use surface::{
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, UserMessageBlock};
+use crate::message::types::{AssistantContentBlock, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{MessageId, ToolCallId};
 
 /// A conversation-state contract violation.
@@ -179,19 +180,14 @@ impl PreparedCompactionCommit {
     }
 }
 
-/// A durable canonical prefix that cannot be resumed automatically.
+/// A current durable Surface head that cannot be resumed automatically.
 ///
-/// This is the smallest semantic evidence of the Issue #63 restart gate: a
-/// durable Message Ledger append does **not** by itself imply that the head
-/// is a resumable `ConversationRuntime` safe boundary. It fails closed on the
-/// two states a Ledger-only Surface reconstruction cannot represent.
+/// Durable Surface revisions make ordinary compaction history reconstructable
+/// after restart. The remaining fail-closed boundary is structural: a live
+/// model-visible Assistant tool call must not be crossed by a new inbound
+/// turn until its `ToolResult` sibling is committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecoverySafetyError {
-    /// A compaction summary is committed but its Surface `Replace` is not
-    /// durably reconstructable (full #11 surface-revision durability is a
-    /// later milestone). Ordinary append would keep the replaced span active
-    /// and append the summary after it.
-    CompactionSurfaceNotReconstructable(MessageId),
     /// An Assistant message issued a tool call whose `ToolResult` sibling is
     /// not yet committed: resuming admission here would let asynchronous
     /// inbound cross the incomplete tool-call/result structure.
@@ -204,10 +200,6 @@ pub enum RecoverySafetyError {
 impl core::fmt::Display for RecoverySafetyError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::CompactionSurfaceNotReconstructable(id) => write!(
-                f,
-                "the durable canonical prefix contains compaction summary {id} whose Surface replacement is not durably reconstructable"
-            ),
             Self::IncompleteToolTurn { tool_call_id } => write!(
                 f,
                 "the durable canonical prefix ends inside an incomplete tool turn: tool call {tool_call_id} has no committed ToolResult"
@@ -248,30 +240,16 @@ pub fn pending_tool_call(messages: &[MessageBlock]) -> Option<ToolCallId> {
         .find(|call| !tool_results.contains(call))
 }
 
-/// Whether an ordered canonical prefix may be resumed as a live
-/// [`ConversationState`] without guessing missing Surface/execution state.
-///
-/// The predicate answers the restart-gate question exactly: a durable Ledger
-/// prefix is resumable only when ordinary-append Surface reconstruction
-/// (`ConversationState::from_messages`) reproduces a structurally safe live
-/// conversation. It is **not** a generic checkpoint and not a recovery log.
+/// Whether a current model-visible Surface may be resumed without crossing an
+/// incomplete tool turn. Historical compaction state is validated and
+/// reconstructed by the durable store before this predicate is called; it is
+/// no longer a reason to reject a restart.
 ///
 /// # Errors
 ///
-/// Returns [`RecoverySafetyError::CompactionSurfaceNotReconstructable`] for a
-/// committed compaction summary whose Surface `Replace` is not durably
-/// reconstructable, and [`RecoverySafetyError::IncompleteToolTurn`] for an
-/// `Assistant` tool call without its committed `ToolResult` sibling.
+/// Returns [`RecoverySafetyError::IncompleteToolTurn`] for an `Assistant` tool
+/// call without its committed `ToolResult` sibling.
 pub fn recovery_safety(messages: &[MessageBlock]) -> Result<(), RecoverySafetyError> {
-    for message in messages {
-        if let MessageBlock::User(user) = message
-            && user.kind == InboundKind::CompactionSummary
-        {
-            return Err(RecoverySafetyError::CompactionSurfaceNotReconstructable(
-                user.id.clone(),
-            ));
-        }
-    }
     if let Some(tool_call_id) = pending_tool_call(messages) {
         return Err(RecoverySafetyError::IncompleteToolTurn { tool_call_id });
     }
@@ -344,7 +322,41 @@ impl ConversationState {
         Ok(state)
     }
 
-    /// The immutable Message Ledger.
+    /// Hydrates only the current durable Surface head and its active Ledger
+    /// bodies. Retired Ledger facts and historical Surface operations remain
+    /// in the durable store and are read on demand.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a supplied active Surface identity is absent from
+    /// the supplied current Ledger working set.
+    pub fn from_durable_head(
+        messages: impl IntoIterator<Item = MessageBlock>,
+        active_ids: Vec<MessageId>,
+        revision: SurfaceRevision,
+        compaction_generation: u64,
+    ) -> Result<Self, ConversationError> {
+        let mut ledger = MessageLedger::new();
+        for message in messages {
+            ledger.append(message)?;
+        }
+        for id in &active_ids {
+            if !ledger.contains(id) {
+                return Err(ConversationError::DanglingSurfaceIdentity(id.clone()));
+            }
+        }
+        Ok(Self {
+            ledger,
+            surface: ConversationSurface::from_current_head(
+                active_ids,
+                revision,
+                compaction_generation,
+            ),
+        })
+    }
+
+    /// The immutable hot Message Ledger read model. Retired durable records
+    /// are resolved through the `ConversationStore`.
     #[must_use]
     pub fn ledger(&self) -> &MessageLedger {
         &self.ledger
@@ -482,8 +494,10 @@ impl ConversationState {
             .collect()
     }
 
-    /// Reconstructs the exact active ordered identities of a historical
-    /// Surface revision.
+    /// Reconstructs the exact active ordered identities of a hot or
+    /// pre-bootstrap Surface revision. After durable restart, revisions before
+    /// the hydrated hot base are intentionally resolved by the
+    /// `ConversationStore` read path instead.
     ///
     /// Identity and order come from Surface history alone; only afterwards
     /// may a caller resolve bodies with [`ConversationState::hydrate`].
@@ -499,9 +513,10 @@ impl ConversationState {
         Ok(self.surface.reconstruct(revision)?)
     }
 
-    /// Reconstructs the exact canonical messages of a historical Surface
-    /// revision. Surface history supplies identities and order first; the
-    /// Ledger is then queried only for those identities.
+    /// Reconstructs the exact canonical messages of a hot Surface revision.
+    /// The durable store is the historical read path for revisions older than
+    /// a bounded bootstrap. Surface history supplies identities and order
+    /// first; the hot Ledger is then queried only for those identities.
     ///
     /// # Errors
     ///
@@ -519,7 +534,12 @@ impl ConversationState {
     /// not receive this allocator and therefore cannot choose canonical ids.
     #[must_use]
     pub fn allocate_context_message_id(&self, namespace: &str) -> MessageId {
-        let mut serial = self.ledger.len();
+        // After durable bootstrap the hot Ledger contains only active bodies,
+        // so its length may be smaller than the current Surface revision.
+        // Revision is monotonic across retired facts and therefore provides
+        // a collision-resistant lower bound without retaining the retired
+        // Ledger as a second in-memory authority.
+        let mut serial = self.surface.revision().get().max(self.ledger.len() as u64);
         loop {
             let candidate = MessageId::new(format!("rustx-context-{namespace}-{serial}"));
             if !self.ledger.contains(&candidate) {
@@ -1201,6 +1221,46 @@ mod tests {
         assert_eq!(active.len(), 3);
         assert_eq!(state.ledger_access().enumerations(), 0);
         assert_eq!(state.ledger_access().keyed_reads(), 3);
+    }
+
+    /// Durable bootstrap keeps the current Surface as the hot base while
+    /// allowing later in-process appends to extend it without pretending the
+    /// retired historical operation log is resident.
+    #[test]
+    fn durable_head_supports_current_and_later_revisions_without_old_history() {
+        let active = vec![user("active-a"), user("active-b")];
+        let state = ConversationState::from_durable_head(
+            active.clone(),
+            vec![MessageId::new("active-a"), MessageId::new("active-b")],
+            SurfaceRevision::new(7),
+            2,
+        )
+        .expect("hydrate current head");
+        assert_eq!(
+            state
+                .reconstruct(SurfaceRevision::new(7))
+                .expect("base revision"),
+            vec![MessageId::new("active-a"), MessageId::new("active-b")]
+        );
+        assert!(matches!(
+            state.reconstruct(SurfaceRevision::new(6)),
+            Err(ConversationError::Surface(SurfaceError::UnknownRevision(_)))
+        ));
+
+        let mut state = state;
+        state
+            .commit(user("active-c"))
+            .expect("append after restart");
+        assert_eq!(
+            state
+                .reconstruct(SurfaceRevision::new(8))
+                .expect("later revision"),
+            vec![
+                MessageId::new("active-a"),
+                MessageId::new("active-b"),
+                MessageId::new("active-c")
+            ]
+        );
     }
 
     /// Current compaction generation is maintained as head metadata and does

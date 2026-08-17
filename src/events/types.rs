@@ -9,17 +9,20 @@
 //! ```
 //!
 //! Streaming model deltas and tool progress are events, never message blocks.
-//! Events are append-only and persist before external publication in
-//! production (a later milestone). The envelope owns the durable identity and
-//! ordering: an explicit schema version, a monotonic sequence, and a stable
-//! event id, plus conversation/attempt/turn identity and a UTC timestamp.
+//! Events are append-only and a successful durable append commits before
+//! external publication through the durable `ConversationStore`. If a
+//! required append fails, the event is not published or fabricated in a
+//! local projection. The envelope owns the durable identity and ordering: an
+//! explicit schema version, a monotonic sequence, and a stable event id, plus
+//! conversation/attempt/turn identity and a UTC timestamp.
 //!
 //! AG-UI is an output projection of these events and is never the internal
 //! representation.
 //!
 //! ## Attempt settlement
 //!
-//! Exactly one terminal event settles an attempt. The terminal events are
+//! A normally settled attempt has exactly one committed terminal event. The
+//! terminal events are
 //! [`RuntimeEvent::AttemptCompleted`], [`RuntimeEvent::AttemptCancelled`],
 //! [`RuntimeEvent::AttemptTimedOut`],
 //! [`RuntimeEvent::AttemptLimitExceeded`], and
@@ -27,30 +30,25 @@
 //! [`AttemptOutcome`] variants. A terminal event carries only the data valid
 //! for that state: in particular `AttemptCompleted` carries a finish reason
 //! and no outcome payload, so a failed/cancelled/timed-out attempt can never
-//! be encoded as a completion. Unknown payload fields are rejected.
+//! be encoded as a completion. Unknown payload fields are rejected. The
+//! Agent Loop keeps its execution settlement candidate separately; if the
+//! final terminal append fails, no terminal event exists and the result
+//! reports the typed durable failure instead of deriving an outcome from a
+//! fabricated event.
 //!
 //! ## Committed messages
 //!
 //! [`RuntimeEvent::AssistantMessageCommitted`] and
 //! [`RuntimeEvent::ToolMessageCommitted`] reference the committed message by
 //! its stable [`MessageId`] and never embed the message content. Canonical
-//! message content lives only in the durable Message Ledger (M8); the Event
+//! message content lives only in the durable Message Ledger; the Event
 //! Journal records the execution fact. This keeps exactly one authoritative
 //! copy of message content.
 //!
-//! A committed-message event must not be emitted before the corresponding
-//! `MessageBlock` has been durably committed to the Message Ledger. Message
-//! Ledger persistence and Event Journal persistence are separate durable
-//! operations unless a backend provides a shared atomic transaction; M8 owns
-//! the atomicity or crash-reconciliation boundary between these stores. If a
-//! crash occurs after the `MessageBlock` is durably committed but before the
-//! corresponding committed-message event is appended, recovery must
-//! recognize and reconcile that state rather than treating the message as
-//! absent or duplicating its content.
-//!
-//! Persist-before-publish applies to `RuntimeEvent` publication only:
-//! append the event durably before publishing it externally. It does not by
-//! itself provide a transaction with the Message Ledger.
+//! Committed-message events share the `ConversationStore` transaction with the
+//! Ledger body they reference. Compaction and request-start facts use the
+//! same reference-ordering rule. Persist-before-publish appends the committed
+//! envelope before observers or external projections see it.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -61,7 +59,8 @@ use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId, TurnId,
+    AttemptId, ConversationId, EventId, MessageId, RequestId, ToolCallId, ToolExecutionId, ToolId,
+    TurnId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
@@ -78,7 +77,7 @@ pub struct RuntimeEventEnvelope {
     /// Stable identity of this event.
     pub event_id: EventId,
     /// Monotonic sequence within the conversation. Allocation is committed
-    /// by the future event writer before publication.
+    /// by the native durable `ConversationStore` before publication.
     pub sequence: u64,
     /// The conversation this event belongs to.
     pub conversation_id: ConversationId,
@@ -151,7 +150,10 @@ pub enum RuntimeEvent {
 
     /// A model request was sent to an adapter.
     ModelRequestStarted {
-        /// The model identifier requested.
+        /// The exact immutable Request Snapshot this start fact commits.
+        request_id: RequestId,
+        /// The model selected by the frozen invocation. This is a projection
+        /// convenience; the Request Snapshot remains the authority.
         model: String,
     },
     /// A model request completed successfully.
@@ -321,6 +323,30 @@ pub enum RuntimeEvent {
         /// Human-readable failure message.
         error: String,
     },
+    /// A detached background execution's terminal inbound notification was
+    /// durably accepted. The event is committed in the same transaction as
+    /// the Pending Inbound row and references that row by `MessageId`; it never
+    /// embeds the notification body.
+    BackgroundTerminalPublished {
+        /// The detached execution identity.
+        execution_id: ToolExecutionId,
+        /// The pending/canonical `MessageId` of the notification.
+        message_id: MessageId,
+        /// The terminal state represented by the notification.
+        state: BackgroundTerminalState,
+    },
+}
+
+/// The durable terminal outcome of a detached background execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTerminalState {
+    /// The executor completed successfully.
+    Succeeded,
+    /// The executor failed or was interrupted.
+    Failed,
+    /// Cancellation intent won settlement.
+    Cancelled,
 }
 
 /// The normalized failure of an attempt.
@@ -350,11 +376,11 @@ pub enum AttemptFailure {
 ///
 /// Provider finish reasons, runtime cancellation, timeout, limit exhaustion,
 /// and runtime failure are distinct and are never collapsed into one string.
-/// The relationship to terminal runtime events is one-to-one: each terminal
-/// [`RuntimeEvent`] maps to exactly one [`AttemptOutcome`] variant via
-/// [`AttemptOutcome::from_terminal_event`], and no non-terminal event maps
-/// to an outcome. The Agent Loop (M3) consumes this platform-level
-/// projection.
+/// When a terminal runtime event is durably committed, it maps one-to-one to
+/// an [`AttemptOutcome`] variant via
+/// [`AttemptOutcome::from_terminal_event`], and no non-terminal event maps to
+/// an outcome. The Agent Loop (M3) also reports an execution settlement
+/// candidate separately when the required terminal append fails.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AttemptOutcome {

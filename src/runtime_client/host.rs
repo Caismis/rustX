@@ -164,6 +164,9 @@ pub enum HostConstructionError {
         /// The conversation whose runtime is already activated.
         conversation_id: ConversationId,
     },
+    /// The native durable authority could not provide a coherent bootstrap
+    /// snapshot for the client projection.
+    Durable(String),
 }
 
 impl core::fmt::Display for HostConstructionError {
@@ -181,6 +184,7 @@ impl core::fmt::Display for HostConstructionError {
                 f,
                 "the conversation runtime of {conversation_id} is already activated; a Runtime Client host binds before activation"
             ),
+            Self::Durable(message) => write!(f, "durable conversation bootstrap failed: {message}"),
         }
     }
 }
@@ -481,27 +485,24 @@ impl ClientInner {
         state.projection.snapshot()
     }
 
-    /// Returns the immutable in-memory request facts retained by the
+    /// Returns a durable request-history read handle owned by the
     /// conversation runtime.
     ///
-    /// The runtime owns these snapshots after attempt settlement. The
-    /// returned value is a read-only clone of the request-fact collection;
-    /// it does not create another conversation or transcript authority.
+    /// The durable `ConversationStore` owns these snapshots. The returned
+    /// value is a read-only handle; each historical read is resolved through
+    /// the runtime authority and does not create another conversation or
+    /// transcript authority.
     #[must_use]
     pub(crate) fn request_history(&self) -> RequestHistory {
         self.runtime.request_history()
     }
 
-    /// Reconstructs one retained provider-neutral request from its frozen
-    /// snapshot and the exact historical Surface revisions in the runtime's
-    /// authoritative `ConversationState`.
+    /// Reconstructs one retained provider-neutral request from durable facts.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestHistoryError::ConversationUnavailable`] while the
-    /// single `ConversationState` is owned by a running attempt, or a
-    /// lookup / historical reconstruction error for an unknown or invalid
-    /// request.
+    /// Returns a lookup or historical reconstruction error for an unknown or
+    /// invalid request.
     pub(crate) fn reconstruct_request(
         &self,
         identity: &RequestIdentity,
@@ -796,7 +797,8 @@ impl RuntimeClientHost {
     /// [`HostConstructionError::RuntimeAlreadyActivated`] when the runtime
     /// has already been activated, and
     /// [`HostConstructionError::ObservationBridgeAlreadyInstalled`] when a
-    /// headless observation bridge already exists over the runtime.
+    /// headless observation bridge already exists over the runtime, or
+    /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -834,12 +836,16 @@ impl RuntimeClientHost {
                 config.runtime.release_client_binding();
                 return Err(HostConstructionError::RuntimeAlreadyActivated { conversation_id });
             }
+            Err(RuntimeBootstrapError::Durable(message)) => {
+                config.runtime.release_client_binding();
+                return Err(HostConstructionError::Durable(message));
+            }
         };
 
         // ---- Infallible wiring: from here construction always succeeds. ----
         //
         // The projection mirrors the runtime's authoritative seed exactly
-        // — canonical history, session model, capability snapshot, and
+        // — current Surface working set, session model, capability snapshot, and
         // pending inbound — entirely as snapshot state. No seeded fact is
         // routed through `RuntimeClientProjection::apply`, so bootstrap
         // allocates no cursor and publishes no event: the first cursor
@@ -978,22 +984,19 @@ impl RuntimeClientHost {
         self.inner.snapshot()
     }
 
-    /// Returns the immutable in-memory request facts retained by the
+    /// Returns a durable request-history read handle owned by the
     /// conversation runtime.
     #[must_use]
     pub fn request_history(&self) -> RequestHistory {
         self.inner.request_history()
     }
 
-    /// Reconstructs one retained provider-neutral request from its frozen
-    /// snapshot and the exact historical Surface revisions in the runtime's
-    /// authoritative `ConversationState`.
+    /// Reconstructs one retained provider-neutral request from durable facts.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestHistoryError::ConversationUnavailable`] while the
-    /// single `ConversationState` is owned by a running attempt, or a
-    /// lookup / historical reconstruction error.
+    /// Returns a lookup or historical reconstruction error for an unknown or
+    /// invalid request.
     pub fn reconstruct_request(
         &self,
         identity: &RequestIdentity,
@@ -1168,8 +1171,8 @@ pub struct RuntimeClientHostConfig {
     /// derives its identity, its snapshot seed, and every control outcome
     /// from it.
     pub runtime: ConversationRuntime,
-    /// The bounded pre-M8 replay retention; the default is used when
-    /// omitted.
+    /// The bounded projection replay retention; the default is used when
+    /// omitted. This cache is not the durable Event Journal.
     pub replay_limit: Option<usize>,
 }
 
@@ -1324,6 +1327,7 @@ mod tests {
         InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolExecutionId, ToolId};
+    use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::HostConstructionError;
@@ -1343,6 +1347,20 @@ mod tests {
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
 
+    fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
+        let mut snapshots = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = history.page(cursor, 32).expect("request snapshot page");
+            if page.snapshots.is_empty() {
+                break;
+            }
+            cursor = page.next_sequence;
+            snapshots.extend(page.snapshots);
+        }
+        snapshots
+    }
+
     /// One scripted step of the gated adapter.
     enum GatedStep {
         /// Yield one canonical model event.
@@ -1358,18 +1376,25 @@ mod tests {
     struct GatedAdapter {
         scripts: Mutex<VecDeque<VecDeque<GatedStep>>>,
         requests: Arc<Mutex<Vec<ModelRequest>>>,
+        request_count: Arc<watch::Sender<usize>>,
     }
 
     impl GatedAdapter {
         fn new(scripts: Vec<Vec<GatedStep>>) -> Self {
+            let (request_count, _receiver) = watch::channel(0);
             Self {
                 scripts: Mutex::new(scripts.into_iter().map(VecDeque::from).collect()),
                 requests: Arc::new(Mutex::new(Vec::new())),
+                request_count: Arc::new(request_count),
             }
         }
 
         fn requests(&self) -> Vec<ModelRequest> {
             self.requests.lock().expect("requests lock").clone()
+        }
+
+        fn request_count(&self) -> watch::Receiver<usize> {
+            self.request_count.subscribe()
         }
     }
 
@@ -1383,7 +1408,12 @@ mod tests {
             request: ModelRequest,
             cancellation: CancellationSignal,
         ) -> ModelEventStream {
-            self.requests.lock().expect("requests lock").push(request);
+            let request_count = {
+                let mut requests = self.requests.lock().expect("requests lock");
+                requests.push(request);
+                requests.len()
+            };
+            self.request_count.send_replace(request_count);
             let script = self
                 .scripts
                 .lock()
@@ -2029,15 +2059,16 @@ mod tests {
         // wait on that exact condition, never a delay.
         await_canonical_history(&fixture.host, &snapshot.messages).await;
 
-        // Request facts survive the AgentExecutionResult transfer. Mutate
-        // the live session configuration after settlement and reconstruct
-        // from the retained snapshot plus the runtime-owned historical
-        // Surface; neither current configuration nor a live contributor is
-        // consulted.
+        // Request facts remain in the durable ConversationStore after the
+        // AgentExecutionResult transfer. Mutate the live session
+        // configuration after settlement and reconstruct from the durable
+        // snapshot plus its historical Surface; neither current
+        // configuration nor a live contributor is consulted.
         let requests = adapter.requests();
         let history = fixture.host.request_history();
-        assert_eq!(history.snapshots().len(), 1);
-        let retained = history.snapshots()[0].clone();
+        let snapshots = request_snapshots(&history);
+        assert_eq!(snapshots.len(), 1);
+        let retained = snapshots[0].clone();
         let mut live_config = fixture.runtime.model_config();
         live_config.request_params.insert(
             "live_mutation".to_owned(),
@@ -2053,17 +2084,17 @@ mod tests {
             .expect("retained request reconstructs after settlement");
         assert_eq!(reconstructed, requests[0]);
         assert_eq!(
-            history.get(&retained.identity),
-            Some(&retained),
+            history.get(&retained.identity).unwrap(),
+            Some(retained),
             "request history lookup is identity-based and immutable"
         );
     }
 
-    /// A composed runtime retains every actual primary request, including
-    /// an overflow retry, after the `AgentExecutionResult` has been
-    /// transferred and dropped. The retry keeps the pending fresh inbound
-    /// visible while both request facts remain reconstructable from their
-    /// own Surface revisions.
+    /// A composed runtime keeps every actual primary request, including an
+    /// overflow retry, reconstructable in the durable `ConversationStore`
+    /// after the `AgentExecutionResult` has been transferred and dropped. The
+    /// retry keeps the pending fresh inbound visible while both request facts
+    /// remain reconstructable from their own Surface revisions.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn settled_host_retains_distinct_overflow_request_snapshots() {
         let (adapter, fixture) = host_fixture(
@@ -2123,22 +2154,21 @@ mod tests {
         await_request_history_len(&fixture.host, 3).await;
 
         let history = fixture.host.request_history();
-        assert_eq!(history.snapshots().len(), 3);
-        assert_eq!(history.snapshots()[0].identity.retry_number, 0);
-        assert_eq!(history.snapshots()[1].identity.retry_number, 0);
-        assert_eq!(history.snapshots()[2].identity.retry_number, 1);
+        let snapshots = request_snapshots(&history);
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].identity.retry_number, 0);
+        assert_eq!(snapshots[1].identity.retry_number, 0);
+        assert_eq!(snapshots[2].identity.retry_number, 1);
         assert_eq!(
-            history.snapshots()[1].identity.attempt_id,
-            history.snapshots()[2].identity.attempt_id
+            snapshots[1].identity.attempt_id,
+            snapshots[2].identity.attempt_id
         );
         assert_eq!(
-            history.snapshots()[1].context_generation,
-            history.snapshots()[2].context_generation,
+            snapshots[1].context_generation, snapshots[2].context_generation,
             "overflow retry keeps the one admitted context generation"
         );
         assert_ne!(
-            history.snapshots()[1].surface_revision,
-            history.snapshots()[2].surface_revision,
+            snapshots[1].surface_revision, snapshots[2].surface_revision,
             "compaction gives the retry its own historical Surface revision"
         );
 
@@ -2148,7 +2178,7 @@ mod tests {
             4,
             "three primary requests plus summary"
         );
-        for (snapshot, request) in history.snapshots().iter().zip([
+        for (snapshot, request) in snapshots.iter().zip([
             &provider_requests[0],
             &provider_requests[1],
             &provider_requests[3],
@@ -2187,12 +2217,11 @@ mod tests {
         .expect("the projection mirrors the authoritative canonical history");
     }
 
-    /// Waits for the post-settlement transfer of frozen request facts to the
-    /// runtime-owned append-only history.
+    /// Waits for the durable request-fact read to expose the expected count.
     async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
         tokio::time::timeout(std::time::Duration::from_secs(120), async {
             loop {
-                if host.request_history().snapshots().len() == expected {
+                if request_snapshots(&host.request_history()).len() == expected {
                     return;
                 }
                 tokio::task::yield_now().await;
@@ -2200,6 +2229,21 @@ mod tests {
         })
         .await
         .expect("request history transfer must settle");
+    }
+
+    /// Waits until the fake provider has actually received the expected
+    /// number of provider-neutral requests. Request snapshots are durable
+    /// before adapter invocation, so request-history visibility alone is not
+    /// a sufficient synchronization point for provider-side assertions.
+    async fn await_adapter_request_count(adapter: &GatedAdapter, expected: usize) {
+        let mut count = adapter.request_count();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            count.wait_for(|actual| *actual >= expected),
+        )
+        .await
+        .expect("provider invocation must settle")
+        .expect("provider request-count signal must stay open");
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -2662,6 +2706,7 @@ mod tests {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
+        fixture.runtime.settlement_signal().notified().await;
         let (before, _) = fixture.host.snapshot().expect("snapshot");
         let ledger_before = fixture
             .runtime
@@ -2693,6 +2738,7 @@ mod tests {
             .enqueue(inbound_text("conv-host-async-2", "async after detach"))
             .expect("async enqueue");
         await_request_history_len(&fixture.host, 2).await;
+        fixture.runtime.settlement_signal().notified().await;
         assert_eq!(
             adapter.requests().len(),
             2,
@@ -2974,6 +3020,7 @@ mod tests {
             .enqueue(inbound_text("msg-lifetime", "queued"))
             .expect("enqueue");
         await_request_history_len(&host, 1).await;
+        runtime.settlement_signal().notified().await;
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let prepared = runtime
@@ -3013,6 +3060,7 @@ mod tests {
         // for its request-history transfer makes the runtime provably idle
         // before the capability commit below.
         await_request_history_len(&host, 2).await;
+        runtime.settlement_signal().notified().await;
         write_probe_skill(&dir.path().join("workspace"), "lifetime-skill");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
         coordinator.commit(candidate).expect("commit");
@@ -4091,6 +4139,7 @@ mod tests {
         // before the assertions below.
         settlement_gate.release();
         await_request_history_len(&fixture.host, 2).await;
+        await_adapter_request_count(&adapter, 2).await;
         let requests = adapter.requests();
         assert_eq!(
             requests.len(),
@@ -4480,7 +4529,7 @@ mod tests {
         assert!(committed.revision() > revision_at_admission);
         let history = fixture.host.request_history();
         assert_eq!(
-            history.snapshots()[0].capability_revision,
+            request_snapshots(&history)[0].capability_revision,
             revision_at_admission,
             "the later capability change never retroactively mutates the admitted attempt"
         );

@@ -83,10 +83,10 @@ impl LedgerAccess {
 
 /// The append-only Message Ledger of one conversation.
 ///
-/// Storage is intentionally minimal for the pre-M8 in-process runtime:
-/// commit-ordered records plus a `MessageId` → position index. There is no
-/// database, no paging framework, no repository abstraction, and no storage
-/// strategy trait.
+/// The in-process ledger is intentionally a bounded hot read model:
+/// commit-ordered active records plus a `MessageId` → position index. The
+/// durable Message Ledger lives behind `ConversationStore`; historical rows
+/// are paged from that authority rather than retained here after restart.
 #[derive(Debug, Default)]
 pub struct MessageLedger {
     records: Vec<MessageBlock>,
@@ -176,7 +176,10 @@ impl MessageLedger {
         self.index.contains_key(message_id)
     }
 
-    /// The complete committed history in commit order.
+    /// The complete committed history currently resident in the hot read
+    /// model, in commit order. After durable bootstrap this is bounded to the
+    /// current Surface; the complete historical Ledger is paged from the
+    /// `ConversationStore`.
     ///
     /// This is the explicit **audit/read** path: an actual caller (the
     /// Runtime Client read model bootstrap, a diagnostic dump) may ask for

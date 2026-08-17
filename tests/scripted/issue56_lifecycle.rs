@@ -660,10 +660,11 @@ async fn run(
     assembly: ContextAssembly,
     lifecycle: AttemptLifecycle,
     cancellation: &AgentCancellation,
-) -> AgentExecutionResult {
+) -> common::DurableExecutionAudit {
     let tool_runtime = common::tool_runtime("conv-issue56");
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    AgentExecution::new(
+    let result = AgentExecution::new(
         request(tool_runtime.conversation_id().clone(), model),
         capability.into_lease(),
         cancellation,
@@ -673,7 +674,8 @@ async fn run(
     )
     .expect("conversation identity matches the tool runtime")
     .run()
-    .await
+    .await;
+    common::durable_agent_result(result, store.as_ref())
 }
 
 /// A compact canonical description of the committed Message Ledger.
@@ -823,14 +825,14 @@ async fn pre_step_reject_commits_no_context_and_starts_no_request() {
         "the Surface never advanced because of the rejected proposals"
     );
     assert!(
-        result.request_snapshots().is_empty(),
+        result.snapshot_history().is_empty(),
         "a rejected step freezes no RequestSnapshot"
     );
     assert!(
         model.requests().is_empty(),
         "a rejected step issues no provider request"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// No contributor has a private path around the policy: native and
@@ -882,7 +884,7 @@ async fn every_contributor_proposal_reaches_the_same_policy() {
     );
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
     assert!(model.requests().is_empty());
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// A failing policy is contained exactly like a rejection: nothing is
@@ -921,9 +923,9 @@ async fn pre_step_policy_failure_admits_nothing_and_settles_once() {
         } if message == "policy exploded"
     ));
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
-    assert!(result.request_snapshots().is_empty());
+    assert!(result.snapshot_history().is_empty());
     assert!(model.requests().is_empty());
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Cancellation observed while a bounded policy evaluation is pending does
@@ -985,9 +987,9 @@ async fn cancellation_during_pending_pre_step_policy_wins_admission() {
         }
     ));
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
-    assert!(result.request_snapshots().is_empty());
+    assert!(result.snapshot_history().is_empty());
     assert!(model.requests().is_empty());
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 // ---------------------------------------------------------------------------
@@ -1025,7 +1027,7 @@ async fn parallel_tool_results_commit_in_canonical_call_order() {
         ],
         "canonical order follows model call order, not completion order"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Deferred post-tool context never interleaves between sibling tool
@@ -1071,7 +1073,7 @@ async fn deferred_post_tool_context_never_interleaves_between_sibling_results() 
     // The admitted deferred context is explained by the native
     // tool-result-observation owner inside the frozen context generation, so
     // historical reconstruction never needs the observer again.
-    let second = &result.request_snapshots()[1];
+    let second = &result.snapshot_history()[1];
     assert!(
         second.context_generation.contributors.iter().any(|entry| {
             entry.identity
@@ -1081,7 +1083,7 @@ async fn deferred_post_tool_context_never_interleaves_between_sibling_results() 
         }),
         "the frozen generation records the deferred-context owner"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Multiple proposals per observation keep exact FIFO order inside a call,
@@ -1172,11 +1174,11 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
         "the rejected deferred context never became canonical"
     );
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "the rejected second step froze no snapshot"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 // ---------------------------------------------------------------------------
@@ -1388,11 +1390,11 @@ async fn observer_failure_preserves_the_complete_tool_result_batch() {
     assert_eq!(committed[0].result.status, ToolExecutionStatus::Success);
     assert_eq!(committed[1].result.status, ToolExecutionStatus::Success);
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "no provider request begins after the failed observation"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Cancellation observed while a bounded observation is pending does not
@@ -1441,11 +1443,11 @@ async fn cancellation_during_observation_discards_deferred_context() {
         "no deferred context becomes canonical after cancellation"
     );
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "no second model step is admitted"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Cancellation already observable when the batch settles skips the whole
@@ -1513,7 +1515,7 @@ async fn cancellation_before_observation_skips_the_observation_phase() {
         ],
         "the batch is still structurally complete in canonical order"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 // ---------------------------------------------------------------------------
@@ -1522,7 +1524,9 @@ async fn cancellation_before_observation_skips_the_observation_phase() {
 
 /// The accepted `(source, kind, text)` of every admitted context fact, in
 /// canonical committed order.
-fn committed_context(result: &AgentExecutionResult) -> Vec<(UserSource, ContextKind, String)> {
+fn committed_context(
+    result: &common::DurableExecutionAudit,
+) -> Vec<(UserSource, ContextKind, String)> {
     result
         .messages()
         .iter()
@@ -1540,8 +1544,10 @@ fn committed_context(result: &AgentExecutionResult) -> Vec<(UserSource, ContextK
 
 /// The contributor identities recorded by the frozen context generation of the
 /// step that admitted deferred context.
-fn deferred_step_contributors(result: &AgentExecutionResult) -> Vec<ContextContributorIdentity> {
-    result.request_snapshots()[1]
+fn deferred_step_contributors(
+    result: &common::DurableExecutionAudit,
+) -> Vec<ContextContributorIdentity> {
+    result.snapshot_history()[1]
         .context_generation
         .contributors
         .iter()
@@ -1579,7 +1585,7 @@ async fn native_observer_deferred_context_receives_native_provenance() {
             NativeContextContributor::RuntimeToolObservation,
         )],
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// A deferred proposal produced by an observer registered for a **certified
@@ -1617,10 +1623,7 @@ async fn extension_observer_deferred_context_preserves_extension_provenance() {
         "post-tool timing does not rewrite the contributor identity"
     );
     assert_eq!(
-        result.request_snapshots()[1]
-            .context_generation
-            .contributors[0]
-            .attestation,
+        result.snapshot_history()[1].context_generation.contributors[0].attestation,
         Some("package-7".to_owned()),
         "the authoritative registered attestation is frozen, not a synthesized one"
     );
@@ -1630,7 +1633,7 @@ async fn extension_observer_deferred_context_preserves_extension_provenance() {
         )),
         "the native observation owner never appears for an extension's fact"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Context Assembly registration is the **only** semantic admission authority.
@@ -1683,11 +1686,11 @@ async fn an_unregistered_extension_observer_cannot_get_extension_provenance() {
         "the complete canonical result batch survives the rejection"
     );
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "the rejected step froze no snapshot"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// A **post-tool-only** certified extension — one with no request-time
@@ -1717,9 +1720,7 @@ async fn a_post_tool_only_certified_extension_produces_deferred_context() {
         )],
     );
     assert_eq!(
-        result.request_snapshots()[1]
-            .context_generation
-            .contributors,
+        result.snapshot_history()[1].context_generation.contributors,
         vec![rustx::context::ContributorGeneration {
             identity: ContextContributorIdentity::CertifiedExtension(
                 CertifiedExtensionIdentity::new("observer.only").expect("identity"),
@@ -1728,7 +1729,7 @@ async fn a_post_tool_only_certified_extension_produces_deferred_context() {
         }],
         "a producer that only defers is still explained by its registration"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// The same certified extension produces the same semantic fact whether it
@@ -1793,7 +1794,7 @@ async fn timing_does_not_change_an_owner_semantics() {
         )],
         "one owner appears exactly once even when it contributed in both phases"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Two deferred-context producers with different identities are ordered by
@@ -1819,7 +1820,7 @@ async fn two_producers_keep_deterministic_identity_order() {
             None,
         )
         .await;
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         committed_context(&result)
     }
 
@@ -2080,8 +2081,8 @@ async fn cancellation_prevents_a_later_observer_from_starting() {
         ],
         "the complete canonical result batch is untouched"
     );
-    assert_eq!(result.request_snapshots().len(), 1);
-    assert_single_terminal(&result.events);
+    assert_eq!(result.snapshot_history().len(), 1);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Already-observable cancellation outranks an observer **failure**. An
@@ -2140,7 +2141,7 @@ async fn cancellation_outranks_an_observer_error() {
         ),
         "an observer error never overrides already-observable cancellation"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Cancellation observed while a *later* producer is pending discards what the
@@ -2196,11 +2197,11 @@ async fn cancellation_discards_the_earlier_observers_proposals() {
         "the earlier producer's proposals are discarded with the rest of the pass"
     );
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "no later step could observe a partially staged buffer"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// The deferred seam carries User context only, so an admitted deferred batch
@@ -2231,7 +2232,7 @@ async fn deferred_context_never_changes_the_effective_system_prompt() {
         "the deferred fact is admitted as conversational User context"
     );
     let prompts = result
-        .request_snapshots()
+        .snapshot_history()
         .iter()
         .map(|snapshot| snapshot.effective_system_prompt.clone())
         .collect::<Vec<_>>();
@@ -2244,7 +2245,7 @@ async fn deferred_context_never_changes_the_effective_system_prompt() {
         !prompts[1].contains("deferred user fact"),
         "no deferred text reaches the Effective System Prompt"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 // ---------------------------------------------------------------------------
 // The bounded observer transaction boundary
@@ -2292,11 +2293,11 @@ async fn a_single_observation_above_the_bound_stages_nothing() {
         "no deferred context became canonical and the result batch is complete"
     );
     assert_eq!(
-        result.request_snapshots().len(),
+        result.snapshot_history().len(),
         1,
         "no provider request begins after the rejected pass"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Individually bounded observations that together exceed the aggregate
@@ -2356,8 +2357,8 @@ async fn observations_that_together_exceed_the_aggregate_bound_stage_nothing() {
         calls,
         "the complete canonical result batch survives the rejected pass"
     );
-    assert_eq!(result.request_snapshots().len(), 1);
-    assert_single_terminal(&result.events);
+    assert_eq!(result.snapshot_history().len(), 1);
+    assert_single_terminal(&result.event_history);
 }
 
 /// A failing observation discards the proposals the *earlier* observations of
@@ -2403,8 +2404,8 @@ async fn a_failed_observation_leaves_no_deferred_context() {
             "tool_result(call-b)".to_owned(),
         ],
     );
-    assert_eq!(result.request_snapshots().len(), 1);
-    assert_single_terminal(&result.events);
+    assert_eq!(result.snapshot_history().len(), 1);
+    assert_single_terminal(&result.event_history);
 }
 
 // ---------------------------------------------------------------------------
@@ -2431,7 +2432,7 @@ async fn run_inverted_parallel_batch(
     lifecycle: AttemptLifecycle,
     reason: CancellationReason,
     observation_gate: Option<ObservationGate>,
-) -> (AgentExecutionResult, Vec<String>) {
+) -> (common::DurableExecutionAudit, Vec<String>) {
     run_inverted_parallel_batch_with_assembly(
         lifecycle,
         ContextAssembly::new(),
@@ -2448,7 +2449,7 @@ async fn run_inverted_parallel_batch_with_assembly(
     assembly: ContextAssembly,
     reason: CancellationReason,
     observation_gate: Option<ObservationGate>,
-) -> (AgentExecutionResult, Vec<String>) {
+) -> (common::DurableExecutionAudit, Vec<String>) {
     let mut tools = ToolRegistry::new();
     let order = Arc::new(Mutex::new(Vec::new()));
     let (alpha, mut alpha_handle) =

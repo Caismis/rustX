@@ -1,5 +1,5 @@
 //! Issue #27: deterministic multi-compaction validation through the final
-//! pre-M8 `ConversationRuntime` path.
+//! durable `ConversationRuntime` path.
 //!
 //! Every test here drives at least two committed compactions through the
 //! production `ConversationRuntime` → `AgentExecution` → `ContextRuntime`
@@ -224,12 +224,11 @@ fn submit(attachment: &RuntimeAttachment, id: u64, value: &str) {
     );
 }
 
-/// Waits for the post-settlement transfer of frozen request facts to the
-/// runtime-owned append-only history.
+/// Waits for the durable request-fact read to expose the expected count.
 async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
     tokio::time::timeout(LIVENESS, async {
         loop {
-            if host.request_history().snapshots().len() == expected {
+            if common::request_snapshots(&host.request_history()).len() == expected {
                 return;
             }
             tokio::task::yield_now().await;
@@ -239,8 +238,8 @@ async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
     .expect("request history transfer must settle");
 }
 
-/// Waits until the runtime owns the conversation state again and returns the
-/// authoritative Message Ledger.
+/// Waits until the runtime is idle again and returns its current working
+/// Message Ledger projection.
 async fn await_ledger(host: &RuntimeClientHost) -> Vec<MessageBlock> {
     tokio::time::timeout(LIVENESS, async {
         loop {
@@ -254,11 +253,11 @@ async fn await_ledger(host: &RuntimeClientHost) -> Vec<MessageBlock> {
     .expect("the runtime must re-own the conversation state after settlement")
 }
 
-/// Reconstructs one retained snapshot by position in the append-only
-/// history.
+/// Reconstructs one retained snapshot by position in an on-demand durable
+/// read result.
 fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, ModelRequest) {
     let history = host.request_history();
-    let snapshot = history.snapshots()[index].clone();
+    let snapshot = common::request_snapshots(&history)[index].clone();
     let request = host
         .reconstruct_request(&snapshot.identity)
         .expect("retained request reconstructs");
@@ -501,7 +500,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // Three distinct frozen snapshots with strictly advancing Surface
     // revisions, one per attempt, never a retry.
     let history = host.request_history();
-    let snapshots = history.snapshots();
+    let snapshots = common::request_snapshots(&history);
     assert_eq!(snapshots.len(), 3);
     assert!(snapshots.iter().all(|s| s.identity.retry_number == 0));
     let attempt_ids: Vec<&str> = snapshots
@@ -805,7 +804,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // Six frozen snapshots: att1×1, att2×3 (tool turn + overflow + retry),
     // att3×2 (overflow + retry).
     let history = host.request_history();
-    let snapshots = history.snapshots();
+    let snapshots = common::request_snapshots(&history);
     assert_eq!(snapshots.len(), 6);
     let attempt = |index: usize| snapshots[index].identity.attempt_id.as_str();
     assert_eq!(attempt(0), "conv-27-overflow-attempt-0");
@@ -975,12 +974,11 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let requests = adapter.requests();
     assert_eq!(requests.len(), 4, "att1 + att2 overflow + summary + retry");
     let history = host.request_history();
-    assert_eq!(history.snapshots().len(), 3);
-    for (snapshot, request) in
-        history
-            .snapshots()
-            .iter()
-            .zip([&requests[0], &requests[1], &requests[3]])
+    let snapshots = common::request_snapshots(&history);
+    assert_eq!(snapshots.len(), 3);
+    for (snapshot, request) in snapshots
+        .iter()
+        .zip([&requests[0], &requests[1], &requests[3]])
     {
         assert_eq!(
             host.reconstruct_request(&snapshot.identity)
@@ -1037,7 +1035,8 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let requests = adapter.requests();
     assert_eq!(requests.len(), 7);
     let history = host.request_history();
-    assert_eq!(history.snapshots().len(), 5);
+    let snapshots = common::request_snapshots(&history);
+    assert_eq!(snapshots.len(), 5);
     let expected = [
         &requests[0],
         &requests[1],
@@ -1045,7 +1044,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         &requests[4],
         &requests[6],
     ];
-    for (snapshot, request) in history.snapshots().iter().zip(expected) {
+    for (snapshot, request) in snapshots.iter().zip(expected) {
         assert_eq!(
             host.reconstruct_request(&snapshot.identity)
                 .expect("settled historical request reconstructs"),

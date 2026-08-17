@@ -11,7 +11,7 @@
 //! The seam is deliberately broader than the internal [`RuntimeEvent`]
 //! vocabulary in exactly one way: canonical message content. The internal
 //! committed-message events reference messages by identity only (message
-//! content lives in the durable Message Ledger, M8), while an external
+//! content lives in the durable Message Ledger), while an external
 //! client projection needs the committed content to repair its read model.
 //! [`AgentExecutionObserver::observe_committed`] therefore receives the
 //! canonical [`MessageBlock`] at the same commit linearization point where
@@ -60,10 +60,10 @@ pub struct AgentStatusObservation {
 pub trait AgentExecutionObserver: Sync {
     /// Observes one canonical runtime execution fact at its emission point.
     ///
-    /// The attempt-local ordered trace in `AgentExecutionResult.events`
-    /// remains the authoritative record; this callback observes the same
-    /// fact at the same emission linearization point, so attempt recording
-    /// and external observation share one emission path.
+    /// The durable Event Journal remains the historical authority; this
+    /// callback observes the committed fact at the same publication
+    /// linearization point, so live projections do not need an attempt-local
+    /// duplicate journal.
     fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent);
 
     /// Observes one canonical message commit at its commit point.

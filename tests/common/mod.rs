@@ -36,8 +36,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use rustx::agent::state::ExecutionState;
+use rustx::agent::{AgentExecutionResult, state::ExecutionState};
+use rustx::durable::ConversationStore;
 use rustx::events::types::RuntimeEvent;
+use rustx::runtime::identity::AttemptId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -403,6 +405,127 @@ fn tool_runtime_dir(conversation_id: &str) -> std::path::PathBuf {
     ))
 }
 
+/// Test-only full walk over the bounded `RequestHistory` page API.
+///
+/// Production code must choose an explicit page size; this helper is kept in
+/// the test support module so tests can compare complete retained histories
+/// without restoring an unbounded production API.
+pub fn request_snapshots(
+    history: &rustx::runtime::RequestHistory,
+) -> Vec<rustx::model::RequestSnapshot> {
+    let mut snapshots = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = history.page(cursor, 32).expect("request snapshot page");
+        if page.snapshots.is_empty() {
+            break;
+        }
+        cursor = page.next_sequence;
+        snapshots.extend(page.snapshots);
+    }
+    snapshots
+}
+
+/// A test-only audit that loads committed Event Journal facts from the durable
+/// authority in bounded pages after an attempt settles. It deliberately does
+/// not alter [`AgentExecutionResult`]: production settlement has no complete
+/// attempt-local event trace.
+pub struct DurableExecutionAudit {
+    /// The bounded settlement handoff returned by the Agent Loop.
+    pub result: AgentExecutionResult,
+    /// The durable Event Journal facts read through fixed-size pages for a
+    /// test that is explicitly auditing execution history.
+    pub event_history: Vec<RuntimeEvent>,
+    /// The durable Request Snapshots read through fixed-size pages for a
+    /// test that is explicitly auditing request history.
+    snapshot_history: Vec<rustx::model::RequestSnapshot>,
+}
+
+impl std::ops::Deref for DurableExecutionAudit {
+    type Target = AgentExecutionResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.result
+    }
+}
+
+/// Reads one attempt's complete Event Journal history through bounded pages.
+///
+/// This helper is intentionally test-only. Production callers should use the
+/// store's page API directly and retain only the page they need.
+pub fn read_event_history(
+    store: &dyn ConversationStore,
+    attempt_id: &AttemptId,
+) -> Vec<RuntimeEvent> {
+    const PAGE_SIZE: usize = 32;
+    let mut cursor = None;
+    let mut events = Vec::new();
+    loop {
+        let page = store
+            .read_events(cursor, PAGE_SIZE)
+            .expect("durable Event Journal page");
+        if page.events.is_empty() {
+            break;
+        }
+        events.extend(
+            page.events
+                .iter()
+                .filter(|envelope| envelope.attempt_id.as_ref() == Some(attempt_id))
+                .map(|envelope| envelope.event.clone()),
+        );
+        cursor = page.next_sequence;
+    }
+    events
+}
+
+/// Reads one conversation's retained Request Snapshots through bounded pages.
+pub fn read_request_snapshot_history(
+    store: &dyn ConversationStore,
+    attempt_id: &AttemptId,
+) -> Vec<rustx::model::RequestSnapshot> {
+    const PAGE_SIZE: usize = 32;
+    let mut cursor = None;
+    let mut snapshots = Vec::new();
+    loop {
+        let page = store
+            .read_request_snapshots(cursor, PAGE_SIZE)
+            .expect("durable Request Snapshot page");
+        if page.snapshots.is_empty() {
+            break;
+        }
+        snapshots.extend(
+            page.snapshots
+                .into_iter()
+                .filter(|snapshot| snapshot.identity.attempt_id == *attempt_id),
+        );
+        cursor = page.next_sequence;
+    }
+    snapshots
+}
+
+impl DurableExecutionAudit {
+    /// Returns the test's explicitly paged durable Request Snapshot audit.
+    #[must_use]
+    pub fn snapshot_history(&self) -> &[rustx::model::RequestSnapshot] {
+        &self.snapshot_history
+    }
+}
+
+/// Builds the test-only history view from the durable store after settlement.
+#[must_use]
+pub fn durable_agent_result(
+    result: AgentExecutionResult,
+    store: &dyn ConversationStore,
+) -> DurableExecutionAudit {
+    let event_history = read_event_history(store, &result.attempt_id);
+    let snapshot_history = read_request_snapshot_history(store, &result.attempt_id);
+    DurableExecutionAudit {
+        result,
+        event_history,
+        snapshot_history,
+    }
+}
+
 /// A conversation tool runtime over a unique temporary workspace.
 ///
 /// Fake tools never touch the workspace, but the durable store now holds the
@@ -418,26 +541,6 @@ pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::Conversatio
         rustx::runtime::identity::ConversationId::new(conversation_id),
         dir.join("workspace"),
         dir.join("artifacts"),
-    )
-    .expect("tool runtime")
-}
-
-/// A conversation tool runtime bound to an explicitly configured canonical
-/// conversation mailbox.
-#[must_use]
-pub fn tool_runtime_with_mailbox(
-    conversation_id: &str,
-    mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
-) -> rustx::tools::runtime::ConversationToolRuntime {
-    use rustx::tools::runtime::ConversationRuntimeConfig;
-    let dir = tool_runtime_dir(conversation_id);
-    let _ = std::fs::create_dir_all(dir.join("workspace"));
-    rustx::tools::runtime::ConversationToolRuntime::from_config(
-        rustx::runtime::identity::ConversationId::new(conversation_id),
-        ConversationRuntimeConfig {
-            mailbox: Some(mailbox),
-            ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
-        },
     )
     .expect("tool runtime")
 }
@@ -477,6 +580,10 @@ pub struct NativeFixture {
     pub registry: rustx::tools::executor::ToolRegistry,
     /// The conversation inbound mailbox shared by the runtime and tests.
     pub mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
+    /// The full conversation authority used by direct Agent Loop tests.
+    /// Tool/runtime code receives only the mailbox capability; the test
+    /// harness passes this handle explicitly at the execution boundary.
+    pub store: Arc<rustx::durable::SqliteConversationStore>,
 }
 
 impl NativeFixture {
@@ -502,14 +609,21 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
     let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).expect("artifact directory");
     let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m5");
-    let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::new(conversation_id.clone());
+    let store = Arc::new(
+        rustx::durable::SqliteConversationStore::open(
+            conversation_id.clone(),
+            &artifacts.join("conversation.sqlite"),
+        )
+        .expect("durable store"),
+    );
     let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
         .expect("authorized environment");
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
+            durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
             environment: Some(environment),
             ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
         },
@@ -524,11 +638,13 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         rustx::tools::native::NativeToolPolicies::default(),
     )
     .expect("native tool registration");
+    let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
         runtime,
         registry,
         mailbox,
+        store,
     }
 }
 

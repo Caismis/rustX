@@ -1002,7 +1002,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
         // requests through the real provider path, after both compactions.
         await_history_len(&driver, 3).await;
         let history = driver.host().request_history();
-        let snapshots = history.snapshots();
+        let snapshots = common::request_snapshots(&history);
         assert_eq!(
             snapshots.len(),
             3,
@@ -1045,7 +1045,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
 async fn await_history_len(driver: &Driver, expected: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if driver.host().request_history().snapshots().len() == expected {
+            if common::request_snapshots(&driver.host().request_history()).len() == expected {
                 return;
             }
             tokio::task::yield_now().await;

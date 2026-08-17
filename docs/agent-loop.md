@@ -9,7 +9,8 @@ mailbox integration.
 
 The loop (`src/agent`) executes one attempt to its single terminal outcome:
 
-- attempt lifecycle (`AttemptStarted` → exactly one terminal event)
+- attempt lifecycle (`AttemptStarted` → one terminal settlement candidate,
+  normally one committed terminal event)
 - turn lifecycle (one model response plus its tool calls and results)
 - canonical `ModelEvent` stream consumption, validation, and message assembly
 - tool resolution and tool execution (in deterministic block order)
@@ -166,26 +167,30 @@ provenance, finite semantic lanes, stable extension ordering, and
 `ContextGeneration`; contributors cannot allocate canonical IDs or mutate
 the conversation.
 
-The exact model-step linearization point is the generic cancellation check
-in `AgentExecution::prepare_model_request`, immediately after assembly and
-immediately before `admit_context`:
+The dynamic-context admission point is the generic cancellation check in
+`AgentExecution::prepare_model_request`, immediately after assembly and
+immediately before `admit_context`. The durable model-request start is a
+separate, later linearization point:
 
 ```text
 transient proposals
     ↓
 observable cancellation check
-    ↓ admission/request-start commit point
+    ↓ dynamic-context admission checkpoint
 allocate MessageIds and commit canonical context
     ↓
-freeze RequestSnapshot and reconstruct-check ModelRequest
+freeze RequestSnapshot
+    ↓ ConversationStore transaction: snapshot + ModelRequestStarted
+independent reconstruction/equality check
     ↓
 invoke adapter
 ```
 
-Cancellation before that check commits no dynamic context, no Surface
-advancement, no snapshot, and no provider request. After `admit_context`
-commits, provider failure or cancellation cannot roll back the accepted
-Ledger facts, Surface revision, ContextGeneration, or RequestSnapshot.
+Cancellation before the dynamic checkpoint commits no dynamic context or
+Surface advancement. A request-start durability failure commits no snapshot,
+no start fact, and no provider request. After the ConversationStore request-
+start transaction commits, provider failure or cancellation cannot roll back
+the accepted Ledger facts, Surface revision, ContextGeneration, or snapshot.
 
 If cancellation becomes observable while a contributor future is pending, the
 future is allowed to settle its bounded transient result; the same final
@@ -202,18 +207,23 @@ provider-neutral `ModelRequest` with the reconstructed value before calling
 an adapter. It never reads current configuration, Skill discovery, live
 contributors, package contents, filesystem state, or current runtime status.
 
-Every actual primary request is retained after settlement: the
-conversation runtime's `finish_attempt` transfers `AgentExecutionResult`'s
-snapshots into the runtime-owned append-only `RequestHistory` (now
-`src/runtime/request_history.rs`, runtime-owned semantic state, never
-client projection state) before dropping the result. The runtime retains
-those frozen facts separately from the one historical ConversationState;
-it does not create a second transcript. `RuntimeClientHost::reconstruct_request`
-forwards to the runtime, which uses request identity, the retained
-snapshot, and its exact historical Surface revision after settlement.
-While an attempt runs, reconstruction is explicitly unavailable because
-the single ConversationState is moved into that attempt. No current model
-settings, contributors, Skills, clock, or status fill historical gaps.
+Every actual primary request is durably started before provider dispatch:
+`ConversationStore::persist_request_start` commits the immutable snapshot and
+the exact `ModelRequestStarted` fact together. `RequestHistory` (now
+`src/runtime/request_history.rs`) is a durable read handle, never a retained
+snapshot vector or client projection state. Historical reconstruction loads
+one snapshot, its exact Surface revision, and keyed Ledger bodies on demand.
+Historical listing is a bounded, fallible, cursor-paged read; no current model
+settings, contributors, Skills, clock, or status fill historical gaps, and
+runtime bootstrap never enumerates the full snapshot history.
+
+`AgentExecution` applies the same ownership rule to the Event Journal. It
+retains only active state needed to continue the current turn, not every
+committed `RuntimeEvent`. A successful event append is followed by live
+observer publication, if attached, and the event body is then dropped. The
+settlement handoff contains current `ConversationState`, outcome, terminal
+state, and durability status; historical events are read from the durable
+store with `read_events` pages.
 
 The loop's `observe_event`/`observe_committed`/`observe_status` facts are
 published as runtime-owned `ConversationObservation`s
@@ -378,6 +388,15 @@ Context Assembly → resolve producer → PreStepPolicy → admission
     ↓
 canonical User context
 ```
+
+Foreground progress reported while a batch executes is transient
+current-execution state: each active call retains a bounded number of
+normalized progress observations
+(`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`, earliest prefix plus latest),
+and only the retained observations become durable `ToolExecutionProgress`
+Event Journal facts at batch commit, in canonical model-call order before
+their completion event. Coalesced observations never cross the durable
+commit point.
 
 The observer receives `ToolResultObservation`, a borrow of already-canonical
 facts: attempt/conversation identity, the turn, the canonical
@@ -564,7 +583,10 @@ drained by the very next primary step's assembly.
 | cancellation already observable when the batch settles | the observation phase is skipped entirely; `AttemptCancelled` |
 | cancellation while an observation is pending | the bounded observation settles; the staged proposals are never admitted; `AttemptCancelled` |
 
-In every case the attempt emits exactly one terminal event and it is last.
+In every case the attempt selects one terminal settlement candidate. When the
+required Event Journal append succeeds, that candidate is the one terminal
+event and it is last; if the append fails, no terminal event is emitted or
+fabricated and the typed durable failure is reported to the owner.
 Because the observation pass runs strictly after structural settlement,
 observer failure can never prevent a committed Assistant `ToolCall` batch from
 receiving its complete canonical `ToolMessage` result batch, and it can never
@@ -624,14 +646,15 @@ missing counters are never fabricated.
 
 ## 6. Terminal state guarantee
 
-Exactly one terminal `RuntimeEvent` settles an attempt:
+Normally exactly one terminal `RuntimeEvent` settles an attempt:
 `AttemptCompleted`, `AttemptCancelled`, or `AttemptFailed`. The terminal
-event is always the last recorded event, the platform outcome maps
-one-to-one from it (`AttemptOutcome::from_terminal_event`), and the loop
-structure makes later events impossible. The execution state machine is
-settled immediately before the terminal event is emitted, so the machine's
-terminal state (`Completed` or `Failed`) and the terminal event describe
-the same settlement.
+event is the last recorded event when its durable append succeeds, the
+platform outcome maps one-to-one from it
+(`AttemptOutcome::from_terminal_event`), and the loop structure makes later
+events impossible. The execution state machine is settled immediately before
+the terminal event append is attempted. A failed append leaves the machine
+terminal and the execution result with its settlement candidate, but no
+terminal Journal fact or observer event.
 
 ## 7. Cancellation
 
@@ -772,33 +795,33 @@ Ownership model:
 ```text
 mailbox          = coordination
   Message Ledger + Surface = conversation truth
+Request Snapshot = exact non-history inputs for one model request
 Event Journal    = execution facts
 ```
 
-- The mailbox owns one shared inbound sequence domain
-  (`InboundSequence`). The first successful enqueue receives `1`; sequences
+- `ConversationStore` owns one shared inbound sequence domain
+  (`InboundSequence`). The first successful acceptance receives `1`; sequences
   advance strictly monotonically with checked arithmetic and never come
-  from the Event Journal sequence. Sequence allocation and publication into
-  the pending queue happen under one mailbox lock, so no
-  allocated-but-unpublished sequence is ever visible to a drain. Enqueue
-  accepts only ordinary messages (`InboundKind::Message`) carrying their
-  persisted UTC timestamp; a runtime compaction summary is derived history,
-  not new asynchronous work, and is rejected, as is an ordinary message
-  without a timestamp. Human, Runtime, Agent, Fleet, and ExternalSystem
-  producers share the one sequence domain.
-- At a safe boundary the loop performs exactly one finite drain
-  (`InboundBatch`): under the mailbox lock the watermark is established as
-  the highest sequence present, exactly the pending items through that
-  watermark are detached, and one non-empty batch is returned (an empty
-  mailbox returns `None`). A post-watermark arrival waits for the next
-  drain; the boundary never re-inspects the queue for newly arriving items.
+  from the Event Journal sequence. Sequence allocation and the pending row
+  commit in one SQLite transaction before the mailbox publishes its
+  process-local wake. Enqueue accepts only ordinary messages
+  (`InboundKind::Message`) carrying their persisted UTC timestamp; a runtime
+  compaction summary is derived history, not new asynchronous work, and is
+  rejected, as is an ordinary message without a timestamp. Human, Runtime,
+  Agent, Fleet, and ExternalSystem producers share the one sequence domain.
+- At a safe boundary the loop performs exactly one finite selection
+  (`PendingBatch`): the store establishes a watermark from the pending rows,
+  returns the selected items without consuming them, and adoption later
+  removes exactly that committed prefix. A post-watermark arrival waits for
+  the next batch; the boundary never re-inspects the queue for newly arriving
+  items.
 - Every item of the selected batch is appended as its own canonical
   `UserMessageBlock` in inbound sequence order before the next model
   request. Messages remain separate blocks — never concatenated and never
-  an intermediate single-message request. Once the complete batch is
-  appended to canonical history it is consumed from the mailbox and is
-  never requeued; canonical history carries it forward even if the attempt
-  later fails before the model observes it.
+  an intermediate single-message request. Adoption removes the pending rows
+  only in the same transaction as Ledger and Surface advancement, so a crash
+  exposes either the complete pending batch or the complete canonical
+  adoption; the process-local batch is never the authority.
 - The whole drained batch becomes one `FreshInboundTurn`, so the next model
   request receives exactly one Agent Status snapshot. `inbound_message_time`
   is the persisted timestamp of the final batch item in inbound sequence

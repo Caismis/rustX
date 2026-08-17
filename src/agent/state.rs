@@ -11,7 +11,7 @@
 //! WaitingForTool ──tools_finished()──▶ RunningModel ──model_finished──▶ ...
 //! RunningModel
 //!   ↓ complete()
-//! Completed        (immediately before the attempt terminal event)
+//! Completed        (immediately before the terminal event append)
 //!
 //! any active state
 //!   ↓ fail()
@@ -19,9 +19,11 @@
 //! ```
 //!
 //! The machine is the settlement authority: the loop settles the machine
-//! (`complete()` or `fail()`) immediately before emitting the attempt
-//! terminal `RuntimeEvent`, so the terminal event and the terminal state
-//! always represent the same settlement boundary. A terminal state is
+//! (`complete()` or `fail()`) immediately before attempting the attempt
+//! terminal `RuntimeEvent` append, so a successful append and the terminal
+//! state represent the same settlement boundary. A terminal state can still
+//! exist without a terminal Journal fact when that required append fails; the
+//! typed execution result reports that condition. A terminal state is
 //! absorbing: no transition leaves it, so execution facts cannot be
 //! produced after the attempt settled. Cancellation terminates through the
 //! failure path ([`ExecutionStateMachine::fail`]) and is reported
@@ -106,7 +108,7 @@ impl ExecutionStateMachine {
     /// [`ExecutionState::RunningModel`] → [`ExecutionState::WaitingForTool`].
     /// Without tool calls the machine stays in [`ExecutionState::RunningModel`]:
     /// the attempt is not settled until [`ExecutionStateMachine::complete`]
-    /// runs immediately before the attempt terminal event, so the machine
+    /// runs immediately before the terminal event append, so the machine
     /// never reports `Completed` while non-terminal execution facts (message
     /// commit, turn completion) are still being produced.
     ///
@@ -142,7 +144,9 @@ impl ExecutionStateMachine {
     /// Settles the attempt successfully: [`ExecutionState::RunningModel`] →
     /// [`ExecutionState::Completed`]. This is the only successful settlement
     /// transition and must run immediately before the attempt terminal
-    /// event, so the terminal event and the terminal state coincide.
+    /// event is attempted. A failed durable append leaves the machine
+    /// terminal without inventing an event in the local or observer
+    /// projections.
     ///
     /// # Errors
     ///

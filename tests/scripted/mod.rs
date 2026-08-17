@@ -64,3 +64,4 @@ mod m5_agent_loop;
 mod m5_background;
 mod m6_capabilities;
 mod native_tool_contracts;
+mod tool_progress_bounds;

@@ -6,6 +6,109 @@ rustX is an execution kernel, not an agent application framework and not a contr
 
 The architecture is layered so that external SDKs, storage backends, process managers, and UI protocols can change without rewriting the agent kernel.
 
+## 1.1 Native durable conversation authority (M8 / Issue #11)
+
+The conversation has one backend-independent durability owner,
+`ConversationStore`, implemented locally by `SqliteConversationStore`. One
+SQLite database is physical colocation only; semantic ownership remains
+separate:
+
+| Domain | Durable authority |
+| --- | --- |
+| Pending Inbound Inbox | Accepted, not-yet-adopted deliveries, one shared `InboundSequence`, and correlation/idempotency state. |
+| Message Ledger | Append-only canonical `MessageBlock` bodies, stable `MessageId`, and commit order. |
+| Conversation Surface | Immutable `SurfaceOp` history plus current `SurfaceRevision`, active identity order, and compaction generation. |
+| Request Snapshot | Immutable non-history inputs for one actual request, bound to one historical Surface revision and one `RequestId`. |
+| Event Journal | Append-only typed execution facts with `EventId`, per-conversation `EventSequence`, schema version, reference checks, and terminal constraints. |
+| Checkpoint/index metadata | Current Surface head and structural/context checkpoint copies used for bounded bootstrap validation; never a transcript. |
+| `ConversationInboundMailbox` | Process-local acceptance coordination and wakeup only; it is not durable authority. |
+| Runtime Client | Projection, cursor, and control adapter only; reconnect never supplies recovery facts. |
+
+There is no `ConversationRecord`, full transcript table, request-message
+copy, generic repository, or second durable history. Canonical message bodies
+are stored once in the Ledger. A Surface revision stores identity/order
+transitions, and a historical request combines that revision with its frozen
+snapshot on demand.
+
+The SQLite schema is development schema version 1. An incompatible database
+fails explicitly; there is no migration chain, legacy reader, compatibility
+fallback, dual write, or old storage mode. File-backed stores use WAL,
+`synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
+SQLite commit is the local durability linearization point documented here.
+
+The version-1 physical tables are deliberately semantic rather than generic:
+
+| Table | Purpose and constraints |
+| --- | --- |
+| `rustx_store` | One-row conversation binding, schema version, and durable next `InboundSequence` / Event Journal sequence counters. |
+| `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
+| `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
+| `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
+| `bootstrap_identity` | Immutable initial-history count and digest, including an explicit empty bootstrap. |
+| `surface_ops` | One immutable `Append` or `Replace` operation per `SurfaceRevision`, with compaction generation. |
+| `surface_head` | Current Surface revision, active identity order, and compaction generation. |
+| `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
+| `request_snapshots` | One immutable non-history snapshot per `RequestId`, its Surface revision, and committed start sequence. |
+| `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
+| `lifecycle_state` | Durable terminal markers enforcing zero-or-one terminal event and terminal absorption for attempt, turn, and background-execution lifecycles. |
+
+`MessageId`, `InboundSequence`, `SurfaceRevision`, `RequestId`, `EventId`,
+Event Journal sequence, `AttemptId`, `TurnId`, `ToolCallId`,
+`ToolExecutionId`, `CapabilityRevision`, and `ContextGeneration` remain
+distinct identity domains even where SQLite stores their serialized values as
+integers or text. The unique constraints prevent identity reuse; semantic
+reference checks prevent an Event Journal fact or Surface operation from
+pointing at an unavailable authority.
+
+The semantic write pattern is always:
+
+```text
+prepare and validate all fallible state
+        ↓
+one ConversationStore SQLite transaction
+        ↓ COMMIT = durable authority linearization
+install the already-validated hot result, or reload it from the authority
+```
+
+Inbound acceptance commits sequence allocation, pending delivery, and
+correlation state together. Adoption commits the selected finite pending
+watermark, canonical User Ledger rows, Surface Append revisions, checkpoint
+metadata, and pending deletion together. Ordinary canonical appends and
+ToolResult sibling batches append Ledger bodies and Surface revisions in one
+transaction; committed-message events share that transaction. Compaction
+commits the summary body, Surface Replace revision, generation/checkpoint
+metadata, and `CompactionCompleted` reference together. Request start commits
+the immutable Request Snapshot and `ModelRequestStarted` fact together before
+the provider adapter is called. Background terminal publication commits its
+terminal inbound row and reference fact together.
+
+The durable request-start flow is:
+
+```text
+assemble provider-neutral ModelRequest
+→ freeze RequestSnapshot / RequestId
+→ commit snapshot + ModelRequestStarted
+→ independently reconstruct and compare exact ModelRequest
+→ invoke provider adapter
+```
+
+Historical reconstruction reads only the immutable snapshot, the referenced
+Surface operation history, and keyed Ledger bodies. It never reruns
+contributors, Skill discovery, extension/DSH logic, current status sampling,
+workspace inspection, or current model/tool/capability configuration.
+
+The Event Journal lifecycle table rejects a second terminal attempt, turn, or
+background-execution fact and rejects every later fact in that lifecycle. An
+attempt terminal is an attempt-level fact; it is not treated as a late event
+inside a turn that already emitted `TurnCompleted`.
+
+Runtime bootstrap loads only the current Surface head, active IDs, active
+message bodies, structural checkpoint metadata, pending items, and bounded
+projection state. Event pages, old requests, retired Ledger rows, and
+historical Surface revisions are read lazily. M8 stores evidence; restart
+recovery, replay/resend policy, supervision, and retry orchestration remain
+Issue #12.
+
 ## 2. Layer model
 
 ### Layer 0: Domain and protocol types
@@ -41,15 +144,14 @@ runtime/inbound.rs         ConversationInboundMailbox (per-conversation
                            process-local coordination contract over the
                            durable Pending Inbound Inbox): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
-durable/inbox.rs           InboundStore trait + domain types (InboundDraft,
+durable/inbox.rs           ConversationStore trait + domain types (InboundDraft,
                            AcceptedInbound, PendingInboundItem, PendingBatch):
                            the backend-independent acceptance/selection/adoption
                            operations
-durable/sqlite.rs          SqliteInboundStore: the M8 SQLite backend (per-
-                           conversation durable sequence counter, pending
-                           records, correlation/idempotency state, the durable
-                           canonical Message Ledger, and the per-database
-                           ConversationId binding)
+durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
+                           (one semantic authority over Pending Inbound,
+                           Message Ledger, Surface revisions, Request
+                           Snapshots, Event Journal, and checkpoint metadata)
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
@@ -216,8 +318,8 @@ reasoning-enabled state.
 
 ### 2.2 Attempt settlement invariant
 
-Exactly one terminal runtime event settles an attempt, and each terminal
-event carries only the data valid for that state:
+Normally exactly one terminal runtime event is durably committed for an
+attempt, and each terminal event carries only the data valid for that state:
 
 ```text
 AttemptCompleted      finish reason
@@ -234,6 +336,12 @@ type maps one-to-one with these terminal events via
 `AttemptOutcome::from_terminal_event`. When an attempt fails because a model
 request exhausted its retry policy, `AttemptFailure::Model` preserves the
 normalized `ModelError` without degrading it to a runtime error string.
+
+The Agent Loop settles its execution state before attempting the terminal
+Event Journal append. If that required append fails, no terminal event is
+published or fabricated; the typed execution result carries the settlement
+candidate and the durable failure, and the owning runtime enters
+`DurabilityFailed`.
 
 ### 2.3 Streaming assembly identity
 
@@ -267,19 +375,13 @@ execution facts that reference the committed message by its stable
 `MessageId` and never embed the message body, so the Event Journal never
 holds a competing copy.
 
-A committed-message event must not be emitted before the corresponding
-`MessageBlock` has been durably committed to the Message Ledger. Message
-Ledger persistence and Event Journal persistence are separate durable
-operations unless a backend provides a shared atomic transaction; M8 owns
-the atomicity or crash-reconciliation boundary between these stores. If a
-crash occurs after the `MessageBlock` is durably committed but before the
-corresponding committed-message event is appended, recovery must recognize
-and reconcile that state rather than treating the message as absent or
-duplicating its content.
-
-Persist-before-publish applies to `RuntimeEvent` publication only: append
-the event durably before publishing it externally. It does not by itself
-provide a transaction with the Message Ledger.
+A committed-message event is inserted in the same `ConversationStore`
+transaction as the Ledger body it references. The same rule applies to
+`CompactionCompleted` (summary plus exact Surface revision) and
+`ModelRequestStarted` (snapshot plus referenced Surface revision). This makes
+an orphan reference structurally impossible in the SQLite backend; a failed
+transaction exposes neither side. Persist-before-publish then appends the
+committed event before any observer or external projection sees it.
 
 ### 2.6 Durable Pending Inbound Inbox (Issue #63)
 
@@ -298,7 +400,7 @@ Event Journal             = execution facts
 
 Two linearization points are defined exactly:
 
-1. **Acceptance** ([`InboundStore::accept_inbound`]): the durable
+1. **Acceptance** ([`ConversationStore::accept_inbound`]): the durable
    per-conversation sequence allocation, the pending record, and any
    producer correlation/idempotency state commit in **one** transaction.
    Producer success is returned only after that commit. The process-local
@@ -309,11 +411,13 @@ Two linearization points are defined exactly:
    the durable acceptance, so shutdown linearizes either entirely before the
    acceptance (the acceptance then fails with `Shutdown` and commits nothing)
    or entirely after it.
-2. **Adoption** ([`InboundStore::adopt_pending_batch`]): the selected finite
-   watermark batch is appended to the durable canonical Message Ledger and
-   its pending records are removed in **one** transaction. Crash before the
-   commit leaves the items pending; crash after it makes them canonical
-   exactly once and never independently re-adoptable.
+2. **Adoption** ([`ConversationStore::adopt_pending_batch`]): the selected
+   finite watermark batch is appended to the durable canonical Message
+   Ledger, advanced through Surface Append operations, updates the current
+   checkpoint, and removes its pending records in **one** transaction. Crash
+   before the commit leaves the items pending; crash after it makes them
+   canonical and Surface-visible exactly once, never independently
+   re-adoptable.
 
 `select_pending_batch` is a non-destructive finite-watermark snapshot: an
 item accepted after the snapshot belongs to the next batch. The durable
@@ -346,16 +450,13 @@ durability-health sink.
 A durable Ledger append is **not** by itself a resumable runtime safe
 boundary. The durable store's complete Ledger ordering is the canonical
 truth of committed message facts; normal live runtime resumption additionally
-requires a durable recovery-safe boundary. The conversation domain's
-`recovery_safety` predicate answers that question fail-closed: a Ledger head
-that ends inside an incomplete tool turn (an `Assistant` tool call without
-its committed `ToolResult` sibling) or that contains a compaction summary
-whose Surface `Replace` is not yet durably reconstructable (full #11 surface
-revision durability remains a later milestone) refuses automatic recovery
-with a typed `ConversationRuntimeError::RecoveryRequired`, preserving every
-durable fact and never admitting pending inbound. Full historical
-Surface/Request/Event durability remains #11; recovery orchestration and
-unresolved-tool repair remain #12.
+requires a structurally complete current Surface boundary. The conversation
+domain's `recovery_safety` predicate answers that question fail-closed for an
+incomplete tool turn (an `Assistant` tool call without its committed
+`ToolResult` sibling). A compaction summary can no longer be durable without
+its exact Surface Replace and checkpoint because M8 commits those facts in
+one transaction. Recovery orchestration and unresolved-tool repair remain
+#12.
 
 ### Layer 1: Agent kernel
 
@@ -378,7 +479,7 @@ The runtime inbound boundary (`src/runtime/inbound.rs`, Layer 0) is
 coordination only. Since Issue #63 the [`ConversationInboundMailbox`] is the
 narrow acceptance/publisher seam over the **durable Pending Inbound Inbox**
 (`src/durable`): it validates eligibility and lifecycle, durably accepts
-through the [`InboundStore`], then publishes the process-local wake and
+through the [`ConversationStore`], then publishes the process-local wake and
 observation. It owns **no** sequence allocator and **no** payload queue. The
 kernel's `AgentExecution` selects and adopts exactly one finite batch per
 safe turn boundary. Canonical history is the durable Message Ledger and the
@@ -404,18 +505,20 @@ ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
         |
 deterministic scheduling phases (sequential barriers, parallel groups)
         |
-RuntimeEvent trace, ending in exactly one terminal event
+        durable Event Journal facts, ending in one terminal event when its durable append succeeds
 ```
 
 The loop owns execution semantics, message assembly, tool execution,
-continuation state, cancellation observation, and the runtime event
-trace. Adapters own provider protocol translation only; the validating
+continuation state, cancellation observation, and runtime-event emission.
+The durable Event Journal owns historical execution facts; the observer is
+only the live projection seam. Adapters own provider protocol translation only; the validating
 [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
 [`ToolExecutor`] implementations and never falls back id-first.
 Continuation state propagates losslessly without fabrication, cancellation
-always settles as a terminal cancellation, and every attempt emits exactly
-one terminal `RuntimeEvent`. See `docs/agent-loop.md` for the full
-boundary description.
+always settles as a terminal cancellation candidate, and a normally settled
+attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append
+is an explicit durable failure, not a fabricated event. See
+`docs/agent-loop.md` for the full boundary description.
 
 The M3 test suite drives the loop with scripted fixture models and tools
 (`tests/common/fake.rs`), asserts behavior through the recorded
@@ -724,15 +827,21 @@ structural equality with the actual `ModelRequest` before adapter
 translation. Current contributors, Skills, configuration, filesystem, and
 runtime status are never consulted.
 
-During execution, `AgentExecution` owns the transient ordered snapshot list.
-At attempt settlement, the conversation runtime's `finish_attempt` transfers
-those immutable values into its append-only `RequestHistory` before dropping
-the `AgentExecutionResult`. The runtime retains request facts separately
-from the Message Ledger and Conversation Surface; `RequestHistory` never
-becomes a second transcript. After settlement, the Runtime Client host can
-reconstruct by request identity through the runtime, from the retained
-snapshot plus the exact historical Surface revision. Issue #11 may later
-persist this same object, but no persistence framework is part of M7.5b.
+During execution, `AgentExecution` keeps only the current attempt's bounded
+request references. At request start the ConversationStore durably commits
+the immutable snapshot and its `ModelRequestStarted` fact. The runtime's
+`RequestHistory` is now a durable read handle, not a `Vec<RequestSnapshot>`
+and not a second transcript. Historical inspection either loads one snapshot
+by key or reads a bounded, fallible page with an exclusive sequence cursor;
+it never retains every request in process memory.
+
+The same rule applies to execution facts: `AgentExecution` owns bounded active
+state and the current conversation working set, not a complete attempt
+Event Journal. Each event is durably appended first, then delivered to the
+live observer when one is attached, and its full body is released from the
+loop. `AgentExecutionResult` transfers the settlement candidate, durability
+status, and current conversation only; historical events are inspected from
+`ConversationStore::read_events` through bounded pages.
 
 An overflow retry reuses the admitted ContextGeneration and canonical
 context facts. `ContextWindowExceeded` does not prove that fresh inbound was
@@ -919,7 +1028,8 @@ definitions reach the model in deterministic registration order, and the
 context engine accounts the exact compiled definitions.
 
 One conversation owns one `ConversationToolRuntime`, constructed exactly
-once from a bounded `ConversationRuntimeConfig` that binds the mailbox,
+once from a bounded `ConversationRuntimeConfig` that binds one
+`ConversationStoreBinding` (the mailbox capability is derived from it),
 the clock, the event sink, the environment, the workspace, and the
 artifact store; after construction the conversation background registry
 identity and its execution records are stable and can never be replaced
@@ -952,7 +1062,14 @@ the registry winner and the stored result always agree (only an explicit
 process-control failure after cancellation intent settles as `Failed`).
 All progress entering runtime state and events passes through one shared
 UTF-8-safe bound (`bound_tool_progress`) used by both foreground and
-background paths.
+background paths. Foreground progress is additionally cardinality-bounded
+per active call (`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`): one invocation
+retains at most that many normalized observations before structural
+settlement — the first `MAX - 1` observations pinned, the final slot
+tracking the newest observation — and only the retained observations become
+durable `ToolExecutionProgress` Event Journal facts at batch commit;
+coalesced observations never cross the durable commit point. Background
+progress retains only the latest bounded snapshot per execution record.
 
 Agent Status owns the runtime `background_execution` built-in section: the
 executing attempt samples a read-only active snapshot from the background
@@ -1690,12 +1807,14 @@ This layer owns execution infrastructure:
 - Cancellation hierarchy
 - Runtime event writer
 - Message store interface
-- Conversation Ledger/Surface integration (the in-memory #54 boundary)
+- ConversationStore integration for Ledger, Surface, Request Snapshot, and
+  Event Journal durability (the in-memory model is only a bounded hot read
+  model)
 - Capability revision management
 - Capability mutation guard
 - Process supervision
 - Background shell session management
-- Crash reconciliation
+- Durable recovery evidence; recovery orchestration remains #12
 
 #### M6 implementation (capability coordination)
 
@@ -2135,7 +2254,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   host. The binding is deliberately not released when the bound host is
   dropped: rebinding a surviving runtime bundle would require a recovery
   model for canonical history, pending mailbox projection, and cursor
-  continuity that pre-M8 does not own. Recreating a host over the same
+  continuity that the Runtime Client projection does not own. Recreating a host over the same
   runtime bundle is **not** supported v1 recovery — a new host requires a
   new `ConversationToolRuntime` identity. Observer installation on the
   mailbox, background registry, and capability coordinator is crate-private
@@ -2253,11 +2372,13 @@ Runtime Client is a projection/control/attachment adapter over it.
   reconstructs every client-visible effect without duplicated or missing
   semantic output. Parallel physical completion never corrupts logical
   identities.
-- **Bounded pre-M8 replay is the only retained backlog.** A finite
+- **The client replay ring is a projection cache, not durability.** A finite
   in-memory ring (`RUNTIME_CLIENT_REPLAY_LIMIT_DEFAULT = 4096`,
-  configurable) holds every retained event; expired or ahead-of-stream
-  cursors fail with `resync_required`. There is no Event Journal, no
-  persistence, and no crash-safe replay claim (M8 owns durability).
+  configurable) holds recent projected events; expired or ahead-of-stream
+  cursors fail with `resync_required`. Reconnect/bootstrap rebuilds the
+  projection from the ConversationStore's current head and paged Event
+  Journal when historical inspection is requested. The ring never supplies
+  recovery facts and is not the Event Journal.
 - **Cursor-driven subscriptions (no second backlog).** A subscription is
   a consumed `RuntimeClientCursor` into that one ring plus an
   edge-triggered, payload-free wakeup. Publication pushes into the ring,
@@ -2978,11 +3099,19 @@ RuntimeEvent = execution fact
 MessageBlock = model-context fact
 ```
 
-Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
+Runtime events are append-only. In production, a successful Event Journal
+append must commit before the event is published to external subscribers. A
+failed required terminal append publishes neither the terminal event nor a
+synthetic replacement; the owning runtime reports the durable failure.
 
 Partial model deltas are execution facts. A canonical `AssistantMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AssistantMessageBlock` from it.
 
-Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
+Normally exactly one terminal runtime event settles an attempt (see section
+2.2). If its required append fails, the attempt has a typed settlement
+candidate but no terminal Journal fact. Committed-message events reference
+the message by identity only: canonical message content exists solely in the
+Message Ledger, and the Event Journal records the commit fact (see section
+2.5).
 
 Persist-before-publish is the frozen event-publication invariant:
 
@@ -2992,9 +3121,12 @@ generate RuntimeEvent
 → publish externally
 ```
 
-It applies to `RuntimeEvent` publication only and does not by itself provide
-a transaction with the Message Ledger; cross-store atomicity or crash
-reconciliation between the Message Ledger and Event Journal is owned by M8.
+It applies to every externally published runtime fact. Facts that reference a
+Ledger body, Surface revision, or Request Snapshot use the shared
+ConversationStore transaction so publication never outruns its authority.
+Successful publication does not add the committed event to an attempt-local
+trace: the observer is a live projection seam, while the durable Event
+Journal remains the historical authority.
 
 ## 7. Recovery model
 
@@ -3005,7 +3137,8 @@ Recovery uses durable state:
 - committed message blocks
 - runtime events
 - capability revision
-- Message Ledger and retained Surface history (durability is Issue #11/M8)
+- Message Ledger, retained immutable Surface revisions, Request Snapshots,
+  and Event Journal facts
 - workspace state
 
 An unresolved tool call after a crash is never automatically replayed unless the tool explicitly declares an idempotent replay policy. The safe default is to commit an interrupted/unknown tool result and allow the model to decide what to do next.
