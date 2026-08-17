@@ -249,8 +249,9 @@ use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilityS
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
+use crate::durable::inbox::InboundDraft;
 use crate::events::types::RuntimeEvent;
-use crate::message::types::{MessageBlock, UserContentBlock};
+use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{
     AttemptModelSnapshot, SessionModelConfig, SessionModelState, SessionModelView,
@@ -319,6 +320,15 @@ pub enum ConversationRuntimeError {
     /// would silently never admit anything. Construction therefore fails
     /// explicitly instead of creating a partially active coordinator.
     NoExecutionRuntime,
+    /// The durable canonical prefix is not at a recovery-safe boundary, so
+    /// the runtime refuses to reconstruct a live `ConversationState` from it
+    /// automatically (Issue #63 recovery gate).
+    RecoveryRequired {
+        /// Why the durable head cannot be resumed safely.
+        reason: String,
+    },
+    /// The durable Pending Inbound Inbox failed a storage operation.
+    Storage(String),
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -348,6 +358,13 @@ impl core::fmt::Display for ConversationRuntimeError {
                 f,
                 "the conversation runtime requires a Tokio execution runtime at construction"
             ),
+            Self::RecoveryRequired { reason } => write!(
+                f,
+                "the durable conversation head is not at a recovery-safe boundary: {reason}"
+            ),
+            Self::Storage(message) => {
+                write!(f, "the durable pending inbound inbox failed: {message}")
+            }
         }
     }
 }
@@ -430,6 +447,144 @@ struct CurrentAttempt {
     cancellation: AgentCancellation,
 }
 
+/// The semantic durable operations of the coordinator's durability-health
+/// contract (Issue #63).
+///
+/// The retry budget is owned by one finite admission cycle, not by the last
+/// operation that happened to fail. [`AdmissionRetryBudget`] retains the
+/// consumed allowance for each transient stage while that cycle moves from
+/// selection to adoption.
+///
+/// Only genuine transient storage failures earn a retry. A semantic
+/// contract failure (a pending item that cannot be prepared for canonical
+/// adoption, an incomplete tool turn observed by the admission guard) is
+/// persistent by nature — retrying the identical transition is futile — and
+/// an already-terminal durable failure (an active attempt's canonical-write
+/// failure, an exhausted background publication budget) has already consumed
+/// its settlement; all of these fail closed immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DurableOperation {
+    /// Selecting the finite pending batch from the durable inbox.
+    SelectPendingBatch,
+    /// Adopting the selected batch into the durable canonical ledger.
+    AdoptPendingBatch,
+    /// Preparing the canonical adoption transition (in-memory validation):
+    /// a semantic contract failure, not a transient storage failure.
+    PrepareAdoption,
+    /// The live admission safety guard observed an incomplete tool turn.
+    IncompleteToolTurn,
+    /// An active attempt hit a durable canonical-write failure.
+    CanonicalCommit,
+    /// The background settlement owner exhausted its bounded terminal
+    /// publication budget.
+    BackgroundTerminalPublication,
+}
+
+impl DurableOperation {
+    /// Whether a failure of this operation is a transient storage failure
+    /// that earns one bounded retry.
+    fn is_transient(self) -> bool {
+        matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
+    }
+
+    /// The stable diagnostic name of the operation.
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SelectPendingBatch => "select_pending_batch",
+            Self::AdoptPendingBatch => "adopt_pending_batch",
+            Self::PrepareAdoption => "prepare_adoption",
+            Self::IncompleteToolTurn => "incomplete_tool_turn",
+            Self::CanonicalCommit => "canonical_commit",
+            Self::BackgroundTerminalPublication => "background_terminal_publication",
+        }
+    }
+}
+
+/// The bounded transient retry allowance of one finite admission cycle.
+///
+/// Each transient stage may fail once and receive one immediate re-kick. The
+/// bits are deliberately retained when the cycle advances from selection to
+/// adoption, so a later failure cannot erase earlier retry debt. The budget
+/// is reset only when the cycle reaches a semantic completion boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AdmissionRetryBudget {
+    /// Whether the one select retry has already been consumed.
+    select_retry_used: bool,
+    /// Whether the one adopt retry has already been consumed.
+    adopt_retry_used: bool,
+}
+
+impl AdmissionRetryBudget {
+    /// Consumes the one retry allowance for a transient operation.
+    ///
+    /// Returns `true` when the allowance was available and is now consumed;
+    /// returns `false` when that operation has already failed once in the
+    /// current admission cycle.
+    fn try_consume(&mut self, operation: DurableOperation) -> bool {
+        let used = match operation {
+            DurableOperation::SelectPendingBatch => &mut self.select_retry_used,
+            DurableOperation::AdoptPendingBatch => &mut self.adopt_retry_used,
+            _ => unreachable!("only transient operations have an admission retry budget"),
+        };
+        if *used {
+            false
+        } else {
+            *used = true;
+            true
+        }
+    }
+}
+
+/// The most recent transient failure whose bounded re-kick is in flight.
+///
+/// This is only wake/diagnostic state. It is intentionally separate from
+/// [`AdmissionRetryBudget`], because operation identity must not own the
+/// lifetime of retry debt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingDurabilityRetry {
+    /// The operation that will be retried by the re-kick.
+    operation: DurableOperation,
+    /// The first-failure diagnostic.
+    diagnostic: String,
+}
+
+/// The coordinator's durable-authority health state (Issue #63).
+///
+/// A storage failure that a required transition cannot proceed without is
+/// never silently swallowed and never retried forever. The admission-cycle
+/// budget records one allowance independently for select and adopt, while
+/// this state retains only the latest pending re-kick/diagnostic. A second
+/// failure of either transient stage in the same cycle moves the runtime into
+/// an explicit `DurabilityFailed` state in which no new durable
+/// admission/execution work may begin. A non-transient failure enters
+/// `DurabilityFailed` immediately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DurabilityHealth {
+    /// The current finite admission cycle, including its independent retry
+    /// budget and (when present) the latest re-kick diagnostic.
+    AdmissionCycle {
+        /// The independent select/adopt retry allowances for this cycle.
+        budget: AdmissionRetryBudget,
+        /// The latest transient failure whose re-kick is armed.
+        pending_retry: Option<PendingDurabilityRetry>,
+    },
+    /// Persistent failure after the bounded retry (or an immediately
+    /// non-transient failure): no new durable work may begin until the
+    /// runtime is reconstructed.
+    DurabilityFailed {
+        /// The operation that failed persistently.
+        operation: DurableOperation,
+        /// The failure diagnostic.
+        diagnostic: String,
+    },
+}
+
+impl DurabilityHealth {
+    fn is_failed(&self) -> bool {
+        matches!(self, Self::DurabilityFailed { .. })
+    }
+}
+
 /// The one synchronized coordinator state (the admission linearization
 /// owner).
 struct CoordinatorState {
@@ -457,8 +612,8 @@ struct CoordinatorState {
     shutting_down: bool,
     /// The next attempt identity sequence.
     next_attempt_seq: u64,
-    /// The next submitted-inbound message identity sequence.
-    next_inbound_seq: u64,
+    /// The durable-authority health state (Issue #63, Finding 5).
+    durability_health: DurabilityHealth,
 }
 
 /// The runtime admission worker's wake boundary.
@@ -556,6 +711,15 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the next activation before the lifecycle transition when
     /// armed.
     pub(crate) activation_gate: Option<Arc<Gate>>,
+    /// Parks the next `submit_inbound` **after** the coordinator lock is
+    /// acquired and the shutdown/activation decision is read, but **before**
+    /// the durable acceptance. This is the exact critical-section window the
+    /// Issue #63 (Finding 1) fix closes.
+    pub(crate) submit_gate: Option<Arc<Gate>>,
+    /// Signals that `shutdown` reached the point just before it attempts the
+    /// coordinator lock. This makes the submit-vs-shutdown ordering provable
+    /// by mutex exclusion instead of a timing assumption.
+    pub(crate) shutdown_arrival: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -716,6 +880,110 @@ impl RuntimeInner {
     fn observe(&self, observation: ConversationObservation) {
         if let Some(pending) = self.pending.get() {
             pending.push(observation);
+        }
+    }
+
+    /// Records a durable-authority failure without silently swallowing it
+    /// (Issue #63, Finding 5).
+    ///
+    /// A transient storage failure ([`DurableOperation::is_transient`])
+    /// consumes the allowance for that stage in the current finite admission
+    /// cycle, publishes a [`ConversationObservation::DurableFailure`], and
+    /// arms exactly one bounded re-kick. A second failure of that stage in
+    /// the same cycle moves the runtime into the explicit
+    /// [`DurabilityHealth::DurabilityFailed`] state and publishes a
+    /// [`ConversationObservation::DurabilityFailed`]; no further re-kick is
+    /// armed, so a persistent or alternating fault cannot become a hot loop.
+    /// A failure of a different transient stage consumes its own allowance
+    /// without erasing the first stage's debt.
+    ///
+    /// A non-transient failure (a semantic contract failure or an
+    /// already-terminal durable failure) enters `DurabilityFailed`
+    /// immediately: retrying the identical transition is futile.
+    fn record_durability_failure(
+        &self,
+        state: &mut CoordinatorState,
+        operation: DurableOperation,
+        diagnostic: String,
+    ) {
+        if state.durability_health.is_failed() {
+            // Already failed: no re-kick, no hot loop.
+            return;
+        }
+        if !operation.is_transient() {
+            state.durability_health = DurabilityHealth::DurabilityFailed {
+                operation,
+                diagnostic: diagnostic.clone(),
+            };
+            self.observe(ConversationObservation::DurabilityFailed {
+                operation: operation.as_str().to_owned(),
+                diagnostic,
+            });
+            return;
+        }
+        let retry_armed = match &mut state.durability_health {
+            DurabilityHealth::AdmissionCycle {
+                budget,
+                pending_retry,
+            } => {
+                if budget.try_consume(operation) {
+                    *pending_retry = Some(PendingDurabilityRetry {
+                        operation,
+                        diagnostic: diagnostic.clone(),
+                    });
+                    true
+                } else {
+                    false
+                }
+            }
+            DurabilityHealth::DurabilityFailed { .. } => {
+                // Unreachable: guarded above.
+                false
+            }
+        };
+        if retry_armed {
+            self.observe(ConversationObservation::DurableFailure {
+                message: diagnostic,
+            });
+            self.wake.notify.notify_one();
+        } else {
+            state.durability_health = DurabilityHealth::DurabilityFailed {
+                operation,
+                diagnostic: diagnostic.clone(),
+            };
+            self.observe(ConversationObservation::DurabilityFailed {
+                operation: operation.as_str().to_owned(),
+                diagnostic,
+            });
+        }
+    }
+
+    /// Records progress through one durable stage. This clears only the
+    /// matching pending re-kick marker; it never resets the admission-cycle
+    /// budget. A stage success is not a semantic completion boundary.
+    fn record_durability_success(state: &mut CoordinatorState, operation: DurableOperation) {
+        if let DurabilityHealth::AdmissionCycle { pending_retry, .. } = &mut state.durability_health
+            && pending_retry
+                .as_ref()
+                .is_some_and(|pending| pending.operation == operation)
+        {
+            *pending_retry = None;
+        }
+    }
+
+    /// Completes the current finite admission cycle and starts a fresh one.
+    ///
+    /// This is intentionally called only after selection proves there is no
+    /// pending work or after the selected batch is durably adopted. Success
+    /// of an intermediate select/adopt stage must retain the consumed bits.
+    fn complete_admission_cycle(state: &mut CoordinatorState) {
+        if let DurabilityHealth::AdmissionCycle {
+            budget,
+            pending_retry,
+        } = &mut state.durability_health
+        {
+            *budget = AdmissionRetryBudget::default();
+            *pending_retry = None;
         }
     }
 
@@ -927,11 +1195,29 @@ impl RuntimeInner {
     ) {
         {
             let mut state = self.lock_state();
+            // An active-attempt durable canonical-write failure means the
+            // durable authority rejected a required commit while the
+            // conversation's single mutable state was checked out: the
+            // runtime must not silently return to a false `Healthy` state
+            // and admit future work as though storage were fine (Issue
+            // #63). This is an already-terminal durable failure, so it
+            // enters the explicit `DurabilityFailed` state immediately;
+            // the settled attempt's conversation state is still restored
+            // (its in-memory content stayed consistent with the durable
+            // Ledger: the failed commit installed nothing).
+            let durable_failure = result.durable_failure.clone();
             state
                 .request_history
                 .append(result.request_snapshots)
                 .expect("each admitted request identity is transferred exactly once");
             state.conversation = Some(result.conversation);
+            if let Some(diagnostic) = durable_failure {
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::CanonicalCommit,
+                    diagnostic,
+                );
+            }
             if state
                 .current_attempt
                 .as_ref()
@@ -944,15 +1230,18 @@ impl RuntimeInner {
             // current-attempt slot is cleared, but the next-admission
             // handoff has not run yet. An enqueue during this park
             // deterministically races the settlement boundary. The gate
-            // parks only when armed and disarms after one park.
+            // parks only when armed and disarms after one park. The gate
+            // handle is extracted before the park so the probe mutex is not
+            // held while parked.
             #[cfg(test)]
-            if let Some(probe) = self
+            let settlement_gate = self
                 .probe
                 .lock()
                 .expect("coordinator probe lock poisoned")
                 .as_ref()
-                && let Some(gate) = &probe.settlement_gate
-            {
+                .and_then(|probe| probe.settlement_gate.clone());
+            #[cfg(test)]
+            if let Some(gate) = settlement_gate {
                 gate.enter();
             }
         }
@@ -979,27 +1268,132 @@ impl RuntimeInner {
     /// this lock. After the publication the lock is released and the
     /// attempt task is spawned, so at most one active [`AgentExecution`]
     /// exists per conversation.
+    #[allow(clippy::too_many_lines)]
     fn admit_next_attempt(self: &Arc<Self>) {
         // Test-only gate: parks before the coordinator lock, so a competing
         // publish can still enqueue while the admission is gated. The gate
-        // parks only when armed and disarms after one park.
+        // parks only when armed and disarms after one park. The gate handle
+        // is extracted before the park so the probe mutex is not held while
+        // parked (a parked admission must never block a submit that holds the
+        // coordinator lock and only briefly probes the gate).
         #[cfg(test)]
-        if let Some(probe) = self
+        let admission_gate = self
             .probe
             .lock()
             .expect("coordinator probe lock poisoned")
             .as_ref()
-            && let Some(gate) = &probe.admission_gate
-        {
+            .and_then(|probe| probe.admission_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = admission_gate {
             gate.enter();
         }
         let mut state = self.lock_state();
         if !self.lifecycle.is_active() || state.shutting_down || state.current_attempt.is_some() {
             return;
         }
-        let Some(batch) = self.mailbox.drain() else {
+        // Persistent durable failure: no new admission may begin. The runtime
+        // is already in an explicit degraded state, so this is not a hot loop.
+        if state.durability_health.is_failed() {
             return;
+        }
+        // Live admission guard: the coordinator may only adopt inbound when
+        // the active conversation is at a safe boundary (no incomplete tool
+        // call without its committed ToolResult sibling). This closes the
+        // window a failed tool-result batch would otherwise leave open.
+        {
+            let conversation = state
+                .conversation
+                .as_ref()
+                .expect("the coordinator owns the conversation state while idle");
+            if let Ok(active) = conversation.active_messages()
+                && let Some(tool_call_id) = crate::conversation::pending_tool_call(&active)
+            {
+                // A semantic contract failure, not a transient storage
+                // failure: the broken boundary cannot heal by retrying the
+                // identical admission, so it fails closed immediately.
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::IncompleteToolTurn,
+                    format!(
+                        "the active conversation ends inside an incomplete tool turn: tool call {tool_call_id} has no committed ToolResult"
+                    ),
+                );
+                return;
+            }
+        }
+        // Selection freezes the finite watermark (non-destructive): an
+        // acceptance that linearizes after this point can never join the
+        // selected batch. A storage failure here is never silently
+        // swallowed (Finding 5): it is recorded, observed, and re-kicked
+        // exactly once.
+        let batch = match self.mailbox.select_pending_batch() {
+            Ok(Some(batch)) => {
+                Self::record_durability_success(&mut state, DurableOperation::SelectPendingBatch);
+                batch
+            }
+            Ok(None) => {
+                Self::record_durability_success(&mut state, DurableOperation::SelectPendingBatch);
+                // No pending work is a semantic completion boundary for the
+                // finite admission cycle. Only here, or after successful
+                // batch adoption below, is the retry budget reset.
+                Self::complete_admission_cycle(&mut state);
+                return;
+            }
+            Err(error) => {
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::SelectPendingBatch,
+                    error.to_string(),
+                );
+                return;
+            }
         };
+        // Prepare the canonical transition **before** the durable adoption
+        // commit: validate every fallible in-memory condition now, so the
+        // post-commit installation is infallible (Finding 2). The prepared
+        // values bind each exact drained message. On a validation failure
+        // nothing is durably adopted and the items remain pending.
+        let mut prepared_commits = Vec::with_capacity(batch.items().len());
+        {
+            let conversation = state
+                .conversation
+                .as_ref()
+                .expect("the coordinator owns the conversation state while idle");
+            for item in batch.items() {
+                let block = crate::durable::inbox::canonical_block(item.message());
+                match conversation.prepare_commit(&block) {
+                    Ok(prepared) => prepared_commits.push(prepared),
+                    Err(error) => {
+                        // A semantic contract failure (the durable pending
+                        // item conflicts with canonical memory), not a
+                        // transient storage failure: it fails closed
+                        // immediately instead of consuming a storage retry.
+                        self.record_durability_failure(
+                            &mut state,
+                            DurableOperation::PrepareAdoption,
+                            format!(
+                                "a pending inbound item cannot be prepared for canonical adoption: {error}"
+                            ),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        // Canonical adoption: the durable ledger append and the pending
+        // removal commit in one transaction. On failure the selected items
+        // remain durably pending and the failure is surfaced, never swallowed.
+        if let Err(error) = self.mailbox.adopt_pending_batch(&batch) {
+            self.record_durability_failure(
+                &mut state,
+                DurableOperation::AdoptPendingBatch,
+                error.to_string(),
+            );
+            return;
+        }
+        // Durable adoption completes this finite admission cycle. The next
+        // cycle starts with a fresh select/adopt retry allowance.
+        Self::complete_admission_cycle(&mut state);
         // Ownership transfer: the coordinator hands its conversation state
         // to the attempt. From here until settlement the coordinator holds
         // `None` and the attempt is the single mutable conversation
@@ -1008,12 +1402,12 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        let mut fresh_ids = Vec::with_capacity(batch.items().len());
-        for item in batch.into_items() {
-            let block = MessageBlock::User(item.into_message());
-            let message_id = conversation
-                .commit(block.clone())
-                .expect("a mailbox-assigned inbound identity is unique");
+        let mut fresh_ids = Vec::with_capacity(prepared_commits.len());
+        for prepared in prepared_commits {
+            // Infallible: every adopted identity was validated by
+            // `prepare_commit` above under exclusive ownership.
+            let block = prepared.message().clone();
+            let message_id = conversation.install_prepared(prepared);
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
@@ -1021,7 +1415,7 @@ impl RuntimeInner {
             fresh_ids.push(message_id);
         }
         let fresh = FreshInboundTurn::new(fresh_ids)
-            .expect("a drained mailbox batch forms one fresh inbound turn");
+            .expect("an adopted inbox batch forms one fresh inbound turn");
         let attempt_id = AttemptId::new(format!(
             "{}-attempt-{}",
             self.conversation_id, state.next_attempt_seq
@@ -1063,6 +1457,38 @@ impl RuntimeInner {
                 .await;
             inner.finish_attempt(attempt_id, result);
         });
+    }
+}
+
+/// The background-settlement failure sink of one conversation runtime
+/// (Issue #63): the narrow seam through which the background registry
+/// reports an exhausted terminal-publication budget.
+///
+/// The runtime is the durability-health owner of its background plane, so
+/// the report moves it into the explicit `DurabilityFailed` state while the
+/// unresolved terminal candidate stays retained and observable in the
+/// registry. The sink is invoked by the background runner without the
+/// registry lock held; it acquires only the coordinator lock, so the lock
+/// graph keeps its single coordinator -> registry edge direction.
+struct BackgroundFailureSink {
+    inner: Weak<RuntimeInner>,
+}
+
+impl crate::tools::background::BackgroundDurabilityFailureSink for BackgroundFailureSink {
+    fn terminal_publication_failed(
+        &self,
+        execution_id: &crate::runtime::identity::ToolExecutionId,
+        diagnostic: String,
+    ) {
+        let Some(inner) = self.inner.upgrade() else {
+            return;
+        };
+        let mut state = inner.lock_state();
+        inner.record_durability_failure(
+            &mut state,
+            DurableOperation::BackgroundTerminalPublication,
+            format!("background execution {execution_id}: {diagnostic}"),
+        );
     }
 }
 
@@ -1153,12 +1579,31 @@ impl ConversationRuntime {
         // admission, where there is no caller left to report to.
         validate_context_policy(&config.context.policy, &config.model.snapshot())
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
-        // The bootstrap conversation state is built here, in the fallible
-        // section: a rejected bootstrap leaves no runtime behind.
-        let conversation = ConversationState::from_messages(config.initial_messages.clone())
-            .map_err(|error| {
-                ConversationRuntimeError::InvalidInitialConversation(error.to_string())
-            })?;
+        // The bootstrap conversation state is built from the durable
+        // canonical prefix: the initial messages are seeded exactly once,
+        // and on recovery the previously-adopted inbound is loaded on top.
+        // The store is the one crash-recoverable prefix of the Message
+        // Ledger; a rejected bootstrap leaves no runtime behind.
+        let store = config.tool_runtime.inbound_store();
+        store
+            .seed_canonical(&config.initial_messages)
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let canonical = store
+            .load_canonical()
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        // Issue #63 recovery gate: a durable Message Ledger append does not
+        // by itself imply a resumable safe boundary. Refuse automatic live
+        // recovery from a durable head that cannot reconstruct a valid
+        // Surface without guessing missing compaction/tool state (fail
+        // closed; #11/#12 later make more states exactly recoverable).
+        crate::conversation::recovery_safety(&canonical).map_err(|error| {
+            ConversationRuntimeError::RecoveryRequired {
+                reason: error.to_string(),
+            }
+        })?;
+        let conversation = ConversationState::from_messages(canonical).map_err(|error| {
+            ConversationRuntimeError::InvalidInitialConversation(error.to_string())
+        })?;
         // Activation spawns the admission worker, and a runtime with no
         // worker would silently never admit anything. The execution
         // runtime is required — and captured — here, still in the fallible
@@ -1238,7 +1683,10 @@ impl ConversationRuntime {
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
-                next_inbound_seq: 0,
+                durability_health: DurabilityHealth::AdmissionCycle {
+                    budget: AdmissionRetryBudget::default(),
+                    pending_retry: None,
+                },
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
@@ -1247,6 +1695,19 @@ impl ConversationRuntime {
             #[cfg(test)]
             probe: Mutex::new(None),
         });
+        // The runtime is the durability-health owner of its background
+        // plane (Issue #63): install the narrow failure seam the
+        // background settlement owner reports an exhausted
+        // terminal-publication budget through. No background execution can
+        // exist before activation — the registry refused every commit
+        // while the mailbox was bound inactive — so the installation can
+        // never race a settlement.
+        inner
+            .tool_runtime
+            .background()
+            .install_failure_sink(Arc::new(BackgroundFailureSink {
+                inner: Arc::downgrade(&inner),
+            }));
         Ok(Self { inner })
     }
 
@@ -1397,16 +1858,19 @@ impl ConversationRuntime {
         // before the lifecycle transition, so while the park holds the
         // conversation is provably still Inactive and every competing
         // runtime-owned commit or host bind can still proceed. The gate
-        // parks only when armed and disarms after one park.
+        // parks only when armed and disarms after one park. The gate handle
+        // is extracted before the park so the probe mutex is not held while
+        // parked.
         #[cfg(test)]
-        if let Some(probe) = self
+        let activation_gate = self
             .inner
             .probe
             .lock()
             .expect("coordinator probe lock poisoned")
             .as_ref()
-            && let Some(gate) = &probe.activation_gate
-        {
+            .and_then(|probe| probe.activation_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = activation_gate {
             gate.enter();
         }
         {
@@ -1432,19 +1896,28 @@ impl ConversationRuntime {
 
     /// Submits one ordinary inbound user message.
     ///
-    /// The runtime owns authoritative metadata: the message identity, the
+    /// The durable Pending Inbound Inbox owns authoritative metadata: the
+    /// message identity (deterministic from the allocated sequence), the
     /// inbound sequence, the persisted timestamp, and the provenance are
-    /// all runtime-assigned. Success means accepted/published, never
-    /// assistant-finished: the runtime wake gate admits the next attempt
-    /// when the runtime is idle, and while an attempt is running the message
-    /// waits in the authoritative mailbox for the next safe-boundary drain.
+    /// all owner-assigned and commit in one durable acceptance transaction.
+    /// Success means durably accepted, never assistant-finished: the runtime
+    /// wake gate admits the next attempt when the runtime is idle, and while
+    /// an attempt is running the message stays durably pending for the next
+    /// safe-boundary adoption.
     ///
     /// # Errors
     ///
     /// Returns [`InboundAdmissionError::Inactive`] before activation,
     /// [`InboundAdmissionError::Shutdown`] after shutdown,
-    /// [`InboundAdmissionError::EmptyContent`] for empty content, and
-    /// [`InboundAdmissionError::Mailbox`] for a mailbox admission failure.
+    /// [`InboundAdmissionError::EmptyContent`] for empty content,
+    /// [`InboundAdmissionError::DurabilityFailed`] while the runtime's
+    /// durable authority is in the explicit failed state, and
+    /// [`InboundAdmissionError::Mailbox`] for a durable acceptance failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the test-only coordinator probe lock is poisoned,
+    /// which would mean a previous test hook panicked while holding it.
     pub fn submit_inbound(
         &self,
         content: Vec<UserContentBlock>,
@@ -1452,38 +1925,68 @@ impl ConversationRuntime {
         if content.is_empty() {
             return Err(InboundAdmissionError::EmptyContent);
         }
-        let (message_id, timestamp) = {
-            let mut state = self.inner.lock_state();
-            if !self.inner.lifecycle.is_active() {
-                return Err(InboundAdmissionError::Inactive);
-            }
-            if state.shutting_down {
-                return Err(InboundAdmissionError::Shutdown);
-            }
-            state.next_inbound_seq = state.next_inbound_seq.saturating_add(1);
-            (
-                MessageId::new(format!(
-                    "{}-inbound-{}",
-                    self.inner.conversation_id, state.next_inbound_seq
-                )),
-                self.inner.clock.now(),
-            )
-        };
-        let message = crate::message::types::UserMessageBlock {
-            id: message_id.clone(),
-            content,
-            source: crate::message::types::UserSource::Human,
-            kind: crate::message::types::InboundKind::Message,
-            timestamp: Some(timestamp),
-        };
-        let sequence = self
+        // Issue #63 (Finding 1): the one coordinator lock is held across the
+        // lifecycle/shutdown check **and** the durable acceptance, so a
+        // successful acceptance and shutdown have one total ordering.
+        // Shutdown therefore linearizes either entirely before the
+        // acceptance (and the acceptance fails with `Shutdown`) or entirely
+        // after it (and the acceptance is a legal pre-shutdown success).
+        // Holding the coordinator lock here nests only the mailbox/store
+        // locks inside it, the same order the admission worker already
+        // takes; no mailbox/store → coordinator edge exists, so the lock
+        // graph stays acyclic.
+        let state = self.inner.lock_state();
+        if !self.inner.lifecycle.is_active() {
+            return Err(InboundAdmissionError::Inactive);
+        }
+        if state.shutting_down {
+            return Err(InboundAdmissionError::Shutdown);
+        }
+        if state.durability_health.is_failed() {
+            let message = match &state.durability_health {
+                DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
+                DurabilityHealth::AdmissionCycle { .. } => {
+                    unreachable!("is_failed implies DurabilityFailed")
+                }
+            };
+            return Err(InboundAdmissionError::DurabilityFailed { message });
+        }
+        // Test-only gate: parked while holding the coordinator lock, after
+        // the shutdown/activation decision and before the durable acceptance,
+        // so a race regression can prove shutdown cannot slip between the
+        // decision and the commit. The gate handle is extracted before the
+        // park so the probe mutex is not held while parked.
+        #[cfg(test)]
+        let submit_gate = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.submit_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = submit_gate {
+            gate.enter();
+        }
+        // The durable acceptance linearization point: the sequence, the
+        // deterministic message identity, the pending record, and (when a
+        // producer supplies one) the correlation commit here before success
+        // is returned.
+        let accepted = self
             .inner
             .mailbox
-            .enqueue(message)
+            .accept_draft(InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                content,
+                timestamp: self.inner.clock.now(),
+                correlation: None,
+            })
             .map_err(InboundAdmissionError::Mailbox)?;
         Ok(InboundAdmission {
-            message_id,
-            inbound_sequence: sequence,
+            message_id: accepted.message_id,
+            inbound_sequence: accepted.sequence,
         })
     }
 
@@ -1547,7 +2050,9 @@ impl ConversationRuntime {
     ///
     /// # Errors
     ///
-    /// Returns [`ModelUpdateError::Inactive`] before activation and
+    /// Returns [`ModelUpdateError::Inactive`] before activation,
+    /// [`ModelUpdateError::DurabilityFailed`] while the runtime's durable
+    /// authority is in the explicit failed state, and
     /// [`ModelUpdateError::InvalidConfiguration`] when the configuration
     /// cannot be resolved against the catalog or cannot run under the
     /// session context policy.
@@ -1558,6 +2063,15 @@ impl ConversationRuntime {
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_active() {
             return Err(ModelUpdateError::Inactive);
+        }
+        if state.durability_health.is_failed() {
+            let message = match &state.durability_health {
+                DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
+                DurabilityHealth::AdmissionCycle { .. } => {
+                    unreachable!("is_failed implies DurabilityFailed")
+                }
+            };
+            return Err(ModelUpdateError::DurabilityFailed { message });
         }
         // Resolve into a scratch copy first: `SessionModelState::apply` is
         // itself transactional, and the context-policy check runs against the
@@ -1614,7 +2128,26 @@ impl ConversationRuntime {
     ///
     /// Returns [`ShutdownError::Inactive`] before activation. After
     /// activation shutdown is accepted (idempotently) and never fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the test-only coordinator probe lock is poisoned,
+    /// which would mean a previous test hook panicked while holding it.
     pub fn shutdown(&self) -> Result<(), ShutdownError> {
+        // Test-only: signal that shutdown reached the point just before it
+        // attempts the coordinator lock. Combined with the submit gate this
+        // makes the submit-vs-shutdown ordering provable by mutex exclusion.
+        #[cfg(test)]
+        if let Some(arrival) = self
+            .inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.shutdown_arrival.clone())
+        {
+            arrival.notify_one();
+        }
         let mut state = self.inner.lock_state();
         if !self.inner.lifecycle.is_active() {
             return Err(ShutdownError::Inactive);
@@ -1799,6 +2332,12 @@ pub enum InboundAdmissionError {
     Shutdown,
     /// Inbound content must not be empty.
     EmptyContent,
+    /// The runtime's durable authority failed persistently: no new inbound
+    /// work may be accepted until the runtime is reconstructed.
+    DurabilityFailed {
+        /// The human-readable failure diagnostic.
+        message: String,
+    },
     /// The authoritative mailbox rejected the message.
     Mailbox(MailboxError),
 }
@@ -1809,6 +2348,10 @@ impl core::fmt::Display for InboundAdmissionError {
             Self::Inactive => f.write_str("the conversation runtime is not activated"),
             Self::Shutdown => f.write_str("the conversation runtime is shutting down"),
             Self::EmptyContent => f.write_str("inbound content must not be empty"),
+            Self::DurabilityFailed { message } => write!(
+                f,
+                "the conversation runtime durability authority failed: {message}"
+            ),
             Self::Mailbox(error) => error.fmt(f),
         }
     }
@@ -1832,6 +2375,12 @@ pub enum ModelUpdateError {
     /// The configuration cannot be resolved against the catalog or cannot
     /// run under the session context policy.
     InvalidConfiguration(String),
+    /// The runtime's durable authority failed persistently: no new durable
+    /// mutation may begin until the runtime is reconstructed.
+    DurabilityFailed {
+        /// The human-readable failure diagnostic.
+        message: String,
+    },
 }
 
 /// A runtime shutdown failure.
@@ -2060,8 +2609,9 @@ mod tests {
         RuntimeConversationConfig,
     };
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
+    use crate::durable::inbox::InboundStore;
     use crate::message::content::TextBlock;
-    use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+    use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::identity::{AgentId, ConversationId};
     use crate::runtime::observation::ConversationObservation;
@@ -2155,6 +2705,66 @@ mod tests {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
             None => ConversationRuntime::new(config).expect("runtime"),
         };
+        (runtime, model)
+    }
+
+    /// Builds the conversation runtime of one headless fixture over a custom
+    /// canonical mailbox (used by the storage-fault regression, which needs
+    /// direct access to the durable store).
+    async fn headless_runtime_over_mailbox(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
+        let conversation_id = ConversationId::new(conversation_id);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
+            conversation_id.clone(),
+            crate::tools::runtime::ConversationRuntimeConfig {
+                mailbox: Some(mailbox),
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            },
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let model = Arc::new(FakeModel::new(vec![one_turn_script()]));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
+                status_composer: AgentStatusComposer::default(),
+            },
+            tool_runtime,
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+        };
+        let runtime = ConversationRuntime::new(config).expect("runtime");
         (runtime, model)
     }
 
@@ -2481,6 +3091,8 @@ mod tests {
             admission_gate: Some(gate.clone()),
             settlement_gate: None,
             activation_gate: None,
+            submit_gate: None,
+            shutdown_arrival: None,
         }))
         .await;
         gate.arm();
@@ -2532,7 +3144,9 @@ mod tests {
             })
             .collect();
         assert_eq!(inbound[0], "conv-headless-async-1");
-        assert!(inbound.contains(&"conv-headless-inbound-1"));
+        // The client submit is the second item of the one durable sequence
+        // domain, so its deterministic identity derives from sequence 2.
+        assert!(inbound.contains(&"conv-headless-inbound-2"));
         // Exactly one finite drain was observed, carrying both messages in
         // mailbox order.
         let drained: Vec<_> = observations
@@ -2544,6 +3158,72 @@ mod tests {
             .collect();
         assert_eq!(drained.len(), 1, "one finite inbound batch");
         assert_eq!(drained[0].items().len(), 2, "both messages in one batch");
+    }
+
+    /// Durable pending inbound accepted before the runtime exists (for
+    /// example by a crashed process) drives admission on recovery without a
+    /// new client request (Issue #63 recovery seam).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn recovered_durable_pending_drives_admission_without_a_client_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+
+        // First process: accept one inbound item durably, then die before
+        // any adoption.
+        {
+            let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+                ConversationId::new("conv-headless"),
+                &workspace,
+                &artifacts,
+            )
+            .expect("tool runtime");
+            let store = tool_runtime.inbound_store();
+            store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("recovered"),
+                    timestamp: chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+                        .expect("parse")
+                        .with_timezone(&chrono::Utc),
+                    correlation: None,
+                })
+                .expect("durable acceptance");
+        }
+
+        // Second process: reconstruct the runtime over the same durable
+        // store and activate. The recovered pending item drives admission by
+        // itself, without any new submit.
+        let (runtime, model) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+        runtime.activate();
+        let ledger = await_settled_ledger(&runtime).await;
+        let inbound: Vec<&str> = ledger
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::User(user) if user.kind == InboundKind::Message => {
+                    Some(user.id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inbound,
+            vec!["conv-headless-inbound-1"],
+            "the recovered pending item is adopted exactly once"
+        );
+        assert_eq!(model.requests().len(), 1, "one admitted attempt");
+        assert!(
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .select_pending_batch()
+                .expect("select")
+                .is_none(),
+            "no pending record remains after recovery adoption"
+        );
     }
 
     /// Waits until an observation satisfying the predicate reaches the
@@ -2727,6 +3407,762 @@ mod tests {
         ));
     }
 
+    /// Issue #63 (Finding 1): a successful acceptance and shutdown have one
+    /// total ordering. When acceptance linearizes first — proven by parking
+    /// `submit_inbound` inside its coordinator-lock critical section while
+    /// `shutdown` blocks on that same lock — the acceptance succeeds and
+    /// shutdown follows.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn submit_linearizes_before_shutdown_when_acceptance_wins() {
+        let gate = Arc::new(super::Gate::default());
+        let shutdown_arrival = Arc::new(tokio::sync::Notify::new());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            admission_gate: None,
+            settlement_gate: None,
+            activation_gate: None,
+            submit_gate: Some(gate.clone()),
+            shutdown_arrival: Some(shutdown_arrival.clone()),
+        }))
+        .await;
+        gate.arm();
+
+        // `submit_inbound` parks inside its critical section: the coordinator
+        // lock is held, the shutdown decision was read, but the durable
+        // acceptance has not yet committed.
+        let submit_runtime = fixture.runtime.clone();
+        let submit_task = tokio::task::spawn_blocking(move || {
+            submit_runtime
+                .submit_inbound(text_content("raced"))
+                .expect("acceptance linearized before shutdown")
+        });
+        let submit_entered = {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.wait_entered())
+        };
+        submit_entered
+            .await
+            .expect("submit parked inside its critical section holding the lock");
+
+        // Shutdown signals that it reached the point immediately before
+        // attempting the coordinator lock, then blocks on that lock. The
+        // ordering proof is mutex exclusion (submit holds the lock), not a
+        // timeout: shutdown cannot complete while submit holds the critical
+        // section.
+        let shutdown_runtime = fixture.runtime.clone();
+        let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+        let shutdown_task = tokio::task::spawn_blocking(move || {
+            let _ = shutdown_runtime.shutdown();
+            let _ = shutdown_tx.send(());
+        });
+        shutdown_arrival.notified().await;
+
+        // Release submit: the acceptance commits, then shutdown acquires the
+        // lock and linearizes after it.
+        let release = {
+            let gate = gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+        };
+        release.await.expect("release submit");
+        let admission = submit_task.await.expect("submit completed");
+        assert_eq!(
+            admission.inbound_sequence.get(),
+            1,
+            "the acceptance was the first sequence of the conversation"
+        );
+        shutdown_task.await.expect("shutdown completed");
+        shutdown_rx
+            .recv()
+            .expect("shutdown completed after submit released the lock");
+        // Shutdown is now authoritative: no later acceptance succeeds.
+        assert!(matches!(
+            fixture.runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+    }
+
+    /// Issue #63 (Finding 1): when shutdown linearizes first, a later submit
+    /// returns `Shutdown` and commits no pending item and consumes no
+    /// sequence. Admission is frozen deterministically so the pre-shutdown
+    /// acceptance stays pending for the exact-count assertion.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_linearizes_before_acceptance_commits_nothing() {
+        let admission_gate = Arc::new(super::Gate::default());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            admission_gate: Some(admission_gate.clone()),
+            settlement_gate: None,
+            activation_gate: None,
+            submit_gate: None,
+            shutdown_arrival: None,
+        }))
+        .await;
+        // Freeze admission so the worker cannot adopt the pre-shutdown item.
+        admission_gate.arm();
+        let first = fixture
+            .runtime
+            .submit_inbound(text_content("before"))
+            .expect("pre-shutdown acceptance");
+        assert_eq!(first.inbound_sequence.get(), 1);
+        admission_gate.wait_entered();
+        // Shutdown linearizes first.
+        fixture
+            .runtime
+            .shutdown()
+            .expect("shutdown accepted after activation");
+        assert!(matches!(
+            fixture.runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+
+        // The refused acceptance committed no pending item and consumed no
+        // sequence: exactly the one pre-shutdown acceptance remains durable.
+        let batch = fixture
+            .runtime
+            .tool_runtime()
+            .mailbox()
+            .select_pending_batch()
+            .expect("select")
+            .expect("exactly one pre-shutdown pending item");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "the refused acceptance committed no pending item"
+        );
+        assert_eq!(
+            batch.items()[0].sequence().get(),
+            1,
+            "the refused acceptance consumed no sequence"
+        );
+        // Release the frozen admission worker so the test's tokio runtime can
+        // shut down: the worker observes `shutting_down` and returns without
+        // adopting the pending item.
+        admission_gate.release();
+    }
+
+    /// Issue #63 (Finding 5 / Important 5): a transient select storage
+    /// failure follows the bounded retry and completes a fresh admission
+    /// cycle; the pending item is admitted exactly once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn transient_select_failure_recovers_and_admits_once() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-select-transient",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-select-transient", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // One select fault: the first admission fails, the bounded retry
+        // succeeds.
+        store.arm_fail_select_times(1);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        // The transient failure is surfaced exactly once as a DurableFailure.
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::DurableFailure { .. })
+        })
+        .await;
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+                .count(),
+            1,
+            "exactly one transient DurableFailure observation"
+        );
+
+        // The retry adopts the pending item exactly once and completes the
+        // admission cycle (settlement completes).
+        runtime.settlement_signal().notified().await;
+        let ledger = runtime.coordinator_ledger().expect("settled");
+        assert!(
+            ledger.iter().any(|m| matches!(
+                m,
+                MessageBlock::User(user) if user.id == admission.message_id
+            )),
+            "the pending item was adopted exactly once"
+        );
+        assert!(
+            store.load_pending().expect("load pending").is_empty(),
+            "no pending item remains after the successful retry"
+        );
+    }
+
+    /// Issue #63 (Important 5): a persistent select storage failure moves the
+    /// runtime into the explicit `DurabilityFailed` state after the bounded
+    /// retry; pending work remains intact, no attempt is admitted, and a
+    /// later durable mutation fails typed (no false healthy state).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn persistent_select_failure_enters_durability_failed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-select-persistent",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-select-persistent", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Arm two select faults: the first fails and re-kicks exactly once;
+        // the retry fails again → explicit DurabilityFailed, no hot loop.
+        store.arm_fail_select_times(2);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "select_pending_batch")
+        })
+        .await;
+        assert!(
+            observations
+                .iter()
+                .any(|o| matches!(o, ConversationObservation::DurabilityFailed { .. })),
+            "the persistent failure is surfaced as an explicit degraded state"
+        );
+
+        // Pending remains durably intact, no attempt was admitted, and a
+        // later mutation requiring durability fails typed.
+        assert_eq!(
+            store.load_pending().expect("load pending").len(),
+            1,
+            "the persistent failure left the accepted pending item intact"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "no attempt was admitted through a failed selection"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+    }
+
+    /// Issue #63 (retry domain): two independent first failures of
+    /// *different* durable stages never combine into a false
+    /// `DurabilityFailed` — the finite admission-cycle budget gives select
+    /// and adopt independent allowances, so the adopt failure gets its own
+    /// bounded retry after the select retry already succeeded; the item is
+    /// then admitted exactly once and the cycle completes normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn select_then_adopt_failures_get_independent_bounded_retries() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-ops-independent",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-ops-independent", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // One select fault and one adopt fault: pass 1 consumes the select
+        // retry allowance and re-kicks; pass 2 selects successfully (the
+        // select allowance remains consumed) but fails the adopt, which
+        // consumes adopt's independent allowance; pass 3 adopts successfully
+        // and completes the cycle before admitting the item.
+        store.arm_fail_select_times(1);
+        store.arm_fail_adopt_times(1);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        runtime.settlement_signal().notified().await;
+        let ledger = runtime.coordinator_ledger().expect("settled");
+        assert!(
+            ledger.iter().any(|m| matches!(
+                m,
+                MessageBlock::User(user) if user.id == admission.message_id
+            )),
+            "the pending item was adopted exactly once after the independent retries"
+        );
+        assert!(
+            store.load_pending().expect("load pending").is_empty(),
+            "no pending item remains after the successful retries"
+        );
+        // Every durability observation is published during admission,
+        // strictly before the settlement handoff observed above.
+        let observations = pending.drain();
+        let transient = observations
+            .iter()
+            .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+            .count();
+        assert_eq!(
+            transient, 2,
+            "exactly two transient failures (one per operation), never a combined failure"
+        );
+        assert!(
+            !observations
+                .iter()
+                .any(|o| matches!(o, ConversationObservation::DurabilityFailed { .. })),
+            "two independent first failures must not become DurabilityFailed"
+        );
+    }
+
+    /// Issue #63 (retry-cycle budget): alternating transient failures cannot
+    /// keep replacing one another's retry debt. The deterministic ordered
+    /// fault script forces exactly this admission sequence:
+    ///
+    /// ```text
+    /// select fails -> select succeeds -> adopt fails -> select fails again
+    /// ```
+    ///
+    /// The second select failure exhausts the select allowance retained from
+    /// the first operation, so the runtime fails closed before any attempt is
+    /// admitted. The test uses the real Runtime Client projection to prove
+    /// the explicit degraded state is observable; the timeout only guards
+    /// against a deadlocked or non-progressing test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn alternating_select_adopt_failures_exhaust_one_admission_cycle() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-alternating-retry-cycle",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, model) =
+            headless_runtime_over_mailbox(&dir, "conv-alternating-retry-cycle", mailbox).await;
+        let host = crate::runtime_client::RuntimeClientHost::new(
+            crate::runtime_client::RuntimeClientHostConfig {
+                runtime: runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .expect("runtime client host");
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach runtime client");
+        let subscription = attachment
+            .subscribe_events(crate::runtime_client::RuntimeClientCursor::new(0))
+            .expect("subscribe runtime client");
+        runtime.activate();
+
+        // Activation's empty admission cycle is complete before this script
+        // is armed. The pending item therefore drives exactly the four
+        // operations named above.
+        store.arm_admission_fault_script([
+            crate::durable::sqlite::AdmissionFaultOperation::SelectPendingBatch,
+            crate::durable::sqlite::AdmissionFaultOperation::AdoptPendingBatch,
+            crate::durable::sqlite::AdmissionFaultOperation::SelectPendingBatch,
+        ]);
+        runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+
+        let failure = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match subscription.next().await {
+                    crate::runtime_client::EventDelivery::Event(event)
+                        if matches!(
+                            &event.event,
+                            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+                                operation,
+                                ..
+                            } if operation == "select_pending_batch"
+                        ) =>
+                    {
+                        break event;
+                    }
+                    crate::runtime_client::EventDelivery::Event(_) => {}
+                    delivery => panic!("unexpected terminal client delivery: {delivery:?}"),
+                }
+            }
+        })
+        .await
+        .expect("the alternating fault sequence reaches explicit failure");
+        assert!(matches!(
+            failure.event,
+            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+                operation,
+                ..
+            } if operation == "select_pending_batch"
+        ));
+
+        // The ordered script was fully consumed, proving the intended
+        // deterministic operation sequence rather than a persistent
+        // same-operation shortcut.
+        assert!(
+            store
+                .admission_fault_script
+                .lock()
+                .expect("admission fault script lock")
+                .is_empty(),
+            "select fail -> select success -> adopt fail -> select fail"
+        );
+
+        let (snapshot, _) = host.snapshot().expect("client snapshot");
+        assert_eq!(
+            snapshot
+                .durability_failure
+                .as_ref()
+                .map(|failure| failure.operation.as_str()),
+            Some("select_pending_batch"),
+            "the Runtime Client projection exposes the explicit degraded state"
+        );
+        assert_eq!(
+            store.load_pending().expect("load pending").len(),
+            1,
+            "the accepted pending item remains durable and intact"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "no attempt is admitted through the failed adoption cycle"
+        );
+        assert!(
+            model.requests().is_empty(),
+            "the failed admission cycle never reaches the model"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+        assert!(matches!(
+            subscription.try_next(),
+            crate::runtime_client::EventDelivery::Pending
+        ));
+    }
+
+    /// Issue #63 (retry domain): a persistent adopt storage failure moves
+    /// the runtime into the explicit `DurabilityFailed(adopt_pending_batch)`
+    /// state after its own bounded retry; the pending work remains intact,
+    /// no attempt is admitted, and a later durable mutation fails typed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn persistent_adopt_failure_enters_durability_failed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-adopt-persistent",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-adopt-persistent", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Two adopt faults: pass 1 selects successfully but fails the adopt
+        // (the adopt allowance is consumed and a re-kick is armed); the retry
+        // fails the same stage again -> explicit DurabilityFailed, no hot
+        // loop.
+        store.arm_fail_adopt_times(2);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "adopt_pending_batch")
+        })
+        .await;
+        let transient = observations
+            .iter()
+            .filter(|o| matches!(o, ConversationObservation::DurableFailure { .. }))
+            .count();
+        assert_eq!(
+            transient, 1,
+            "exactly one transient failure before the second adopt-stage failure"
+        );
+
+        // Pending remains durably intact, no attempt was admitted, and a
+        // later durable mutation fails typed.
+        assert_eq!(
+            store.load_pending().expect("load pending").len(),
+            1,
+            "the persistent failure left the accepted pending item intact"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "no attempt was admitted through a failed adoption"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+    }
+
+    /// Issue #63 (active-attempt durability audit): when the active attempt
+    /// hits a durable canonical-write failure, the attempt settles failed
+    /// with the typed durable-store failure AND the coordinator records the
+    /// durable-authority failure — the runtime never returns to a false
+    /// `Healthy` state that admits further work as though storage were
+    /// fine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn active_attempt_durable_failure_degrades_the_runtime() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-attempt-durable",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, model) =
+            headless_runtime_over_mailbox(&dir, "conv-attempt-durable", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // The first canonical append of the attempt (the committed
+        // canonical fact of the first model turn) fails durably.
+        store.arm_fail_canonical_append_times(1);
+        let admission = runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+        assert_eq!(admission.inbound_sequence.get(), 1);
+
+        // The coordinator enters the explicit DurabilityFailed state for
+        // the active attempt's durable commit failure.
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "canonical_commit")
+        })
+        .await;
+        assert!(
+            observations.iter().any(|o| matches!(
+                o,
+                ConversationObservation::Event { event, .. }
+                    if matches!(
+                        event,
+                        crate::events::types::RuntimeEvent::AttemptFailed {
+                            error: crate::events::types::AttemptFailure::Runtime {
+                                error: crate::runtime::types::RuntimeError::DurableStore { .. },
+                            },
+                            ..
+                        }
+                    )
+            )),
+            "the attempt settled failed with the typed durable-store failure"
+        );
+
+        // No false healthy progress: new durable work is refused typed and
+        // no further attempt is admitted.
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+        assert!(
+            model.requests().is_empty(),
+            "the durable fault struck the pre-request canonical context commit, \
+             so the attempt failed before its first model request and no further \
+             attempt was admitted"
+        );
+
+        // The durable Ledger contains the adopted inbound but never the
+        // failed canonical commit: memory and durability stayed consistent
+        // (a failed durable commit installed nothing).
+        let canonical = store.load_canonical().expect("load canonical");
+        assert_eq!(
+            canonical.len(),
+            1,
+            "only the adopted inbound is durable; the failed commit appended nothing"
+        );
+        assert!(
+            matches!(&canonical[0], MessageBlock::User(user) if user.id == admission.message_id),
+            "the adopted inbound survived intact"
+        );
+    }
+
+    /// A gated background executor for the owning-runtime degradation
+    /// regression: signals its start, parks until released, then returns a
+    /// fixed success result.
+    struct GatedBackgroundExecutor {
+        started: tokio::sync::watch::Sender<bool>,
+        release: tokio::sync::watch::Sender<bool>,
+    }
+
+    impl GatedBackgroundExecutor {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            tokio::sync::watch::Sender<bool>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let (release, _release_rx) = tokio::sync::watch::channel(false);
+            (
+                Self {
+                    started,
+                    release: release.clone(),
+                },
+                started_rx,
+                release,
+            )
+        }
+    }
+
+    impl crate::tools::executor::ToolExecutor for GatedBackgroundExecutor {
+        fn execute<'a>(
+            &'a self,
+            _invocation: crate::tools::types::ToolInvocation,
+            _context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> futures_util::future::BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+            let started = self.started.clone();
+            let mut release = self.release.subscribe();
+            Box::pin(async move {
+                started.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("release channel stays open");
+                crate::tools::types::ToolExecutionResult {
+                    status: crate::tools::types::ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                }
+            })
+        }
+    }
+
+    /// Issue #63 (Blocker 2, owning-runtime level): when the background
+    /// settlement owner's bounded terminal-publication budget is exhausted,
+    /// the owning runtime is placed into the explicit `DurabilityFailed`
+    /// state through the narrow failure seam installed at construction —
+    /// the unresolved candidate stays retained and observable in the
+    /// registry, and the runtime never claims false healthy progress.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn exhausted_background_publication_degrades_the_owning_runtime() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new("conv-bg-degrade"))
+                .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, _model) =
+            headless_runtime_over_mailbox(&dir, "conv-bg-degrade", mailbox).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Dispatch one background execution through the authoritative
+        // registry of the runtime's tool runtime.
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: crate::runtime::identity::ToolCallId::new("call-1"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            runtime
+                .tool_runtime()
+                .background()
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .expect("commit")
+        else {
+            panic!("accepted");
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("runner start wait exceeded liveness guard")
+        .expect("start channel stays open");
+
+        // Arm exactly the bounded publication budget (two acceptance
+        // faults), then release the runner: both production publication
+        // attempts fail, and the runner reports the exhausted budget
+        // through the failure seam.
+        store.arm_fail_accept_times(2);
+        release.send_replace(true);
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "background_terminal_publication")
+        })
+        .await;
+        let failures = observations
+            .iter()
+            .filter(|o| matches!(o, ConversationObservation::DurabilityFailed { .. }))
+            .count();
+        assert_eq!(
+            failures, 1,
+            "the exhausted budget degraded the runtime exactly once — no hot loop"
+        );
+
+        // The unresolved terminal candidate stays retained and observable;
+        // no false terminal publication exists; the runtime refuses new
+        // durable work typed.
+        let snapshot = runtime
+            .background_status(&execution_id)
+            .expect("execution record");
+        assert_eq!(
+            snapshot.state,
+            crate::tools::background::BackgroundLifecycle::PublishingTerminal
+        );
+        assert!(
+            snapshot.result.is_some(),
+            "the unresolved terminal candidate remains retained and observable"
+        );
+        assert!(
+            store.load_pending().expect("load pending").is_empty(),
+            "no false durable terminal inbound committed"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+    }
+
     /// Cancelling an unknown attempt identity fails explicitly and never
     /// cancels a different attempt.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2738,5 +4174,255 @@ mod tests {
                 .cancel_current_attempt(&crate::runtime::identity::AttemptId::new("ghost")),
             Err(CancelAttemptError::NoCurrentAttempt)
         );
+    }
+
+    /// Builds a conversation runtime over an existing artifacts directory
+    /// (whose `durable-inbound.db` may already be populated), returning the
+    /// construction result so recovery-gate tests can assert the typed error.
+    async fn runtime_at(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        initial_messages: Vec<MessageBlock>,
+        scripts: Vec<Vec<FakeStep>>,
+    ) -> Result<ConversationRuntime, ConversationRuntimeError> {
+        let conversation_id = ConversationId::new(conversation_id);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            &artifacts,
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let model = Arc::new(FakeModel::new(scripts));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
+        let config = RuntimeConversationConfig {
+            agent_id: AgentId::new("agent-a"),
+            model: scripted_session_model(adapter),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator,
+                status_composer: AgentStatusComposer::default(),
+            },
+            tool_runtime,
+            capability: coordinator,
+            clock: None,
+            initial_messages,
+        };
+        ConversationRuntime::new(config)
+    }
+
+    fn fixed_time() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-08-07T12:00:00Z")
+            .expect("parse")
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn assistant_tool_block(id: &str, call: &str) -> MessageBlock {
+        MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {
+            id: crate::runtime::identity::MessageId::new(id),
+            content: vec![crate::message::types::AssistantContentBlock::ToolCall(
+                crate::tools::types::ToolCall {
+                    id: crate::runtime::identity::ToolCallId::new(call),
+                    tool_id: crate::runtime::identity::ToolId::new("tool-a"),
+                    name: "alpha".to_owned(),
+                    arguments: serde_json::json!({}),
+                },
+            )],
+        })
+    }
+
+    fn tool_result_block(call: &str) -> MessageBlock {
+        MessageBlock::Tool(crate::message::types::ToolMessageBlock {
+            id: crate::runtime::identity::MessageId::new(format!("tool-{call}")),
+            tool_call_id: crate::runtime::identity::ToolCallId::new(call),
+            tool_id: crate::runtime::identity::ToolId::new("tool-a"),
+            result: crate::tools::types::ToolExecutionResult {
+                status: crate::tools::types::ToolExecutionStatus::Success,
+                content: Vec::new(),
+                duration_ms: 1,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        })
+    }
+
+    fn seed_user(id: &str, text: &str) -> MessageBlock {
+        MessageBlock::User(crate::message::types::UserMessageBlock {
+            id: crate::runtime::identity::MessageId::new(id),
+            content: text_content(text),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: Some(fixed_time()),
+        })
+    }
+
+    /// Issue #63 (Blocker 1, test A): an incomplete Assistant tool-call
+    /// durable tail blocks automatic recovery: the pending inbound is not
+    /// admitted and the runtime fails closed with a typed `RecoveryRequired`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn incomplete_tool_tail_blocks_recovery_and_pending_remains_intact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-recovery-tool");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let store_path = artifacts.join("durable-inbound.db");
+        let seed = vec![seed_user("msg-u0", "start")];
+        {
+            let store =
+                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                    .expect("open");
+            store.seed_canonical(&seed).expect("seed");
+            store
+                .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
+                .expect("assistant tool call");
+            store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("pending"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept pending");
+        }
+
+        let result = runtime_at(&dir, "conv-recovery-tool", seed, vec![one_turn_script()]).await;
+        assert!(matches!(
+            result,
+            Err(ConversationRuntimeError::RecoveryRequired { .. })
+        ));
+
+        // The pending inbound remains durable with its exact identity.
+        let reopened =
+            crate::durable::SqliteInboundStore::open(conversation_id, &store_path).expect("reopen");
+        let pending = reopened.load_pending().expect("load pending");
+        assert_eq!(
+            pending.len(),
+            1,
+            "recovered pending stays intact while blocked"
+        );
+        assert_eq!(pending[0].sequence.get(), 1);
+        assert_eq!(
+            pending[0].message_id.as_str(),
+            "conv-recovery-tool-inbound-1"
+        );
+    }
+
+    /// Issue #63 (Blocker 1, test B): a structurally complete tool group is
+    /// a recovery-safe boundary; the runtime reconstructs and admits normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn complete_tool_group_is_recoverable_and_admits_normally() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-recovery-complete");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let store_path = artifacts.join("durable-inbound.db");
+        let seed = vec![seed_user("msg-u0", "start")];
+        {
+            let store =
+                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                    .expect("open");
+            store.seed_canonical(&seed).expect("seed");
+            store
+                .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
+                .expect("assistant tool call");
+            store
+                .append_canonical(&tool_result_block("call-1"))
+                .expect("tool result");
+        }
+
+        let runtime = runtime_at(
+            &dir,
+            "conv-recovery-complete",
+            seed,
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("a complete tool group is recovery-safe");
+        runtime.activate();
+
+        // Normal admission is allowed and the attempt settles.
+        let admission = runtime
+            .submit_inbound(text_content("hello"))
+            .expect("accepted after recovery");
+        runtime.settlement_signal().notified().await;
+        let ledger = runtime.coordinator_ledger().expect("settled");
+        assert!(
+            ledger
+                .iter()
+                .any(|m| matches!(m, MessageBlock::User(user) if user.id == admission.message_id)),
+            "the recovered runtime admitted the inbound exactly once"
+        );
+    }
+
+    /// Issue #63 (Blocker 1, test C): a committed compaction summary without
+    /// durable Surface Replace evidence refuses automatic recovery — the
+    /// runtime never reconstructs `old messages + summary` as if it were
+    /// valid.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn compaction_summary_without_surface_replace_blocks_recovery() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-recovery-compact");
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let store_path = artifacts.join("durable-inbound.db");
+        let seed = vec![seed_user("msg-a", "A"), seed_user("msg-b", "B")];
+        {
+            let store =
+                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                    .expect("open");
+            store.seed_canonical(&seed).expect("seed");
+            // A compaction summary appended durably, with no durable Surface
+            // Replace (full #11 is not implemented).
+            store
+                .append_canonical(&MessageBlock::User(
+                    crate::message::types::UserMessageBlock {
+                        id: crate::runtime::identity::MessageId::new(
+                            "conv-recovery-compact-summary-1",
+                        ),
+                        content: text_content("earlier context"),
+                        source: UserSource::Runtime,
+                        kind: InboundKind::CompactionSummary,
+                        timestamp: None,
+                    },
+                ))
+                .expect("compaction summary");
+        }
+
+        let result = runtime_at(&dir, "conv-recovery-compact", seed, vec![one_turn_script()]).await;
+        assert!(matches!(
+            result,
+            Err(ConversationRuntimeError::RecoveryRequired { .. })
+        ));
     }
 }

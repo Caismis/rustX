@@ -383,20 +383,32 @@ async fn natural_completion_wins_over_later_cancel() {
     let terminal = fixture.registry.snapshot(&execution_id).expect("snapshot");
     assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     // The terminal transition published exactly one inbound message.
-    let batch = fixture.mailbox.drain().expect("one batch");
+    let batch = fixture
+        .mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("one batch");
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
         "background-exec_1-terminal",
         "deterministic terminal message identity"
     );
+    let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
     // A later cancel is an idempotent no-op returning the terminal snapshot.
     let after_cancel = fixture
         .registry
         .cancel(&execution_id)
         .expect("cancel returns the snapshot");
     assert_eq!(after_cancel, terminal);
-    assert!(fixture.mailbox.drain().is_none(), "no second publication");
+    assert!(
+        fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .is_none(),
+        "no second publication"
+    );
 }
 
 /// Cancel transition before completion: cancellation wins and owns
@@ -426,7 +438,11 @@ async fn cancel_before_completion_wins_settlement() {
     // The runner observes its background cancellation and settles.
     let settled = wait_for_state(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
     assert_eq!(settled.state, BackgroundLifecycle::Cancelled);
-    let batch = fixture.mailbox.drain().expect("one batch");
+    let batch = fixture
+        .mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("one batch");
     assert_eq!(batch.items().len(), 1);
 }
 
@@ -498,14 +514,23 @@ async fn one_terminal_transition_and_one_publication_only() {
     // Duplicate settlement is an idempotent no-op.
     fixture.registry.finish(&execution_id, &success());
     fixture.registry.finish(&execution_id, &cancelled());
-    let batch = fixture.mailbox.drain().expect("one batch");
+    let batch = fixture
+        .mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("one batch");
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
         "background-exec_1-terminal"
     );
+    let _ = fixture.mailbox.adopt_pending_batch(&batch).expect("adopt");
     assert!(
-        fixture.mailbox.drain().is_none(),
+        fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .is_none(),
         "no second publication under duplicate settlement"
     );
 }
@@ -842,7 +867,10 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     )
     .await;
     assert_eq!(settled.state, BackgroundLifecycle::Succeeded);
-    let batch = mailbox.drain().expect("terminal batch");
+    let batch = mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("terminal batch");
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id.as_str(),
@@ -1304,6 +1332,7 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     );
     let mut started_b1 = tool_b1.started();
     let mut started_b2 = tool_b2.started();
+    let mut model_parked = model.parked();
     let mut tools = ToolRegistry::new();
     tool_b1.register(&mut tools);
     tool_b2.register(&mut tools);
@@ -1311,6 +1340,14 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
 
     let controller_registry = tool_runtime.background().clone();
     let controller = tokio::spawn(async move {
+        // Wait for the second model generation to park: that happens only
+        // after the first turn's safe-boundary selection already committed,
+        // so the terminal inbound below provably enqueues after that
+        // snapshot (and can never join the first batch).
+        model_parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("the second model generation parks");
         await_background_started(&mut started_b1, "b1 started").await;
         await_background_started(&mut started_b2, "b2 started").await;
         // B1 settles while the second model generation is parked. The

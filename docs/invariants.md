@@ -120,26 +120,63 @@ A turn consists of one model response plus all tool calls and corresponding tool
 
 Inbound asynchronous messages may be accepted at any time but may enter model context only at a safe turn boundary.
 
-## Conversation inbound mailbox (Issue #22)
+## Conversation inbound boundary (Issue #22 / #63)
 
-The conversation inbound mailbox is an in-memory runtime coordination
-contract, never durable storage and never canonical history:
+The conversation inbound boundary has one durable authority and one
+process-local coordination seam:
 
-- one conversation inbound sequence domain (`InboundSequence`), shared by
-  every producer provenance (Human, Runtime, Agent, Fleet, ExternalSystem);
-  it is not the Event Journal sequence and is never allocated from it;
-- sequence allocation and enqueue publication are atomically visible under
-  one mailbox lock: no allocated-but-unpublished sequence ever exists;
+```text
+Pending Inbound Inbox   = accepted / not-yet-adopted inbound durability
+ConversationInboundMailbox = process-local wakeup / coordination only
+Message Ledger          = adopted canonical conversational facts
+```
+
+- one durable per-conversation inbound sequence domain (`InboundSequence`),
+  owned by the Pending Inbound Inbox and shared by every producer provenance
+  (Human, Runtime, Agent, Fleet, ExternalSystem); it is not the Event
+  Journal sequence and is never allocated from it, and no producer or
+  process-local mailbox may allocate a competing range;
+- acceptance is the one linearization point: sequence allocation, pending
+  persistence, and producer correlation/idempotency state commit in one
+  durable transaction, and producer success is returned only after that
+  commit. A failed acceptance exposes no successful sequence, no pending
+  record, and no correlation. A successful acceptance and the coordinator's
+  `shutdown` have one total ordering: the coordinator holds its one state
+  lock across the lifecycle/shutdown decision and the durable acceptance,
+  so shutdown linearizes either entirely before the acceptance (the
+  acceptance fails with `Shutdown` and commits no pending item and consumes
+  no sequence) or entirely after it;
 - the mailbox accepts only ordinary inbound messages
   (`InboundKind::Message`) that carry their persisted UTC timestamp;
-  runtime compaction summaries are rejected at enqueue;
-- a safe-boundary drain performs exactly one finite watermark-bounded
-  snapshot: all items at or below the watermark are consumed together, and
-  post-watermark arrivals are deferred to the next batch;
-- one message still produces one one-item batch, and every drained item
+  runtime compaction summaries are rejected at acceptance;
+- a safe-boundary selection performs exactly one finite watermark-bounded
+  non-destructive snapshot; adoption then atomically appends the selected
+  messages to the durable canonical Message Ledger and removes their pending
+  records in one transaction, so post-watermark arrivals are deferred to
+  the next batch and a crash can never observe a pending record without its
+  canonical commit nor a canonical message that remains independently
+  re-adoptable;
+- canonical adoption is the prepare → durable → install seam: every fallible
+  in-memory condition (duplicate identity, already-active Surface identity)
+  is validated before the durable adoption commit, the durable append and
+  the pending removal share one transaction, and the in-memory install is
+  then infallible under exclusive ownership. There is no window where a
+  durable adoption has committed but the canonical in-memory conversation
+  state may still reject it;
+- the durable Message Ledger is the complete ordered canonical prefix: every
+  canonical `MessageBlock` commit — adopted inbound `User` messages,
+  `Assistant` messages, `ToolResult`s, context facts, and compaction
+  summaries — appends to it in canonical order. It is never a filtered
+  subsequence of inbound-only rows with intervening `Assistant`/`Tool` facts
+  omitted, and a complete `ToolResult` sibling batch commits atomically in
+  one durable transaction (a partial tool-result group can never become
+  canonical);
+- one message still produces one one-item batch, and every adopted item
   becomes its own distinct canonical `UserMessageBlock` in inbound sequence
   order — never concatenated, never delivered through an intermediate
-  single-message request;
+  single-message request, and each adopted item keeps its stable
+  accepted identity (message id, sequence, provenance, timestamp) rather
+  than regenerating one at adoption or recovery;
 - no drain may split an incomplete foreground tool-result batch: the safe
   boundary occurs only after every tool result of the turn is committed;
 - cancellation before batch selection leaves the mailbox untouched; a
@@ -158,7 +195,75 @@ contract, never durable storage and never canonical history:
   enqueue never reopens or reclassifies that attempt;
 - terminal failure paths never drain the mailbox: pending items remain for
   later conversation processing, and idle attempt creation for them is not
-  implemented by the mailbox contract.
+  implemented by the mailbox contract;
+- the durable store binds itself to exactly one `ConversationId` on first
+  creation and enforces that binding on every reopen: opening a database
+  created for conversation A under conversation B fails typed with
+  `InboundStoreError::ConversationIdMismatch` and mutates nothing. The first
+  `seed_canonical` atomically establishes the conversation's immutable
+  bootstrap initial-history identity (exact message count and content
+  digest); every reopen must re-supply an initial history **exactly equal**
+  to the original one — neither a shorter prefix nor an empty replacement of
+  a non-empty bootstrap is accepted (`InitialHistoryMismatch`), and an
+  explicitly empty bootstrap is recorded distinctly from "never
+  initialized". The boundary is never inferred from the current Ledger, and
+  a canonical Ledger without its bootstrap identity fails closed. A
+  correlation retry with a conflicting semantic payload is rejected
+  (`CorrelationConflict`) instead of silently returning the original
+  acceptance;
+- a durable Ledger append does **not** by itself imply a resumable runtime
+  safe boundary: the conversation domain's `recovery_safety` predicate fails
+  closed on restart for a Ledger head that ends inside an incomplete tool
+  turn or that contains a compaction summary whose Surface `Replace` is not
+  yet durably reconstructable (full #11). The runtime then returns typed
+  `ConversationRuntimeError::RecoveryRequired`, preserves every durable fact,
+  and never admits pending inbound. Live admission is additionally gated by
+  the same incomplete-tool-turn check, so a failed tool-result batch can
+  never be crossed by a later inbound batch;
+- a durable storage failure in idle admission is never silently swallowed:
+  one finite admission cycle owns an independent one-retry allowance for
+  `select_pending_batch` and `adopt_pending_batch`. The first transient
+  failure of either stage records a diagnostic, publishes a `DurableFailure`
+  observation, and re-kicks the admission wake gate exactly once. Successful
+  progress to the next stage does **not** erase an allowance already consumed
+  in that cycle; a second failure of either stage before semantic completion
+  moves the runtime into the explicit `DurabilityFailed` state (published as
+  `DurabilityFailed` and projected to the Runtime Client as
+  `RuntimeDurabilityFailed`) and no further re-kick is armed. The budget
+  resets only when selection proves there is no pending work or when the
+  selected batch is durably adopted, so alternating select/adopt faults
+  cannot hot-loop. Two independent first failures still use their respective
+  allowances and do not combine into a false `DurabilityFailed`.
+  Non-transient failures — a semantic contract failure (a pending item that
+  cannot be prepared for canonical adoption, an incomplete tool turn observed
+  by the live admission guard) or an already-terminal durable failure (an
+  active attempt's durable canonical-write failure, carried to the coordinator
+  in the settled attempt result; an exhausted background terminal-publication
+  budget, reported through the failure sink) — enter `DurabilityFailed`
+  immediately instead of consuming a futile storage retry. In
+  `DurabilityFailed`, accepted pending work remains intact, no attempt is
+  admitted, and new durable mutations (`submit_inbound`, `model_set`) are
+  rejected typed; shutdown and read-only inspection remain available;
+- background terminal settlement publishes its durable terminal inbound
+  **before** the record becomes observable as terminal: the terminal
+  candidate is computed first, the notification is durably accepted, and only
+  then is the terminal lifecycle committed. After the executor returns, the
+  registry retains the terminal candidate until settlement reaches a
+  terminal outcome: a durable acceptance failure transitions the record to
+  the explicit non-terminal `PublishingTerminal` state (never `Running` with
+  a lost result and no runner), and the runner itself drives the production
+  settlement continuation — exactly one registry-owned retry under the same
+  exactly-once correlation, then, when the bounded budget is exhausted, an
+  explicit failure report through the `BackgroundDurabilityFailureSink` seam
+  that places the owning `ConversationRuntime` into `DurabilityFailed` while
+  the candidate stays retained and observable. No runtime-owned execution
+  can leave its production settlement path without either terminal
+  publication or an explicit degraded outcome from its owning runtime. A
+  standalone never-claimed registry may retain an observable
+  `PublishingTerminal` candidate after its bounded budget is exhausted
+  because no `ConversationRuntime` durability-health owner exists. An
+  observable terminal settlement always implies the terminal inbound already
+  obtained durable ownership.
 
 ## Capability immutability
 

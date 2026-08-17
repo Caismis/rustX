@@ -36,8 +36,8 @@ use crate::context::projection::ContextProjection;
 use crate::context::summarizer::SummaryRequest;
 use crate::context::tokens::{ProviderObservedInput, TokenEstimator};
 use crate::conversation::{
-    CompactionCommit, ConversationError, ConversationState, StructuralIndex, SurfaceRevision,
-    SurfaceSpan, summary_message_id,
+    ConversationError, ConversationState, PreparedCompactionCommit, StructuralIndex,
+    SurfaceRevision, SurfaceSpan, summary_message_id,
 };
 use crate::message::content::TextBlock;
 use crate::message::types::{
@@ -177,7 +177,7 @@ impl ContextConfig {
 /// A plan is a pure function of the current Surface state; it names the
 /// exact inclusive active span to replace and carries the complete canonical
 /// messages of that span for summarization. Applying it produces the one
-/// [`CompactionCommit`] the conversation state linearizes.
+/// [`PreparedCompactionCommit`] the conversation state linearizes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompactionPlan {
     /// The Surface revision this plan was made against. A commit against a
@@ -556,7 +556,7 @@ impl ContextEngine {
         plan: &CompactionPlan,
         summary_text: &str,
         tool_definitions: &[ModelToolDefinition],
-    ) -> Result<(CompactionCommit, ContextProjection), ContextError> {
+    ) -> Result<(PreparedCompactionCommit, ContextProjection), ContextError> {
         if plan.retired.is_empty() {
             return Err(no_progress("the plan retires no canonical message"));
         }

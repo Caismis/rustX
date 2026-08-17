@@ -2655,7 +2655,10 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     });
     let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
     controller.await.expect("controller task");
-    assert!(mailbox.drain().is_none(), "the drained batch is consumed");
+    assert!(
+        mailbox.select_pending_batch().expect("select").is_none(),
+        "the drained batch is consumed"
+    );
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -2704,7 +2707,10 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         user_a.content != user_b.content || user_a.id != user_b.id,
         "A and B stay distinct canonical messages"
     );
-    assert!(mailbox.drain().is_none(), "the drained batch is consumed");
+    assert!(
+        mailbox.select_pending_batch().expect("select").is_none(),
+        "the drained batch is consumed"
+    );
 }
 
 /// The later-correction regression: enqueuing "deploy it" then "actually do
@@ -2918,7 +2924,10 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
         1,
         "a later enqueue never reopens the settled attempt"
     );
-    let batch = mailbox.drain().expect("the late message remains pending");
+    let batch = mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("the late message remains pending");
     assert_eq!(batch.items().len(), 1);
     assert_eq!(batch.items()[0].message().id, MessageId::new("msg-late-1"));
     assert_eq!(
@@ -2973,7 +2982,10 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
             .any(|block| matches!(block, MessageBlock::User(user) if user.id == MessageId::new("msg-cancel-a"))),
         "the pending message is not appended to attempt history"
     );
-    let batch = mailbox.drain().expect("the pending message remains");
+    let batch = mailbox
+        .select_pending_batch()
+        .expect("select")
+        .expect("the pending message remains");
     assert_eq!(batch.items().len(), 1);
     assert_eq!(
         batch.items()[0].message().id,
@@ -3061,7 +3073,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
         "the drained batch exists exactly once in canonical history"
     );
     assert!(
-        mailbox.drain().is_none(),
+        mailbox.select_pending_batch().expect("select").is_none(),
         "the appended batch is consumed from the mailbox and never requeued"
     );
     assert_eq!(
@@ -3118,7 +3130,13 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
         "no post-failure drain appends the pending message"
     );
     assert_eq!(
-        mailbox.drain().expect("pending").items()[0].message().id,
+        mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("pending")
+            .items()[0]
+            .message()
+            .id,
         MessageId::new("msg-fail-a")
     );
 }
@@ -3169,7 +3187,13 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
         },
     );
     assert_eq!(
-        mailbox.drain().expect("pending").items()[0].message().id,
+        mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("pending")
+            .items()[0]
+            .message()
+            .id,
         MessageId::new("msg-ut-a")
     );
 }

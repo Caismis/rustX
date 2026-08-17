@@ -593,6 +593,10 @@ async fn an_escaped_newline_stays_inside_one_record() {
         as_response(&outcome.records[1]).result,
         Some(RuntimeClientResult::InboundAccepted { .. })
     ));
+    // Acceptance is durable and asynchronous from admission: wait for the
+    // admitted attempt to settle so the committed inbound is deterministically
+    // folded into the snapshot before it is read.
+    fixture.runtime.settlement_signal().notified().await;
     let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
     let MessageBlock::User(message) = &snapshot.messages[0] else {
         panic!("the inbound message committed");

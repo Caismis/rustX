@@ -64,6 +64,9 @@ rmcp = { version = "3.1.2", default-features = false, features = [
     "reqwest",
 ] }
 schemars = "1"
+# The M8 durability backend (Issue #63 / #11). `bundled` compiles the SQLite
+# amalgamation so no system libsqlite3 is required on any CI platform.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

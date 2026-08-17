@@ -301,6 +301,17 @@ pub enum RuntimeClientEvent {
     /// inbound work. Detach remains available; the current attempt
     /// continues to its settlement.
     RuntimeShutdown,
+
+    /// The runtime's durable authority failed persistently: it has entered
+    /// an explicit degraded state and no new durable admission/execution
+    /// work may begin until it is reconstructed. Read-only inspection and
+    /// shutdown remain available.
+    RuntimeDurabilityFailed {
+        /// The operation that failed persistently.
+        operation: String,
+        /// The human-readable failure diagnostic.
+        diagnostic: String,
+    },
 }
 
 /// The platform-level settlement outcome of one attempt.

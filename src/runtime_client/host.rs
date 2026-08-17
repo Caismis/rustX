@@ -417,6 +417,9 @@ impl ClientInner {
                 InboundAdmissionError::EmptyContent => RuntimeClientError::InvalidRequest {
                     message: "inbound content must not be empty".to_owned(),
                 },
+                InboundAdmissionError::DurabilityFailed { message } => {
+                    RuntimeClientError::InvalidState { message }
+                }
                 InboundAdmissionError::Mailbox(error) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
@@ -642,6 +645,9 @@ impl ClientInner {
                 },
                 ModelUpdateError::InvalidConfiguration(message) => {
                     RuntimeClientError::InvalidModelConfiguration { message }
+                }
+                ModelUpdateError::DurabilityFailed { message } => {
+                    RuntimeClientError::InvalidState { message }
                 }
             })?;
         Ok(RuntimeClientResult::ModelSet {
@@ -3096,7 +3102,10 @@ mod tests {
             .enqueue(inbound_text("msg-after", "still authoritative"))
             .expect("the mailbox remains authoritative without a runtime");
         assert_eq!(sequence.get(), 1);
-        let batch = mailbox.drain().expect("the drain still works");
+        let batch = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("the select still works");
         assert_eq!(batch.items().len(), 1);
 
         // Authoritative background transition: same.
@@ -3373,6 +3382,8 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -3452,6 +3463,8 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -3962,6 +3975,8 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -4014,8 +4029,8 @@ mod tests {
             .collect();
         assert_eq!(
             inbound_ids,
-            vec!["conv-host-async-1", "conv-host-inbound-1"],
-            "both producers sequence through one mailbox in order"
+            vec!["conv-host-async-1", "conv-host-inbound-2"],
+            "both producers sequence through one durable sequence domain in order"
         );
         let (snapshot, _) = fixture.host.snapshot().expect("snapshot");
         assert!(
@@ -4040,6 +4055,8 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: Some(settlement_gate.clone()),
                 activation_gate: None,
+                submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -4261,6 +4278,8 @@ mod tests {
                 admission_gate: Some(admission_gate.clone()),
                 settlement_gate: None,
                 activation_gate: None,
+                submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -5616,6 +5635,8 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                submit_gate: None,
+                shutdown_arrival: None,
             }),
         )
         .await;
@@ -5855,6 +5876,8 @@ mod tests {
                 admission_gate: None,
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
+                submit_gate: None,
+                shutdown_arrival: None,
             }),
         )
         .await;

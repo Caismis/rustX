@@ -731,10 +731,13 @@ Implement interfaces for:
 
 - Runtime event writer
 - Message Ledger and Conversation Surface durability
+- Durable Pending Inbound Inbox (Issue #63, the M8a slice — implemented)
 
 Development backend:
 
-- JSONL / filesystem storage is acceptable for local validation.
+- SQLite (`rusqlite`, bundled) for the durable Message Ledger and the
+  durable inbound/canonical prefix; JSONL / filesystem storage remains
+  acceptable for other local validation.
 
 Semantics:
 
@@ -743,10 +746,60 @@ Semantics:
 - Stable event sequence numbers
 - Crash reconciliation
 - Unresolved tool-call handling
+- Acceptance linearization (durable before producer success) and
+  canonical-adoption linearization (atomic inbox→ledger transfer) for
+  accepted inbound work — see Issue #63.
 
 Exit criteria:
 
 - A local session can be reconstructed from durable facts after process restart.
+
+### Issue #63 (M8a) — implemented
+
+The durable Pending Inbound Inbox (`src/durable`) is the one authority for
+accepted-but-not-yet-adopted inbound: the per-conversation
+`InboundSequence` allocator, the acceptance transaction, the finite
+watermark selection, and the atomic canonical-adoption transaction.
+`ConversationInboundMailbox` is reduced to process-local wakeup/coordination;
+background terminal notifications converge on the same acceptance seam with
+a deterministic producer correlation, and the durable terminal inbound
+commits before the record is exposed as terminal.
+
+The durable store now persists the **complete** canonical Message Ledger —
+initial messages, adopted inbound `User` messages, `Assistant` messages,
+`ToolResult`s, context facts, and compaction summaries in canonical order —
+through the prepare → durable-append → infallible-install seam, not a
+filtered inbound-only prefix. A complete `ToolResult` sibling batch commits
+atomically. The store binds its database to one `ConversationId` and enforces
+that binding on reopen, records an explicit immutable bootstrap
+initial-history identity (exact message count and content digest) at the
+first seed and requires every reopen to re-supply an exactly equal initial
+history, and rejects a correlation retry with a conflicting semantic
+payload.
+
+A durable Ledger append does not by itself imply a resumable runtime safe
+boundary: the `recovery_safety` predicate fails closed on restart for an
+incomplete tool turn or a compaction summary whose Surface `Replace` is not
+yet durably reconstructable, returning a typed `RecoveryRequired`. Durable
+failure handling is owned by one finite admission cycle: transient `select`
+and `adopt` storage failures each earn one bounded retry allowance, and
+successful progress between those stages does not erase allowance already
+consumed in the cycle. A second failure of either stage before selection
+proves no pending work or adoption completes enters the explicit
+`DurabilityFailed` state; only those semantic completion points reset the
+cycle budget. Semantic contract failures and already-terminal durable
+failures (an active attempt's canonical-write failure, an exhausted
+background terminal-publication budget) fail closed immediately. Background
+terminal settlement is owned end-to-end by the registry: on publication
+failure the runner retains the terminal candidate in an explicit
+`PublishingTerminal` state, performs one registry-owned retry under the same
+exactly-once correlation, and reports an exhausted budget through the
+`BackgroundDurabilityFailureSink` seam so an owning runtime degrades
+explicitly. A standalone never-claimed registry may retain that observable
+candidate because it has no runtime durability-health owner. What remains
+for #11 is the durability of the remaining canonical domains (the Surface
+revision history needed to replay compaction replacements after restart) and
+full M9 recovery orchestration.
 
 ## Milestone 9 — Cancellation and runtime supervision
 

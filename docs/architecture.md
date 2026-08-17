@@ -38,8 +38,18 @@ runtime/cancellation.rs   CancellationSignal: the one runtime-owned
 runtime/types.rs           TokenMeasurement, TokenMeasurementSource,
                            CancellationReason, RuntimeError, RuntimeClock
 runtime/inbound.rs         ConversationInboundMailbox (per-conversation
-                           in-memory coordination contract): InboundSequence,
+                           process-local coordination contract over the
+                           durable Pending Inbound Inbox): InboundSequence,
                            InboundItem, InboundBatch, MailboxError
+durable/inbox.rs           InboundStore trait + domain types (InboundDraft,
+                           AcceptedInbound, PendingInboundItem, PendingBatch):
+                           the backend-independent acceptance/selection/adoption
+                           operations
+durable/sqlite.rs          SqliteInboundStore: the M8 SQLite backend (per-
+                           conversation durable sequence counter, pending
+                           records, correlation/idempotency state, the durable
+                           canonical Message Ledger, and the per-database
+                           ConversationId binding)
 runtime/continuation.rs   ProviderContinuationState boundary (OpenAI Responses
                            stored/stateless, Anthropic opaque state)
 message/content.rs         TextBlock, ImageReference, FileReference
@@ -271,6 +281,82 @@ Persist-before-publish applies to `RuntimeEvent` publication only: append
 the event durably before publishing it externally. It does not by itself
 provide a transaction with the Message Ledger.
 
+### 2.6 Durable Pending Inbound Inbox (Issue #63)
+
+The durable authority split for inbound work:
+
+```text
+Pending Inbound Inbox     = accepted / not-yet-adopted inbound durability
+                            (the one per-conversation InboundSequence
+                            allocator; the acceptance linearization point)
+ConversationInboundMailbox = process-local coordination / wakeup only
+Message Ledger            = adopted canonical conversational facts
+Conversation Surface      = current model-visible ordering/projection
+ConversationRuntime       = admission + safe-boundary adoption owner
+Event Journal             = execution facts
+```
+
+Two linearization points are defined exactly:
+
+1. **Acceptance** ([`InboundStore::accept_inbound`]): the durable
+   per-conversation sequence allocation, the pending record, and any
+   producer correlation/idempotency state commit in **one** transaction.
+   Producer success is returned only after that commit. The process-local
+   wake fires strictly after it and is a liveness optimization — a crash
+   between the commit and the wake loses nothing. A successful acceptance
+   and the coordinator's `shutdown` have one total ordering: the coordinator
+   holds its one state lock across the lifecycle/shutdown decision **and**
+   the durable acceptance, so shutdown linearizes either entirely before the
+   acceptance (the acceptance then fails with `Shutdown` and commits nothing)
+   or entirely after it.
+2. **Adoption** ([`InboundStore::adopt_pending_batch`]): the selected finite
+   watermark batch is appended to the durable canonical Message Ledger and
+   its pending records are removed in **one** transaction. Crash before the
+   commit leaves the items pending; crash after it makes them canonical
+   exactly once and never independently re-adoptable.
+
+`select_pending_batch` is a non-destructive finite-watermark snapshot: an
+item accepted after the snapshot belongs to the next batch. The durable
+store persists the **complete** canonical Message Ledger — adopted inbound
+`User` messages, `Assistant` messages, `ToolResult`s, context facts, and
+compaction summaries in canonical order — through the prepare →
+durable-append → infallible-install seam. A complete `ToolResult` sibling
+batch commits atomically (one durable transaction), so a partial tool-result
+group can never become canonical. Background terminal notifications converge
+on the same acceptance seam with a deterministic producer correlation, so a
+retry with the same committed correlation can never publish a duplicate
+notification; the durable terminal inbound commits **before** the background
+record is exposed as terminal, and a durable publication failure retains the
+terminal candidate in an explicit `PublishingTerminal` state rather than
+faking `Running`. Retaining the candidate is not the settlement ownership
+itself: the background runner drives the production settlement continuation
+— publication attempt #1 inside `finish`, then exactly one registry-owned
+retry under the same deterministic correlation (exactly-once even when
+attempt #1 committed durably but observed an error). When that bounded
+budget is exhausted, the candidate stays retained and the failure is
+reported to the owning `ConversationRuntime` through the narrow
+`BackgroundDurabilityFailureSink` seam, which places the owning runtime
+into its explicit `DurabilityFailed` state; no runtime-owned execution can
+leave its production settlement path without a guaranteed terminal
+publication or that explicit degraded outcome. A standalone never-claimed
+registry may retain an observable `PublishingTerminal` candidate when its
+bounded budget is exhausted because it has no owning `ConversationRuntime`
+durability-health sink.
+
+A durable Ledger append is **not** by itself a resumable runtime safe
+boundary. The durable store's complete Ledger ordering is the canonical
+truth of committed message facts; normal live runtime resumption additionally
+requires a durable recovery-safe boundary. The conversation domain's
+`recovery_safety` predicate answers that question fail-closed: a Ledger head
+that ends inside an incomplete tool turn (an `Assistant` tool call without
+its committed `ToolResult` sibling) or that contains a compaction summary
+whose Surface `Replace` is not yet durably reconstructable (full #11 surface
+revision durability remains a later milestone) refuses automatic recovery
+with a typed `ConversationRuntimeError::RecoveryRequired`, preserving every
+durable fact and never admitting pending inbound. Full historical
+Surface/Request/Event durability remains #11; recovery orchestration and
+unresolved-tool repair remain #12.
+
 ### Layer 1: Agent kernel
 
 The kernel owns deterministic execution semantics:
@@ -288,13 +374,16 @@ The kernel owns deterministic execution semantics:
 
 The kernel operates only on rustX canonical types and interfaces.
 
-The runtime inbound coordination contract (`src/runtime/inbound.rs`, Layer
-0) is deliberately not part of the kernel: the conversation mailbox is a
-conversation-owned in-memory queue shared by concurrent producers while the
-kernel's `AgentExecution` consumes exactly one finite batch per safe turn
-boundary. The mailbox is coordination only — canonical history is the
-durable conversation truth and the Event Journal records execution facts —
-and it is not a scheduler, supervisor, or persistent service layer.
+The runtime inbound boundary (`src/runtime/inbound.rs`, Layer 0) is
+coordination only. Since Issue #63 the [`ConversationInboundMailbox`] is the
+narrow acceptance/publisher seam over the **durable Pending Inbound Inbox**
+(`src/durable`): it validates eligibility and lifecycle, durably accepts
+through the [`InboundStore`], then publishes the process-local wake and
+observation. It owns **no** sequence allocator and **no** payload queue. The
+kernel's `AgentExecution` selects and adopts exactly one finite batch per
+safe turn boundary. Canonical history is the durable Message Ledger and the
+Event Journal records execution facts; the mailbox is not a scheduler,
+supervisor, or persistent service layer.
 
 #### M3 implementation (agent loop)
 

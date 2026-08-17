@@ -205,6 +205,7 @@ impl RuntimeClientProjection {
             snapshot: RuntimeClientSnapshot {
                 conversation_id,
                 shutting_down: false,
+                durability_failure: None,
                 messages: initial_messages,
                 attempt: None,
                 inbound: InboundDiagnostics {
@@ -390,6 +391,26 @@ impl RuntimeClientProjection {
             ConversationObservation::Shutdown => {
                 self.snapshot.shutting_down = true;
                 vec![RuntimeClientEvent::RuntimeShutdown]
+            }
+            ConversationObservation::DurableFailure { .. } => {
+                // A transient durable-authority failure is recorded and
+                // re-kicked; it does not yet change the externally visible
+                // runtime health.
+                Vec::new()
+            }
+            ConversationObservation::DurabilityFailed {
+                operation,
+                diagnostic,
+            } => {
+                self.snapshot.durability_failure =
+                    Some(super::snapshot::RuntimeDurabilityFailure {
+                        operation: operation.clone(),
+                        diagnostic: diagnostic.clone(),
+                    });
+                vec![RuntimeClientEvent::RuntimeDurabilityFailed {
+                    operation,
+                    diagnostic,
+                }]
             }
         }
     }
@@ -2520,7 +2541,10 @@ mod tests {
         let second = mailbox.enqueue(item("m2")).expect("enqueue");
 
         let mut projection = projection();
-        let drained = mailbox.drain().expect("batch");
+        let drained = mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("batch");
         let _ = (first, second);
         // The authoritative items fold through the enqueue observations.
         for entry in drained.items() {
