@@ -104,9 +104,10 @@
 //!
 //! Once a background executor has returned, the registry owns settlement
 //! until exactly one stable outcome exists. Retaining the terminal candidate
-//! is not enough — the runner task itself drives the production settlement
-//! continuation, so no execution can remain in the non-terminal
-//! `PublishingTerminal` state without a live owner:
+//! is not enough for runtime-owned work — the runner task itself drives the
+//! production settlement continuation, so no runtime-owned execution can
+//! leave its production settlement path without terminal publication or an
+//! explicit degraded outcome from its owning `ConversationRuntime`:
 //!
 //! ```text
 //! executor returns
@@ -122,6 +123,11 @@
 //!           [`BackgroundDurabilityFailureSink`] seam while the candidate
 //!           stays retained and observable
 //! ```
+//!
+//! A standalone registry that has never been claimed by a
+//! `ConversationRuntime` has no durability-health owner; after its bounded
+//! budget is exhausted it may therefore retain an observable
+//! `PublishingTerminal` candidate without a runtime degradation sink.
 //!
 //! The budget is exactly two publication attempts driven synchronously by
 //! the runner: no sleep, no hot loop, no process-global worker, and no
@@ -230,8 +236,9 @@ pub trait BackgroundObserver: Send + Sync {
 /// terminal candidate stays retained in the explicit non-terminal
 /// [`BackgroundLifecycle::PublishingTerminal`] state and the registry
 /// reports the failure through this seam, so the owning
-/// `ConversationRuntime` enters its explicit durable-failure state and no
-/// execution is left ownerless.
+/// `ConversationRuntime` enters its explicit durable-failure state. A
+/// standalone never-claimed registry may retain the observable candidate
+/// without this runtime-owned degraded outcome because no owner exists.
 ///
 /// The sink is invoked by the runner **without** the registry lock held:
 /// the runtime-side implementation acquires the coordinator lock, and the
@@ -1048,8 +1055,11 @@ impl ConversationBackgroundRegistry {
 
     /// The production settlement continuation of one returned executor
     /// (Issue #63): the runner drives the bounded terminal-publication
-    /// budget itself, so no execution can remain in `PublishingTerminal`
-    /// without a live owner.
+    /// budget itself, so no runtime-owned execution can leave its settlement
+    /// path without terminal publication or an explicit degraded outcome.
+    /// A standalone never-claimed registry may retain the candidate in
+    /// `PublishingTerminal` after the bounded budget is exhausted because it
+    /// has no owning `ConversationRuntime` to degrade.
     ///
     /// Attempt #1 runs inside [`ConversationBackgroundRegistry::finish`];
     /// exactly one registry-owned retry follows under the same
@@ -1966,8 +1976,8 @@ mod tests {
     /// exhausted, the terminal candidate remains retained in the explicit
     /// non-terminal `PublishingTerminal` state, no false terminal
     /// publication exists, and the registry reports the failure through the
-    /// narrow durability-failure seam exactly once — no hot loop, no
-    /// further attempts, no ownerless record.
+    /// narrow durability-failure seam exactly once — no hot loop and no
+    /// further publication attempts.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn exhausted_publication_budget_retains_candidate_and_reports_failure() {
         let fixture = file_registry("conv-bg-fault");

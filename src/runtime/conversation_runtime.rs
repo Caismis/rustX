@@ -450,10 +450,10 @@ struct CurrentAttempt {
 /// The semantic durable operations of the coordinator's durability-health
 /// contract (Issue #63).
 ///
-/// The bounded retry budget is keyed by the operation: a transient failure
-/// arms exactly one retry of the *same* operation, and only a second failure
-/// of that same operation fails closed. A failure of a different operation
-/// supersedes the pending retry and begins its own bounded retry.
+/// The retry budget is owned by one finite admission cycle, not by the last
+/// operation that happened to fail. [`AdmissionRetryBudget`] retains the
+/// consumed allowance for each transient stage while that cycle moves from
+/// selection to adoption.
 ///
 /// Only genuine transient storage failures earn a retry. A semantic
 /// contract failure (a pending item that cannot be prepared for canonical
@@ -500,26 +500,73 @@ impl DurableOperation {
     }
 }
 
+/// The bounded transient retry allowance of one finite admission cycle.
+///
+/// Each transient stage may fail once and receive one immediate re-kick. The
+/// bits are deliberately retained when the cycle advances from selection to
+/// adoption, so a later failure cannot erase earlier retry debt. The budget
+/// is reset only when the cycle reaches a semantic completion boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AdmissionRetryBudget {
+    /// Whether the one select retry has already been consumed.
+    select_retry_used: bool,
+    /// Whether the one adopt retry has already been consumed.
+    adopt_retry_used: bool,
+}
+
+impl AdmissionRetryBudget {
+    /// Consumes the one retry allowance for a transient operation.
+    ///
+    /// Returns `true` when the allowance was available and is now consumed;
+    /// returns `false` when that operation has already failed once in the
+    /// current admission cycle.
+    fn try_consume(&mut self, operation: DurableOperation) -> bool {
+        let used = match operation {
+            DurableOperation::SelectPendingBatch => &mut self.select_retry_used,
+            DurableOperation::AdoptPendingBatch => &mut self.adopt_retry_used,
+            _ => unreachable!("only transient operations have an admission retry budget"),
+        };
+        if *used {
+            false
+        } else {
+            *used = true;
+            true
+        }
+    }
+}
+
+/// The most recent transient failure whose bounded re-kick is in flight.
+///
+/// This is only wake/diagnostic state. It is intentionally separate from
+/// [`AdmissionRetryBudget`], because operation identity must not own the
+/// lifetime of retry debt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingDurabilityRetry {
+    /// The operation that will be retried by the re-kick.
+    operation: DurableOperation,
+    /// The first-failure diagnostic.
+    diagnostic: String,
+}
+
 /// The coordinator's durable-authority health state (Issue #63).
 ///
 /// A storage failure that a required transition cannot proceed without is
-/// never silently swallowed and never retried forever: the first transient
-/// failure of an operation records a diagnostic and arms exactly one
-/// bounded re-kick **of that operation**; a second failure of the same
-/// operation moves the runtime into an explicit `DurabilityFailed` state in
-/// which no new durable admission/execution work may begin. A
-/// non-transient failure enters `DurabilityFailed` immediately.
+/// never silently swallowed and never retried forever. The admission-cycle
+/// budget records one allowance independently for select and adopt, while
+/// this state retains only the latest pending re-kick/diagnostic. A second
+/// failure of either transient stage in the same cycle moves the runtime into
+/// an explicit `DurabilityFailed` state in which no new durable
+/// admission/execution work may begin. A non-transient failure enters
+/// `DurabilityFailed` immediately.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DurabilityHealth {
-    /// The durable authority is operational.
-    Healthy,
-    /// One transient failure of `operation` was recorded; a single bounded
-    /// retry of that same operation is armed.
-    RetryPending {
-        /// The operation whose retry is armed.
-        operation: DurableOperation,
-        /// The failure diagnostic.
-        diagnostic: String,
+    /// The current finite admission cycle, including its independent retry
+    /// budget and (when present) the latest re-kick diagnostic.
+    AdmissionCycle {
+        /// The independent select/adopt retry allowances for this cycle.
+        budget: AdmissionRetryBudget,
+        /// The latest transient failure whose re-kick is armed.
+        pending_retry: Option<PendingDurabilityRetry>,
     },
     /// Persistent failure after the bounded retry (or an immediately
     /// non-transient failure): no new durable work may begin until the
@@ -837,18 +884,18 @@ impl RuntimeInner {
     }
 
     /// Records a durable-authority failure without silently swallowing it
-    /// (Issue #63, Finding 5), keyed by the semantic durable operation.
+    /// (Issue #63, Finding 5).
     ///
-    /// A transient storage failure ([`DurableOperation::is_transient`]):
-    /// the first failure of an operation records a diagnostic, publishes a
-    /// [`ConversationObservation::DurableFailure`], and arms exactly one
-    /// bounded retry by re-kicking the admission wake gate. A second
-    /// failure of the *same* operation moves the runtime into the explicit
+    /// A transient storage failure ([`DurableOperation::is_transient`])
+    /// consumes the allowance for that stage in the current finite admission
+    /// cycle, publishes a [`ConversationObservation::DurableFailure`], and
+    /// arms exactly one bounded re-kick. A second failure of that stage in
+    /// the same cycle moves the runtime into the explicit
     /// [`DurabilityHealth::DurabilityFailed`] state and publishes a
     /// [`ConversationObservation::DurabilityFailed`]; no further re-kick is
-    /// armed, so a persistent failure never becomes a hot loop. A failure
-    /// of a *different* operation supersedes the pending retry and begins
-    /// its own bounded retry.
+    /// armed, so a persistent or alternating fault cannot become a hot loop.
+    /// A failure of a different transient stage consumes its own allowance
+    /// without erasing the first stage's debt.
     ///
     /// A non-transient failure (a semantic contract failure or an
     /// already-terminal durable failure) enters `DurabilityFailed`
@@ -874,61 +921,69 @@ impl RuntimeInner {
             });
             return;
         }
-        match &state.durability_health {
-            DurabilityHealth::Healthy => {
-                state.durability_health = DurabilityHealth::RetryPending {
-                    operation,
-                    diagnostic: diagnostic.clone(),
-                };
-                self.observe(ConversationObservation::DurableFailure {
-                    message: diagnostic,
-                });
-                self.wake.notify.notify_one();
-            }
-            DurabilityHealth::RetryPending {
-                operation: pending, ..
-            } if *pending == operation => {
-                state.durability_health = DurabilityHealth::DurabilityFailed {
-                    operation,
-                    diagnostic: diagnostic.clone(),
-                };
-                self.observe(ConversationObservation::DurabilityFailed {
-                    operation: operation.as_str().to_owned(),
-                    diagnostic,
-                });
-            }
-            DurabilityHealth::RetryPending { .. } => {
-                // A failure of a different operation begins its own bounded
-                // retry; the earlier operation's pending retry is
-                // superseded.
-                state.durability_health = DurabilityHealth::RetryPending {
-                    operation,
-                    diagnostic: diagnostic.clone(),
-                };
-                self.observe(ConversationObservation::DurableFailure {
-                    message: diagnostic,
-                });
-                self.wake.notify.notify_one();
+        let retry_armed = match &mut state.durability_health {
+            DurabilityHealth::AdmissionCycle {
+                budget,
+                pending_retry,
+            } => {
+                if budget.try_consume(operation) {
+                    *pending_retry = Some(PendingDurabilityRetry {
+                        operation,
+                        diagnostic: diagnostic.clone(),
+                    });
+                    true
+                } else {
+                    false
+                }
             }
             DurabilityHealth::DurabilityFailed { .. } => {
                 // Unreachable: guarded above.
+                false
             }
+        };
+        if retry_armed {
+            self.observe(ConversationObservation::DurableFailure {
+                message: diagnostic,
+            });
+            self.wake.notify.notify_one();
+        } else {
+            state.durability_health = DurabilityHealth::DurabilityFailed {
+                operation,
+                diagnostic: diagnostic.clone(),
+            };
+            self.observe(ConversationObservation::DurabilityFailed {
+                operation: operation.as_str().to_owned(),
+                diagnostic,
+            });
         }
     }
 
-    /// Records the success of one durable operation: a pending bounded
-    /// retry of that same operation resets to [`DurabilityHealth::Healthy`].
-    /// A success of a different operation leaves a pending retry untouched —
-    /// the failed operation still owes its retry.
+    /// Records progress through one durable stage. This clears only the
+    /// matching pending re-kick marker; it never resets the admission-cycle
+    /// budget. A stage success is not a semantic completion boundary.
     fn record_durability_success(state: &mut CoordinatorState, operation: DurableOperation) {
-        if matches!(
-            &state.durability_health,
-            DurabilityHealth::RetryPending {
-                operation: pending,
-                ..
-            } if *pending == operation
-        ) {
-            state.durability_health = DurabilityHealth::Healthy;
+        if let DurabilityHealth::AdmissionCycle { pending_retry, .. } = &mut state.durability_health
+            && pending_retry
+                .as_ref()
+                .is_some_and(|pending| pending.operation == operation)
+        {
+            *pending_retry = None;
+        }
+    }
+
+    /// Completes the current finite admission cycle and starts a fresh one.
+    ///
+    /// This is intentionally called only after selection proves there is no
+    /// pending work or after the selected batch is durably adopted. Success
+    /// of an intermediate select/adopt stage must retain the consumed bits.
+    fn complete_admission_cycle(state: &mut CoordinatorState) {
+        if let DurabilityHealth::AdmissionCycle {
+            budget,
+            pending_retry,
+        } = &mut state.durability_health
+        {
+            *budget = AdmissionRetryBudget::default();
+            *pending_retry = None;
         }
     }
 
@@ -1278,6 +1333,10 @@ impl RuntimeInner {
             }
             Ok(None) => {
                 Self::record_durability_success(&mut state, DurableOperation::SelectPendingBatch);
+                // No pending work is a semantic completion boundary for the
+                // finite admission cycle. Only here, or after successful
+                // batch adoption below, is the retry budget reset.
+                Self::complete_admission_cycle(&mut state);
                 return;
             }
             Err(error) => {
@@ -1332,7 +1391,9 @@ impl RuntimeInner {
             );
             return;
         }
-        Self::record_durability_success(&mut state, DurableOperation::AdoptPendingBatch);
+        // Durable adoption completes this finite admission cycle. The next
+        // cycle starts with a fresh select/adopt retry allowance.
+        Self::complete_admission_cycle(&mut state);
         // Ownership transfer: the coordinator hands its conversation state
         // to the attempt. From here until settlement the coordinator holds
         // `None` and the attempt is the single mutable conversation
@@ -1622,7 +1683,10 @@ impl ConversationRuntime {
                 current_attempt: None,
                 shutting_down: false,
                 next_attempt_seq: 0,
-                durability_health: DurabilityHealth::Healthy,
+                durability_health: DurabilityHealth::AdmissionCycle {
+                    budget: AdmissionRetryBudget::default(),
+                    pending_retry: None,
+                },
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
@@ -1881,7 +1945,9 @@ impl ConversationRuntime {
         if state.durability_health.is_failed() {
             let message = match &state.durability_health {
                 DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
-                _ => unreachable!("is_failed implies DurabilityFailed"),
+                DurabilityHealth::AdmissionCycle { .. } => {
+                    unreachable!("is_failed implies DurabilityFailed")
+                }
             };
             return Err(InboundAdmissionError::DurabilityFailed { message });
         }
@@ -2001,7 +2067,9 @@ impl ConversationRuntime {
         if state.durability_health.is_failed() {
             let message = match &state.durability_health {
                 DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
-                _ => unreachable!("is_failed implies DurabilityFailed"),
+                DurabilityHealth::AdmissionCycle { .. } => {
+                    unreachable!("is_failed implies DurabilityFailed")
+                }
             };
             return Err(ModelUpdateError::DurabilityFailed { message });
         }
@@ -3471,8 +3539,8 @@ mod tests {
     }
 
     /// Issue #63 (Finding 5 / Important 5): a transient select storage
-    /// failure follows the bounded retry and returns to Healthy; the pending
-    /// item is admitted exactly once.
+    /// failure follows the bounded retry and completes a fresh admission
+    /// cycle; the pending item is admitted exactly once.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn transient_select_failure_recovers_and_admits_once() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3514,8 +3582,8 @@ mod tests {
             "exactly one transient DurableFailure observation"
         );
 
-        // The retry adopts the pending item exactly once and the runtime
-        // returns to Healthy (settlement completes).
+        // The retry adopts the pending item exactly once and completes the
+        // admission cycle (settlement completes).
         runtime.settlement_signal().notified().await;
         let ledger = runtime.coordinator_ledger().expect("settled");
         assert!(
@@ -3592,11 +3660,11 @@ mod tests {
     }
 
     /// Issue #63 (retry domain): two independent first failures of
-    /// *different* durable operations never combine into a false
-    /// `DurabilityFailed` — the retry budget is keyed by the semantic
-    /// operation, so the adopt failure gets its own bounded retry after
-    /// the select retry already succeeded; the item is then admitted
-    /// exactly once and the runtime returns to `Healthy`.
+    /// *different* durable stages never combine into a false
+    /// `DurabilityFailed` — the finite admission-cycle budget gives select
+    /// and adopt independent allowances, so the adopt failure gets its own
+    /// bounded retry after the select retry already succeeded; the item is
+    /// then admitted exactly once and the cycle completes normally.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn select_then_adopt_failures_get_independent_bounded_retries() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -3616,11 +3684,11 @@ mod tests {
             .expect("bridge");
         runtime.activate();
 
-        // One select fault and one adopt fault: pass 1 fails the select
-        // (RetryPending(select) + re-kick); pass 2 selects successfully
-        // (the select retry resets) but fails the adopt — a different
-        // operation's first failure, which arms its own bounded retry;
-        // pass 3 adopts successfully (Healthy) and admits the item.
+        // One select fault and one adopt fault: pass 1 consumes the select
+        // retry allowance and re-kicks; pass 2 selects successfully (the
+        // select allowance remains consumed) but fails the adopt, which
+        // consumes adopt's independent allowance; pass 3 adopts successfully
+        // and completes the cycle before admitting the item.
         store.arm_fail_select_times(1);
         store.arm_fail_adopt_times(1);
         let admission = runtime
@@ -3660,6 +3728,132 @@ mod tests {
         );
     }
 
+    /// Issue #63 (retry-cycle budget): alternating transient failures cannot
+    /// keep replacing one another's retry debt. The deterministic ordered
+    /// fault script forces exactly this admission sequence:
+    ///
+    /// ```text
+    /// select fails -> select succeeds -> adopt fails -> select fails again
+    /// ```
+    ///
+    /// The second select failure exhausts the select allowance retained from
+    /// the first operation, so the runtime fails closed before any attempt is
+    /// admitted. The test uses the real Runtime Client projection to prove
+    /// the explicit degraded state is observable; the timeout only guards
+    /// against a deadlocked or non-progressing test.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn alternating_select_adopt_failures_exhaust_one_admission_cycle() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+                "conv-alternating-retry-cycle",
+            ))
+            .expect("in-memory store"),
+        );
+        let mailbox =
+            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
+        let (runtime, model) =
+            headless_runtime_over_mailbox(&dir, "conv-alternating-retry-cycle", mailbox).await;
+        let host = crate::runtime_client::RuntimeClientHost::new(
+            crate::runtime_client::RuntimeClientHostConfig {
+                runtime: runtime.clone(),
+                replay_limit: None,
+            },
+        )
+        .expect("runtime client host");
+        let (attachment, _) = host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("attach runtime client");
+        let subscription = attachment
+            .subscribe_events(crate::runtime_client::RuntimeClientCursor::new(0))
+            .expect("subscribe runtime client");
+        runtime.activate();
+
+        // Activation's empty admission cycle is complete before this script
+        // is armed. The pending item therefore drives exactly the four
+        // operations named above.
+        store.arm_admission_fault_script([
+            crate::durable::sqlite::AdmissionFaultOperation::SelectPendingBatch,
+            crate::durable::sqlite::AdmissionFaultOperation::AdoptPendingBatch,
+            crate::durable::sqlite::AdmissionFaultOperation::SelectPendingBatch,
+        ]);
+        runtime
+            .submit_inbound(text_content("item"))
+            .expect("accepted");
+
+        let failure = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match subscription.next().await {
+                    crate::runtime_client::EventDelivery::Event(event)
+                        if matches!(
+                            &event.event,
+                            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+                                operation,
+                                ..
+                            } if operation == "select_pending_batch"
+                        ) =>
+                    {
+                        break event;
+                    }
+                    crate::runtime_client::EventDelivery::Event(_) => {}
+                    delivery => panic!("unexpected terminal client delivery: {delivery:?}"),
+                }
+            }
+        })
+        .await
+        .expect("the alternating fault sequence reaches explicit failure");
+        assert!(matches!(
+            failure.event,
+            crate::runtime_client::RuntimeClientEvent::RuntimeDurabilityFailed {
+                operation,
+                ..
+            } if operation == "select_pending_batch"
+        ));
+
+        // The ordered script was fully consumed, proving the intended
+        // deterministic operation sequence rather than a persistent
+        // same-operation shortcut.
+        assert!(
+            store
+                .admission_fault_script
+                .lock()
+                .expect("admission fault script lock")
+                .is_empty(),
+            "select fail -> select success -> adopt fail -> select fail"
+        );
+
+        let (snapshot, _) = host.snapshot().expect("client snapshot");
+        assert_eq!(
+            snapshot
+                .durability_failure
+                .as_ref()
+                .map(|failure| failure.operation.as_str()),
+            Some("select_pending_batch"),
+            "the Runtime Client projection exposes the explicit degraded state"
+        );
+        assert_eq!(
+            store.load_pending().expect("load pending").len(),
+            1,
+            "the accepted pending item remains durable and intact"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "no attempt is admitted through the failed adoption cycle"
+        );
+        assert!(
+            model.requests().is_empty(),
+            "the failed admission cycle never reaches the model"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
+        assert!(matches!(
+            subscription.try_next(),
+            crate::runtime_client::EventDelivery::Pending
+        ));
+    }
+
     /// Issue #63 (retry domain): a persistent adopt storage failure moves
     /// the runtime into the explicit `DurabilityFailed(adopt_pending_batch)`
     /// state after its own bounded retry; the pending work remains intact,
@@ -3683,9 +3877,10 @@ mod tests {
             .expect("bridge");
         runtime.activate();
 
-        // Two adopt faults: pass 1 selects successfully but fails the
-        // adopt (RetryPending(adopt) + re-kick); the retry fails the same
-        // operation again -> explicit DurabilityFailed, no hot loop.
+        // Two adopt faults: pass 1 selects successfully but fails the adopt
+        // (the adopt allowance is consumed and a re-kick is armed); the retry
+        // fails the same stage again -> explicit DurabilityFailed, no hot
+        // loop.
         store.arm_fail_adopt_times(2);
         let admission = runtime
             .submit_inbound(text_content("item"))
@@ -3703,7 +3898,7 @@ mod tests {
             .count();
         assert_eq!(
             transient, 1,
-            "exactly one transient failure before the same-operation second failure"
+            "exactly one transient failure before the second adopt-stage failure"
         );
 
         // Pending remains durably intact, no attempt was admitted, and a

@@ -30,6 +30,9 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+#[cfg(test)]
+use std::collections::VecDeque;
+
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 #[cfg(test)]
@@ -45,6 +48,20 @@ use super::inbox::{
     AcceptedInbound, InboundDraft, InboundStore, InboundStoreError, PendingBatch,
     PendingInboundItem,
 };
+
+/// One operation in a deterministic admission fault script.
+///
+/// This is test-only because production storage failures come from the real
+/// backend, while state-machine regressions need to prescribe an exact
+/// cross-operation sequence without relying on timing.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionFaultOperation {
+    /// Fail the next scripted pending-batch selection.
+    SelectPendingBatch,
+    /// Fail the next scripted pending-batch adoption.
+    AdoptPendingBatch,
+}
 
 /// The `SQLite` durable Pending Inbound Inbox of one conversation.
 pub struct SqliteInboundStore {
@@ -67,6 +84,10 @@ pub struct SqliteInboundStore {
     /// production.
     #[cfg(test)]
     pub(crate) fail_select_remaining: Arc<AtomicUsize>,
+    /// Test-only ordered fault script for deterministic cross-operation
+    /// admission regressions. Never present in production builds.
+    #[cfg(test)]
+    pub(crate) admission_fault_script: Arc<Mutex<VecDeque<AdmissionFaultOperation>>>,
 }
 
 impl core::fmt::Debug for SqliteInboundStore {
@@ -160,6 +181,8 @@ impl SqliteInboundStore {
             fail_canonical_append_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            admission_fault_script: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
@@ -238,6 +261,36 @@ impl SqliteInboundStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_select_times(&self, n: usize) {
         self.fail_select_remaining.fetch_add(n, Ordering::SeqCst);
+    }
+
+    /// Appends an ordered admission fault script. Each operation consumes the
+    /// next matching entry at the real store boundary; a mismatch leaves the
+    /// script intact, so a test can assert that the prescribed sequence was
+    /// actually exercised.
+    #[cfg(test)]
+    pub(crate) fn arm_admission_fault_script(
+        &self,
+        operations: impl IntoIterator<Item = AdmissionFaultOperation>,
+    ) {
+        self.admission_fault_script
+            .lock()
+            .expect("admission fault script lock poisoned")
+            .extend(operations);
+    }
+
+    /// Consumes the next matching ordered admission fault. Test-only.
+    #[cfg(test)]
+    fn consume_admission_fault(&self, operation: AdmissionFaultOperation) -> bool {
+        let mut script = self
+            .admission_fault_script
+            .lock()
+            .expect("admission fault script lock poisoned");
+        if script.front().copied() == Some(operation) {
+            script.pop_front();
+            true
+        } else {
+            false
+        }
     }
 
     /// Consumes one armed fault of `counter`: returns `true` (and
@@ -441,6 +494,10 @@ impl InboundStore for SqliteInboundStore {
 
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, InboundStoreError> {
         #[cfg(test)]
+        if self.consume_admission_fault(AdmissionFaultOperation::SelectPendingBatch) {
+            return Err(storage("fault injected: scripted select pending batch"));
+        }
+        #[cfg(test)]
         if self
             .fail_select_remaining
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
@@ -536,6 +593,10 @@ impl InboundStore for SqliteInboundStore {
             [watermark_i64],
         )
         .map_err(|error| storage(format!("adopt delete: {error}")))?;
+        #[cfg(test)]
+        if self.consume_admission_fault(AdmissionFaultOperation::AdoptPendingBatch) {
+            return Err(storage("fault injected: scripted adopt pending batch"));
+        }
         #[cfg(test)]
         if Self::consume_fault(&self.fail_adopt_remaining) {
             return Err(storage("fault injected: adopt commit"));

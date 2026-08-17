@@ -221,27 +221,29 @@ Message Ledger          = adopted canonical conversational facts
   the same incomplete-tool-turn check, so a failed tool-result batch can
   never be crossed by a later inbound batch;
 - a durable storage failure in idle admission is never silently swallowed:
-  the retry budget is keyed by the semantic durable operation. The first
-  transient failure of an operation (`select_pending_batch` /
-  `adopt_pending_batch`) records a diagnostic, publishes a `DurableFailure`
-  observation, and re-kicks the admission wake gate exactly once; a second
-  failure of the **same** operation moves the runtime into the explicit
-  `DurabilityFailed` state (published as `DurabilityFailed` and projected to
-  the Runtime Client as `RuntimeDurabilityFailed`) and no further re-kick is
-  armed, so a persistent failure is not a hot loop. A failure of a
-  different operation supersedes the pending retry and begins its own
-  bounded retry — two independent first failures never combine into a false
-  `DurabilityFailed`. Non-transient failures — a semantic contract failure
-  (a pending item that cannot be prepared for canonical adoption, an
-  incomplete tool turn observed by the live admission guard) or an
-  already-terminal durable failure (an active attempt's durable
-  canonical-write failure, carried to the coordinator in the settled attempt
-  result; an exhausted background terminal-publication budget, reported
-  through the failure sink) — enter `DurabilityFailed` immediately instead
-  of consuming a futile storage retry. In `DurabilityFailed`,
-  accepted pending work remains intact, no attempt is admitted, and new
-  durable mutations (`submit_inbound`, `model_set`) are rejected typed;
-  shutdown and read-only inspection remain available;
+  one finite admission cycle owns an independent one-retry allowance for
+  `select_pending_batch` and `adopt_pending_batch`. The first transient
+  failure of either stage records a diagnostic, publishes a `DurableFailure`
+  observation, and re-kicks the admission wake gate exactly once. Successful
+  progress to the next stage does **not** erase an allowance already consumed
+  in that cycle; a second failure of either stage before semantic completion
+  moves the runtime into the explicit `DurabilityFailed` state (published as
+  `DurabilityFailed` and projected to the Runtime Client as
+  `RuntimeDurabilityFailed`) and no further re-kick is armed. The budget
+  resets only when selection proves there is no pending work or when the
+  selected batch is durably adopted, so alternating select/adopt faults
+  cannot hot-loop. Two independent first failures still use their respective
+  allowances and do not combine into a false `DurabilityFailed`.
+  Non-transient failures — a semantic contract failure (a pending item that
+  cannot be prepared for canonical adoption, an incomplete tool turn observed
+  by the live admission guard) or an already-terminal durable failure (an
+  active attempt's durable canonical-write failure, carried to the coordinator
+  in the settled attempt result; an exhausted background terminal-publication
+  budget, reported through the failure sink) — enter `DurabilityFailed`
+  immediately instead of consuming a futile storage retry. In
+  `DurabilityFailed`, accepted pending work remains intact, no attempt is
+  admitted, and new durable mutations (`submit_inbound`, `model_set`) are
+  rejected typed; shutdown and read-only inspection remain available;
 - background terminal settlement publishes its durable terminal inbound
   **before** the record becomes observable as terminal: the terminal
   candidate is computed first, the notification is durably accepted, and only
@@ -254,9 +256,14 @@ Message Ledger          = adopted canonical conversational facts
   exactly-once correlation, then, when the bounded budget is exhausted, an
   explicit failure report through the `BackgroundDurabilityFailureSink` seam
   that places the owning `ConversationRuntime` into `DurabilityFailed` while
-  the candidate stays retained and observable. No execution can remain
-  ownerless after its runner exits, and an observable terminal settlement
-  always implies the terminal inbound already obtained durable ownership.
+  the candidate stays retained and observable. No runtime-owned execution
+  can leave its production settlement path without either terminal
+  publication or an explicit degraded outcome from its owning runtime. A
+  standalone never-claimed registry may retain an observable
+  `PublishingTerminal` candidate after its bounded budget is exhausted
+  because no `ConversationRuntime` durability-health owner exists. An
+  observable terminal settlement always implies the terminal inbound already
+  obtained durable ownership.
 
 ## Capability immutability
 

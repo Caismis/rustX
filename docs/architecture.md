@@ -335,10 +335,13 @@ retry under the same deterministic correlation (exactly-once even when
 attempt #1 committed durably but observed an error). When that bounded
 budget is exhausted, the candidate stays retained and the failure is
 reported to the owning `ConversationRuntime` through the narrow
-`BackgroundDurabilityFailureSink` seam, which places the runtime into its
-explicit `DurabilityFailed` state; no execution can remain in
-`PublishingTerminal` without a guaranteed production continuation or an
-explicit degraded outcome.
+`BackgroundDurabilityFailureSink` seam, which places the owning runtime
+into its explicit `DurabilityFailed` state; no runtime-owned execution can
+leave its production settlement path without a guaranteed terminal
+publication or that explicit degraded outcome. A standalone never-claimed
+registry may retain an observable `PublishingTerminal` candidate when its
+bounded budget is exhausted because it has no owning `ConversationRuntime`
+durability-health sink.
 
 A durable Ledger append is **not** by itself a resumable runtime safe
 boundary. The durable store's complete Ledger ordering is the canonical

@@ -124,17 +124,19 @@ pub(crate) enum ConversationObservation {
     Shutdown,
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow
-    /// (Issue #63, Finding 5). The failure is recorded and one bounded retry
-    /// of that same semantic operation is scheduled; accepted pending work
-    /// remains intact.
+    /// (Issue #63, Finding 5). The failure consumes that stage's one bounded
+    /// retry allowance for the current finite admission cycle and schedules a
+    /// re-kick; the allowance remains consumed if the cycle advances to the
+    /// other durable stage. Accepted pending work remains intact.
     DurableFailure {
         /// The human-readable storage failure description.
         #[allow(dead_code)]
         // surfaced by tests; the projection folds it without a client event
         message: String,
     },
-    /// The durable authority failed persistently — a second failure of the
-    /// same retried operation, or an immediately non-transient durable
+    /// The durable authority failed persistently — a second failure of either
+    /// transient admission stage in the same finite cycle, or an immediately
+    /// non-transient durable
     /// failure (a semantic contract failure, an active attempt's
     /// canonical-write failure, or an exhausted background
     /// terminal-publication budget): the runtime has entered an explicit
