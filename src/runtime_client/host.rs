@@ -417,6 +417,9 @@ impl ClientInner {
                 InboundAdmissionError::EmptyContent => RuntimeClientError::InvalidRequest {
                     message: "inbound content must not be empty".to_owned(),
                 },
+                InboundAdmissionError::DurabilityFailed { message } => {
+                    RuntimeClientError::InvalidState { message }
+                }
                 InboundAdmissionError::Mailbox(error) => RuntimeClientError::InvalidState {
                     message: error.to_string(),
                 },
@@ -642,6 +645,9 @@ impl ClientInner {
                 },
                 ModelUpdateError::InvalidConfiguration(message) => {
                     RuntimeClientError::InvalidModelConfiguration { message }
+                }
+                ModelUpdateError::DurabilityFailed { message } => {
+                    RuntimeClientError::InvalidState { message }
                 }
             })?;
         Ok(RuntimeClientResult::ModelSet {
@@ -3377,6 +3383,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: None,
                 submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -3457,6 +3464,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: None,
                 submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -3968,6 +3976,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: None,
                 submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -4047,6 +4056,7 @@ mod tests {
                 settlement_gate: Some(settlement_gate.clone()),
                 activation_gate: None,
                 submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -4269,6 +4279,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: None,
                 submit_gate: None,
+                shutdown_arrival: None,
             },
         )
         .await;
@@ -5625,6 +5636,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
                 submit_gate: None,
+                shutdown_arrival: None,
             }),
         )
         .await;
@@ -5865,6 +5877,7 @@ mod tests {
                 settlement_gate: None,
                 activation_gate: Some(gate.clone()),
                 submit_gate: None,
+                shutdown_arrival: None,
             }),
         )
         .await;

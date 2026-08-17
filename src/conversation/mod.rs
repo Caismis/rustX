@@ -44,10 +44,11 @@ pub use surface::{
     ConversationSurface, SurfaceAccess, SurfaceError, SurfaceOp, SurfaceRevision, SurfaceSpan,
 };
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::message::types::{MessageBlock, UserMessageBlock};
-use crate::runtime::identity::MessageId;
+use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, UserMessageBlock};
+use crate::runtime::identity::{MessageId, ToolCallId};
 
 /// A conversation-state contract violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,37 +99,183 @@ impl From<StructuralError> for ConversationError {
     }
 }
 
-/// The validated, not-yet-applied semantic commit of one compaction.
+/// A validated, not-yet-installed canonical commit.
 ///
-/// The command is produced by the Context Engine after planning,
-/// summarization, and the progress/fit checks, and applied by
-/// [`ConversationState::commit_compaction`] — the single linearization
-/// point of compaction. Constructing it mutates nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompactionCommit {
-    /// The canonical runtime compaction summary to append to the Ledger.
-    pub summary: UserMessageBlock,
-    /// The inclusive active span the summary replaces.
-    pub span: SurfaceSpan,
-    /// The Surface revision the command was validated against. A commit
-    /// against a different current revision is rejected as stale.
-    pub expected_revision: SurfaceRevision,
+/// Produced by [`ConversationState::prepare_commit`] after every fallible
+/// condition (duplicate Ledger identity, already-active Surface identity) has
+/// been checked against the current state; consumed by
+/// [`ConversationState::install_prepared`], which is infallible under
+/// exclusive ownership. The exact message that was validated is carried
+/// inside the value, so a caller can never substitute a different message at
+/// install time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedCanonicalCommit {
+    /// The validated message identity.
+    id: MessageId,
+    /// The exact message that was validated.
+    message: MessageBlock,
 }
 
-/// The validated, not-yet-installed transition of one compaction.
+impl PreparedCanonicalCommit {
+    /// The exact message this commit validated.
+    #[must_use]
+    pub fn message(&self) -> &MessageBlock {
+        &self.message
+    }
+
+    /// The validated message identity.
+    #[must_use]
+    pub fn message_id(&self) -> &MessageId {
+        &self.id
+    }
+}
+
+/// A validated, not-yet-installed compaction commit.
 ///
-/// Produced by [`ConversationState::validate_compaction_commit`] after every
-/// fallible condition (stale revision, invalid span, structural integrity,
-/// duplicate identity) has been checked against the current state; consumed
-/// by [`ConversationState::install_prepared_compaction`], which is infallible.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedCompaction {
+/// Produced by [`ConversationState::prepare_compaction`] after every fallible
+/// condition (stale/valid span, structural integrity, duplicate identity) has
+/// been checked against the current state; consumed by
+/// [`ConversationState::install_prepared_compaction`], which is infallible
+/// under exclusive ownership. The exact summary, span, validated indices, and
+/// validated Surface revision are carried inside the value, so no caller may
+/// substitute another summary or span at install time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedCompactionCommit {
+    /// The canonical runtime compaction summary to append to the Ledger.
+    summary: UserMessageBlock,
     /// The inclusive active span the summary replaces.
     span: SurfaceSpan,
+    /// The Surface revision the commit was validated against.
+    expected_revision: SurfaceRevision,
     /// The resolved inclusive active index range of the span.
     start: usize,
     /// The resolved inclusive active index range of the span.
     end: usize,
+}
+
+impl PreparedCompactionCommit {
+    /// The exact canonical summary this commit validated.
+    #[must_use]
+    pub fn summary(&self) -> &UserMessageBlock {
+        &self.summary
+    }
+
+    /// The canonical summary as a [`MessageBlock`], for the durable append.
+    #[must_use]
+    pub fn summary_block(&self) -> MessageBlock {
+        MessageBlock::User(self.summary.clone())
+    }
+
+    /// The inclusive active span this commit replaces.
+    #[must_use]
+    pub fn span(&self) -> &SurfaceSpan {
+        &self.span
+    }
+
+    /// The Surface revision this commit was validated against.
+    #[must_use]
+    pub fn expected_revision(&self) -> SurfaceRevision {
+        self.expected_revision
+    }
+}
+
+/// A durable canonical prefix that cannot be resumed automatically.
+///
+/// This is the smallest semantic evidence of the Issue #63 restart gate: a
+/// durable Message Ledger append does **not** by itself imply that the head
+/// is a resumable `ConversationRuntime` safe boundary. It fails closed on the
+/// two states a Ledger-only Surface reconstruction cannot represent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoverySafetyError {
+    /// A compaction summary is committed but its Surface `Replace` is not
+    /// durably reconstructable (full #11 surface-revision durability is a
+    /// later milestone). Ordinary append would keep the replaced span active
+    /// and append the summary after it.
+    CompactionSurfaceNotReconstructable(MessageId),
+    /// An Assistant message issued a tool call whose `ToolResult` sibling is
+    /// not yet committed: resuming admission here would let asynchronous
+    /// inbound cross the incomplete tool-call/result structure.
+    IncompleteToolTurn {
+        /// The tool call without a committed result.
+        tool_call_id: ToolCallId,
+    },
+}
+
+impl core::fmt::Display for RecoverySafetyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::CompactionSurfaceNotReconstructable(id) => write!(
+                f,
+                "the durable canonical prefix contains compaction summary {id} whose Surface replacement is not durably reconstructable"
+            ),
+            Self::IncompleteToolTurn { tool_call_id } => write!(
+                f,
+                "the durable canonical prefix ends inside an incomplete tool turn: tool call {tool_call_id} has no committed ToolResult"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RecoverySafetyError {}
+
+/// The first committed tool call with no committed `ToolResult` sibling.
+///
+/// This is the live-admission half of the recovery gate: an active Surface
+/// (or a reconstructed prefix) that ends inside an incomplete tool turn must
+/// not admit asynchronous inbound, which would cross the tool-call/result
+/// structure.
+#[must_use]
+pub fn pending_tool_call(messages: &[MessageBlock]) -> Option<ToolCallId> {
+    let mut tool_calls: BTreeSet<ToolCallId> = BTreeSet::new();
+    let mut tool_results: BTreeSet<ToolCallId> = BTreeSet::new();
+    for message in messages {
+        match message {
+            MessageBlock::Assistant(assistant) => {
+                for block in &assistant.content {
+                    if let AssistantContentBlock::ToolCall(call) = block {
+                        tool_calls.insert(call.id.clone());
+                    }
+                }
+            }
+            MessageBlock::Tool(tool) => {
+                tool_results.insert(tool.tool_call_id.clone());
+            }
+            MessageBlock::User(_) | MessageBlock::System(_) => {}
+        }
+    }
+    tool_calls
+        .into_iter()
+        .find(|call| !tool_results.contains(call))
+}
+
+/// Whether an ordered canonical prefix may be resumed as a live
+/// [`ConversationState`] without guessing missing Surface/execution state.
+///
+/// The predicate answers the restart-gate question exactly: a durable Ledger
+/// prefix is resumable only when ordinary-append Surface reconstruction
+/// (`ConversationState::from_messages`) reproduces a structurally safe live
+/// conversation. It is **not** a generic checkpoint and not a recovery log.
+///
+/// # Errors
+///
+/// Returns [`RecoverySafetyError::CompactionSurfaceNotReconstructable`] for a
+/// committed compaction summary whose Surface `Replace` is not durably
+/// reconstructable, and [`RecoverySafetyError::IncompleteToolTurn`] for an
+/// `Assistant` tool call without its committed `ToolResult` sibling.
+pub fn recovery_safety(messages: &[MessageBlock]) -> Result<(), RecoverySafetyError> {
+    for message in messages {
+        if let MessageBlock::User(user) = message
+            && user.kind == InboundKind::CompactionSummary
+        {
+            return Err(RecoverySafetyError::CompactionSurfaceNotReconstructable(
+                user.id.clone(),
+            ));
+        }
+    }
+    if let Some(tool_call_id) = pending_tool_call(messages) {
+        return Err(RecoverySafetyError::IncompleteToolTurn { tool_call_id });
+    }
+    Ok(())
 }
 
 /// The committed record of one applied compaction.
@@ -244,24 +391,11 @@ impl ConversationState {
     /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
     /// [`ConversationError::Surface`] when the identity is already active.
     pub fn commit(&mut self, message: MessageBlock) -> Result<MessageId, ConversationError> {
-        self.prepare_commit(&message)?;
-        Ok(self.install_prepared(message))
+        let id = self.validate_commit(&message)?;
+        Ok(self.install_prepared(PreparedCanonicalCommit { id, message }))
     }
 
-    /// Validates that `message` can be committed without mutating anything.
-    ///
-    /// This is the prepare half of the Issue #63 canonical-commit seam: the
-    /// caller validates every fallible condition (duplicate Ledger identity,
-    /// already-active Surface identity) against the current state, then
-    /// commits the same message durably, and only then installs it with
-    /// [`ConversationState::install_prepared`], which is infallible under
-    /// exclusive ownership.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
-    /// [`ConversationError::Surface`] when the identity is already active.
-    pub fn prepare_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
+    fn validate_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
         let id = message_id_of(message);
         if self.surface.is_active(&id) {
             return Err(ConversationError::Surface(SurfaceError::AlreadyActive(id)));
@@ -274,17 +408,44 @@ impl ConversationState {
         Ok(id)
     }
 
-    /// Installs a commit whose identity was already validated by
+    /// Validates that `message` can be committed without mutating anything,
+    /// producing a typed [`PreparedCanonicalCommit`] that binds the exact
+    /// validated message to its install.
+    ///
+    /// This is the prepare half of the Issue #63 canonical-commit seam: the
+    /// caller validates every fallible condition (duplicate Ledger identity,
+    /// already-active Surface identity) against the current state, then
+    /// commits the exact same message durably, and only then installs it with
+    /// [`ConversationState::install_prepared`], which is infallible under
+    /// exclusive ownership.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
+    /// [`ConversationError::Surface`] when the identity is already active.
+    pub fn prepare_commit(
+        &self,
+        message: &MessageBlock,
+    ) -> Result<PreparedCanonicalCommit, ConversationError> {
+        let id = self.validate_commit(message)?;
+        Ok(PreparedCanonicalCommit {
+            id,
+            message: message.clone(),
+        })
+    }
+
+    /// Installs a commit whose exact message was already validated by
     /// [`ConversationState::prepare_commit`].
     ///
     /// Infallible: the caller validated against this exact state and holds
     /// exclusive ownership, so neither the Ledger nor the Surface can reject
-    /// the same message again.
-    pub fn install_prepared(&mut self, message: MessageBlock) -> MessageId {
-        let id = message_id_of(&message);
+    /// the same message again. The installed message is the exact one carried
+    /// inside the prepared value — no substitution is representable.
+    pub(crate) fn install_prepared(&mut self, prepared: PreparedCanonicalCommit) -> MessageId {
+        let id = prepared.id.clone();
         debug_assert!(!self.surface.is_active(&id));
         debug_assert!(!self.ledger.contains(&id));
-        self.ledger.append_after_validation(message);
+        self.ledger.append_after_validation(prepared.message);
         self.surface.append_after_validation(id.clone());
         id
     }
@@ -396,13 +557,15 @@ impl ConversationState {
         &self,
         summary: UserMessageBlock,
         span: SurfaceSpan,
-    ) -> Result<CompactionCommit, ConversationError> {
+    ) -> Result<PreparedCompactionCommit, ConversationError> {
         let replacement = summary.id.clone();
-        self.validate_compaction_span(&replacement, &span)?;
-        Ok(CompactionCommit {
+        let (start, end) = self.validate_compaction_span(&replacement, &span)?;
+        Ok(PreparedCompactionCommit {
             summary,
             span,
             expected_revision: self.surface.revision(),
+            start,
+            end,
         })
     }
 
@@ -422,53 +585,21 @@ impl ConversationState {
         Ok((start, end))
     }
 
-    /// Validates a prepared [`CompactionCommit`] against the current Surface
-    /// without mutating anything, producing the deterministic prepared
-    /// transition for [`ConversationState::install_prepared_compaction`].
-    ///
-    /// This is the prepare half of the Issue #63 canonical-compaction seam:
-    /// the caller validates the revision and span here, appends the summary
-    /// durably, then installs the transition infallibly.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ConversationError::Surface`] with
-    /// [`SurfaceError::StaleRevision`] when the Surface moved since the
-    /// command was prepared, and otherwise the [`ConversationError`] of the
-    /// first violated identity/span/structural condition.
-    pub fn validate_compaction_commit(
-        &self,
-        commit: &CompactionCommit,
-    ) -> Result<PreparedCompaction, ConversationError> {
-        let current = self.surface.revision();
-        if commit.expected_revision != current {
-            return Err(ConversationError::Surface(SurfaceError::StaleRevision {
-                expected: commit.expected_revision,
-                actual: current,
-            }));
-        }
-        let (start, end) = self.validate_compaction_span(&commit.summary.id, &commit.span)?;
-        Ok(PreparedCompaction {
-            span: commit.span.clone(),
-            start,
-            end,
-        })
-    }
-
-    /// Installs a compaction whose span was already validated by
-    /// [`ConversationState::validate_compaction_commit`].
+    /// Installs a compaction whose exact summary/span/indices were already
+    /// validated by [`ConversationState::prepare_compaction`].
     ///
     /// Infallible: the caller validated against this exact state and holds
     /// exclusive ownership, so the span and identity re-validation can no
-    /// longer fail.
-    pub fn install_prepared_compaction(
+    /// longer fail. The installed summary and span are the exact values
+    /// carried inside the prepared value — no substitution is representable.
+    pub(crate) fn install_prepared_compaction(
         &mut self,
-        summary: UserMessageBlock,
-        prepared: PreparedCompaction,
+        prepared: PreparedCompactionCommit,
     ) -> CompactionRecord {
+        debug_assert_eq!(prepared.expected_revision, self.surface.revision());
         let summary_message_id = self
             .ledger
-            .append_after_validation(MessageBlock::User(summary));
+            .append_after_validation(MessageBlock::User(prepared.summary));
         let surface_revision = self.surface.replace_after_validation(
             &prepared.span,
             summary_message_id.clone(),
@@ -505,32 +636,16 @@ impl ConversationState {
     /// first violation.
     pub fn commit_compaction(
         &mut self,
-        commit: CompactionCommit,
+        prepared: PreparedCompactionCommit,
     ) -> Result<CompactionRecord, ConversationError> {
         let current = self.surface.revision();
-        if commit.expected_revision != current {
+        if prepared.expected_revision != current {
             return Err(ConversationError::Surface(SurfaceError::StaleRevision {
-                expected: commit.expected_revision,
+                expected: prepared.expected_revision,
                 actual: current,
             }));
         }
-        // Full re-validation before any mutation. The returned active range
-        // is the proof used by the infallible Surface mutation below; no
-        // ordinary recoverable Surface error remains after the append.
-        let (start, end) = self.validate_compaction_span(&commit.summary.id, &commit.span)?;
-        let summary_message_id = self.ledger.append(MessageBlock::User(commit.summary))?;
-        let surface_revision = self.surface.replace_after_validation(
-            &commit.span,
-            summary_message_id.clone(),
-            start,
-            end,
-        );
-        Ok(CompactionRecord {
-            summary_message_id,
-            replaced: commit.span,
-            surface_revision,
-            generation: self.surface.compaction_generation(),
-        })
+        Ok(self.install_prepared_compaction(prepared))
     }
 }
 
@@ -549,8 +664,8 @@ pub fn summary_message_id(
 #[cfg(test)]
 mod tests {
     use super::{
-        CompactionCommit, ConversationError, ConversationState, LedgerError, SurfaceError,
-        SurfaceRevision, SurfaceSpan, message_id_of, summary_message_id,
+        ConversationError, ConversationState, LedgerError, SurfaceError, SurfaceRevision,
+        SurfaceSpan, message_id_of, summary_message_id,
     };
     use crate::conversation::structure::StructuralError;
     use crate::message::content::TextBlock;
@@ -988,30 +1103,26 @@ mod tests {
     /// before the Ledger append, leaving both authorities unchanged.
     #[test]
     fn invalid_prepared_compactions_are_atomic() {
-        let mut state =
+        let state =
             ConversationState::from_messages([user("a"), user("b"), user("c")]).expect("bootstrap");
         let before_ids = state.active_ids().to_vec();
         let before_revision = state.revision();
         let before_ledger_len = state.ledger().len();
 
-        let duplicate = CompactionCommit {
-            summary: summary("a", "duplicate"),
-            span: SurfaceSpan::new(MessageId::new("a"), MessageId::new("b")),
-            expected_revision: before_revision,
-        };
         assert!(matches!(
-            state.commit_compaction(duplicate),
+            state.prepare_compaction(
+                summary("a", "duplicate"),
+                SurfaceSpan::new(MessageId::new("a"), MessageId::new("b")),
+            ),
             Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(id)))
                 if id == MessageId::new("a")
         ));
 
-        let invalid_span = CompactionCommit {
-            summary: summary("s1", "invalid"),
-            span: SurfaceSpan::new(MessageId::new("ghost"), MessageId::new("b")),
-            expected_revision: before_revision,
-        };
         assert!(matches!(
-            state.commit_compaction(invalid_span),
+            state.prepare_compaction(
+                summary("s1", "invalid"),
+                SurfaceSpan::new(MessageId::new("ghost"), MessageId::new("b")),
+            ),
             Err(ConversationError::Surface(SurfaceError::NotActive(id)))
                 if id == MessageId::new("ghost")
         ));

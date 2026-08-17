@@ -145,11 +145,18 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 /// Starting  → Succeeded / Failed
 /// Running   → Cancelling
 /// Running   → Succeeded / Failed
+/// Running   → PublishingTerminal
 /// Cancelling → Cancelled
+/// PublishingTerminal → Succeeded / Failed / Cancelled
 /// ```
 ///
-/// An internal unpublished prepared state implements dispatch atomicity but
-/// never leaks as an accepted execution.
+/// [`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal
+/// state in which the executor has returned its terminal candidate and the
+/// registry now owns durable terminal publication; it is never `Running`
+/// (the runner has exited) and it retains the settlement candidate until
+/// publication reaches a terminal outcome. An internal unpublished prepared
+/// state implements dispatch atomicity but never leaks as an accepted
+/// execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackgroundLifecycle {
@@ -159,6 +166,9 @@ pub enum BackgroundLifecycle {
     Running,
     /// Cancellation intent committed and owns settlement.
     Cancelling,
+    /// The executor returned its terminal candidate; the registry owns
+    /// durable terminal publication, which has not committed yet.
+    PublishingTerminal,
     /// The execution succeeded.
     Succeeded,
     /// The execution failed.
@@ -202,6 +212,7 @@ impl BackgroundLifecycle {
             Self::Starting => "starting",
             Self::Running => "running",
             Self::Cancelling => "cancelling",
+            Self::PublishingTerminal => "publishing_terminal",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -375,7 +386,26 @@ struct BackgroundRecord {
     cancel_reason: Option<CancellationReason>,
     progress: Option<ToolProgress>,
     result: Option<ToolExecutionResult>,
+    /// The retained terminal candidate while durable terminal publication is
+    /// pending (`PublishingTerminal`). This is the settlement owner: after the
+    /// executor returns, the registry retains the candidate until publication
+    /// reaches a terminal outcome.
+    pending_terminal: Option<TerminalCandidate>,
     notification: NotificationState,
+}
+
+/// The registry-owned terminal settlement candidate of one execution.
+///
+/// Once the executor returns, this value is retained by the registry (in
+/// [`BackgroundRecord::pending_terminal`]) so a durable publication failure
+/// can never lose the executor result or leave a `Running` record with no
+/// runner.
+#[derive(Clone)]
+struct TerminalCandidate {
+    /// The terminal lifecycle the candidate settles to.
+    settled: BackgroundLifecycle,
+    /// The exact terminal result the candidate carries.
+    result: ToolExecutionResult,
 }
 
 /// One prepared (not yet committed) background dispatch.
@@ -646,6 +676,7 @@ impl ConversationBackgroundRegistry {
                 cancel_reason: None,
                 progress: None,
                 result: None,
+                pending_terminal: None,
                 notification: NotificationState::Pending,
             },
             gate,
@@ -772,6 +803,7 @@ impl ConversationBackgroundRegistry {
                     record.cancellation.cancel();
                 }
                 BackgroundLifecycle::Cancelling
+                | BackgroundLifecycle::PublishingTerminal
                 | BackgroundLifecycle::Succeeded
                 | BackgroundLifecycle::Failed
                 | BackgroundLifecycle::Cancelled => {}
@@ -840,11 +872,14 @@ impl ConversationBackgroundRegistry {
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
-        // Issue #63 (Finding 3): compute the terminal candidate **without**
-        // committing the lifecycle, durably accept the terminal inbound
-        // notification, and only then commit the terminal lifecycle. The
-        // observable terminal settlement therefore implies the terminal
-        // inbound already obtained durable ownership.
+        // Issue #63 (Finding 3 + Blocker 2): compute the terminal candidate
+        // **without** committing the lifecycle, durably accept the terminal
+        // inbound notification, and only then commit the terminal lifecycle.
+        // The observable terminal settlement therefore implies the terminal
+        // inbound already obtained durable ownership. After the executor
+        // returns, the candidate is retained by the registry until settlement
+        // reaches a terminal outcome — it never disappears on a publication
+        // failure.
         let candidate = {
             let record = &state.records[index];
             if record.lifecycle.is_terminal() {
@@ -881,12 +916,20 @@ impl ConversationBackgroundRegistry {
                         (BackgroundLifecycle::Cancelled, canonical)
                     }
                 }
-                BackgroundLifecycle::Succeeded
+                BackgroundLifecycle::PublishingTerminal
+                | BackgroundLifecycle::Succeeded
                 | BackgroundLifecycle::Failed
                 | BackgroundLifecycle::Cancelled => return,
             }
         };
         let (settled, stored) = candidate;
+        // The registry retains the terminal candidate before publication, so
+        // a durable acceptance failure cannot lose the executor result and
+        // cannot leave a false `Running` state with no runner.
+        state.records[index].pending_terminal = Some(TerminalCandidate {
+            settled,
+            result: stored.clone(),
+        });
         let notification = terminal_inbound_message(
             execution_id,
             &state.records[index].tool_name,
@@ -910,17 +953,78 @@ impl ConversationBackgroundRegistry {
                 record.lifecycle = settled;
                 record.result = Some(stored);
                 record.notification = NotificationState::Published;
+                record.pending_terminal = None;
             }
             Err(_error) => {
                 // The terminal inbound did not obtain durable ownership, so
-                // the record must NOT become terminal. The active lifecycle
-                // is retained and the failure is recorded so it is observable.
-                state.records[index].notification = NotificationState::Failed;
+                // the record must NOT become terminal and must NOT stay
+                // `Running` (the runner has exited). It enters the explicit
+                // publication-pending state with the candidate retained for a
+                // later `retry_terminal_publication`.
+                let record = &mut state.records[index];
+                record.lifecycle = BackgroundLifecycle::PublishingTerminal;
+                record.notification = NotificationState::Failed;
             }
         }
         Self::observe_record(&state, index);
         drop(state);
         self.notify_state_change();
+    }
+
+    /// Retries the durable terminal publication of one execution that is in
+    /// [`BackgroundLifecycle::PublishingTerminal`], using the retained
+    /// terminal candidate and the stable correlation.
+    ///
+    /// This is the narrow owned retry trigger of the background settlement
+    /// owner (Blocker 2): a `PublishingTerminal` record always retains its
+    /// candidate and can reach a terminal outcome through this seam without
+    /// duplicating the terminal inbound (the correlation is exactly-once).
+    #[must_use]
+    pub fn retry_terminal_publication(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        let mut state = self.state();
+        let index = *state.index.get(execution_id)?;
+        let Some(candidate) = state.records[index].pending_terminal.clone() else {
+            let snapshot = snapshot_of(&state.records[index]);
+            drop(state);
+            return Some(snapshot);
+        };
+        if state.records[index].lifecycle != BackgroundLifecycle::PublishingTerminal {
+            let snapshot = snapshot_of(&state.records[index]);
+            drop(state);
+            return Some(snapshot);
+        }
+        let notification = terminal_inbound_message(
+            execution_id,
+            &state.records[index].tool_name,
+            candidate.settled,
+            &candidate.result.artifacts,
+            self.resources.clock.now(),
+        );
+        let correlation = format!("background-terminal:{}", execution_id.as_str());
+        match self
+            .resources
+            .mailbox
+            .enqueue_correlated(notification, correlation)
+        {
+            Ok(_) => {
+                let record = &mut state.records[index];
+                record.lifecycle = candidate.settled;
+                record.result = Some(candidate.result);
+                record.notification = NotificationState::Published;
+                record.pending_terminal = None;
+            }
+            Err(_error) => {
+                state.records[index].notification = NotificationState::Failed;
+            }
+        }
+        Self::observe_record(&state, index);
+        let snapshot = snapshot_of(&state.records[index]);
+        drop(state);
+        self.notify_state_change();
+        Some(snapshot)
     }
 
     /// Updates the latest bounded progress snapshot of one execution and
@@ -1060,7 +1164,12 @@ fn snapshot_of(record: &BackgroundRecord) -> BackgroundExecutionSnapshot {
         tool_name: record.tool_name.clone(),
         state: record.lifecycle,
         progress: record.progress.clone(),
-        result: record.result.clone(),
+        result: record.result.clone().or_else(|| {
+            record
+                .pending_terminal
+                .as_ref()
+                .map(|candidate| candidate.result.clone())
+        }),
     }
 }
 
@@ -1597,11 +1706,13 @@ mod tests {
         );
     }
 
-    /// Issue #63 (Finding 3): a durable terminal inbound acceptance failure
-    /// must not leave a falsely completed terminal record — the record stays
-    /// non-terminal and no durable correlation/pending record exists.
+    /// Issue #63 (Blocker 2, Test 1): when the real runner's single
+    /// settlement call hits a durable terminal-inbound acceptance failure, the
+    /// registry retains the terminal candidate in the explicit
+    /// `PublishingTerminal` state — never `Running` with a lost result and no
+    /// settlement owner.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn terminal_acceptance_failure_leaves_record_non_terminal_and_nothing_durable() {
+    async fn terminal_publication_failure_retains_candidate_as_publishing_terminal() {
         let fixture = file_registry("conv-bg-fault");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
@@ -1625,38 +1736,109 @@ mod tests {
         };
         await_test_started(&mut started, "runner started").await;
 
-        // Inject a durable acceptance failure into the terminal notification.
+        // Arm the acceptance fault and release the real runner: its single
+        // settlement call (inside `finish`) fails the durable acceptance.
         fixture.store.arm_fail_next_accept_commit();
-        // Invoke the settlement boundary directly (the runner is gated
-        // before its own settlement).
-        fixture.registry.finish(&execution_id, &success());
+        release.send_replace(true);
 
-        // The record must not become falsely terminal, and nothing durable
-        // was committed.
-        let snapshot = fixture.registry.snapshot(&execution_id).expect("record");
-        assert_eq!(
+        // The runner invokes finish exactly once; the resulting state is the
+        // explicit publication-pending state with the candidate retained.
+        let snapshot = wait_for_state(
+            &fixture,
+            &execution_id,
+            BackgroundLifecycle::PublishingTerminal,
+        )
+        .await;
+        assert_eq!(snapshot.state, BackgroundLifecycle::PublishingTerminal);
+        assert_ne!(
             snapshot.state,
             BackgroundLifecycle::Running,
-            "the record must not become falsely terminal on acceptance failure"
+            "the record must not fake Running after the runner has exited"
         );
+        let result = snapshot
+            .result
+            .expect("the retained terminal candidate is not lost");
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        // No durable acceptance committed (the fault rolled the transaction
+        // back).
         assert!(
             fixture.store.load_pending().expect("load").is_empty(),
-            "no durable pending record survives the failed acceptance"
+            "the failed acceptance left no durable pending record"
         );
         assert!(
             fixture.store.load_canonical().expect("load").is_empty(),
-            "no durable canonical record survives the failed acceptance"
+            "the failed acceptance left no durable canonical record"
         );
+    }
 
-        // Release the gated runner: its own settlement retries and succeeds
-        // through the same correlation seam.
+    /// Issue #63 (Blocker 2, Test 2 + 3): the retained candidate is
+    /// finalized by the narrow owned retry — durable terminal inbound exactly
+    /// once, terminal lifecycle exactly once, and the same correlation
+    /// resolves to the same acceptance.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_terminal_publication_reaches_terminal_exactly_once() {
+        let fixture = file_registry("conv-bg-retry");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+
+        fixture.store.arm_fail_next_accept_commit();
         release.send_replace(true);
+        let pending = wait_for_state(
+            &fixture,
+            &execution_id,
+            BackgroundLifecycle::PublishingTerminal,
+        )
+        .await;
+        assert_eq!(pending.state, BackgroundLifecycle::PublishingTerminal);
+
+        // The narrow owned retry finalizes the retained candidate.
         let terminal = fixture
             .registry
-            .wait_until_terminal(&execution_id)
-            .await
-            .expect("terminal");
+            .retry_terminal_publication(&execution_id)
+            .expect("record");
         assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        assert!(terminal.result.is_some());
+
+        // Durable terminal inbound exactly once, under the stable correlation.
+        let items = fixture.store.load_pending().expect("load");
+        assert_eq!(items.len(), 1, "exactly one durable terminal inbound");
+        let expected_correlation = format!("background-terminal:{}", execution_id.as_str());
+        assert_eq!(
+            items[0].correlation.as_deref(),
+            Some(expected_correlation.as_str()),
+            "the same correlation resolves to the same acceptance"
+        );
+
+        // A second retry is an idempotent no-op: no duplicate delivery.
+        let again = fixture
+            .registry
+            .retry_terminal_publication(&execution_id)
+            .expect("record");
+        assert_eq!(again.state, BackgroundLifecycle::Succeeded);
+        assert_eq!(
+            fixture.store.load_pending().expect("load").len(),
+            1,
+            "no duplicate pending delivery is manufactured"
+        );
     }
 
     /// Issue #63 (Finding 3): successful terminal settlement implies the
@@ -1828,6 +2010,28 @@ mod tests {
         .await
         .expect("terminal wait exceeded liveness guard")
         .expect("execution record")
+    }
+
+    /// Waits (with a liveness guard only) until one execution reaches an
+    /// exact non-terminal state, polling the authoritative snapshot. The
+    /// proof is the exact state, never a sleep.
+    async fn wait_for_state(
+        fixture: &FileRegistry,
+        execution_id: &ToolExecutionId,
+        want: BackgroundLifecycle,
+    ) -> super::BackgroundExecutionSnapshot {
+        tokio::time::timeout(TEST_LIVENESS_GUARD, async {
+            loop {
+                if let Some(snapshot) = fixture.registry.snapshot(execution_id)
+                    && snapshot.state == want
+                {
+                    return snapshot;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("state wait exceeded liveness guard")
     }
 
     /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the

@@ -168,7 +168,9 @@ Message Ledger          = adopted canonical conversational facts
   `Assistant` messages, `ToolResult`s, context facts, and compaction
   summaries — appends to it in canonical order. It is never a filtered
   subsequence of inbound-only rows with intervening `Assistant`/`Tool` facts
-  omitted;
+  omitted, and a complete `ToolResult` sibling batch commits atomically in
+  one durable transaction (a partial tool-result group can never become
+  canonical);
 - one message still produces one one-item batch, and every adopted item
   becomes its own distinct canonical `UserMessageBlock` in inbound sequence
   order — never concatenated, never delivered through an intermediate
@@ -197,17 +199,41 @@ Message Ledger          = adopted canonical conversational facts
 - the durable store binds itself to exactly one `ConversationId` on first
   creation and enforces that binding on every reopen: opening a database
   created for conversation A under conversation B fails typed with
-  `InboundStoreError::ConversationIdMismatch` and mutates nothing;
+  `InboundStoreError::ConversationIdMismatch` and mutates nothing. Reopening
+  an existing conversation verifies that re-supplied bootstrap initial
+  messages equal the persisted initial prefix (`InitialHistoryMismatch` on
+  mismatch) and rejects a correlation retry with a conflicting semantic
+  payload (`CorrelationConflict`) instead of silently returning the original
+  acceptance;
+- a durable Ledger append does **not** by itself imply a resumable runtime
+  safe boundary: the conversation domain's `recovery_safety` predicate fails
+  closed on restart for a Ledger head that ends inside an incomplete tool
+  turn or that contains a compaction summary whose Surface `Replace` is not
+  yet durably reconstructable (full #11). The runtime then returns typed
+  `ConversationRuntimeError::RecoveryRequired`, preserves every durable fact,
+  and never admits pending inbound. Live admission is additionally gated by
+  the same incomplete-tool-turn check, so a failed tool-result batch can
+  never be crossed by a later inbound batch;
 - a durable storage failure in idle admission is never silently swallowed:
-  the coordinator records the failure, publishes a `DurableFailure`
-  observation, and re-kicks the admission wake gate exactly once (bounded by
-  a retry flag, so a persistent failure is not a hot loop). The accepted
-  pending work remains intact because selection is non-destructive;
+  the first failure records a diagnostic, publishes a `DurableFailure`
+  observation, and re-kicks the admission wake gate exactly once; a second
+  failure of the same transition moves the runtime into the explicit
+  `DurabilityFailed` state (published as `DurabilityFailed` and projected to
+  the Runtime Client as `RuntimeDurabilityFailed`) and no further re-kick is
+  armed, so a persistent failure is not a hot loop. In `DurabilityFailed`,
+  accepted pending work remains intact, no attempt is admitted, and new
+  durable mutations (`submit_inbound`, `model_set`) are rejected typed;
+  shutdown and read-only inspection remain available;
 - background terminal settlement publishes its durable terminal inbound
   **before** the record becomes observable as terminal: the terminal
   candidate is computed first, the notification is durably accepted, and only
-  then is the terminal lifecycle committed. A durable acceptance failure
-  leaves the record non-terminal, so an observable terminal settlement
+  then is the terminal lifecycle committed. After the executor returns, the
+  registry retains the terminal candidate until settlement reaches a
+  terminal outcome: a durable acceptance failure transitions the record to
+  the explicit non-terminal `PublishingTerminal` state (never `Running` with
+  a lost result and no runner), and the retained candidate is finalizable
+  through the narrow `retry_terminal_publication` seam under the same
+  exactly-once correlation. An observable terminal settlement therefore
   always implies the terminal inbound already obtained durable ownership.
 
 ## Capability immutability

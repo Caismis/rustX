@@ -423,3 +423,125 @@ fn canonical_ledger_preserves_intervening_assistant_and_tool_facts_across_reopen
         "both inbound batches were adopted exactly once"
     );
 }
+
+/// Issue #63 (seed identity): reopening an existing durable conversation
+/// verifies that the re-supplied bootstrap initial messages equal the
+/// persisted initial prefix instead of silently ignoring a mismatch.
+#[test]
+fn seed_canonical_verifies_the_initial_history() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+    let initial = [MessageBlock::User(
+        rustx::message::types::UserMessageBlock {
+            id: MessageId::new("msg-user-0"),
+            content: text_blocks("start"),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        },
+    )];
+    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    store.seed_canonical(&initial).expect("seed");
+    drop(store);
+
+    // A matching re-supply is accepted.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    reopened.seed_canonical(&initial).expect("matching seed");
+    drop(reopened);
+
+    // A mismatched re-supply is a typed failure, not a silent ignore.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    let mismatch = reopened.seed_canonical(&[MessageBlock::User(
+        rustx::message::types::UserMessageBlock {
+            id: MessageId::new("msg-user-OTHER"),
+            content: text_blocks("different"),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        },
+    )]);
+    assert!(matches!(
+        mismatch,
+        Err(InboundStoreError::InitialHistoryMismatch)
+    ));
+}
+
+/// Issue #63 (correlation identity): reusing an idempotency key with a
+/// conflicting semantic payload is a typed conflict, never a silent return of
+/// the original acceptance.
+#[test]
+fn correlation_conflict_is_rejected_typed() {
+    let store =
+        Arc::new(SqliteInboundStore::in_memory(ConversationId::new("conv-1")).expect("in-memory"));
+    let base = InboundDraft {
+        message_id: Some(MessageId::new("background-exec_1-terminal")),
+        source: UserSource::Runtime,
+        kind: InboundKind::Message,
+        content: text_blocks("settled"),
+        timestamp: fixed_time(),
+        correlation: Some("background-terminal:exec_1".to_owned()),
+    };
+    store.accept_inbound(base.clone()).expect("accept");
+    let conflict = store
+        .accept_inbound(InboundDraft {
+            content: text_blocks("different payload"),
+            ..base.clone()
+        })
+        .expect_err("conflicting payload must be rejected");
+    assert!(matches!(
+        conflict,
+        InboundStoreError::CorrelationConflict { ref correlation } if correlation == "background-terminal:exec_1"
+    ));
+    // The original acceptance is unchanged.
+    assert_eq!(store.load_pending().expect("load").len(), 1);
+}
+
+/// Issue #63 recovery gate predicate: an incomplete tool turn and a committed
+/// compaction summary both fail closed; a complete tool group is safe.
+#[test]
+fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
+    use rustx::conversation::recovery_safety;
+    let user = |id: &str| {
+        MessageBlock::User(rustx::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: text_blocks("hi"),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: Some(fixed_time()),
+        })
+    };
+    let assistant = MessageBlock::Assistant(AssistantMessageBlock {
+        id: MessageId::new("assistant-1"),
+        content: vec![AssistantContentBlock::ToolCall(
+            rustx::tools::types::ToolCall {
+                id: rustx::runtime::identity::ToolCallId::new("call-1"),
+                tool_id: rustx::runtime::identity::ToolId::new("tool-a"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            },
+        )],
+    });
+    let tool = tool_block("call-1");
+
+    // Complete tool group is safe.
+    recovery_safety(&[user("u0"), assistant.clone(), tool.clone()]).expect("complete is safe");
+
+    // Incomplete tool tail fails closed.
+    assert!(matches!(
+        recovery_safety(&[user("u0"), assistant.clone()]),
+        Err(rustx::conversation::RecoverySafetyError::IncompleteToolTurn { .. })
+    ));
+
+    // A compaction summary fails closed (Surface Replace is not durable).
+    let summary = MessageBlock::User(rustx::message::types::UserMessageBlock {
+        id: MessageId::new("summary-1"),
+        content: text_blocks("earlier context"),
+        source: UserSource::Runtime,
+        kind: InboundKind::CompactionSummary,
+        timestamp: None,
+    });
+    assert!(matches!(
+        recovery_safety(&[user("u0"), user("u1"), summary]),
+        Err(rustx::conversation::RecoverySafetyError::CompactionSurfaceNotReconstructable(_))
+    ));
+}

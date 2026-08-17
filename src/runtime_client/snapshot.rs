@@ -42,6 +42,17 @@ use crate::tools::types::{
     ToolReplayPolicy,
 };
 
+/// The client-visible durable-authority failure state of a conversation
+/// runtime (Issue #63).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeDurabilityFailure {
+    /// The operation that failed persistently.
+    pub operation: String,
+    /// The human-readable failure diagnostic.
+    pub diagnostic: String,
+}
+
 /// The authoritative Runtime Client snapshot of one conversation runtime.
 ///
 /// Every section is a deterministic projection of one authoritative
@@ -56,6 +67,11 @@ pub struct RuntimeClientSnapshot {
     /// Whether the runtime has accepted shutdown and stopped admitting new
     /// inbound work. This is runtime-owned state, not a client observation.
     pub shutting_down: bool,
+    /// The runtime's durable-authority failure, when it has entered the
+    /// explicit degraded state. While set, no new durable admission/execution
+    /// work may begin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durability_failure: Option<RuntimeDurabilityFailure>,
     /// The committed canonical Message Ledger records, in commit order.
     ///
     /// This is a read model of the immutable Message Ledger: it is repaired

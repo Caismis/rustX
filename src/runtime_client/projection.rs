@@ -205,6 +205,7 @@ impl RuntimeClientProjection {
             snapshot: RuntimeClientSnapshot {
                 conversation_id,
                 shutting_down: false,
+                durability_failure: None,
                 messages: initial_messages,
                 attempt: None,
                 inbound: InboundDiagnostics {
@@ -392,10 +393,24 @@ impl RuntimeClientProjection {
                 vec![RuntimeClientEvent::RuntimeShutdown]
             }
             ConversationObservation::DurableFailure { .. } => {
-                // The durable-authority failure is a runtime-internal fact;
-                // it is surfaced through the observation stream (and recorded
-                // in the coordinator state) but has no client-facing event.
+                // A transient durable-authority failure is recorded and
+                // re-kicked; it does not yet change the externally visible
+                // runtime health.
                 Vec::new()
+            }
+            ConversationObservation::DurabilityFailed {
+                operation,
+                diagnostic,
+            } => {
+                self.snapshot.durability_failure =
+                    Some(super::snapshot::RuntimeDurabilityFailure {
+                        operation: operation.clone(),
+                        diagnostic: diagnostic.clone(),
+                    });
+                vec![RuntimeClientEvent::RuntimeDurabilityFailed {
+                    operation,
+                    diagnostic,
+                }]
             }
         }
     }

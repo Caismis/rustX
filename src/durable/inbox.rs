@@ -103,6 +103,16 @@ pub enum InboundStoreError {
         /// The conversation the caller requested.
         requested: ConversationId,
     },
+    /// A producer retried an existing correlation with a conflicting
+    /// semantic payload. Reusing an idempotency key to mask a producer bug
+    /// is rejected rather than silently returning the original acceptance.
+    CorrelationConflict {
+        /// The correlation whose payload conflicts with its committed one.
+        correlation: String,
+    },
+    /// The re-supplied bootstrap initial messages do not match the durable
+    /// canonical prefix already committed to this conversation.
+    InitialHistoryMismatch,
     /// The underlying storage rejected the operation.
     Storage(String),
 }
@@ -121,6 +131,14 @@ impl core::fmt::Display for InboundStoreError {
             Self::ConversationIdMismatch { stored, requested } => write!(
                 f,
                 "the durable inbox is bound to conversation {stored}, not {requested}"
+            ),
+            Self::CorrelationConflict { correlation } => write!(
+                f,
+                "correlation {correlation} was retried with a conflicting semantic payload"
+            ),
+            Self::InitialHistoryMismatch => write!(
+                f,
+                "the re-supplied initial canonical messages do not match the durable conversation prefix"
             ),
             Self::Storage(message) => write!(f, "durable inbound storage failed: {message}"),
         }
@@ -223,6 +241,21 @@ pub trait InboundStore: Send + Sync + 'static {
     /// already committed to the durable Ledger and
     /// [`InboundStoreError::Storage`] on a backend failure.
     fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError>;
+
+    /// Appends a canonical [`MessageBlock`] batch atomically.
+    ///
+    /// Every message of the batch commits in **one** transaction: a failure
+    /// appends none of them. This is the durable seam for structurally
+    /// atomic canonical groups (an `Assistant` tool-call turn's complete
+    /// `ToolResult` sibling batch), so a partial group can never become
+    /// canonical. It must be called in canonical commit order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InboundStoreError::DuplicateMessageId`] when an identity is
+    /// already committed to the durable Ledger and
+    /// [`InboundStoreError::Storage`] on a backend failure.
+    fn append_canonical_batch(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
 
     /// Loads the durable canonical Message Ledger in commit order (the
     /// complete crash-recoverable prefix of the Message Ledger).

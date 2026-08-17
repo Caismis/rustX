@@ -132,6 +132,15 @@ pub(crate) enum ConversationObservation {
         // surfaced by tests; the projection folds it without a client event
         message: String,
     },
+    /// The durable authority failed persistently after the bounded retry: the
+    /// runtime has entered an explicit degraded state and will not pretend
+    /// normal operation continues (Issue #63, Finding 5).
+    DurabilityFailed {
+        /// The operation that failed persistently.
+        operation: String,
+        /// The human-readable failure diagnostic.
+        diagnostic: String,
+    },
 }
 
 /// The tiny synchronization boundary between the conversation runtime and

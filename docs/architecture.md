@@ -317,17 +317,32 @@ Two linearization points are defined exactly:
 
 `select_pending_batch` is a non-destructive finite-watermark snapshot: an
 item accepted after the snapshot belongs to the next batch. The durable
-store is the crash-recoverable Message Ledger: every canonical commit —
-adopted inbound `User` messages, `Assistant` messages, `ToolResult`s,
-context facts, and compaction summaries — appends to it in canonical order
-through the prepare → durable-append → infallible-install seam, so it is the
-exact ordered prefix of the authoritative in-memory `ConversationState` for
-the portion claimed durable (full #11 surface-revision durability remains a
-later milestone). Background terminal notifications converge on the same
-acceptance seam with a deterministic producer correlation, so a retry with
-the same committed correlation can never publish a duplicate notification;
-and the durable terminal inbound commits **before** the background record is
-exposed as terminal.
+store persists the **complete** canonical Message Ledger — adopted inbound
+`User` messages, `Assistant` messages, `ToolResult`s, context facts, and
+compaction summaries in canonical order — through the prepare →
+durable-append → infallible-install seam. A complete `ToolResult` sibling
+batch commits atomically (one durable transaction), so a partial tool-result
+group can never become canonical. Background terminal notifications converge
+on the same acceptance seam with a deterministic producer correlation, so a
+retry with the same committed correlation can never publish a duplicate
+notification; the durable terminal inbound commits **before** the background
+record is exposed as terminal, and a durable publication failure retains the
+terminal candidate in an explicit `PublishingTerminal` state rather than
+faking `Running`.
+
+A durable Ledger append is **not** by itself a resumable runtime safe
+boundary. The durable store's complete Ledger ordering is the canonical
+truth of committed message facts; normal live runtime resumption additionally
+requires a durable recovery-safe boundary. The conversation domain's
+`recovery_safety` predicate answers that question fail-closed: a Ledger head
+that ends inside an incomplete tool turn (an `Assistant` tool call without
+its committed `ToolResult` sibling) or that contains a compaction summary
+whose Surface `Replace` is not yet durably reconstructable (full #11 surface
+revision durability remains a later milestone) refuses automatic recovery
+with a typed `ConversationRuntimeError::RecoveryRequired`, preserving every
+durable fact and never admitting pending inbound. Full historical
+Surface/Request/Event durability remains #11; recovery orchestration and
+unresolved-tool repair remain #12.
 
 ### Layer 1: Agent kernel
 

@@ -2042,9 +2042,9 @@ fn first_compaction_commits_one_summary_and_one_replacement() {
     // Preparation mutates nothing.
     assert_eq!(history.revision(), before_revision);
     assert_eq!(ledger_ids(&history), ledger_before);
-    assert_eq!(commit.summary.id, summary_id(1));
-    assert_eq!(commit.summary.source, UserSource::Runtime);
-    assert_eq!(commit.summary.kind, InboundKind::CompactionSummary);
+    assert_eq!(commit.summary().id, summary_id(1));
+    assert_eq!(commit.summary().source, UserSource::Runtime);
+    assert_eq!(commit.summary().kind, InboundKind::CompactionSummary);
     assert_eq!(rebuilt.estimated_input.input_tokens, 101);
     assert_eq!(rebuilt.surface_revision, before_revision.next());
 

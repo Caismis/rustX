@@ -900,25 +900,30 @@ impl<'a> AgentExecution<'a> {
         };
         // Prepare the canonical transition **before** the durable adoption
         // commit: validate every fallible in-memory condition now, so the
-        // post-commit installation is infallible (Finding 2). A validation
-        // failure leaves every item pending and adopts nothing.
+        // post-commit installation is infallible (Finding 2). The prepared
+        // values bind each exact drained message. A validation failure leaves
+        // every item pending and adopts nothing.
+        let mut prepared = Vec::with_capacity(batch.items().len());
         for item in batch.items() {
             let block = crate::durable::inbox::canonical_block(item.message());
-            self.conversation
-                .prepare_commit(&block)
-                .map_err(|error| Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::ContractViolation {
-                            message: format!(
-                                "a drained inbound message cannot be prepared: {error}"
-                            ),
+            match self.conversation.prepare_commit(&block) {
+                Ok(commit) => prepared.push(commit),
+                Err(error) => {
+                    return Err(Terminal::Failed {
+                        failure: AttemptFailure::Runtime {
+                            error: RuntimeError::ContractViolation {
+                                message: format!(
+                                    "a drained inbound message cannot be prepared: {error}"
+                                ),
+                            },
                         },
-                    },
-                })?;
+                    });
+                }
+            }
         }
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction.
-        let adopted = mailbox
+        mailbox
             .adopt_pending_batch(&batch)
             .map_err(|error| Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -927,11 +932,12 @@ impl<'a> AgentExecution<'a> {
                     },
                 },
             })?;
-        let mut message_ids = Vec::with_capacity(adopted.len());
-        for block in adopted {
+        let mut message_ids = Vec::with_capacity(prepared.len());
+        for commit in prepared {
             // Infallible: every adopted identity was validated above under
             // exclusive ownership of the conversation state.
-            let message_id = self.conversation.install_prepared(block.clone());
+            let block = commit.message().clone();
+            let message_id = self.conversation.install_prepared(commit);
             if let Some(observer) = self.observer {
                 observer.observe_committed(&self.request.attempt_id, &block);
             }
@@ -1547,13 +1553,17 @@ impl<'a> AgentExecution<'a> {
                 "compaction cancelled before the semantic commit",
             ));
         }
-        let (commit, projection) = self.context_runtime.engine.prepare_compaction(
+        // The semantic commit point: prepare (validate), durable append,
+        // then infallible install (Issue #63, Finding 2). The prepared value
+        // binds the exact summary and span, so no substitution is possible.
+        let (prepared, projection) = self.context_runtime.engine.prepare_compaction(
             &self.conversation,
             &self.request.conversation_id,
             &plan,
             &summary_text,
             &tools,
         )?;
+        let summary_block = prepared.summary_block();
         // The rebuilt projection must fit under the soft input limit; if
         // retained context and the actual summary cannot fit, fail
         // explicitly before anything is committed.
@@ -1571,20 +1581,11 @@ impl<'a> AgentExecution<'a> {
             }
             Err(error) => return Err(error),
         }
-        // The semantic commit point: prepare (validate), durable append,
-        // then infallible install (Issue #63, Finding 2).
-        let summary_block = MessageBlock::User(commit.summary.clone());
-        let prepared = self
-            .conversation
-            .validate_compaction_commit(&commit)
-            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
         self.tool_runtime
             .inbound_store()
             .append_canonical(&summary_block)
             .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
-        let record = self
-            .conversation
-            .install_prepared_compaction(commit.summary, prepared);
+        let record = self.conversation.install_prepared_compaction(prepared);
         // The committed runtime summary is a canonical Ledger fact, observed
         // at exactly the commit linearization point like every other commit.
         if let Some(observer) = self.observer {
@@ -1967,13 +1968,16 @@ impl<'a> AgentExecution<'a> {
         // themselves are committed in canonical order regardless of physical
         // completion order.
         //
-        // The **structural settlement point of the whole batch** is the last
-        // `commit_canonical` of this loop: at that instant every logical call
+        // The **structural settlement point of the whole batch** is the one
+        // atomic `commit_tool_result_batch` call: either every logical call
         // of the committed Assistant tool-call message owns exactly one
-        // canonical `ToolMessage`, in original model call order. The settled
-        // facts collected here are immutable copies of exactly what was
-        // committed, and they are the only input of the observation pass.
-        let mut settled = Vec::with_capacity(slots.len());
+        // canonical `ToolMessage` (in original model call order) or none of
+        // them becomes canonical. A durable failure of one member can never
+        // leave a partial batch behind. The settled facts collected here are
+        // immutable copies of exactly what was committed, and they are the
+        // only input of the observation pass.
+        let mut blocks = Vec::with_capacity(slots.len());
+        let mut result_slots = Vec::with_capacity(slots.len());
         for (batch_position, slot) in slots.iter().enumerate() {
             let result = slot.result.clone().expect("every call slot settles");
             for event in &slot.progress {
@@ -1995,8 +1999,13 @@ impl<'a> AgentExecution<'a> {
                 tool_id: slot.tool_id.clone(),
                 result: result.clone(),
             });
-            self.commit_canonical(&block)?;
-            settled.push(SettledCall {
+            blocks.push(block);
+            result_slots.push((batch_position, slot, result));
+        }
+        self.commit_tool_result_batch(&blocks)?;
+        let settled = result_slots
+            .into_iter()
+            .map(|(batch_position, slot, result)| SettledCall {
                 batch_position,
                 call_id: slot.call.id.clone(),
                 tool_id: slot.tool_id.clone(),
@@ -2016,8 +2025,8 @@ impl<'a> AgentExecution<'a> {
                         arguments: prepared.invocation.arguments.clone(),
                     }),
                 result,
-            });
-        }
+            })
+            .collect();
         self.emit(RuntimeEvent::TurnCompleted);
         Ok(settled)
     }
@@ -2369,20 +2378,49 @@ impl<'a> AgentExecution<'a> {
         block: &MessageBlock,
     ) -> Result<MessageId, CanonicalCommitError> {
         // Prepare: validate the fallible in-memory conditions first, so the
-        // post-commit installation below is infallible.
-        self.conversation.prepare_commit(block)?;
+        // post-commit installation below is infallible. The prepared value
+        // binds the exact message.
+        let prepared = self.conversation.prepare_commit(block)?;
         // Durable append through the canonical Message Ledger seam.
         self.tool_runtime
             .inbound_store()
-            .append_canonical(block)
+            .append_canonical(prepared.message())
             .map_err(CanonicalCommitError::Durable)?;
         // Infallible install: the identity was validated above and the
         // attempt holds exclusive ownership of the conversation state.
-        let message_id = self.conversation.install_prepared(block.clone());
+        let message_id = self.conversation.install_prepared(prepared);
         if let Some(observer) = self.observer {
             observer.observe_committed(&self.request.attempt_id, block);
         }
         Ok(message_id)
+    }
+
+    /// Commits one complete `ToolResult` batch atomically.
+    ///
+    /// The whole batch prepares (validates) first, then appends to the
+    /// durable Message Ledger in **one** transaction, and only then installs
+    /// each member in memory. A durable failure of any member appends and
+    /// installs none of them, so a partial tool-result group can never become
+    /// canonical — the prior review's tool-batch atomicity requirement.
+    fn commit_tool_result_batch(
+        &mut self,
+        blocks: &[MessageBlock],
+    ) -> Result<(), CanonicalCommitError> {
+        let mut prepared = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            prepared.push(self.conversation.prepare_commit(block)?);
+        }
+        self.tool_runtime
+            .inbound_store()
+            .append_canonical_batch(blocks)
+            .map_err(CanonicalCommitError::Durable)?;
+        for (prepared, block) in prepared.into_iter().zip(blocks) {
+            self.conversation.install_prepared(prepared);
+            if let Some(observer) = self.observer {
+                observer.observe_committed(&self.request.attempt_id, block);
+            }
+        }
+        Ok(())
     }
 
     /// Emits the runtime events for one non-terminal model event.

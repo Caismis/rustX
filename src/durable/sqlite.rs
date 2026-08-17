@@ -265,6 +265,7 @@ impl InboundStore for SqliteInboundStore {
         &self.conversation_id
     }
 
+    #[allow(clippy::too_many_lines)] // one acceptance transaction: idempotency + insert + sequence
     fn accept_inbound(&self, draft: InboundDraft) -> Result<AcceptedInbound, InboundStoreError> {
         if draft.content.is_empty() {
             return Err(InboundStoreError::EmptyContent);
@@ -301,6 +302,25 @@ impl InboundStore for SqliteInboundStore {
             let message_id = MessageId::new(message_id_value);
             let message: UserMessageBlock = serde_json::from_str(&message_json_value)
                 .map_err(|error| storage(format!("correlation decode: {error}")))?;
+            // Semantic idempotency contract: the same correlation plus the
+            // same acceptance identity/payload resolves to the original
+            // acceptance; a conflicting payload is a typed conflict so a
+            // producer bug cannot be masked by an idempotency key.
+            let conflict = draft
+                .message_id
+                .as_ref()
+                .is_some_and(|id| id != &message_id)
+                || draft.source != message.source
+                || draft.kind != message.kind
+                || draft.content != message.content;
+            if conflict {
+                return Err(InboundStoreError::CorrelationConflict {
+                    correlation: draft
+                        .correlation
+                        .clone()
+                        .expect("a correlation hit implies a supplied correlation"),
+                });
+            }
             return Ok(AcceptedInbound {
                 sequence,
                 message_id,
@@ -483,26 +503,83 @@ impl InboundStore for SqliteInboundStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("seed transaction: {error}")))?;
+        let existing = load_canonical_rows(&tx)?;
+        if existing.is_empty() {
+            // First creation: seed the exact initial prefix.
+            let mut position: i64 = 0;
+            for message in messages {
+                position = position.checked_add(1).ok_or_else(|| {
+                    InboundStoreError::Storage("canonical ledger position exhausted".to_owned())
+                })?;
+                let id = crate::conversation::message_id_of(message);
+                let message_json = serde_json::to_string(message)
+                    .map_err(|error| storage(format!("serialize seed: {error}")))?;
+                tx.execute(
+                    "INSERT INTO message_ledger (position, message_id, message_json)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![position, id.as_str(), message_json],
+                )
+                .map_err(|error| map_insert_error(&error, &id))?;
+            }
+        } else {
+            // Reopen: verify the externally supplied initial messages equal
+            // the persisted initial prefix instead of silently ignoring a
+            // mismatch (Issue #63 seed identity).
+            if existing.len() < messages.len()
+                || messages
+                    .iter()
+                    .zip(&existing[..messages.len()])
+                    .any(|(supplied, stored)| supplied != stored)
+            {
+                return Err(InboundStoreError::InitialHistoryMismatch);
+            }
+        }
+        tx.commit()
+            .map_err(|error| storage(format!("seed commit: {error}")))?;
+        Ok(())
+    }
+
+    fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError> {
+        self.append_canonical_impl(core::slice::from_ref(message))
+    }
+
+    fn append_canonical_batch(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError> {
+        self.append_canonical_impl(messages)
+    }
+
+    fn load_canonical(&self) -> Result<Vec<MessageBlock>, InboundStoreError> {
+        let conn = self.lock()?;
+        load_canonical_rows(&conn)
+    }
+}
+
+impl SqliteInboundStore {
+    /// Appends one or more canonical messages in one transaction.
+    fn append_canonical_impl(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("canonical append transaction: {error}")))?;
         let mut position: i64 = tx
             .query_row(
                 "SELECT COALESCE(MAX(position), 0) FROM message_ledger",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(format!("seed position: {error}")))?;
-        if position > 0 {
-            // The canonical prefix is already seeded (recovery): leave it
-            // unchanged. The caller re-supplies the same deterministic
-            // initial messages across restarts.
-            return Ok(());
-        }
+            .map_err(|error| storage(format!("canonical append position: {error}")))?;
         for message in messages {
+            let id = crate::conversation::message_id_of(message);
+            if Self::message_id_exists(&tx, &id)? {
+                return Err(InboundStoreError::DuplicateMessageId(id));
+            }
             position = position.checked_add(1).ok_or_else(|| {
                 InboundStoreError::Storage("canonical ledger position exhausted".to_owned())
             })?;
-            let id = crate::conversation::message_id_of(message);
             let message_json = serde_json::to_string(message)
-                .map_err(|error| storage(format!("serialize seed: {error}")))?;
+                .map_err(|error| storage(format!("serialize canonical: {error}")))?;
             tx.execute(
                 "INSERT INTO message_ledger (position, message_id, message_json)
                  VALUES (?1, ?2, ?3)",
@@ -511,59 +588,27 @@ impl InboundStore for SqliteInboundStore {
             .map_err(|error| map_insert_error(&error, &id))?;
         }
         tx.commit()
-            .map_err(|error| storage(format!("seed commit: {error}")))?;
-        Ok(())
-    }
-
-    fn append_canonical(&self, message: &MessageBlock) -> Result<(), InboundStoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical append transaction: {error}")))?;
-        let id = crate::conversation::message_id_of(message);
-        if Self::message_id_exists(&tx, &id)? {
-            return Err(InboundStoreError::DuplicateMessageId(id));
-        }
-        let position: i64 = tx
-            .query_row(
-                "SELECT COALESCE(MAX(position), 0) FROM message_ledger",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(|error| storage(format!("canonical append position: {error}")))?;
-        let position = position.checked_add(1).ok_or_else(|| {
-            InboundStoreError::Storage("canonical ledger position exhausted".to_owned())
-        })?;
-        let message_json = serde_json::to_string(message)
-            .map_err(|error| storage(format!("serialize canonical: {error}")))?;
-        tx.execute(
-            "INSERT INTO message_ledger (position, message_id, message_json)
-             VALUES (?1, ?2, ?3)",
-            rusqlite::params![position, id.as_str(), message_json],
-        )
-        .map_err(|error| map_insert_error(&error, &id))?;
-        tx.commit()
             .map_err(|error| storage(format!("canonical append commit: {error}")))?;
         Ok(())
     }
+}
 
-    fn load_canonical(&self) -> Result<Vec<MessageBlock>, InboundStoreError> {
-        let conn = self.lock()?;
-        let mut statement = conn
-            .prepare("SELECT message_json FROM message_ledger ORDER BY position")
-            .map_err(|error| storage(format!("load canonical: {error}")))?;
-        let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| storage(format!("load canonical map: {error}")))?;
-        let mut messages = Vec::new();
-        for row in rows {
-            let json = row.map_err(|error| storage(format!("load canonical row: {error}")))?;
-            let message: MessageBlock = serde_json::from_str(&json)
-                .map_err(|error| storage(format!("decode canonical: {error}")))?;
-            messages.push(message);
-        }
-        Ok(messages)
+/// Loads the durable canonical Message Ledger in commit order.
+fn load_canonical_rows(conn: &Connection) -> Result<Vec<MessageBlock>, InboundStoreError> {
+    let mut statement = conn
+        .prepare("SELECT message_json FROM message_ledger ORDER BY position")
+        .map_err(|error| storage(format!("load canonical: {error}")))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| storage(format!("load canonical map: {error}")))?;
+    let mut messages = Vec::new();
+    for row in rows {
+        let json = row.map_err(|error| storage(format!("load canonical row: {error}")))?;
+        let message: MessageBlock = serde_json::from_str(&json)
+            .map_err(|error| storage(format!("decode canonical: {error}")))?;
+        messages.push(message);
     }
+    Ok(messages)
 }
 
 /// Loads every pending row in strict sequence order.

@@ -769,14 +769,22 @@ The durable store now persists the **complete** canonical Message Ledger —
 initial messages, adopted inbound `User` messages, `Assistant` messages,
 `ToolResult`s, context facts, and compaction summaries in canonical order —
 through the prepare → durable-append → infallible-install seam, not a
-filtered inbound-only prefix. Canonical adoption validates every fallible
-in-memory condition before the durable commit, so there is no window where a
-durable adoption has committed but the in-memory conversation may still
-reject it. The store also binds its database to one `ConversationId` and
-enforces that binding on reopen. What remains for #11 is the durability of
-the remaining canonical domains (for example the Surface revision history
-needed to replay compaction replacements after restart) and full M9
-recovery orchestration.
+filtered inbound-only prefix. A complete `ToolResult` sibling batch commits
+atomically. The store binds its database to one `ConversationId` and enforces
+that binding on reopen, verifies that re-supplied bootstrap initial messages
+match the persisted prefix, and rejects a correlation retry with a
+conflicting semantic payload.
+
+A durable Ledger append does not by itself imply a resumable runtime safe
+boundary: the `recovery_safety` predicate fails closed on restart for an
+incomplete tool turn or a compaction summary whose Surface `Replace` is not
+yet durably reconstructable, returning a typed `RecoveryRequired`. Persistent
+durable storage failure moves the runtime into an explicit `DurabilityFailed`
+state, and background terminal settlement retains its terminal candidate in
+an explicit `PublishingTerminal` state on publication failure. What remains
+for #11 is the durability of the remaining canonical domains (the Surface
+revision history needed to replay compaction replacements after restart) and
+full M9 recovery orchestration.
 
 ## Milestone 9 — Cancellation and runtime supervision
 
