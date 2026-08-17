@@ -3272,7 +3272,11 @@ must name the attempt whose lifecycle it closes.
 
 If a reconciliation transaction fails, recovery fails closed: no fabricated
 success is published, no runtime is constructed, and nothing is admitted as
-though recovery had completed.
+though recovery had completed. The same applies to a durable authority that
+holds two concurrently non-terminal attempts: that contradicts the
+one-active-attempt admission invariant, so recovery reports it instead of
+settling whichever attempt sorted first and silently leaving the other
+unresolved.
 
 ### 7.6 Terminal uniqueness and repeated-restart idempotence
 

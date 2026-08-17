@@ -2073,6 +2073,11 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
   publishes no fabricated recovery/terminal event: construction returns typed
   and no runtime exists that could admit work as though recovery had completed;
 
+- a durable authority that holds **two** concurrently non-terminal attempts
+  contradicts the one-active-attempt admission invariant. Recovery reports it
+  and fails closed rather than settling whichever attempt happens to sort
+  first and silently leaving the other unresolved;
+
 - a successful recovery starts a fresh admission cycle; an unresolved durable
   inconsistency is never silently converted into a healthy state, and a
   previous process's crash never permanently poisons a runtime whose

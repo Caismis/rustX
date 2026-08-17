@@ -179,8 +179,10 @@ pub struct RecoveryEvidence {
     active: Vec<MessageBlock>,
     /// Accepted-but-not-yet-adopted inbound, exactly as #63 committed it.
     pending: Vec<PendingInboundItem>,
-    /// Non-terminal attempts. The admission invariant permits at most one; the
-    /// map is a map so a contract violation is *reported* rather than hidden.
+    /// Non-terminal attempts. The admission invariant permits at most one; a
+    /// durable authority that holds two is a contract violation that
+    /// reconciliation reports and fails closed on, rather than silently
+    /// settling whichever attempt happens to sort first.
     unsettled_attempts: BTreeMap<AttemptId, AttemptEvidence>,
     /// Tool executions with durable evidence and no committed `ToolResult`.
     unsettled_tools: BTreeMap<ToolCallId, ToolEvidence>,
@@ -502,6 +504,13 @@ pub struct RecoveryPlan {
     next_attempt_ordinal: u64,
     highest_background_ordinal: u64,
     pending_inbound: usize,
+    /// Every durably non-terminal attempt the fold observed.
+    ///
+    /// The admission invariant permits at most one, so this is normally the
+    /// same single attempt the classification names. It is retained so that a
+    /// durable authority which disagrees with that invariant is *reported*
+    /// rather than silently truncated to whichever attempt sorted first.
+    unsettled_attempts: Vec<AttemptId>,
 }
 
 /// One structurally incomplete canonical tool turn and its repair batch.
@@ -557,6 +566,7 @@ impl RecoveryPlan {
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
             highest_background_ordinal: evidence.highest_background_ordinal,
             pending_inbound: evidence.pending.len(),
+            unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
         }
     }
 
@@ -726,15 +736,57 @@ impl RecoveryPlan {
     /// # Errors
     ///
     /// Returns [`RecoveryError::Durable`] when a reconciliation transaction
-    /// fails.
+    /// fails, and [`RecoveryError::Unrecoverable`] when the durable authority
+    /// contradicts the one-active-attempt invariant.
     pub fn reconcile(
         self,
         store: &dyn ConversationStore,
         clock: &dyn RuntimeClock,
     ) -> Result<RecoveryReport, RecoveryError> {
+        // A conversation admits at most one attempt at a time, so at most one
+        // attempt can be durably non-terminal. Two would mean the durable
+        // authority contradicts the admission invariant, and settling only the
+        // first would silently hide the other. Recovery reports it and fails
+        // closed instead of guessing which attempt is real.
+        if self.unsettled_attempts.len() > 1 {
+            return Err(RecoveryError::Unrecoverable(format!(
+                "the durable authority holds {} concurrently non-terminal attempts ({}), \
+                 but a conversation admits at most one attempt at a time",
+                self.unsettled_attempts.len(),
+                self.unsettled_attempts
+                    .iter()
+                    .map(AttemptId::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         let mut committed = RecoveryReconciliation::default();
+        self.repair_tool_turns(store, clock, &mut committed)?;
+        self.settle_interrupted_attempt(store, clock, &mut committed)?;
+        self.publish_background_terminals(store, clock, &mut committed)?;
+        Ok(RecoveryReport {
+            attempt: self.attempt,
+            background: self.background,
+            resume: self.resume,
+            reconciliation: committed,
+            next_attempt_ordinal: self.next_attempt_ordinal,
+            highest_background_ordinal: self.highest_background_ordinal,
+            pending_inbound: self.pending_inbound,
+        })
+    }
 
-        // ---- 1. canonical tool-turn repair ----
+    /// **Reconciliation 1.** Completes every structurally incomplete canonical
+    /// tool turn, one atomic sibling batch per owning Assistant message.
+    ///
+    /// Before the commit the turn cannot form a valid later model request;
+    /// after it, every issued call owns exactly one committed `ToolResult`. A
+    /// durable prefix of a sibling batch is never observable.
+    fn repair_tool_turns(
+        &self,
+        store: &dyn ConversationStore,
+        clock: &dyn RuntimeClock,
+        committed: &mut RecoveryReconciliation,
+    ) -> Result<(), RecoveryError> {
         for repair in &self.tool_repairs {
             let mut blocks = Vec::with_capacity(repair.missing.len());
             let mut events = Vec::with_capacity(repair.missing.len());
@@ -758,25 +810,34 @@ impl RecoveryPlan {
                     clock.now(),
                 ));
             }
-            // One transaction: the incomplete turn becomes complete, or
-            // nothing changes. A durable prefix of the sibling batch is never
-            // observable.
             store.append_canonical_batch_with_events(&blocks, &events)?;
             committed
                 .repaired_tool_results
                 .extend(repair.missing.iter().map(|missing| missing.call_id.clone()));
         }
+        Ok(())
+    }
 
-        // ---- 2. attempt recovery terminal ----
-        match &self.attempt {
-            AttemptRecoveryClass::AdmittedWithoutExternalStart { attempt_id } => {
-                self.terminalize(store, attempt_id, clock.now(), &format!(
+    /// **Reconciliation 2.** Settles the one interrupted attempt, when the
+    /// classification found one.
+    ///
+    /// The diagnostic states exactly what rustX knows and what stays unknown;
+    /// it never claims the external work failed.
+    fn settle_interrupted_attempt(
+        &self,
+        store: &dyn ConversationStore,
+        clock: &dyn RuntimeClock,
+        committed: &mut RecoveryReconciliation,
+    ) -> Result<(), RecoveryError> {
+        let (attempt_id, diagnostic) = match &self.attempt {
+            AttemptRecoveryClass::AdmittedWithoutExternalStart { attempt_id } => (
+                attempt_id,
+                format!(
                     "the runtime restarted while attempt {attempt_id} was durably non-terminal; \
                      no model request and no tool execution had crossed a durable start commit, \
                      so no external side effect is outstanding"
-                ))?;
-                committed.attempt_terminal = Some(attempt_id.clone());
-            }
+                ),
+            ),
             AttemptRecoveryClass::IndeterminateExternalOutcome {
                 attempt_id,
                 model_request,
@@ -802,16 +863,38 @@ impl RecoveryPlan {
                             .join(", ")
                     )
                 };
-                self.terminalize(store, attempt_id, clock.now(), &format!(
-                    "the runtime restarted while attempt {attempt_id} was durably non-terminal; \
-                     {request}; {tools}. Nothing was resent and nothing was re-executed"
-                ))?;
-                committed.attempt_terminal = Some(attempt_id.clone());
+                (
+                    attempt_id,
+                    format!(
+                        "the runtime restarted while attempt {attempt_id} was durably \
+                         non-terminal; {request}; {tools}. Nothing was resent and nothing was \
+                         re-executed"
+                    ),
+                )
             }
-            AttemptRecoveryClass::NotStarted | AttemptRecoveryClass::AlreadyTerminal => {}
-        }
+            AttemptRecoveryClass::NotStarted | AttemptRecoveryClass::AlreadyTerminal => {
+                return Ok(());
+            }
+        };
+        self.terminalize(store, attempt_id, clock.now(), &diagnostic)?;
+        committed.attempt_terminal = Some(attempt_id.clone());
+        Ok(())
+    }
 
-        // ---- 3. background terminal publication ----
+    /// **Reconciliation 3.** Publishes the terminal notification of every
+    /// durably owned background execution that never settled.
+    ///
+    /// The terminal Pending Inbound row and the `BackgroundTerminalPublished`
+    /// fact commit in one transaction, exactly as the live settlement path
+    /// does. The stable producer correlation and the durable
+    /// `background:{execution_id}` terminal lifecycle together make this
+    /// exactly-once across any number of restarts.
+    fn publish_background_terminals(
+        &self,
+        store: &dyn ConversationStore,
+        clock: &dyn RuntimeClock,
+        committed: &mut RecoveryReconciliation,
+    ) -> Result<(), RecoveryError> {
         for class in &self.background {
             let (draft, event) = crate::tools::background::recovery_terminal_publication(
                 &self.conversation_id,
@@ -819,27 +902,12 @@ impl RecoveryPlan {
                 &class.evidence.tool_name,
                 clock.now(),
             );
-            // The terminal Pending Inbound row and the
-            // `BackgroundTerminalPublished` fact commit in one transaction,
-            // exactly as the live settlement path does. The stable producer
-            // correlation and the durable `background:{execution_id}` terminal
-            // lifecycle together make this exactly-once across any number of
-            // restarts.
             store.accept_inbound_with_event(draft, event)?;
             committed
                 .background_terminals
                 .push(class.evidence.execution_id.clone());
         }
-
-        Ok(RecoveryReport {
-            attempt: self.attempt,
-            background: self.background,
-            resume: self.resume,
-            reconciliation: committed,
-            next_attempt_ordinal: self.next_attempt_ordinal,
-            highest_background_ordinal: self.highest_background_ordinal,
-            pending_inbound: self.pending_inbound,
-        })
+        Ok(())
     }
 
     fn terminalize(

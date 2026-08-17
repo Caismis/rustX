@@ -50,8 +50,8 @@ use rustx::runtime::identity::{
     ToolId, TurnId,
 };
 use rustx::runtime::recovery::{
-    AttemptRecoveryClass, RecoveryEvidence, RecoveryPlan, RecoveryReport, ResumeDisposition,
-    recover,
+    AttemptRecoveryClass, RecoveryError, RecoveryEvidence, RecoveryPlan, RecoveryReport,
+    ResumeDisposition, recover,
 };
 use rustx::runtime::types::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -1382,4 +1382,57 @@ fn recovery_is_a_pure_function_of_durable_authority() {
         report.reconciliation().attempt_terminal.as_ref(),
         Some(&attempt)
     );
+}
+
+/// A durable authority that contradicts the one-active-attempt invariant is
+/// reported, not silently truncated.
+///
+/// Settling only whichever attempt sorted first would leave the other durably
+/// non-terminal forever while the runtime reported a clean recovery. Recovery
+/// fails closed instead, so no runtime exists that could admit work over an
+/// incoherent attempt plane.
+#[test]
+fn two_concurrently_unsettled_attempts_fail_recovery_closed() {
+    let durable = Durable::new();
+    let conversation = conversation_id();
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        for ordinal in 0..2 {
+            let attempt = AttemptId::for_conversation(&conversation, ordinal);
+            store
+                .append_event(envelope(
+                    &format!("started-{ordinal}"),
+                    Some(attempt.clone()),
+                    None,
+                    RuntimeEvent::AttemptStarted {
+                        attempt_id: attempt,
+                    },
+                ))
+                .expect("attempt started");
+        }
+    }
+
+    let store = durable.open();
+    let failure = recover(&store, &FixedClock).expect_err("recovery must fail closed");
+    let RecoveryError::Unrecoverable(detail) = failure else {
+        panic!("an incoherent attempt plane is unrecoverable, not a storage failure");
+    };
+    assert!(
+        detail.contains("non-terminal attempts"),
+        "the report names the violation: {detail}"
+    );
+    // Nothing was settled: neither attempt received a partial recovery
+    // terminal.
+    let events = all_events(&store);
+    for ordinal in 0..2 {
+        assert_eq!(
+            terminal_count(
+                &events,
+                &AttemptId::for_conversation(&conversation, ordinal)
+            ),
+            0,
+            "a failed recovery terminalizes nothing"
+        );
+    }
 }
