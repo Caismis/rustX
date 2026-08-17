@@ -27,8 +27,10 @@ use rustx::model::types::ModelUsage;
 use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
-use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
-use rustx::runtime::inbound::{ConversationInboundMailbox, MailboxError};
+use rustx::runtime::identity::{
+    AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+};
+use rustx::runtime::inbound::MailboxError;
 use rustx::runtime::types::{CancellationReason, RuntimeError};
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolCall, ToolExecutionStatus};
@@ -242,6 +244,7 @@ async fn text_execution_completes_with_exact_trace() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -260,6 +263,9 @@ async fn text_execution_completes_with_exact_trace() {
         RuntimeEvent::ModelRequestCompleted {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+        },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(1),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
@@ -347,6 +353,7 @@ async fn model_failure_before_content_fails_attempt() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::ModelRequestFailed {
@@ -456,7 +463,7 @@ async fn no_events_after_completed_terminal() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
     assert_single_terminal(&result.events);
-    assert_eq!(result.events.len(), 8, "exact event count of a text turn");
+    assert_eq!(result.events.len(), 9, "exact event count of a text turn");
 }
 
 /// A tool turn's calls execute in block order.
@@ -603,6 +610,7 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -637,6 +645,9 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             finish_reason: ModelFinishReason::ToolCalls,
             usage: None,
         },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(1),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
@@ -646,9 +657,14 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
             tool_id: ToolId::new("tool-alpha"),
             result: success_result("listed"),
         },
+        RuntimeEvent::ToolMessageCommitted {
+            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            tool_call_id: ToolCallId::new("call-1"),
+        },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -662,6 +678,9 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::ModelRequestCompleted {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+        },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(2),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
@@ -813,6 +832,7 @@ fn expected_unknown_tool_trace() -> Vec<RuntimeEvent> {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -1109,6 +1129,7 @@ async fn cancellation_during_generation_after_partial_text() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2499,16 +2520,15 @@ async fn run_with_mailbox(
     model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
-    mailbox: ConversationInboundMailbox,
+    tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
 ) -> AgentExecutionResult {
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox);
-    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let capability = common::capability_lease(tools, tool_runtime).await;
     AgentExecution::new(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
         runtime(model),
-        &tool_runtime,
+        tool_runtime,
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")
@@ -2570,8 +2590,8 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
+    let tool_runtime = common::tool_runtime("conv-1");
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
     assert_trace(&result.events, &expected_single_tool_trace());
     assert_single_terminal(&result.events);
@@ -2633,7 +2653,8 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
         await_started(&mut tool_started, "tool started").await;
@@ -2653,7 +2674,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         );
         release.send_replace(true);
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
     assert!(
         mailbox.select_pending_batch().expect("select").is_none(),
@@ -2745,7 +2766,8 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     let mut tools = ToolRegistry::new();
     tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
         await_started(&mut tool_started, "tool started").await;
@@ -2761,7 +2783,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
             .expect("enqueue correction B");
         release.send_replace(true);
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -2833,7 +2855,8 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
     ]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
@@ -2846,7 +2869,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
             .expect("enqueue while turn 1 is in flight");
         release.send(true).expect("release turn 1");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_eq!(
@@ -2898,8 +2921,9 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
     assert_single_terminal(&result.events);
     assert_outcome(
@@ -2950,7 +2974,8 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller_cancellation = cancellation.clone();
     let mut model_parked = model.parked();
@@ -2965,7 +2990,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
         controller_cancellation.cancel();
         release.send(true).expect("release turn");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3037,7 +3062,8 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     first_tool.register(&mut tools);
     second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller_cancellation = cancellation.clone();
     let controller = tokio::spawn(async move {
@@ -3052,7 +3078,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
         await_started(&mut second_started, "second tool started").await;
         controller_cancellation.cancel();
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3099,7 +3125,8 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
@@ -3112,7 +3139,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
             .expect("enqueue pending message");
         release.send(true).expect("release the failing turn");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3160,7 +3187,8 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
     ]]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut emitted = model.emitted();
     let controller = tokio::spawn(async move {
@@ -3172,7 +3200,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
             .enqueue(inbound_user("msg-ut-a", "pending", UserSource::Runtime))
             .expect("enqueue while the request is in flight");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox.clone()).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3226,7 +3254,8 @@ async fn continuation_retained_across_inbound_drain() {
     ]);
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
@@ -3239,7 +3268,7 @@ async fn continuation_retained_across_inbound_drain() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);
@@ -3306,7 +3335,8 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     first_tool.register(&mut tools);
     second_tool.register(&mut tools);
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let controller = tokio::spawn(async move {
         await_started(&mut first_started, "first tool started").await;
@@ -3320,7 +3350,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
             .expect("enqueue C before boundary 2");
         second_release.send_replace(true);
     });
-    let result = run_with_mailbox(&model, tools, &cancellation, mailbox).await;
+    let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
     assert_single_terminal(&result.events);

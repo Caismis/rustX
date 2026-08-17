@@ -110,6 +110,7 @@ fn try_config(
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
+        durable_store: None,
     })?;
     Ok((
         conversation_runtime.clone(),
@@ -296,6 +297,9 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
         Err(HostConstructionError::RuntimeAlreadyActivated { .. }) => {
             panic!("the binding claim must reject a second host before the lifecycle check")
         }
+        Err(HostConstructionError::Durable(_)) => {
+            panic!("the second host must not reach durable bootstrap")
+        }
         Ok(_) => panic!("a second host over one runtime identity must be rejected"),
     }
 
@@ -447,7 +451,8 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
     );
 
     // A fresh coordinator over a surviving runtime bundle is rejected at
-    // coordinator construction: pre-M8 owns no recovery model.
+    // Coordinator construction owns no generic recovery policy; that
+    // evidence is retained for the later recovery/supervision milestone.
     let rebind = try_config(
         bundle.runtime.clone(),
         bundle.coordinator.clone(),
@@ -460,7 +465,7 @@ async fn dropping_the_host_never_rebinds_the_runtime_identity() {
                 conversation_id,
             }) if conversation_id.as_str() == "conv-37-bind-lifetime"
         ),
-        "a surviving runtime bundle is never rebound: pre-M8 owns no recovery model"
+        "a surviving runtime bundle is never rebound: recovery policy is not a host-binding concern"
     );
 
     // A genuinely fresh runtime identity binds normally, even under the

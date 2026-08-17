@@ -477,6 +477,10 @@ pub struct NativeFixture {
     pub registry: rustx::tools::executor::ToolRegistry,
     /// The conversation inbound mailbox shared by the runtime and tests.
     pub mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
+    /// The full conversation authority used by direct Agent Loop tests.
+    /// Tool/runtime code receives only the mailbox capability; the test
+    /// harness passes this handle explicitly at the execution boundary.
+    pub store: Arc<rustx::durable::SqliteConversationStore>,
 }
 
 impl NativeFixture {
@@ -502,8 +506,16 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace directory");
     let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).expect("artifact directory");
     let conversation_id = rustx::runtime::identity::ConversationId::new("conv-m5");
-    let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::new(conversation_id.clone());
+    let store = Arc::new(
+        rustx::durable::SqliteConversationStore::open(
+            conversation_id.clone(),
+            &artifacts.join("conversation.sqlite"),
+        )
+        .expect("durable store"),
+    );
+    let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
     let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
         .expect("authorized environment");
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
@@ -529,6 +541,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         runtime,
         registry,
         mailbox,
+        store,
     }
 }
 

@@ -248,10 +248,16 @@ pub struct ConversationSurface {
     active: Vec<MessageId>,
     /// The current revision, maintained as head metadata.
     revision: SurfaceRevision,
+    /// The first revision represented by the bounded hot operation suffix.
+    /// Revisions before this base remain durable-store reads after restart.
+    history_base_revision: SurfaceRevision,
+    /// The active identity order at `history_base_revision`.
+    history_base_active: Vec<MessageId>,
     /// The number of accepted replacements, maintained as head metadata.
     compaction_generation: u64,
-    /// Every accepted operation in acceptance order. Revision `n` is the
-    /// state after `ops[..n]`.
+    /// The bounded operation suffix accepted after the hot bootstrap base.
+    /// The durable `ConversationStore` owns the prefix before
+    /// `history_base_revision`.
     ops: Vec<SurfaceOp>,
     /// Read instrumentation for current-head versus historical access.
     access: Arc<SurfaceAccess>,
@@ -261,6 +267,8 @@ impl PartialEq for ConversationSurface {
     fn eq(&self, other: &Self) -> bool {
         self.active == other.active
             && self.revision == other.revision
+            && self.history_base_revision == other.history_base_revision
+            && self.history_base_active == other.history_base_active
             && self.compaction_generation == other.compaction_generation
             && self.ops == other.ops
     }
@@ -269,6 +277,26 @@ impl PartialEq for ConversationSurface {
 impl Eq for ConversationSurface {}
 
 impl ConversationSurface {
+    /// Hydrates the current durable head without materializing historical
+    /// operations. The operation log remains a store concern; this value is
+    /// only the bounded hot projection used by the runtime.
+    #[must_use]
+    pub fn from_current_head(
+        active: Vec<MessageId>,
+        revision: SurfaceRevision,
+        compaction_generation: u64,
+    ) -> Self {
+        Self {
+            history_base_active: active.clone(),
+            active,
+            revision,
+            history_base_revision: revision,
+            compaction_generation,
+            ops: Vec::new(),
+            access: Arc::new(SurfaceAccess::default()),
+        }
+    }
+
     fn mark_current_head_read(&self) {
         self.access.current_head_read();
     }
@@ -443,25 +471,32 @@ impl ConversationSurface {
         self.revision
     }
 
-    /// Reconstructs the exact active ordered identities of a historical
-    /// revision.
+    /// Reconstructs the exact active ordered identities of a retained hot
+    /// revision. Revisions before a durable bootstrap base are read through
+    /// the `ConversationStore` rather than materialized here.
     ///
-    /// Reconstruction replays the retained operation log only: it never
+    /// Reconstruction replays the bounded operation suffix only: it never
     /// reads the Message Ledger, and later mutations never change the
-    /// reconstruction of an earlier revision.
+    /// reconstruction of an earlier retained revision.
     ///
     /// # Errors
     ///
     /// Returns [`SurfaceError::UnknownRevision`] for a revision beyond this
     /// Surface's history.
     pub fn reconstruct(&self, revision: SurfaceRevision) -> Result<Vec<MessageId>, SurfaceError> {
-        let upto =
-            usize::try_from(revision.get()).map_err(|_| SurfaceError::UnknownRevision(revision))?;
-        if revision > self.revision || upto > self.ops.len() {
+        if revision < self.history_base_revision || revision > self.revision {
+            return Err(SurfaceError::UnknownRevision(revision));
+        }
+        let offset = revision
+            .get()
+            .checked_sub(self.history_base_revision.get())
+            .ok_or(SurfaceError::UnknownRevision(revision))?;
+        let upto = usize::try_from(offset).map_err(|_| SurfaceError::UnknownRevision(revision))?;
+        if upto > self.ops.len() {
             return Err(SurfaceError::UnknownRevision(revision));
         }
         self.access.history_read(upto);
-        let mut active: Vec<MessageId> = Vec::new();
+        let mut active = self.history_base_active.clone();
         for op in &self.ops[..upto] {
             match op {
                 SurfaceOp::Append { message_id } => active.push(message_id.clone()),
@@ -483,8 +518,8 @@ impl ConversationSurface {
         Ok(active)
     }
 
-    /// Every retired identity: an identity this Surface once carried that is
-    /// no longer active.
+    /// Every identity retired in the bounded hot suffix that is no longer
+    /// active. Older retired identities remain a durable-store read.
     ///
     /// This is a diagnostic/audit accessor over Surface history; normal
     /// projection and compaction never call it.
@@ -512,7 +547,7 @@ impl ConversationSurface {
         retired
     }
 
-    /// The accepted operation log, in acceptance order.
+    /// The bounded accepted operation suffix, in acceptance order.
     #[must_use]
     pub fn ops(&self) -> &[SurfaceOp] {
         self.access.history_read(self.ops.len());

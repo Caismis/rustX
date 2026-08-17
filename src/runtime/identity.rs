@@ -61,6 +61,17 @@ id_type! {
 }
 
 id_type! {
+    /// Identifies one actual provider-neutral model request.
+    ///
+    /// A request identity is distinct from an attempt, turn, retry ordinal,
+    /// and Event Journal sequence. It is derived once from the immutable
+    /// [`RequestIdentity`](crate::model::snapshot::RequestIdentity) and is
+    /// the durable correlation key for the Request Snapshot and its
+    /// request-start fact.
+    RequestId
+}
+
+id_type! {
     /// Identifies an agent.
     AgentId
 }

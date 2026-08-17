@@ -15,8 +15,10 @@
 //! target, structural compaction planning, summary planning, the fit and
 //! progress checks, and the provider-neutral projection. It does **not** own
 //! Ledger mutation, Surface authority, attempt cancellation, provider
-//! continuation storage, or Runtime Client state: the semantic commit of a
-//! compaction is applied by [`ConversationState::commit_compaction`].
+//! continuation storage, or Runtime Client state: the engine prepares the
+//! compaction command, while the durable `ConversationStore` owns the atomic
+//! summary Ledger + Surface Replace commit and the hot state installs the
+//! already-committed result.
 //!
 //! All decisions are deterministic pure functions of (Surface revision,
 //! hydrated active messages, tool definitions, observed provider usage, and

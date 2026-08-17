@@ -24,7 +24,8 @@ pub mod cancellation;
 pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of
 /// conversation coordination — session model state, attempt admission, the
-/// current-attempt slot, between-attempt canonical state, request history,
+/// current-attempt slot, between-attempt current Surface state, durable
+/// request-history reads,
 /// the shutdown gate, and settlement handoff.
 pub mod conversation_runtime;
 pub mod identity;
@@ -83,9 +84,10 @@ pub(crate) mod process_supervision;
 /// currently expose `waitid` on Apple targets.
 #[cfg(unix)]
 pub(crate) mod process_wait;
-/// The runtime-owned retained provider-neutral request facts (Issue #61):
-/// immutable settled request snapshots, appended by the conversation
-/// runtime coordinator at attempt settlement. Not client projection state.
+/// The runtime-owned provider-neutral request read handle (M8 / Issue #11):
+/// immutable request snapshots are persisted at request start and resolved on
+/// demand from the native durable conversation authority. Not client
+/// projection state.
 pub mod request_history;
 /// The shared structural ownership core of every rustX-owned supervised
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
@@ -103,7 +105,7 @@ pub use conversation_runtime::{
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
-    McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, SkillId,
+    McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, RequestId, SkillId,
     SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
 };
 pub use inbound::{

@@ -1,5 +1,5 @@
 //! Issue #27: deterministic multi-compaction validation through the final
-//! pre-M8 `ConversationRuntime` path.
+//! durable `ConversationRuntime` path.
 //!
 //! Every test here drives at least two committed compactions through the
 //! production `ConversationRuntime` → `AgentExecution` → `ContextRuntime`
@@ -224,8 +224,7 @@ fn submit(attachment: &RuntimeAttachment, id: u64, value: &str) {
     );
 }
 
-/// Waits for the post-settlement transfer of frozen request facts to the
-/// runtime-owned append-only history.
+/// Waits for the durable request-fact read to expose the expected count.
 async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
     tokio::time::timeout(LIVENESS, async {
         loop {
@@ -239,8 +238,8 @@ async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
     .expect("request history transfer must settle");
 }
 
-/// Waits until the runtime owns the conversation state again and returns the
-/// authoritative Message Ledger.
+/// Waits until the runtime is idle again and returns its current working
+/// Message Ledger projection.
 async fn await_ledger(host: &RuntimeClientHost) -> Vec<MessageBlock> {
     tokio::time::timeout(LIVENESS, async {
         loop {
@@ -254,8 +253,8 @@ async fn await_ledger(host: &RuntimeClientHost) -> Vec<MessageBlock> {
     .expect("the runtime must re-own the conversation state after settlement")
 }
 
-/// Reconstructs one retained snapshot by position in the append-only
-/// history.
+/// Reconstructs one retained snapshot by position in an on-demand durable
+/// read result.
 fn reconstruct_at(host: &RuntimeClientHost, index: usize) -> (RequestSnapshot, ModelRequest) {
     let history = host.request_history();
     let snapshot = history.snapshots()[index].clone();

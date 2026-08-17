@@ -13,7 +13,7 @@ use crate::conversation::{ConversationError, ConversationState, SurfaceRevision}
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{AttemptId, CapabilityRevision, TurnId};
+use crate::runtime::identity::{AttemptId, CapabilityRevision, RequestId, TurnId};
 use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
@@ -28,9 +28,26 @@ pub struct RequestIdentity {
     pub retry_number: u32,
 }
 
+impl RequestIdentity {
+    /// Derives the stable durable identity of this actual request.
+    #[must_use]
+    pub fn request_id(&self) -> RequestId {
+        RequestId::new(format!(
+            "request:{}:{}:{}:{}:{}",
+            self.attempt_id.as_str().len(),
+            self.attempt_id,
+            self.turn.as_str().len(),
+            self.turn,
+            self.retry_number
+        ))
+    }
+}
+
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Stable durable identity of this actual request.
+    pub request_id: RequestId,
     /// Request identity.
     pub identity: RequestIdentity,
     /// The exact immutable Surface revision used by this request.
@@ -47,8 +64,8 @@ pub struct RequestSnapshot {
     pub reasoning_enabled: bool,
     /// The exact effective tool definitions/capability view used by this
     /// request. The capability revision is retained for audit, while the
-    /// definitions are frozen by value because pre-M8 capability storage is
-    /// not a durable historical lookup authority.
+    /// definitions are frozen by value because capability revision metadata
+    /// is not a separate historical definition lookup authority.
     pub tool_definitions: Vec<ModelToolDefinition>,
     /// The immutable capability generation observed at admission.
     pub capability_revision: CapabilityRevision,
@@ -106,6 +123,7 @@ impl RequestSnapshot {
         continuation: Option<ProviderContinuationState>,
     ) -> Self {
         Self {
+            request_id: identity.request_id(),
             identity,
             surface_revision,
             effective_system_prompt,

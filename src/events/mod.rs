@@ -1,19 +1,20 @@
-//! Durable runtime event types, the event-writer abstraction, and the narrow
-//! non-durable execution-fact sink.
+//! Durable runtime event types and the narrow optional non-durable execution-
+//! fact sink.
 //!
-//! M1 defines the canonical event envelope and initial event vocabulary.
-//! Event writers, persistence, and external publication are milestone M8.
-//! M5 adds a narrow non-durable [`RuntimeEventSink`] so detached background
-//! executions can emit execution facts after their originating attempt
-//! ended; durable Event Journal writing remains M8.
+//! M1 defines the canonical event envelope and initial event vocabulary. M8
+//! persists the envelope in the `ConversationStore` Event Journal before
+//! publication. M5's [`RuntimeEventSink`] remains an optional process-local
+//! progress projection for detached background work; it is not a second
+//! durable journal.
 
 pub mod types;
 
-/// The narrow non-durable execution-fact sink of the tool plane.
+/// The narrow optional non-durable execution-fact projection of the tool
+/// plane.
 ///
 /// Detached background executions emit facts (for example progress events)
 /// through this seam after their originating attempt may have ended. The
-/// sink is explicitly not the M8 durable Event Journal: it performs no
+/// sink is explicitly not the `ConversationStore` Event Journal: it performs no
 /// sequence allocation, no persistence, and no ordering beyond best-effort
 /// in-memory delivery. No second competing event history exists — the
 /// canonical [`RuntimeEvent`] vocabulary is unchanged.
@@ -58,6 +59,6 @@ impl RuntimeEventSink for RecordingEventSink {
 }
 
 pub use types::{
-    AttemptFailure, AttemptLimit, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent,
-    RuntimeEventEnvelope,
+    AttemptFailure, AttemptLimit, AttemptOutcome, BackgroundTerminalState, EVENT_SCHEMA_VERSION,
+    RuntimeEvent, RuntimeEventEnvelope,
 };

@@ -1,7 +1,8 @@
-//! The durable Pending Inbound Inbox (Issue #63).
+//! The native durable conversation authority (Issue #11).
 //!
-//! This module owns the one durable authority for accepted-but-not-yet
-//! canonically-adopted inbound work:
+//! This module exposes one backend-independent semantic store for the five
+//! distinct durable domains. Pending Inbound remains its own authority for
+//! accepted-but-not-yet-canonically-adopted work:
 //!
 //! ```text
 //! Pending Inbound Inbox
@@ -26,26 +27,27 @@
 //!
 //! # Backend independence
 //!
-//! [`inbox::InboundStore`] declares the backend-independent domain semantic
-//! operations (accept, select, adopt, load). [`sqlite::SqliteInboundStore`]
+//! [`inbox::ConversationStore`] declares the backend-independent semantic
+//! transitions of all five durable domains. [`sqlite::SqliteConversationStore`]
 //! is the M8 concrete backend. A future M11 `PostgreSQL` backend must provide
 //! the same observable contract. The abstraction level is deliberately the
 //! rustX domain transitions — never a generic repository/queue/CRUD frame.
 //!
 //! # Two linearization points
 //!
-//! 1. **Acceptance**: [`InboundStore::accept_inbound`] commits the sequence
+//! 1. **Acceptance**: [`ConversationStore::accept_inbound`] commits the sequence
 //!    allocation, the pending record, and any correlation/idempotency state
 //!    in one transaction. Success is reported only after that commit.
-//! 2. **Adoption**: [`InboundStore::adopt_pending_batch`] atomically appends
-//!    the selected pending messages to the durable canonical message ledger
-//!    and removes the pending records in the same transaction.
+//! 2. **Adoption**: [`ConversationStore::adopt_pending_batch`] atomically
+//!    appends the selected pending messages to the durable canonical Message
+//!    Ledger, advances the Surface/checkpoint, and removes pending records.
 
 pub mod inbox;
 pub mod sqlite;
 
 pub use inbox::{
-    AcceptedInbound, InboundDraft, InboundStore, InboundStoreError, PendingBatch,
-    PendingInboundItem,
+    AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationInboundCapability,
+    ConversationStore, ConversationStoreError, DurableConversationHead, EventPage, InboundDraft,
+    PendingBatch, PendingInboundItem,
 };
-pub use sqlite::SqliteInboundStore;
+pub use sqlite::SqliteConversationStore;

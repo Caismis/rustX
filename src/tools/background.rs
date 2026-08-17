@@ -139,12 +139,18 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
 
-use crate::events::{RuntimeEvent, RuntimeEventSink};
+use crate::durable::inbox::InboundDraft;
+use crate::events::{
+    BackgroundTerminalState, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
+    RuntimeEventSink,
+};
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolExecutionId, ToolId};
+use crate::runtime::identity::{
+    ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
+};
 use crate::runtime::inbound::ConversationInboundMailbox;
 use crate::runtime::types::{CancellationReason, ConversationLifecycle};
 use serde::{Deserialize, Serialize};
@@ -1024,11 +1030,16 @@ impl ConversationBackgroundRegistry {
         // committed correlation can never publish a duplicate notification.
         // Durable acceptance commits **before** the terminal lifecycle.
         let correlation = format!("background-terminal:{}", execution_id.as_str());
-        match self
-            .resources
-            .mailbox
-            .enqueue_correlated(notification, correlation)
-        {
+        let event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
+        let event = background_terminal_event(
+            &self.conversation_id,
+            &event_id,
+            &notification,
+            execution_id,
+            settled,
+        );
+        let draft = inbound_draft(notification, correlation);
+        match self.resources.mailbox.accept_draft_with_event(draft, event) {
             Ok(_) => {
                 let record = &mut state.records[index];
                 record.lifecycle = settled;
@@ -1131,11 +1142,16 @@ impl ConversationBackgroundRegistry {
             self.resources.clock.now(),
         );
         let correlation = format!("background-terminal:{}", execution_id.as_str());
-        match self
-            .resources
-            .mailbox
-            .enqueue_correlated(notification, correlation)
-        {
+        let event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
+        let event = background_terminal_event(
+            &self.conversation_id,
+            &event_id,
+            &notification,
+            execution_id,
+            candidate.settled,
+        );
+        let draft = inbound_draft(notification, correlation);
+        match self.resources.mailbox.accept_draft_with_event(draft, event) {
             Ok(_) => {
                 let record = &mut state.records[index];
                 record.lifecycle = candidate.settled;
@@ -1350,6 +1366,55 @@ fn terminal_inbound_message(
     }
 }
 
+fn inbound_draft(notification: UserMessageBlock, correlation: String) -> InboundDraft {
+    let timestamp = notification
+        .timestamp
+        .expect("background terminal notifications carry a timestamp");
+    InboundDraft {
+        message_id: Some(notification.id.clone()),
+        source: notification.source,
+        kind: notification.kind,
+        content: notification.content,
+        timestamp,
+        correlation: Some(correlation),
+    }
+}
+
+fn background_terminal_event(
+    conversation_id: &ConversationId,
+    event_id: &EventId,
+    notification: &UserMessageBlock,
+    execution_id: &ToolExecutionId,
+    state: BackgroundLifecycle,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: event_id.clone(),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: notification
+            .timestamp
+            .expect("background terminal notifications carry a timestamp"),
+        event: RuntimeEvent::BackgroundTerminalPublished {
+            execution_id: execution_id.clone(),
+            message_id: notification.id.clone(),
+            state: match state {
+                BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
+                BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
+                BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
+                BackgroundLifecycle::Starting
+                | BackgroundLifecycle::Running
+                | BackgroundLifecycle::Cancelling
+                | BackgroundLifecycle::PublishingTerminal => {
+                    unreachable!("only terminal background states are published")
+                }
+            },
+        },
+    }
+}
+
 /// The background progress reporter handed to detached executors: it
 /// updates the registry's latest progress snapshot and emits the
 /// corresponding canonical execution fact.
@@ -1438,8 +1503,8 @@ mod tests {
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundLifecycle,
         BackgroundResources, ConversationBackgroundRegistry,
     };
-    use crate::durable::inbox::InboundStore;
-    use crate::events::RecordingEventSink;
+    use crate::durable::inbox::ConversationStore;
+    use crate::events::{RecordingEventSink, RuntimeEvent};
     use crate::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
     use crate::runtime::inbound::ConversationInboundMailbox;
     use crate::runtime::types::CancellationReason;
@@ -1507,7 +1572,7 @@ mod tests {
     struct FileRegistry {
         _dir: tempfile::TempDir,
         registry: ConversationBackgroundRegistry,
-        store: Arc<crate::durable::SqliteInboundStore>,
+        store: Arc<crate::durable::SqliteConversationStore>,
         store_path: std::path::PathBuf,
     }
 
@@ -1526,7 +1591,7 @@ mod tests {
         let conversation = ConversationId::new(conversation_id);
         let store_path = artifacts.join("inbound.db");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::open(conversation.clone(), &store_path)
+            crate::durable::SqliteConversationStore::open(conversation.clone(), &store_path)
                 .expect("store"),
         );
         let mailbox = ConversationInboundMailbox::over_store(store.clone());
@@ -1969,6 +2034,16 @@ mod tests {
             Some(expected_correlation.as_str()),
             "the bounded retry used the same deterministic correlation"
         );
+        let events = fixture.store.read_events(None, 10).expect("events").events;
+        assert_eq!(events.len(), 1, "terminal publication fact is exactly once");
+        assert!(matches!(
+            &events[0].event,
+            RuntimeEvent::BackgroundTerminalPublished {
+                execution_id: event_execution,
+                message_id,
+                ..
+            } if event_execution == &execution_id && message_id == &items[0].message_id
+        ));
     }
 
     /// Issue #63 (Blocker 2, Test 3): when the bounded publication budget
@@ -2114,7 +2189,7 @@ mod tests {
         );
         // A second connection over the same database file (the process
         // restart boundary) observes the same durable delivery.
-        let reopened = crate::durable::SqliteInboundStore::open(
+        let reopened = crate::durable::SqliteConversationStore::open(
             ConversationId::new("conv-bg-durable"),
             fixture.store_path(),
         )

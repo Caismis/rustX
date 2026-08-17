@@ -455,8 +455,10 @@ pub enum RuntimeClientError {
         /// The referenced execution identity.
         execution_id: ToolExecutionId,
     },
-    /// The requested cursor is not serviceable by the bounded pre-M8
-    /// replay buffer; the client must take a fresh snapshot.
+    /// The requested cursor is not serviceable by the bounded projection
+    /// replay buffer; the client must take a fresh snapshot from the runtime
+    /// projection. The durable Event Journal is not represented by this
+    /// cursor.
     ResyncRequired {
         /// The cursor the client asked to resume after.
         after_cursor: RuntimeClientCursor,

@@ -4,7 +4,7 @@
 //! of authoritative runtime state. It is a projection, never a second
 //! authority:
 //!
-//! - committed messages mirror the conversation's canonical history;
+//! - committed messages mirror the currently projected canonical Surface;
 //! - the attempt view mirrors the current/latest attempt execution;
 //! - the in-flight output and foreground tool views carry enough state to
 //!   repair every client-visible streaming effect;
@@ -72,14 +72,13 @@ pub struct RuntimeClientSnapshot {
     /// work may begin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub durability_failure: Option<RuntimeDurabilityFailure>,
-    /// The committed canonical Message Ledger records, in commit order.
+    /// The client projection of canonical Message Ledger observations.
     ///
-    /// This is a read model of the immutable Message Ledger: it is repaired
-    /// from authoritative commit observations and is never independently
-    /// mutable. It includes the runtime compaction summary, which is a
-    /// canonical Ledger fact like any other, and it keeps every retired
-    /// original: compaction rewrites the Conversation Surface, never the
-    /// Ledger.
+    /// It is repaired from the native durable authority at bootstrap and
+    /// from committed observations while live; it is never independently
+    /// mutable or recovery input. A restarted projection contains the
+    /// current Surface working set, while historical Ledger pages remain
+    /// available through `ConversationStore` APIs.
     pub messages: Vec<MessageBlock>,
     /// The current/latest attempt view, when any attempt exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]

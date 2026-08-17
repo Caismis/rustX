@@ -777,18 +777,13 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::from_config(
+    let tool_runtime = ConversationToolRuntime::new(
         ConversationId::new("conv-1"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace_root,
-                dir.path().join("artifacts"),
-            )
-        },
+        &workspace_root,
+        dir.path().join("artifacts"),
     )
     .expect("tool runtime");
+    let mailbox = tool_runtime.mailbox().clone();
 
     let call = scripted(
         "call-1",
@@ -901,19 +896,12 @@ async fn terminal_inbound_before_snapshot_joins_the_batch() {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::from_config(
+    let tool_runtime = ConversationToolRuntime::new(
         ConversationId::new("conv-1"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace_root,
-                dir.path().join("artifacts"),
-            )
-        },
+        &workspace_root,
+        dir.path().join("artifacts"),
     )
     .expect("tool runtime");
-
     let call_fg = scripted("call-fg", "tool-fg", "fg", serde_json::json!({}));
     let call_bg = scripted(
         "call-bg",
@@ -1254,19 +1242,12 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::from_config(
+    let tool_runtime = ConversationToolRuntime::new(
         ConversationId::new("conv-1"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace_root,
-                dir.path().join("artifacts"),
-            )
-        },
+        &workspace_root,
+        dir.path().join("artifacts"),
     )
     .expect("tool runtime");
-
     let call_b1 = scripted(
         "call-b1",
         "tool-b1",
@@ -1433,19 +1414,12 @@ async fn foreground_tool_continuation_has_no_agent_status() {
     let dir = tempfile::tempdir().expect("temp dir");
     let workspace_root = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
-    let mailbox = ConversationInboundMailbox::new(ConversationId::new("conv-1"));
-    let tool_runtime = ConversationToolRuntime::from_config(
+    let tool_runtime = ConversationToolRuntime::new(
         ConversationId::new("conv-1"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                &workspace_root,
-                dir.path().join("artifacts"),
-            )
-        },
+        &workspace_root,
+        dir.path().join("artifacts"),
     )
     .expect("tool runtime");
-
     let call = scripted("call-1", "tool-alpha", "alpha", serde_json::json!({}));
     let model = fake_model(vec![
         vec![

@@ -2,7 +2,8 @@
 //!
 //! M1 implements the frozen four-role message model in [`types`] and the
 //! shared content/reference blocks in [`content`]. History assembly,
-//! compaction, and context compilation are later milestones.
+//! compaction, and context compilation are owned by the conversation/context
+//! layers; this module remains the canonical message vocabulary.
 
 pub mod content;
 pub mod types;

@@ -1470,15 +1470,10 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
             }),
         ],
     ]);
-    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+    let tool_runtime = rustx::tools::runtime::ConversationToolRuntime::new(
         ConversationId::new("conv-m6"),
-        rustx::tools::runtime::ConversationRuntimeConfig {
-            mailbox: Some(conversation.background.resources().mailbox.clone()),
-            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
-                conversation.workspace.root(),
-                conversation.dir.path().join("agent-artifacts"),
-            )
-        },
+        conversation.workspace.root(),
+        conversation.dir.path().join("agent-artifacts"),
     )
     .expect("tool runtime");
     let cancellation = rustx::agent::AgentCancellation::new(

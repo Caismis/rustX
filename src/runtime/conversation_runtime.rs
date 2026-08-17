@@ -7,8 +7,8 @@
 //! ```text
 //! conversation identity / agent identity
 //! authoritative mutable session model state
-//! between-attempt canonical ConversationState
-//! RequestHistory (frozen non-history request facts)
+//! between-attempt bounded ConversationState hot read model
+//! ConversationStore and its RequestHistory durable read handle
 //! attempt-id allocation
 //! the current-attempt slot and its cancellation handle
 //! attempt admission (the ONE admission owner)
@@ -192,7 +192,7 @@
 //!
 //! ```text
 //! T0  coordinator lock; reject if activated; install the queue;
-//!     capture shutting_down / canonical messages / session model
+//!     capture shutting_down / current Surface messages / session model
 //! T1  background registry: install observer + capture snapshots  (one background section)
 //! T2  mailbox:             install observer + capture pending    (one mailbox section)
 //! R   capability:          install observer + capture snapshot   (one capability section)
@@ -249,7 +249,7 @@ use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilityS
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
-use crate::durable::inbox::InboundDraft;
+use crate::durable::{ConversationStore, InboundDraft, SqliteConversationStore};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
@@ -363,7 +363,7 @@ impl core::fmt::Display for ConversationRuntimeError {
                 "the durable conversation head is not at a recovery-safe boundary: {reason}"
             ),
             Self::Storage(message) => {
-                write!(f, "the durable pending inbound inbox failed: {message}")
+                write!(f, "the durable ConversationStore failed: {message}")
             }
         }
     }
@@ -379,8 +379,9 @@ impl std::error::Error for ConversationRuntimeError {}
 /// and the model path and the Runtime Client projection share one composer.
 ///
 /// There is deliberately no separate summary store: compaction lineage is
-/// derived from Conversation Surface history, which the one `ConversationState`
-/// owns, so no second authority can drift from the authoritative state.
+/// derived from the immutable Conversation Surface history owned by the
+/// durable `ConversationStore`, while the one `ConversationState` is only the
+/// current hot read model.
 ///
 /// The context *window* is deliberately absent: it belongs to the model, so
 /// each attempt derives its [`ContextRuntime`] from this policy plus that
@@ -424,6 +425,11 @@ pub struct RuntimeConversationConfig {
     /// The conversation tool runtime (owns the canonical mailbox and the
     /// authoritative background registry).
     pub tool_runtime: ConversationToolRuntime,
+    /// The full conversation durability authority. When omitted, the runtime
+    /// opens the default file-backed store located by the tool runtime. A
+    /// custom mailbox capability (for example an in-memory test backend) must
+    /// supply the matching full store explicitly here.
+    pub durable_store: Option<Arc<dyn ConversationStore>>,
     /// The capability coordinator (owns the active capability snapshot).
     pub capability: CapabilityCoordinator,
     /// The runtime clock stamping submitted inbound messages; the system
@@ -594,9 +600,6 @@ struct CoordinatorState {
     /// model update and an attempt admission can never interleave
     /// ambiguously: whichever acquires the lock first linearizes first.
     model: SessionModelState,
-    /// Settled frozen non-history request facts, retained beside the
-    /// authoritative `ConversationState` rather than copied into messages.
-    request_history: RequestHistory,
     /// The one canonical conversation state, owned by the coordinator
     /// **only between attempts**.
     ///
@@ -793,6 +796,9 @@ pub(crate) struct RuntimeInner {
     context: ConversationContextConfig,
     tool_runtime: ConversationToolRuntime,
     mailbox: ConversationInboundMailbox,
+    /// The conversation-level durable authority shared with the mailbox and
+    /// `AgentExecution`. Request/event history is read through this handle.
+    store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
     /// The one authoritative activation lifecycle of this conversation
     /// (Issue #61): the single `Inactive -> Active` transition, shared with
@@ -1006,7 +1012,8 @@ impl RuntimeInner {
     /// Returns [`RuntimeBootstrapError::RuntimeAlreadyActivated`] when the
     /// runtime was already activated and
     /// [`RuntimeBootstrapError::BridgeAlreadyInstalled`] when an
-    /// observation bridge already exists.
+    /// observation bridge already exists, or [`RuntimeBootstrapError::Durable`]
+    /// when the native durable bootstrap cannot be read coherently.
     fn install_observation_bridge(
         self: &Arc<Self>,
         queue: Arc<PendingObservations>,
@@ -1026,34 +1033,50 @@ impl RuntimeInner {
                 conversation_id: self.conversation_id.clone(),
             });
         }
-        if self.pending.set(queue).is_err() {
+        if self.pending.get().is_some() {
             return Err(RuntimeBootstrapError::BridgeAlreadyInstalled {
                 conversation_id: self.conversation_id.clone(),
             });
         }
+        // Read the native durable bootstrap before installing any observer
+        // seam. A corrupt/unavailable Pending Inbound or Surface authority
+        // must fail explicitly and leave the runtime unbridged.
+        let head = self
+            .store
+            .load_head()
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        let messages = self
+            .store
+            .load_messages(&head.active_message_ids)
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
         // ---- T0: the coordinator-owned facts ----
         //
         // An inactive runtime never moved its conversation state into an
-        // attempt, so the authoritative canonical history is right here.
-        let messages = state
-            .conversation
-            .as_ref()
-            .expect("an inactive runtime owns its conversation state")
-            .ledger()
-            .audit_records()
-            .to_vec();
+        // attempt. Bootstrap only hydrates the current Surface working set;
+        // the append-only Ledger remains a paged durable read authority.
         let shutting_down = state.shutting_down;
         let model = state.model.view();
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
-        // ---- T1: the background registry (frozen: the registry refuses
+        // ---- T1: the mailbox (frozen: an inactive conversation refuses
+        //          inbound) ----
+        let inbound_pending = self
+            .mailbox
+            .install_observer_and_pending(observer.clone())
+            .map_err(|error| RuntimeBootstrapError::Durable(error.to_string()))?;
+        // ---- T2: the background registry (frozen: the registry refuses
         //          commits while its mailbox is bound inactive) ----
         let background = self
             .tool_runtime
             .background()
             .install_observer_and_snapshots(observer.clone());
-        // ---- T2: the mailbox (frozen: an inactive conversation refuses
-        //          inbound) ----
-        let inbound_pending = self.mailbox.install_observer_and_pending(observer.clone());
+        // No fallible subsystem has been mutated after the pending read. The
+        // pre-check above and the coordinator lock make this set infallible;
+        // keep the explicit branch as a defensive invariant assertion.
+        if self.pending.set(queue).is_err() {
+            return Err(RuntimeBootstrapError::BridgeAlreadyInstalled {
+                conversation_id: self.conversation_id.clone(),
+            });
+        }
         // ---- R: the capability coordinator, the cut itself ----
         let capabilities = self.capability.install_observer_and_snapshot(observer);
         drop(state);
@@ -1157,12 +1180,13 @@ impl RuntimeInner {
             timezone: self.timezone,
             model,
         };
-        let mut execution = AgentExecution::new(
+        let mut execution = AgentExecution::new_with_store(
             request,
             lease,
             cancellation,
             context_runtime,
             &self.tool_runtime,
+            Arc::clone(&self.store),
             // The identity lifecycle configuration: enter every step, defer
             // no context. The runtime has no native pre-step policy or
             // tool-result observer consumer, exactly as it has no certified
@@ -1206,10 +1230,6 @@ impl RuntimeInner {
             // (its in-memory content stayed consistent with the durable
             // Ledger: the failed commit installed nothing).
             let durable_failure = result.durable_failure.clone();
-            state
-                .request_history
-                .append(result.request_snapshots)
-                .expect("each admitted request identity is transferred exactly once");
             state.conversation = Some(result.conversation);
             if let Some(diagnostic) = durable_failure {
                 self.record_durability_failure(
@@ -1380,6 +1400,22 @@ impl RuntimeInner {
                 }
             }
         }
+        let fresh = match FreshInboundTurn::new(
+            prepared_commits
+                .iter()
+                .map(|commit| commit.message_id().clone())
+                .collect(),
+        ) {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                self.record_durability_failure(
+                    &mut state,
+                    DurableOperation::PrepareAdoption,
+                    format!("a selected inbound batch cannot form a fresh inbound turn: {error}"),
+                );
+                return;
+            }
+        };
         // Canonical adoption: the durable ledger append and the pending
         // removal commit in one transaction. On failure the selected items
         // remain durably pending and the failure is surfaced, never swallowed.
@@ -1402,20 +1438,16 @@ impl RuntimeInner {
             .conversation
             .take()
             .expect("the coordinator owns the conversation state while idle");
-        let mut fresh_ids = Vec::with_capacity(prepared_commits.len());
         for prepared in prepared_commits {
             // Infallible: every adopted identity was validated by
             // `prepare_commit` above under exclusive ownership.
             let block = prepared.message().clone();
-            let message_id = conversation.install_prepared(prepared);
+            conversation.install_prepared(prepared);
             self.observe(ConversationObservation::Committed {
                 attempt_id: None,
                 block,
             });
-            fresh_ids.push(message_id);
         }
-        let fresh = FreshInboundTurn::new(fresh_ids)
-            .expect("an adopted inbox batch forms one fresh inbound turn");
         let attempt_id = AttemptId::new(format!(
             "{}-attempt-{}",
             self.conversation_id, state.next_attempt_seq
@@ -1555,6 +1587,7 @@ impl ConversationRuntime {
     /// [`ConversationRuntimeError::ToolRuntimeNotQuiescent`] when the tool
     /// runtime's background plane already holds prepared or committed
     /// background work.
+    #[allow(clippy::too_many_lines)]
     pub fn new(config: RuntimeConversationConfig) -> Result<Self, ConversationRuntimeError> {
         // The one conversation authority at this boundary: every identity
         // this runtime publishes or derives comes from the tool runtime it
@@ -1579,31 +1612,54 @@ impl ConversationRuntime {
         // admission, where there is no caller left to report to.
         validate_context_policy(&config.context.policy, &config.model.snapshot())
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
-        // The bootstrap conversation state is built from the durable
-        // canonical prefix: the initial messages are seeded exactly once,
-        // and on recovery the previously-adopted inbound is loaded on top.
-        // The store is the one crash-recoverable prefix of the Message
-        // Ledger; a rejected bootstrap leaves no runtime behind.
-        let store = config.tool_runtime.inbound_store();
+        // The durable store is the sole authority for bootstrap, current
+        // Surface identity/order, and keyed active Ledger hydration. The
+        // runtime owns this full handle; the tool/background plane only has
+        // the mailbox's narrow inbound capability.
+        let store: Arc<dyn ConversationStore> = if let Some(store) = config.durable_store {
+            store
+        } else {
+            let Some(path) = config.tool_runtime.durable_store_path() else {
+                return Err(ConversationRuntimeError::Storage(
+                    "a custom inbound capability requires an explicit durable_store".to_owned(),
+                ));
+            };
+            Arc::new(
+                SqliteConversationStore::open(conversation_id.clone(), path)
+                    .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?,
+            )
+        };
+        if store.conversation_id() != &conversation_id {
+            return Err(ConversationRuntimeError::Storage(format!(
+                "the configured durable store belongs to {}, not {}",
+                store.conversation_id(),
+                conversation_id
+            )));
+        }
         store
-            .seed_canonical(&config.initial_messages)
+            .initialize(&config.initial_messages)
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        let canonical = store
-            .load_canonical()
+        let head = store
+            .load_head()
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        // Issue #63 recovery gate: a durable Message Ledger append does not
-        // by itself imply a resumable safe boundary. Refuse automatic live
-        // recovery from a durable head that cannot reconstruct a valid
-        // Surface without guessing missing compaction/tool state (fail
-        // closed; #11/#12 later make more states exactly recoverable).
-        crate::conversation::recovery_safety(&canonical).map_err(|error| {
-            ConversationRuntimeError::RecoveryRequired {
-                reason: error.to_string(),
-            }
-        })?;
-        let conversation = ConversationState::from_messages(canonical).map_err(|error| {
+        let active = store
+            .load_messages(&head.active_message_ids)
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let conversation = ConversationState::from_durable_head(
+            active,
+            head.active_message_ids,
+            head.revision,
+            head.compaction_generation,
+        )
+        .map_err(|error| ConversationRuntimeError::InvalidInitialConversation(error.to_string()))?;
+        let active_messages = conversation.active_messages().map_err(|error| {
             ConversationRuntimeError::InvalidInitialConversation(error.to_string())
         })?;
+        if let Err(error) = crate::conversation::recovery_safety(&active_messages) {
+            return Err(ConversationRuntimeError::RecoveryRequired {
+                reason: error.to_string(),
+            });
+        }
         // Activation spawns the admission worker, and a runtime with no
         // worker would silently never admit anything. The execution
         // runtime is required — and captured — here, still in the fallible
@@ -1672,13 +1728,13 @@ impl ConversationRuntime {
             context: config.context,
             tool_runtime: config.tool_runtime,
             mailbox,
+            store,
             capability: config.capability,
             lifecycle,
             clock,
             executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
-                request_history: RequestHistory::default(),
                 conversation: Some(conversation),
                 current_attempt: None,
                 shutting_down: false,
@@ -2159,44 +2215,28 @@ impl ConversationRuntime {
         Ok(())
     }
 
-    /// Returns the immutable in-memory request facts retained by this
-    /// runtime.
+    /// Returns a durable read handle for historical Request Snapshots.
     ///
-    /// The runtime owns these snapshots after attempt settlement. The
-    /// returned value is a read-only clone of the request-fact collection;
-    /// it does not create another conversation or transcript authority.
+    /// The returned value is a read-only handle over the durable request-fact
+    /// authority; it does not retain another collection or create another
+    /// conversation/transcript authority.
     #[must_use]
     pub fn request_history(&self) -> RequestHistory {
-        self.inner.lock_state().request_history.clone()
+        RequestHistory::new(self.inner.store.clone())
     }
 
-    /// Reconstructs one retained provider-neutral request from its frozen
-    /// snapshot and the exact historical Surface revisions in the runtime's
-    /// authoritative `ConversationState`.
-    ///
-    /// While an attempt is running, that single `ConversationState` is moved
-    /// into the attempt and this read is explicitly unavailable. Once the
-    /// attempt settles, the same state returns to the runtime and
-    /// reconstruction is again available without consulting live
-    /// configuration or sources.
+    /// Reconstructs one retained provider-neutral request from its durable
+    /// snapshot, exact historical Surface revision, and keyed Ledger bodies.
     ///
     /// # Errors
     ///
-    /// Returns
-    /// [`RequestHistoryError::ConversationUnavailable`](crate::runtime::request_history::RequestHistoryError::ConversationUnavailable)
-    /// while the single `ConversationState` is owned by a running attempt,
-    /// or a lookup / historical reconstruction error for an unknown or
+    /// Returns a lookup or historical reconstruction error for an unknown or
     /// invalid request.
     pub fn reconstruct_request(
         &self,
         identity: &RequestIdentity,
     ) -> Result<ModelRequest, crate::runtime::request_history::RequestHistoryError> {
-        let state = self.inner.lock_state();
-        let conversation = state
-            .conversation
-            .as_ref()
-            .ok_or(crate::runtime::request_history::RequestHistoryError::ConversationUnavailable)?;
-        state.request_history.reconstruct(identity, conversation)
+        RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
     }
 
     /// Inspects one background execution through the authoritative
@@ -2253,6 +2293,9 @@ pub enum RuntimeBootstrapError {
         /// The conversation whose runtime is already activated.
         conversation_id: ConversationId,
     },
+    /// The native durable authority could not provide a coherent bootstrap
+    /// head or active working set.
+    Durable(String),
 }
 
 impl core::fmt::Display for RuntimeBootstrapError {
@@ -2266,6 +2309,9 @@ impl core::fmt::Display for RuntimeBootstrapError {
                 f,
                 "the conversation runtime of {conversation_id} is already activated; a Runtime Client host binds before activation"
             ),
+            Self::Durable(message) => {
+                write!(f, "durable conversation bootstrap failed: {message}")
+            }
         }
     }
 }
@@ -2291,8 +2337,9 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub conversation_id: ConversationId,
     /// Whether the runtime accepted shutdown.
     pub shutting_down: bool,
-    /// The authoritative canonical history at the cut, read from the
-    /// coordinator-owned `ConversationState`.
+    /// The current model-visible Surface at the cut. Historical Ledger rows
+    /// are deliberately not hydrated into the client projection; callers
+    /// needing them use the durable store's paged read APIs.
     pub messages: Vec<MessageBlock>,
     /// The authoritative session model view.
     pub model: SessionModelView,
@@ -2609,12 +2656,14 @@ mod tests {
         RuntimeConversationConfig,
     };
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
-    use crate::durable::inbox::InboundStore;
+    use crate::conversation::SurfaceSpan;
+    use crate::durable::inbox::{CompactionCommitInput, ConversationStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::identity::{AgentId, ConversationId};
     use crate::runtime::observation::ConversationObservation;
+    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
 
@@ -2700,6 +2749,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            durable_store: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -2715,6 +2765,7 @@ mod tests {
         dir: &tempfile::TempDir,
         conversation_id: &str,
         mailbox: crate::runtime::inbound::ConversationInboundMailbox,
+        store: Arc<dyn ConversationStore>,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
@@ -2763,6 +2814,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            durable_store: Some(store),
         };
         let runtime = ConversationRuntime::new(config).expect("runtime");
         (runtime, model)
@@ -3173,13 +3225,18 @@ mod tests {
         // First process: accept one inbound item durably, then die before
         // any adoption.
         {
-            let tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
+            let _tool_runtime = crate::tools::runtime::ConversationToolRuntime::new(
                 ConversationId::new("conv-headless"),
                 &workspace,
                 &artifacts,
             )
             .expect("tool runtime");
-            let store = tool_runtime.inbound_store();
+            let store = crate::durable::SqliteConversationStore::open(
+                ConversationId::new("conv-headless"),
+                &artifacts.join("conversation.sqlite"),
+            )
+            .map(Arc::new)
+            .expect("durable store");
             store
                 .accept_inbound(crate::durable::inbox::InboundDraft {
                     message_id: None,
@@ -3330,6 +3387,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            durable_store: None,
         })
         .expect_err("mismatched ownership is rejected");
         assert!(matches!(
@@ -3385,6 +3443,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            durable_store: None,
         })
         .expect_err("construction outside Tokio is rejected");
         assert!(matches!(
@@ -3545,7 +3604,7 @@ mod tests {
     async fn transient_select_failure_recovers_and_admits_once() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-select-transient",
             ))
             .expect("in-memory store"),
@@ -3553,7 +3612,8 @@ mod tests {
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-select-transient", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-select-transient", mailbox, store.clone())
+                .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3607,7 +3667,7 @@ mod tests {
     async fn persistent_select_failure_enters_durability_failed() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-select-persistent",
             ))
             .expect("in-memory store"),
@@ -3615,7 +3675,8 @@ mod tests {
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-select-persistent", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-select-persistent", mailbox, store.clone())
+                .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3669,7 +3730,7 @@ mod tests {
     async fn select_then_adopt_failures_get_independent_bounded_retries() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-ops-independent",
             ))
             .expect("in-memory store"),
@@ -3677,7 +3738,8 @@ mod tests {
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-ops-independent", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-ops-independent", mailbox, store.clone())
+                .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3742,18 +3804,24 @@ mod tests {
     /// the explicit degraded state is observable; the timeout only guards
     /// against a deadlocked or non-progressing test.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
     async fn alternating_select_adopt_failures_exhaust_one_admission_cycle() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-alternating-retry-cycle",
             ))
             .expect("in-memory store"),
         );
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
-        let (runtime, model) =
-            headless_runtime_over_mailbox(&dir, "conv-alternating-retry-cycle", mailbox).await;
+        let (runtime, model) = headless_runtime_over_mailbox(
+            &dir,
+            "conv-alternating-retry-cycle",
+            mailbox,
+            store.clone(),
+        )
+        .await;
         let host = crate::runtime_client::RuntimeClientHost::new(
             crate::runtime_client::RuntimeClientHostConfig {
                 runtime: runtime.clone(),
@@ -3862,7 +3930,7 @@ mod tests {
     async fn persistent_adopt_failure_enters_durability_failed() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-adopt-persistent",
             ))
             .expect("in-memory store"),
@@ -3870,7 +3938,8 @@ mod tests {
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-adopt-persistent", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-adopt-persistent", mailbox, store.clone())
+                .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3928,7 +3997,7 @@ mod tests {
     async fn active_attempt_durable_failure_degrades_the_runtime() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
                 "conv-attempt-durable",
             ))
             .expect("in-memory store"),
@@ -3936,7 +4005,8 @@ mod tests {
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, model) =
-            headless_runtime_over_mailbox(&dir, "conv-attempt-durable", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-attempt-durable", mailbox, store.clone())
+                .await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -4066,13 +4136,15 @@ mod tests {
     async fn exhausted_background_publication_degrades_the_owning_runtime() {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = Arc::new(
-            crate::durable::SqliteInboundStore::in_memory(ConversationId::new("conv-bg-degrade"))
-                .expect("in-memory store"),
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-bg-degrade",
+            ))
+            .expect("in-memory store"),
         );
         let mailbox =
             crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-bg-degrade", mailbox).await;
+            headless_runtime_over_mailbox(&dir, "conv-bg-degrade", mailbox, store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -4177,7 +4249,7 @@ mod tests {
     }
 
     /// Builds a conversation runtime over an existing artifacts directory
-    /// (whose `durable-inbound.db` may already be populated), returning the
+    /// (whose `conversation.sqlite` may already be populated), returning the
     /// construction result so recovery-gate tests can assert the typed error.
     async fn runtime_at(
         dir: &tempfile::TempDir,
@@ -4229,6 +4301,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages,
+            durable_store: None,
         };
         ConversationRuntime::new(config)
     }
@@ -4290,13 +4363,13 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
         std::fs::create_dir_all(&artifacts).expect("artifacts");
-        let store_path = artifacts.join("durable-inbound.db");
+        let store_path = artifacts.join("conversation.sqlite");
         let seed = vec![seed_user("msg-u0", "start")];
         {
             let store =
-                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                crate::durable::SqliteConversationStore::open(conversation_id.clone(), &store_path)
                     .expect("open");
-            store.seed_canonical(&seed).expect("seed");
+            store.initialize(&seed).expect("seed");
             store
                 .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
                 .expect("assistant tool call");
@@ -4319,8 +4392,8 @@ mod tests {
         ));
 
         // The pending inbound remains durable with its exact identity.
-        let reopened =
-            crate::durable::SqliteInboundStore::open(conversation_id, &store_path).expect("reopen");
+        let reopened = crate::durable::SqliteConversationStore::open(conversation_id, &store_path)
+            .expect("reopen");
         let pending = reopened.load_pending().expect("load pending");
         assert_eq!(
             pending.len(),
@@ -4344,13 +4417,13 @@ mod tests {
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
         std::fs::create_dir_all(&artifacts).expect("artifacts");
-        let store_path = artifacts.join("durable-inbound.db");
+        let store_path = artifacts.join("conversation.sqlite");
         let seed = vec![seed_user("msg-u0", "start")];
         {
             let store =
-                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                crate::durable::SqliteConversationStore::open(conversation_id.clone(), &store_path)
                     .expect("open");
-            store.seed_canonical(&seed).expect("seed");
+            store.initialize(&seed).expect("seed");
             store
                 .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
                 .expect("assistant tool call");
@@ -4383,46 +4456,68 @@ mod tests {
         );
     }
 
-    /// Issue #63 (Blocker 1, test C): a committed compaction summary without
-    /// durable Surface Replace evidence refuses automatic recovery — the
-    /// runtime never reconstructs `old messages + summary` as if it were
-    /// valid.
+    /// M8 regression: durable compaction history reopens as one exact Surface
+    /// state instead of using the obsolete Ledger-only recovery gate.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn compaction_summary_without_surface_replace_blocks_recovery() {
+    async fn durable_compaction_surface_reopens_as_one_state() {
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation_id = ConversationId::new("conv-recovery-compact");
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let artifacts = dir.path().join("artifacts");
         std::fs::create_dir_all(&artifacts).expect("artifacts");
-        let store_path = artifacts.join("durable-inbound.db");
+        let store_path = artifacts.join("conversation.sqlite");
         let seed = vec![seed_user("msg-a", "A"), seed_user("msg-b", "B")];
         {
             let store =
-                crate::durable::SqliteInboundStore::open(conversation_id.clone(), &store_path)
+                crate::durable::SqliteConversationStore::open(conversation_id.clone(), &store_path)
                     .expect("open");
-            store.seed_canonical(&seed).expect("seed");
-            // A compaction summary appended durably, with no durable Surface
-            // Replace (full #11 is not implemented).
+            store.initialize(&seed).expect("seed");
+            // A summary is durable only through the complete compaction
+            // transition: Ledger row, Surface Replace, checkpoint metadata,
+            // and completion fact share one transaction.
+            let summary = crate::message::types::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new("conv-recovery-compact-summary-1"),
+                content: text_content("earlier context"),
+                source: UserSource::Runtime,
+                kind: InboundKind::CompactionSummary,
+                timestamp: None,
+            };
             store
-                .append_canonical(&MessageBlock::User(
-                    crate::message::types::UserMessageBlock {
-                        id: crate::runtime::identity::MessageId::new(
-                            "conv-recovery-compact-summary-1",
-                        ),
-                        content: text_content("earlier context"),
-                        source: UserSource::Runtime,
-                        kind: InboundKind::CompactionSummary,
-                        timestamp: None,
+                .commit_compaction(CompactionCommitInput {
+                    summary,
+                    span: SurfaceSpan::new(
+                        crate::runtime::identity::MessageId::new("msg-a"),
+                        crate::runtime::identity::MessageId::new("msg-a"),
+                    ),
+                    expected_revision: store.load_head().expect("head").revision,
+                    tokens_before: TokenMeasurement {
+                        input_tokens: 20,
+                        source: TokenMeasurementSource::Estimated,
                     },
-                ))
-                .expect("compaction summary");
+                    estimated_tokens_after: 10,
+                    attempt_id: None,
+                    turn_id: None,
+                    timestamp: fixed_time(),
+                })
+                .expect("atomic compaction summary");
         }
 
-        let result = runtime_at(&dir, "conv-recovery-compact", seed, vec![one_turn_script()]).await;
-        assert!(matches!(
-            result,
-            Err(ConversationRuntimeError::RecoveryRequired { .. })
-        ));
+        let runtime = runtime_at(&dir, "conv-recovery-compact", seed, vec![one_turn_script()])
+            .await
+            .expect("durable summary history reopens");
+        let store = crate::durable::SqliteConversationStore::open(conversation_id, &store_path)
+            .expect("reopen store");
+        let head = store.load_head().expect("head");
+        assert_eq!(
+            store
+                .reconstruct_surface(head.revision)
+                .expect("current Surface"),
+            head.active_message_ids
+        );
+        assert_eq!(
+            runtime.coordinator_active_ids().expect("coordinator head"),
+            head.active_message_ids
+        );
     }
 }

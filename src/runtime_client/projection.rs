@@ -34,7 +34,7 @@
 //! > published Runtime Client event in that stream, or fails explicitly
 //! > with `resync_required`.
 //!
-//! # Pre-M8 replay strategy and the one retained backlog
+//! # Projection replay cache and the one retained backlog
 //!
 //! Replay is a bounded in-memory ring (`cursor -> RuntimeClientEvent`)
 //! with an explicit retention limit. That ring is the **sole** retained
@@ -63,8 +63,9 @@
 //!   so notification can never grow without bound and never blocks the
 //!   publisher.
 //!
-//! There is no persistence, no Event Journal, and no crash-safe replay
-//! claim.
+//! The ring is not durable persistence and is never a recovery input. Durable
+//! Event Journal reads and current Surface bootstrap remain `ConversationStore`
+//! responsibilities.
 //!
 //! # `RuntimeEvent` mapping policy
 //!
@@ -108,7 +109,7 @@ use crate::runtime::observation::ConversationObservation;
 use crate::tools::background::BackgroundExecutionSnapshot;
 use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 
-/// The default bounded replay retention of the pre-M8 observation stream.
+/// The default bounded replay retention of the projection observation stream.
 ///
 /// The ring retains at most this many published events; a resume after an
 /// expired cursor fails with `resync_required` and the client repairs with
@@ -176,7 +177,7 @@ pub(crate) struct RuntimeClientProjection {
     exhausted: bool,
     /// The deterministic snapshot read model.
     snapshot: RuntimeClientSnapshot,
-    /// The bounded pre-M8 replay ring, oldest first.
+    /// The bounded projection replay ring, oldest first.
     replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
     /// The explicit bounded retention limit.
     replay_limit: usize,
@@ -190,8 +191,8 @@ pub(crate) struct RuntimeClientProjection {
 }
 
 impl RuntimeClientProjection {
-    /// Creates the projection over one conversation with the initial
-    /// canonical history and the initial capability view.
+    /// Creates the projection over one conversation with the current Surface
+    /// working set and the initial capability view.
     pub(crate) fn new(
         conversation_id: ConversationId,
         initial_messages: Vec<MessageBlock>,
@@ -246,7 +247,7 @@ impl RuntimeClientProjection {
     /// snapshot read model.
     ///
     /// **Nothing here publishes and nothing here allocates a cursor.**
-    /// The seed *is* the state at cursor 0 — canonical history, session
+    /// The seed *is* the state at cursor 0 — current Surface, session
     /// model, the startup capability snapshot, and pending inbound — all
     /// installed as snapshot state rather than replayed through
     /// [`RuntimeClientProjection::apply`], so state that existed before
@@ -632,9 +633,9 @@ impl RuntimeClientProjection {
                     call: call.clone(),
                 }]
             }
-            // The loop does not emit identity-only committed-message
-            // events yet (M8 owns the durable ledger); if one ever
-            // arrives it folds identity only and publishes nothing.
+            // The durable Journal event carries identity only; the projection
+            // already receives the canonical body from the commit
+            // observation and never copies body content into the Journal.
             RuntimeEvent::AssistantMessageCommitted { .. }
             | RuntimeEvent::ToolMessageCommitted { .. } => Vec::new(),
             RuntimeEvent::ToolExecutionStarted {
@@ -742,8 +743,13 @@ impl RuntimeClientProjection {
                     context: self.snapshot.context.clone(),
                 }]
             }
-            // INTERNAL: compaction start/failure never produce client events.
-            RuntimeEvent::CompactionStarted | RuntimeEvent::CompactionFailed { .. } => Vec::new(),
+            // INTERNAL: compaction start/failure and the background terminal
+            // publication fact are durable execution facts; the client
+            // projection learns the resulting inbound message through its
+            // native mailbox/message projection.
+            RuntimeEvent::CompactionStarted
+            | RuntimeEvent::CompactionFailed { .. }
+            | RuntimeEvent::BackgroundTerminalPublished { .. } => Vec::new(),
         }
     }
 
@@ -1350,7 +1356,7 @@ mod tests {
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
     use crate::runtime::observation::ConversationObservation;
@@ -1816,6 +1822,7 @@ mod tests {
             },
             RuntimeEvent::TurnStarted,
             RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "scripted".to_owned(),
             },
             RuntimeEvent::AssistantMessageStarted {
@@ -1917,6 +1924,7 @@ mod tests {
         let mut projection = projection();
         for event in [
             RuntimeEvent::ModelRequestStarted {
+                request_id: RequestId::new("request:9:attempt-1:1:1:0"),
                 model: "m".to_owned(),
             },
             RuntimeEvent::ModelRequestFailed {

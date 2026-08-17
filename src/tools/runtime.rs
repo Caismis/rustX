@@ -45,8 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::durable::SqliteInboundStore;
-use crate::durable::inbox::InboundStore;
+use crate::durable::SqliteConversationStore;
 use crate::events::RuntimeEventSink;
 use crate::runtime::RuntimeClock;
 use crate::runtime::SystemClock;
@@ -84,8 +83,8 @@ pub enum ConversationRuntimeError {
         /// The conversation the configured mailbox belongs to.
         actual: ConversationId,
     },
-    /// The durable Pending Inbound Inbox could not be opened.
-    DurableInbound(String),
+    /// The durable conversation store could not be opened.
+    DurableConversation(String),
 }
 
 impl core::fmt::Display for ConversationRuntimeError {
@@ -108,9 +107,9 @@ impl core::fmt::Display for ConversationRuntimeError {
                 "the configured mailbox belongs to conversation {actual}, but this \
                  conversation tool runtime is being constructed for {expected}",
             ),
-            Self::DurableInbound(message) => write!(
+            Self::DurableConversation(message) => write!(
                 f,
-                "the durable pending inbound inbox could not be opened: {message}",
+                "the durable conversation store could not be opened: {message}",
             ),
         }
     }
@@ -211,8 +210,11 @@ pub struct ConversationToolRuntime {
     workspace: Workspace,
     artifacts: ArtifactStore,
     environment: ToolEnvironment,
-    inbound_store: Arc<dyn InboundStore>,
     background: ConversationBackgroundRegistry,
+    /// The `SQLite` path from which the conversation runtime may open its full
+    /// durable authority. The tool runtime itself retains only the narrow
+    /// inbound capability carried by its mailbox.
+    durable_store_path: Option<PathBuf>,
     /// The one-time Runtime Client binding of this runtime identity.
     ///
     /// Shared by every clone, so cloning a runtime handle never creates a
@@ -234,8 +236,9 @@ impl core::fmt::Debug for ConversationToolRuntime {
 /// A [`ConversationToolRuntime`] is the canonical mailbox/background
 /// identity of a conversation, and a Runtime Client host is the
 /// projection/control/attachment adapter over the `ConversationRuntime`
-/// that coordinates it (Issue #61): the runtime owns canonical history,
-/// the current-attempt slot, attempt admission, and the model authority;
+/// that coordinates it (Issue #61): the conversation runtime owns the
+/// full `ConversationStore` durability authority, the current-attempt slot,
+/// attempt admission, and the model authority;
 /// the host owns only the client projection. Two hosts over one runtime
 /// identity would still be two adapters over one authoritative runtime.
 ///
@@ -243,7 +246,7 @@ impl core::fmt::Debug for ConversationToolRuntime {
 /// **not** a lease: it is not reset when the bound host is dropped, because
 /// rebinding a surviving runtime bundle would require a recovery model for
 /// canonical history, pending mailbox projection, and cursor continuity
-/// that pre-M8 does not own. A fresh host requires a fresh
+/// that this host-binding contract does not own. A fresh host requires a fresh
 /// `ConversationToolRuntime` identity.
 #[derive(Debug, Default)]
 struct RuntimeClientBinding {
@@ -322,26 +325,29 @@ impl ConversationToolRuntime {
         // The durable Pending Inbound Inbox (Issue #63) lives in the
         // runtime-private artifact root; a configured mailbox carries its
         // own store and is validated against this conversation.
-        let (mailbox, inbound_store): (ConversationInboundMailbox, Arc<dyn InboundStore>) =
-            if let Some(mailbox) = config.mailbox {
-                if mailbox.conversation_id() != &conversation_id {
-                    return Err(ConversationRuntimeError::MailboxConversationMismatch {
-                        expected: conversation_id.clone(),
-                        actual: mailbox.conversation_id().clone(),
-                    });
-                }
-                let store = mailbox.store();
-                (mailbox, store)
-            } else {
-                let store = Arc::new(
-                    SqliteInboundStore::open(
-                        conversation_id.clone(),
-                        &artifacts_root.join("durable-inbound.db"),
-                    )
-                    .map_err(|error| ConversationRuntimeError::DurableInbound(error.to_string()))?,
-                );
-                (ConversationInboundMailbox::over_store(store.clone()), store)
-            };
+        let (mailbox, durable_store_path) = if let Some(mailbox) = config.mailbox {
+            if mailbox.conversation_id() != &conversation_id {
+                return Err(ConversationRuntimeError::MailboxConversationMismatch {
+                    expected: conversation_id.clone(),
+                    actual: mailbox.conversation_id().clone(),
+                });
+            }
+            (mailbox, None)
+        } else {
+            let store = Arc::new(
+                SqliteConversationStore::open(
+                    conversation_id.clone(),
+                    &artifacts_root.join("conversation.sqlite"),
+                )
+                .map_err(|error| {
+                    ConversationRuntimeError::DurableConversation(error.to_string())
+                })?,
+            );
+            (
+                ConversationInboundMailbox::over_store(store),
+                Some(artifacts_root.join("conversation.sqlite")),
+            )
+        };
         let artifacts = ArtifactStore::new(conversation_id.clone(), &artifacts_root)
             .map_err(ConversationRuntimeError::Artifacts)?;
         let clock = config
@@ -363,13 +369,20 @@ impl ConversationToolRuntime {
             workspace,
             artifacts,
             environment,
-            inbound_store,
             background,
+            durable_store_path,
             runtime_client: Arc::new(RuntimeClientBinding {
                 bound: AtomicBool::new(false),
                 coordinator_claimed: AtomicBool::new(false),
             }),
         })
+    }
+
+    /// The file path from which the conversation runtime opens its full
+    /// `ConversationStore`, when this tool runtime was composed with its
+    /// default file-backed inbound capability.
+    pub(crate) fn durable_store_path(&self) -> Option<&Path> {
+        self.durable_store_path.as_deref()
     }
 
     /// Claims the one-time Runtime Client binding of this runtime identity.
@@ -532,16 +545,6 @@ impl ConversationToolRuntime {
     #[must_use]
     pub fn mailbox(&self) -> ConversationInboundMailbox {
         self.background.resources().mailbox.clone()
-    }
-
-    /// The durable Pending Inbound Inbox of this conversation.
-    ///
-    /// The conversation runtime coordinator and the mailbox share this one
-    /// store: acceptance, sequence allocation, pending state, and canonical
-    /// adoption all commit through it. There is no second allocator or
-    /// queue.
-    pub(crate) fn inbound_store(&self) -> Arc<dyn InboundStore> {
-        Arc::clone(&self.inbound_store)
     }
 }
 

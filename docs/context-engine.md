@@ -333,9 +333,8 @@ The value/reference decisions are deliberate:
   frozen effective model/reasoning values. The attempt's immutable model
   snapshot owns their authority.
 - tool_definitions are stored by value. capability_revision is retained
-  for audit/explanation, but pre-M8 capability generations are not a durable
-  historical content store, so a revision alone is insufficient for exact
-  reconstruction.
+  for audit/explanation; the frozen definitions, rather than a mutable
+  capability registry lookup, make historical reconstruction exact.
 - context_generation records the accepted contributor logical identities
   and separate attestations. It explains assembly without requiring a
   contributor to be invoked again.
@@ -362,8 +361,8 @@ and the exact Effective System Prompt. It owns only:
 - deterministic token estimation and provider-measurement provenance;
 - soft-limit pressure detection;
 - complete-message retention and compaction planning;
-- compaction summary generation and the one semantic
-  ConversationState::commit_compaction operation.
+- compaction summary generation and the prepared command consumed by the
+  durable `ConversationStore::commit_compaction` transaction.
 
 The default estimate is the deterministic UTF-8 serialized request content
 with ceil(bytes / 4). Tool definitions and the Effective System Prompt
@@ -463,27 +462,22 @@ fact in the ledger, one accepted context generation, changed revisions when
 compaction occurs, and structural equality for both actual requests and their
 reconstructions.
 
-## 9. Settled RequestSnapshot ownership
+## 9. Durable RequestSnapshot ownership (M8 / Issue #11)
 
-During execution, `AgentExecution` collects the immutable snapshots for the
-actual primary provider requests in order. At the conversation runtime's
-`finish_attempt` (Issue #61) — after the Agent Loop has settled and before
-its result is dropped — the snapshot vector is transferred into the
-runtime-owned append-only `runtime_client::RequestHistory` while the same
-coordinator lock transfers the one `ConversationState` back to the runtime.
-A duplicate `RequestIdentity` is rejected as a coordination defect; equal
-content is never deduplicated.
+During execution, the current request snapshot is prepared from the exact
+provider-neutral request. `ConversationStore::persist_request_start` commits
+that immutable snapshot and its `ModelRequestStarted` Event Journal fact in
+one transaction before the adapter is invoked. `RequestHistory` is a durable
+read handle, not an append-only `Vec<RequestSnapshot>` and not a second
+transcript.
 
-`RequestHistory` owns frozen non-history facts only. It does not copy messages,
-allocate a second Surface, or replace Message Ledger authority. After
-settlement, `RuntimeClientHost::request_history` forwards to the runtime,
-which exposes an immutable read clone, and `reconstruct_request` looks up the
-snapshot and hydrates its exact historical Surface revision from the
-runtime-owned ConversationState. While an attempt is running, reconstruction
-is explicitly unavailable because the single ConversationState is moved into
-that attempt.
-Issue #11 may later persist this same semantic object; this milestone does
-not add SQLite or a generic persistence layer.
+`ConversationStore::reconstruct_model_request` loads one snapshot, replays its
+immutable Surface revision, and resolves only the referenced Ledger bodies.
+It never invokes contributors, reads current model/tool/capability state,
+reruns Skills or extensions, samples status, or inspects the workspace. The
+Agent Loop compares this independent result with its live request before
+dispatch. Historical requests remain reconstructable after later messages,
+compactions, restart, and configuration changes.
 
 ## 10. Provider boundary
 

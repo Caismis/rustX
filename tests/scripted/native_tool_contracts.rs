@@ -844,12 +844,13 @@ async fn run_through_agent_loop(
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let (lease, _coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    AgentExecution::new(
+    AgentExecution::new_with_store(
         request(fixture.runtime.conversation_id().clone(), &model),
         lease,
         &cancellation,
         context_runtime(&model),
         &fixture.runtime,
+        fixture.store.clone(),
         rustx::agent::AttemptLifecycle::inert(),
     )
     .expect("conversation identity matches the tool runtime")

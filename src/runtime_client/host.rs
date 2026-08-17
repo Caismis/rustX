@@ -164,6 +164,9 @@ pub enum HostConstructionError {
         /// The conversation whose runtime is already activated.
         conversation_id: ConversationId,
     },
+    /// The native durable authority could not provide a coherent bootstrap
+    /// snapshot for the client projection.
+    Durable(String),
 }
 
 impl core::fmt::Display for HostConstructionError {
@@ -181,6 +184,7 @@ impl core::fmt::Display for HostConstructionError {
                 f,
                 "the conversation runtime of {conversation_id} is already activated; a Runtime Client host binds before activation"
             ),
+            Self::Durable(message) => write!(f, "durable conversation bootstrap failed: {message}"),
         }
     }
 }
@@ -481,27 +485,24 @@ impl ClientInner {
         state.projection.snapshot()
     }
 
-    /// Returns the immutable in-memory request facts retained by the
+    /// Returns a durable request-history read handle owned by the
     /// conversation runtime.
     ///
-    /// The runtime owns these snapshots after attempt settlement. The
-    /// returned value is a read-only clone of the request-fact collection;
-    /// it does not create another conversation or transcript authority.
+    /// The durable `ConversationStore` owns these snapshots. The returned
+    /// value is a read-only handle; each historical read is resolved through
+    /// the runtime authority and does not create another conversation or
+    /// transcript authority.
     #[must_use]
     pub(crate) fn request_history(&self) -> RequestHistory {
         self.runtime.request_history()
     }
 
-    /// Reconstructs one retained provider-neutral request from its frozen
-    /// snapshot and the exact historical Surface revisions in the runtime's
-    /// authoritative `ConversationState`.
+    /// Reconstructs one retained provider-neutral request from durable facts.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestHistoryError::ConversationUnavailable`] while the
-    /// single `ConversationState` is owned by a running attempt, or a
-    /// lookup / historical reconstruction error for an unknown or invalid
-    /// request.
+    /// Returns a lookup or historical reconstruction error for an unknown or
+    /// invalid request.
     pub(crate) fn reconstruct_request(
         &self,
         identity: &RequestIdentity,
@@ -796,7 +797,8 @@ impl RuntimeClientHost {
     /// [`HostConstructionError::RuntimeAlreadyActivated`] when the runtime
     /// has already been activated, and
     /// [`HostConstructionError::ObservationBridgeAlreadyInstalled`] when a
-    /// headless observation bridge already exists over the runtime.
+    /// headless observation bridge already exists over the runtime, or
+    /// [`HostConstructionError::Durable`] when native durable bootstrap fails.
     pub fn new(config: RuntimeClientHostConfig) -> Result<Self, HostConstructionError> {
         // ---- Ownership commit: the one-time binding claim. ----
         //
@@ -834,12 +836,16 @@ impl RuntimeClientHost {
                 config.runtime.release_client_binding();
                 return Err(HostConstructionError::RuntimeAlreadyActivated { conversation_id });
             }
+            Err(RuntimeBootstrapError::Durable(message)) => {
+                config.runtime.release_client_binding();
+                return Err(HostConstructionError::Durable(message));
+            }
         };
 
         // ---- Infallible wiring: from here construction always succeeds. ----
         //
         // The projection mirrors the runtime's authoritative seed exactly
-        // — canonical history, session model, capability snapshot, and
+        // — current Surface working set, session model, capability snapshot, and
         // pending inbound — entirely as snapshot state. No seeded fact is
         // routed through `RuntimeClientProjection::apply`, so bootstrap
         // allocates no cursor and publishes no event: the first cursor
@@ -978,22 +984,19 @@ impl RuntimeClientHost {
         self.inner.snapshot()
     }
 
-    /// Returns the immutable in-memory request facts retained by the
+    /// Returns a durable request-history read handle owned by the
     /// conversation runtime.
     #[must_use]
     pub fn request_history(&self) -> RequestHistory {
         self.inner.request_history()
     }
 
-    /// Reconstructs one retained provider-neutral request from its frozen
-    /// snapshot and the exact historical Surface revisions in the runtime's
-    /// authoritative `ConversationState`.
+    /// Reconstructs one retained provider-neutral request from durable facts.
     ///
     /// # Errors
     ///
-    /// Returns [`RequestHistoryError::ConversationUnavailable`] while the
-    /// single `ConversationState` is owned by a running attempt, or a
-    /// lookup / historical reconstruction error.
+    /// Returns a lookup or historical reconstruction error for an unknown or
+    /// invalid request.
     pub fn reconstruct_request(
         &self,
         identity: &RequestIdentity,
@@ -1168,8 +1171,8 @@ pub struct RuntimeClientHostConfig {
     /// derives its identity, its snapshot seed, and every control outcome
     /// from it.
     pub runtime: ConversationRuntime,
-    /// The bounded pre-M8 replay retention; the default is used when
-    /// omitted.
+    /// The bounded projection replay retention; the default is used when
+    /// omitted. This cache is not the durable Event Journal.
     pub replay_limit: Option<usize>,
 }
 
@@ -1659,6 +1662,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            durable_store: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -1729,6 +1733,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                durable_store: None,
             },
             probe,
         )
@@ -2031,9 +2036,8 @@ mod tests {
 
         // Request facts survive the AgentExecutionResult transfer. Mutate
         // the live session configuration after settlement and reconstruct
-        // from the retained snapshot plus the runtime-owned historical
-        // Surface; neither current configuration nor a live contributor is
-        // consulted.
+        // from the durable snapshot plus its historical Surface; neither
+        // current configuration nor a live contributor is consulted.
         let requests = adapter.requests();
         let history = fixture.host.request_history();
         assert_eq!(history.snapshots().len(), 1);
@@ -2053,8 +2057,8 @@ mod tests {
             .expect("retained request reconstructs after settlement");
         assert_eq!(reconstructed, requests[0]);
         assert_eq!(
-            history.get(&retained.identity),
-            Some(&retained),
+            history.get(&retained.identity).unwrap(),
+            Some(retained),
             "request history lookup is identity-based and immutable"
         );
     }
@@ -2187,8 +2191,7 @@ mod tests {
         .expect("the projection mirrors the authoritative canonical history");
     }
 
-    /// Waits for the post-settlement transfer of frozen request facts to the
-    /// runtime-owned append-only history.
+    /// Waits for the durable request-fact read to expose the expected count.
     async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
         tokio::time::timeout(std::time::Duration::from_secs(120), async {
             loop {
@@ -2662,6 +2665,7 @@ mod tests {
             matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
         })
         .await;
+        fixture.runtime.settlement_signal().notified().await;
         let (before, _) = fixture.host.snapshot().expect("snapshot");
         let ledger_before = fixture
             .runtime
@@ -2693,6 +2697,7 @@ mod tests {
             .enqueue(inbound_text("conv-host-async-2", "async after detach"))
             .expect("async enqueue");
         await_request_history_len(&fixture.host, 2).await;
+        fixture.runtime.settlement_signal().notified().await;
         assert_eq!(
             adapter.requests().len(),
             2,
@@ -2974,6 +2979,7 @@ mod tests {
             .enqueue(inbound_text("msg-lifetime", "queued"))
             .expect("enqueue");
         await_request_history_len(&host, 1).await;
+        runtime.settlement_signal().notified().await;
         let (tool, mut started, release) = ParkingBackgroundTool::new();
         let executor: Arc<dyn ToolExecutor> = Arc::new(tool);
         let prepared = runtime
@@ -3013,6 +3019,7 @@ mod tests {
         // for its request-history transfer makes the runtime provably idle
         // before the capability commit below.
         await_request_history_len(&host, 2).await;
+        runtime.settlement_signal().notified().await;
         write_probe_skill(&dir.path().join("workspace"), "lifetime-skill");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
         coordinator.commit(candidate).expect("commit");
@@ -4535,6 +4542,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            durable_store: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::with_probe(
@@ -4609,6 +4617,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                durable_store: None,
             },
             runtime_probe,
         )
@@ -4692,6 +4701,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            durable_store: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5246,6 +5256,7 @@ mod tests {
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            durable_store: None,
         }
     }
 

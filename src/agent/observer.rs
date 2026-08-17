@@ -11,7 +11,7 @@
 //! The seam is deliberately broader than the internal [`RuntimeEvent`]
 //! vocabulary in exactly one way: canonical message content. The internal
 //! committed-message events reference messages by identity only (message
-//! content lives in the durable Message Ledger, M8), while an external
+//! content lives in the durable Message Ledger), while an external
 //! client projection needs the committed content to repair its read model.
 //! [`AgentExecutionObserver::observe_committed`] therefore receives the
 //! canonical [`MessageBlock`] at the same commit linearization point where

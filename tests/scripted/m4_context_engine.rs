@@ -41,7 +41,9 @@ use rustx::model::types::{ModelRequest, ModelUsage};
 use rustx::runtime::continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
-use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolCallId, ToolId};
+use rustx::runtime::identity::{
+    AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+};
 use rustx::runtime::inbound::ConversationInboundMailbox;
 use rustx::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
 use rustx::tools::executor::ToolRegistry;
@@ -2525,6 +2527,7 @@ async fn proactive_compaction_before_the_next_turn() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2555,6 +2558,9 @@ async fn proactive_compaction_before_the_next_turn() {
                 details: None,
             }),
         },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(1),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
@@ -2563,6 +2569,10 @@ async fn proactive_compaction_before_the_next_turn() {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
             result: success_result("ok"),
+        },
+        RuntimeEvent::ToolMessageCommitted {
+            message_id: MessageId::new("attempt-1-tool-1-call-1"),
+            tool_call_id: ToolCallId::new("call-1"),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::TurnStarted,
@@ -2575,6 +2585,7 @@ async fn proactive_compaction_before_the_next_turn() {
             estimated_tokens_after: compaction_estimated_after,
         },
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:2:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2588,6 +2599,9 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::ModelRequestCompleted {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
+        },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: assistant_message_id(2),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
@@ -2779,6 +2793,7 @@ async fn overflow_compact_and_retry_succeeds() {
         },
         RuntimeEvent::TurnStarted,
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:0"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2805,6 +2820,7 @@ async fn overflow_compact_and_retry_succeeds() {
             retry_delay_ms: None,
         },
         RuntimeEvent::ModelRequestStarted {
+            request_id: RequestId::new("request:9:attempt-1:1:1:1"),
             model: "fake-model".to_owned(),
         },
         RuntimeEvent::AssistantMessageStarted {
@@ -2823,6 +2839,9 @@ async fn overflow_compact_and_retry_succeeds() {
                 total_tokens: 8,
                 details: None,
             }),
+        },
+        RuntimeEvent::AssistantMessageCommitted {
+            message_id: retry_message_id(1),
         },
         RuntimeEvent::TurnCompleted,
         RuntimeEvent::AttemptCompleted {
@@ -4656,9 +4675,9 @@ async fn m4_projection_contains_drained_batch_before_request() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
@@ -4734,9 +4753,9 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // proactive compaction while retaining the complete fresh inbound batch.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
     let runtime = runtime_with(350, 0, 0, weighted(100, 10, 0), summarizer);
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "start")], 0, &model),
@@ -4890,7 +4909,8 @@ async fn m4_drain_retains_continuation_without_compaction() {
         weighted(100, 10, 0),
         FakeContextSummarizer::new(Vec::new()),
     );
-    let mailbox = ConversationInboundMailbox::new(conversation());
+    let tool_runtime = common::tool_runtime("conv-1");
+    let mailbox = tool_runtime.mailbox().clone();
     let controller_mailbox = mailbox.clone();
     let mut model_parked = model.parked();
     let controller = tokio::spawn(async move {
@@ -4903,7 +4923,6 @@ async fn m4_drain_retains_continuation_without_compaction() {
             .expect("enqueue inbound message");
         release.send(true).expect("release turn 1");
     });
-    let tool_runtime = common::tool_runtime_with_mailbox("conv-1", mailbox.clone());
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let result = AgentExecution::new(
         request("attempt-1", vec![user("msg-u0", "hi")], 0, &model),
