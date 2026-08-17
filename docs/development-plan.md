@@ -778,7 +778,12 @@ bodies before dispatch. Historical reconstruction never reruns contributors,
 Skills, extension/DSH logic, current status, workspace reads, or current
 configuration. Current runtime bootstrap hydrates only the current Surface
 working set; old requests, events, Ledger rows, and Surface revisions are
-paged on demand.
+paged on demand. Active execution retains only bounded current state: the
+current Surface working set, one structurally unsettled tool batch whose
+per-call foreground progress is cardinality-bounded
+(`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`, earliest prefix plus latest),
+and bounded deferred-context staging. Historical growth lives in
+ConversationStore only.
 
 Exit criteria are complete: restart preserves pending delivery, canonical
 Ledger identity/order, every retained Surface revision, exact started-request

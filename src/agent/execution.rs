@@ -2508,19 +2508,14 @@ impl<'a> AgentExecution<'a> {
         invocation: &ToolInvocation,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        let buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let reporter = BufferProgressReporter {
-            call_id: invocation.call_id.clone(),
-            tool_id: invocation.tool_id.clone(),
-            buffer: buffer.clone(),
-        };
+        let buffer =
+            ForegroundProgressBuffer::new(invocation.call_id.clone(), invocation.tool_id.clone());
         let context = ToolExecutionContext {
             conversation_id: &self.request.conversation_id,
             execution_id: None,
             cancellation: self.cancellation.signal(),
             workspace: self.tool_runtime.workspace(),
-            progress: &reporter,
+            progress: &buffer,
             artifacts: self.tool_runtime.artifacts(),
             environment: self.capability.snapshot().effective_environment(),
         };
@@ -2538,7 +2533,7 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             };
         }
-        let progress_events = std::mem::take(&mut *buffer.lock().expect("progress buffer lock"));
+        let progress_events = buffer.take();
         (result, progress_events)
     }
 
@@ -2975,28 +2970,72 @@ fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
     }
 }
 
-/// The foreground progress reporter of one execution: progress facts are
-/// normalized through the one shared UTF-8-safe bound
+/// The bounded foreground progress buffer of one active tool call.
+///
+/// One foreground invocation owns exactly one buffer. The executor's
+/// progress reports are normalized through the one shared UTF-8-safe bound
 /// ([`bound_tool_progress`], the same normalization the background registry
-/// uses), buffered per slot, and become canonical `ToolExecutionProgress`
-/// events at batch commit, before their completion event.
-struct BufferProgressReporter {
+/// uses) and retained under the explicit tool-plane cardinality bound
+/// [`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`]. Once the bound is reached,
+/// the first `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1` observations are
+/// pinned and the final slot tracks the newest observation, so retained
+/// progress always ends with the most recent executor state and the buffer
+/// never exceeds the bound while the executor is still running.
+///
+/// The buffer is transient current-execution state: only the retained
+/// observations become canonical `ToolExecutionProgress` Event Journal facts
+/// at batch commit, before their completion event. Coalesced observations
+/// never cross the durable execution-fact commit point.
+struct ForegroundProgressBuffer {
     call_id: ToolCallId,
     tool_id: ToolId,
-    buffer: std::sync::Arc<std::sync::Mutex<Vec<RuntimeEvent>>>,
+    events: std::sync::Mutex<Vec<RuntimeEvent>>,
 }
 
-impl ProgressReporter for BufferProgressReporter {
+impl ForegroundProgressBuffer {
+    /// An empty bounded buffer for one foreground invocation.
+    fn new(call_id: ToolCallId, tool_id: ToolId) -> Self {
+        Self {
+            call_id,
+            tool_id,
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Drains the retained progress events in observation order, newest
+    /// last. Called exactly once, when the invocation structurally settles.
+    fn take(&self) -> Vec<RuntimeEvent> {
+        std::mem::take(&mut *self.events.lock().expect("progress buffer lock"))
+    }
+
+    /// The number of retained observations; test-only invariant probe.
+    #[cfg(test)]
+    fn retained_len(&self) -> usize {
+        self.events.lock().expect("progress buffer lock").len()
+    }
+}
+
+impl ProgressReporter for ForegroundProgressBuffer {
     fn report(&self, progress: ToolProgress) {
         let bounded = crate::tools::limits::bound_tool_progress(progress);
-        self.buffer.lock().expect("progress buffer lock").push(
-            RuntimeEvent::ToolExecutionProgress {
-                tool_call_id: self.call_id.clone(),
-                tool_id: self.tool_id.clone(),
-                execution_id: None,
-                progress: bounded,
-            },
-        );
+        let event = RuntimeEvent::ToolExecutionProgress {
+            tool_call_id: self.call_id.clone(),
+            tool_id: self.tool_id.clone(),
+            execution_id: None,
+            progress: bounded,
+        };
+        let mut events = self.events.lock().expect("progress buffer lock");
+        if events.len() < crate::tools::limits::MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            events.push(event);
+        } else {
+            // At capacity the earliest observations are pinned and the final
+            // slot tracks the newest observation: first
+            // `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1` progress events,
+            // then the latest progress event.
+            *events
+                .last_mut()
+                .expect("the foreground progress bound is positive") = event;
+        }
     }
 }
 
@@ -3124,18 +3163,151 @@ mod tests {
     use crate::runtime::inbound::InitialTurnTrigger;
     use crate::runtime::types::CancellationReason;
     use crate::scripted_suites::support::model::scripted_session_model;
-    use crate::tools::executor::{ToolExecutor, ToolRegistry};
+    use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
+    use crate::tools::limits::{
+        MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES,
+    };
     use crate::tools::types::{
         ToolCall, ToolCallStart, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
     };
 
     use super::{
-        AgentExecution, AgentExecutionRequest,
+        AgentExecution, AgentExecutionRequest, ForegroundProgressBuffer,
         test_sync::{AdmissionPause, ContinuationBoundaryPause},
     };
     use crate::agent::cancellation::AgentCancellation;
     use crate::context::ContextRuntime;
+
+    /// An empty bounded foreground progress buffer for one scripted call.
+    fn foreground_buffer() -> ForegroundProgressBuffer {
+        ForegroundProgressBuffer::new(ToolCallId::new("call-1"), ToolId::new("tool-1"))
+    }
+
+    /// Reports one numbered progress observation through the reporter seam,
+    /// exactly as an executor would.
+    fn report_progress(buffer: &ForegroundProgressBuffer, index: usize) {
+        buffer.report(crate::tools::types::ToolProgress {
+            message: Some(format!("progress {index}")),
+            completed: None,
+            total: None,
+        });
+    }
+
+    /// Drains the retained progress messages in observation order.
+    fn retained_messages(buffer: &ForegroundProgressBuffer) -> Vec<String> {
+        buffer
+            .take()
+            .iter()
+            .map(|event| match event {
+                RuntimeEvent::ToolExecutionProgress { progress, .. } => {
+                    progress.message.clone().expect("numbered progress message")
+                }
+                other => {
+                    panic!("the foreground progress buffer retains only progress events: {other:?}")
+                }
+            })
+            .collect()
+    }
+
+    /// Exact bound: reporting exactly `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`
+    /// observations retains every one of them in observation order, and the
+    /// retained count never exceeds the bound while reporting.
+    #[test]
+    fn foreground_progress_buffer_retains_the_exact_bound() {
+        let buffer = foreground_buffer();
+        for index in 0..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the retained count never exceeds the bound"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        assert_eq!(messages.len(), MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL);
+        for (index, message) in messages.iter().enumerate() {
+            assert_eq!(message, &format!("progress {index}"));
+        }
+    }
+
+    /// One over the bound: the first `MAX - 1` observations are pinned and
+    /// the final slot tracks the newest observation, so the retained count
+    /// stays exactly at the bound and ends with the latest progress.
+    #[test]
+    fn foreground_progress_buffer_one_over_the_bound_keeps_first_prefix_plus_latest() {
+        let buffer = foreground_buffer();
+        for index in 0..=MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the retained count never exceeds the bound"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        let mut expected: Vec<String> = (0..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1)
+            .map(|index| format!("progress {index}"))
+            .collect();
+        expected.push(format!(
+            "progress {MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL}"
+        ));
+        assert_eq!(
+            messages, expected,
+            "the overflow policy is deterministic: first MAX-1 pinned, newest last"
+        );
+    }
+
+    /// Flood: a misbehaving executor reporting ten times the bound never
+    /// grows the buffer past the bound; the retained prefix stays the
+    /// earliest observations and the final slot is the newest one.
+    #[test]
+    fn foreground_progress_buffer_flood_never_exceeds_the_bound() {
+        const FLOOD: usize = MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL * 10;
+        let buffer = foreground_buffer();
+        for index in 0..FLOOD {
+            report_progress(&buffer, index);
+            assert!(
+                buffer.retained_len() <= MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL,
+                "the bound holds during reporting, not only after settlement"
+            );
+        }
+        let messages = retained_messages(&buffer);
+        assert_eq!(messages.len(), MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL);
+        for (index, message) in messages[..MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL - 1]
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(message, &format!("progress {index}"));
+        }
+        assert_eq!(
+            messages.last().expect("retained progress"),
+            &format!("progress {}", FLOOD - 1),
+            "the final retained observation is the newest executor state"
+        );
+    }
+
+    /// The canonical shared normalization (message bytes, finite values)
+    /// applies as part of bounded retention; the cardinality bound never
+    /// bypasses or duplicates it.
+    #[test]
+    fn foreground_progress_buffer_applies_canonical_normalization_before_retention() {
+        let buffer = foreground_buffer();
+        buffer.report(crate::tools::types::ToolProgress {
+            message: Some("x".repeat(MAX_PROGRESS_MESSAGE_BYTES + 10)),
+            completed: Some(f64::NAN),
+            total: Some(f64::INFINITY),
+        });
+        let events = buffer.take();
+        assert_eq!(events.len(), 1);
+        let RuntimeEvent::ToolExecutionProgress { progress, .. } = &events[0] else {
+            panic!("the buffer retains a progress event");
+        };
+        assert_eq!(
+            progress.message.as_deref().expect("message").len(),
+            MAX_PROGRESS_MESSAGE_BYTES
+        );
+        assert_eq!(progress.completed, None, "non-finite values are dropped");
+        assert_eq!(progress.total, None, "non-finite values are dropped");
+    }
 
     /// A scripted model adapter: each invocation pops the next event script
     /// and yields it synchronously, recording every request.

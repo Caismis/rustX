@@ -389,6 +389,15 @@ Context Assembly → resolve producer → PreStepPolicy → admission
 canonical User context
 ```
 
+Foreground progress reported while a batch executes is transient
+current-execution state: each active call retains a bounded number of
+normalized progress observations
+(`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`, earliest prefix plus latest),
+and only the retained observations become durable `ToolExecutionProgress`
+Event Journal facts at batch commit, in canonical model-call order before
+their completion event. Coalesced observations never cross the durable
+commit point.
+
 The observer receives `ToolResultObservation`, a borrow of already-canonical
 facts: attempt/conversation identity, the turn, the canonical
 `batch_position`, the canonical `ToolCallId`, the registry-resolved `ToolId`,

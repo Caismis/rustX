@@ -491,7 +491,11 @@ observed only at the next quiescent re-discovery.
   passes through the shared normalization boundary (`bound_tool_progress`),
   which drops non-finite `completed`/`total` values (`NaN`, `±inf`) so a
   canonical serialization can never fail on them; finite fractional values
-  are preserved.
+  are preserved. Foreground progress is also cardinality-bounded: one
+  active foreground call retains at most
+  `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL` normalized observations (first
+  `MAX - 1` pinned, final slot tracking the newest); coalesced observations
+  never become durable Event Journal facts.
 - **M7 interactive MCP stdio supervision.** The interactive supervisor unit
   is the M5 Bash supervisor shape applied to a long-lived server, composed
   from the same shared structural ownership core
@@ -776,7 +780,12 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
 - All progress entering runtime state and events passes through one shared
   UTF-8-safe bound (`bound_tool_progress`); the foreground reporter and the
   background registry produce the same normalized value, and an oversized
-  multibyte message can never panic or strand an execution.
+  multibyte message can never panic or strand an execution. The foreground
+  reporter additionally retains at most
+  `MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL` observations per active call
+  (earliest prefix plus latest), so a misbehaving executor cannot grow the
+  transient per-call progress buffer without bound; background progress
+  keeps only the latest bounded snapshot per execution record.
 - Agent Status is a read-only projection: the executing attempt samples the
   active registry snapshot and the runtime-owned `background_execution`
   built-in section shows only `Starting`/`Running`/`Cancelling` entries in

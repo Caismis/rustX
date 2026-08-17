@@ -207,6 +207,7 @@ pub struct FakeTool {
     definition: ToolDefinition,
     result: ToolExecutionResult,
     release: Option<watch::Sender<bool>>,
+    progress_reports: usize,
     calls: watch::Sender<Vec<ToolInvocation>>,
     started: watch::Sender<bool>,
     completed: watch::Sender<Vec<String>>,
@@ -233,6 +234,7 @@ impl FakeTool {
             definition,
             result,
             release: None,
+            progress_reports: 0,
             calls: watch::Sender::new(Vec::new()),
             started: watch::Sender::new(false),
             completed: watch::Sender::new(Vec::new()),
@@ -253,12 +255,21 @@ impl FakeTool {
                 definition,
                 result,
                 release: Some(release.clone()),
+                progress_reports: 0,
                 calls: watch::Sender::new(Vec::new()),
                 started: watch::Sender::new(false),
                 completed: watch::Sender::new(Vec::new()),
             },
             release,
         )
+    }
+
+    /// The tool reports `count` numbered progress observations per call
+    /// before settling, exactly like a chatty real executor.
+    #[must_use]
+    pub fn emitting_progress(mut self, count: usize) -> Self {
+        self.progress_reports = count;
+        self
     }
 
     /// The canonical definition of this tool, registered together with the
@@ -309,8 +320,16 @@ impl ToolExecutor for FakeTool {
         let mut release = self.release.as_ref().map(watch::Sender::subscribe);
         let result = self.result.clone();
         let completed = self.completed.clone();
+        let progress_reports = self.progress_reports;
         Box::pin(async move {
             started.send_replace(true);
+            for index in 0..progress_reports {
+                context.progress.report(rustx::tools::types::ToolProgress {
+                    message: Some(format!("progress {index}")),
+                    completed: None,
+                    total: None,
+                });
+            }
             let outcome = if let Some(release) = release.as_mut() {
                 tokio::select! {
                     biased;

@@ -1062,7 +1062,14 @@ the registry winner and the stored result always agree (only an explicit
 process-control failure after cancellation intent settles as `Failed`).
 All progress entering runtime state and events passes through one shared
 UTF-8-safe bound (`bound_tool_progress`) used by both foreground and
-background paths.
+background paths. Foreground progress is additionally cardinality-bounded
+per active call (`MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL`): one invocation
+retains at most that many normalized observations before structural
+settlement — the first `MAX - 1` observations pinned, the final slot
+tracking the newest observation — and only the retained observations become
+durable `ToolExecutionProgress` Event Journal facts at batch commit;
+coalesced observations never cross the durable commit point. Background
+progress retains only the latest bounded snapshot per execution record.
 
 Agent Status owns the runtime `background_execution` built-in section: the
 executing attempt samples a read-only active snapshot from the background
