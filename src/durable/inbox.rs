@@ -110,8 +110,12 @@ pub enum InboundStoreError {
         /// The correlation whose payload conflicts with its committed one.
         correlation: String,
     },
-    /// The re-supplied bootstrap initial messages do not match the durable
-    /// canonical prefix already committed to this conversation.
+    /// The re-supplied bootstrap initial messages do not equal the
+    /// immutable bootstrap initial-history identity this conversation was
+    /// first seeded with (Issue #63 bootstrap identity). The identity is an
+    /// explicit durable record (message count + content digest), never
+    /// inferred from the current Ledger: neither a shorter prefix nor an
+    /// empty replacement of a non-empty bootstrap is accepted.
     InitialHistoryMismatch,
     /// The underlying storage rejected the operation.
     Storage(String),
@@ -138,7 +142,7 @@ impl core::fmt::Display for InboundStoreError {
             ),
             Self::InitialHistoryMismatch => write!(
                 f,
-                "the re-supplied initial canonical messages do not match the durable conversation prefix"
+                "the re-supplied initial canonical messages do not equal the durable bootstrap initial-history identity"
             ),
             Self::Storage(message) => write!(f, "durable inbound storage failed: {message}"),
         }
@@ -213,15 +217,25 @@ pub trait InboundStore: Send + Sync + 'static {
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, InboundStoreError>;
 
     /// Seeds the durable canonical Message Ledger with the conversation's
-    /// initial canonical messages.
+    /// initial canonical messages and establishes the immutable bootstrap
+    /// initial-history identity.
     ///
-    /// Idempotent: a store whose canonical ledger is already non-empty is
-    /// left unchanged (the caller re-supplies the same deterministic initial
-    /// messages across restarts).
+    /// The first call atomically commits the initial messages **and** the
+    /// bootstrap identity (exact message count and content digest). Every
+    /// later call — across restarts — must re-supply an initial history
+    /// exactly equal to the original one; a shorter prefix, an empty
+    /// replacement of a non-empty bootstrap, or any content change is
+    /// rejected. An empty initial history is a valid bootstrap and is
+    /// recorded explicitly, so "initialized empty" is never confused with
+    /// "never initialized".
     ///
     /// # Errors
     ///
-    /// Returns [`InboundStoreError::Storage`] when the seed transaction fails.
+    /// Returns [`InboundStoreError::InitialHistoryMismatch`] when the
+    /// re-supplied initial history does not exactly equal the original
+    /// bootstrap and [`InboundStoreError::Storage`] when the seed
+    /// transaction fails or a canonical Ledger exists without its bootstrap
+    /// identity (fail-closed: the boundary is never guessed).
     fn seed_canonical(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError>;
 
     /// Appends one canonical [`MessageBlock`] to the durable Message Ledger.

@@ -199,11 +199,17 @@ Message Ledger          = adopted canonical conversational facts
 - the durable store binds itself to exactly one `ConversationId` on first
   creation and enforces that binding on every reopen: opening a database
   created for conversation A under conversation B fails typed with
-  `InboundStoreError::ConversationIdMismatch` and mutates nothing. Reopening
-  an existing conversation verifies that re-supplied bootstrap initial
-  messages equal the persisted initial prefix (`InitialHistoryMismatch` on
-  mismatch) and rejects a correlation retry with a conflicting semantic
-  payload (`CorrelationConflict`) instead of silently returning the original
+  `InboundStoreError::ConversationIdMismatch` and mutates nothing. The first
+  `seed_canonical` atomically establishes the conversation's immutable
+  bootstrap initial-history identity (exact message count and content
+  digest); every reopen must re-supply an initial history **exactly equal**
+  to the original one — neither a shorter prefix nor an empty replacement of
+  a non-empty bootstrap is accepted (`InitialHistoryMismatch`), and an
+  explicitly empty bootstrap is recorded distinctly from "never
+  initialized". The boundary is never inferred from the current Ledger, and
+  a canonical Ledger without its bootstrap identity fails closed. A
+  correlation retry with a conflicting semantic payload is rejected
+  (`CorrelationConflict`) instead of silently returning the original
   acceptance;
 - a durable Ledger append does **not** by itself imply a resumable runtime
   safe boundary: the conversation domain's `recovery_safety` predicate fails
@@ -215,12 +221,24 @@ Message Ledger          = adopted canonical conversational facts
   the same incomplete-tool-turn check, so a failed tool-result batch can
   never be crossed by a later inbound batch;
 - a durable storage failure in idle admission is never silently swallowed:
-  the first failure records a diagnostic, publishes a `DurableFailure`
+  the retry budget is keyed by the semantic durable operation. The first
+  transient failure of an operation (`select_pending_batch` /
+  `adopt_pending_batch`) records a diagnostic, publishes a `DurableFailure`
   observation, and re-kicks the admission wake gate exactly once; a second
-  failure of the same transition moves the runtime into the explicit
+  failure of the **same** operation moves the runtime into the explicit
   `DurabilityFailed` state (published as `DurabilityFailed` and projected to
   the Runtime Client as `RuntimeDurabilityFailed`) and no further re-kick is
-  armed, so a persistent failure is not a hot loop. In `DurabilityFailed`,
+  armed, so a persistent failure is not a hot loop. A failure of a
+  different operation supersedes the pending retry and begins its own
+  bounded retry — two independent first failures never combine into a false
+  `DurabilityFailed`. Non-transient failures — a semantic contract failure
+  (a pending item that cannot be prepared for canonical adoption, an
+  incomplete tool turn observed by the live admission guard) or an
+  already-terminal durable failure (an active attempt's durable
+  canonical-write failure, carried to the coordinator in the settled attempt
+  result; an exhausted background terminal-publication budget, reported
+  through the failure sink) — enter `DurabilityFailed` immediately instead
+  of consuming a futile storage retry. In `DurabilityFailed`,
   accepted pending work remains intact, no attempt is admitted, and new
   durable mutations (`submit_inbound`, `model_set`) are rejected typed;
   shutdown and read-only inspection remain available;
@@ -231,9 +249,13 @@ Message Ledger          = adopted canonical conversational facts
   registry retains the terminal candidate until settlement reaches a
   terminal outcome: a durable acceptance failure transitions the record to
   the explicit non-terminal `PublishingTerminal` state (never `Running` with
-  a lost result and no runner), and the retained candidate is finalizable
-  through the narrow `retry_terminal_publication` seam under the same
-  exactly-once correlation. An observable terminal settlement therefore
+  a lost result and no runner), and the runner itself drives the production
+  settlement continuation — exactly one registry-owned retry under the same
+  exactly-once correlation, then, when the bounded budget is exhausted, an
+  explicit failure report through the `BackgroundDurabilityFailureSink` seam
+  that places the owning `ConversationRuntime` into `DurabilityFailed` while
+  the candidate stays retained and observable. No execution can remain
+  ownerless after its runner exits, and an observable terminal settlement
   always implies the terminal inbound already obtained durable ownership.
 
 ## Capability immutability

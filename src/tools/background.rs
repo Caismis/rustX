@@ -99,6 +99,33 @@
 //! terminal lifecycle. A durable acceptance failure keeps the record
 //! non-terminal and records the failure, so an observable terminal settlement
 //! always implies the terminal inbound already committed durably.
+//!
+//! # Terminal settlement ownership (Issue #63)
+//!
+//! Once a background executor has returned, the registry owns settlement
+//! until exactly one stable outcome exists. Retaining the terminal candidate
+//! is not enough — the runner task itself drives the production settlement
+//! continuation, so no execution can remain in the non-terminal
+//! `PublishingTerminal` state without a live owner:
+//!
+//! ```text
+//! executor returns
+//!     -> finish(): durable publication attempt #1
+//!         -> success: commit the terminal lifecycle
+//!         -> failure: retain the candidate as PublishingTerminal
+//!     -> registry-owned bounded retry (attempt #2, same deterministic
+//!        `background-terminal:{execution_id}` correlation, exactly-once
+//!        even when attempt #1 committed but observed an error)
+//!         -> success: commit the terminal lifecycle
+//!         -> failure: report the exhausted budget to the owning
+//!           ConversationRuntime through the narrow
+//!           [`BackgroundDurabilityFailureSink`] seam while the candidate
+//!           stays retained and observable
+//! ```
+//!
+//! The budget is exactly two publication attempts driven synchronously by
+//! the runner: no sleep, no hot loop, no process-global worker, and no
+//! generic retry framework.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -190,6 +217,32 @@ pub enum BackgroundLifecycle {
 pub trait BackgroundObserver: Send + Sync {
     /// Observes one authoritative registry transition snapshot.
     fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot);
+}
+
+/// The narrow durability-failure seam of the background settlement owner
+/// (Issue #63).
+///
+/// Once a background executor has returned, the registry owns settlement
+/// until a terminal outcome exists: the runner performs the bounded
+/// publication budget itself (the initial attempt inside `finish` plus
+/// exactly one registry-owned retry under the same deterministic
+/// correlation). When that bounded budget is exhausted, the unresolved
+/// terminal candidate stays retained in the explicit non-terminal
+/// [`BackgroundLifecycle::PublishingTerminal`] state and the registry
+/// reports the failure through this seam, so the owning
+/// `ConversationRuntime` enters its explicit durable-failure state and no
+/// execution is left ownerless.
+///
+/// The sink is invoked by the runner **without** the registry lock held:
+/// the runtime-side implementation acquires the coordinator lock, and the
+/// lock graph already has a coordinator -> registry edge (the bootstrap
+/// handshake), so holding the registry lock across this call could
+/// deadlock.
+pub trait BackgroundDurabilityFailureSink: Send + Sync {
+    /// The bounded terminal-publication budget of `execution_id` was
+    /// exhausted; the terminal candidate remains retained by the registry
+    /// in the non-terminal `PublishingTerminal` state.
+    fn terminal_publication_failed(&self, execution_id: &ToolExecutionId, diagnostic: String);
 }
 
 impl BackgroundLifecycle {
@@ -424,6 +477,11 @@ struct BackgroundRegistryState {
     /// The read-only state observer, installed by the owning runtime client
     /// boundary (Issue #37). It fires while the registry lock is held.
     observer: Option<Arc<dyn BackgroundObserver>>,
+    /// The narrow durability-failure seam of the owning conversation
+    /// runtime (Issue #63), installed while the runtime is still inactive.
+    /// It is invoked by the runner after the bounded terminal-publication
+    /// budget is exhausted, never while the registry lock is held.
+    failure_sink: Option<Arc<dyn BackgroundDurabilityFailureSink>>,
     /// Test-only synchronization hook at the dispatch ownership commit
     /// boundary; never present outside `#[cfg(test)]`.
     #[cfg(test)]
@@ -475,6 +533,7 @@ impl ConversationBackgroundRegistry {
                 records: Vec::new(),
                 index: HashMap::new(),
                 observer: None,
+                failure_sink: None,
                 #[cfg(test)]
                 commit_hook: None,
             })),
@@ -496,6 +555,17 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn install_commit_boundary_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         let mut state = self.state();
         state.commit_hook = Some(hook);
+    }
+
+    /// Installs the durability-failure sink of the owning conversation
+    /// runtime (Issue #63).
+    ///
+    /// `ConversationRuntime::new` installs it while the runtime is still
+    /// inactive — and an inactive runtime refuses every background dispatch
+    /// commit, so no execution record or runner exists yet and the
+    /// installation can never race a settlement.
+    pub(crate) fn install_failure_sink(&self, sink: Arc<dyn BackgroundDurabilityFailureSink>) {
+        self.state().failure_sink = Some(sink);
     }
 
     /// Installs the observer and captures every retained record snapshot
@@ -867,6 +937,10 @@ impl ConversationBackgroundRegistry {
     /// retained cancellation reason, preserving useful bounded result data
     /// and artifacts where present. Only an explicit runtime/process-control
     /// failure after cancellation intent settles as `Failed`.
+    ///
+    /// This is durable publication attempt #1 of the production settlement
+    /// continuation; [`ConversationBackgroundRegistry::settle_terminal`]
+    /// drives the bounded retry and the explicit failure report.
     pub fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
@@ -959,8 +1033,9 @@ impl ConversationBackgroundRegistry {
                 // The terminal inbound did not obtain durable ownership, so
                 // the record must NOT become terminal and must NOT stay
                 // `Running` (the runner has exited). It enters the explicit
-                // publication-pending state with the candidate retained for a
-                // later `retry_terminal_publication`.
+                // publication-pending state with the candidate retained;
+                // the runner's settlement continuation performs the bounded
+                // retry immediately after this call returns.
                 let record = &mut state.records[index];
                 record.lifecycle = BackgroundLifecycle::PublishingTerminal;
                 record.notification = NotificationState::Failed;
@@ -971,16 +1046,58 @@ impl ConversationBackgroundRegistry {
         self.notify_state_change();
     }
 
-    /// Retries the durable terminal publication of one execution that is in
-    /// [`BackgroundLifecycle::PublishingTerminal`], using the retained
-    /// terminal candidate and the stable correlation.
+    /// The production settlement continuation of one returned executor
+    /// (Issue #63): the runner drives the bounded terminal-publication
+    /// budget itself, so no execution can remain in `PublishingTerminal`
+    /// without a live owner.
     ///
-    /// This is the narrow owned retry trigger of the background settlement
-    /// owner (Blocker 2): a `PublishingTerminal` record always retains its
-    /// candidate and can reach a terminal outcome through this seam without
-    /// duplicating the terminal inbound (the correlation is exactly-once).
+    /// Attempt #1 runs inside [`ConversationBackgroundRegistry::finish`];
+    /// exactly one registry-owned retry follows under the same
+    /// deterministic correlation (`background-terminal:{execution_id}`),
+    /// which resolves exactly-once even when attempt #1 committed durably
+    /// but observed an error. When the bounded budget is exhausted, the
+    /// terminal candidate remains retained in the explicit non-terminal
+    /// `PublishingTerminal` state and the failure is reported to the
+    /// owning conversation runtime through the installed
+    /// [`BackgroundDurabilityFailureSink`]. There is no sleep, no hot loop,
+    /// and no further attempt after the budget is spent.
+    fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        self.finish(execution_id, result);
+        let Some(snapshot) = self.retry_terminal_publication(execution_id) else {
+            return;
+        };
+        if snapshot.state != BackgroundLifecycle::PublishingTerminal {
+            return;
+        }
+        // The bounded publication budget is exhausted. The sink acquires
+        // the coordinator lock and the lock graph already has a
+        // coordinator -> registry edge (the bootstrap handshake), so the
+        // sink is invoked only after every registry lock acquisition above
+        // has been released — never while the registry lock is held.
+        let sink = self.state().failure_sink.clone();
+        if let Some(sink) = sink {
+            sink.terminal_publication_failed(
+                execution_id,
+                format!(
+                    "the durable terminal publication of background execution {execution_id} failed persistently"
+                ),
+            );
+        }
+    }
+
+    /// The bounded retry of the durable terminal publication of one
+    /// execution that is in [`BackgroundLifecycle::PublishingTerminal`],
+    /// using the retained terminal candidate and the stable correlation.
+    ///
+    /// This is attempt #2 of the runner-owned settlement continuation
+    /// ([`ConversationBackgroundRegistry::settle_terminal`]), never an
+    /// external polling API: a `PublishingTerminal` record always retains
+    /// its candidate and reaches a terminal outcome through this seam
+    /// without duplicating the terminal inbound (the correlation is
+    /// exactly-once). For an already-terminal record it is an idempotent
+    /// no-op returning the current snapshot.
     #[must_use]
-    pub fn retry_terminal_publication(
+    fn retry_terminal_publication(
         &self,
         execution_id: &ToolExecutionId,
     ) -> Option<BackgroundExecutionSnapshot> {
@@ -1152,7 +1269,7 @@ impl ConversationBackgroundRegistry {
                 environment: &environment,
             };
             let result = executor.execute(invocation, context).await;
-            registry.finish(&execution_id, &result);
+            registry.settle_terminal(&execution_id, &result);
         })
     }
 }
@@ -1706,14 +1823,56 @@ mod tests {
         );
     }
 
-    /// Issue #63 (Blocker 2, Test 1): when the real runner's single
-    /// settlement call hits a durable terminal-inbound acceptance failure, the
-    /// registry retains the terminal candidate in the explicit
-    /// `PublishingTerminal` state — never `Running` with a lost result and no
-    /// settlement owner.
+    /// A test observer collecting every published snapshot in order, so a
+    /// regression can prove the exact transition sequence (including the
+    /// intermediate non-terminal publication-pending state).
+    #[derive(Default)]
+    struct CollectingObserver {
+        snapshots: std::sync::Mutex<Vec<super::BackgroundExecutionSnapshot>>,
+    }
+
+    impl super::BackgroundObserver for CollectingObserver {
+        fn on_snapshot(&self, snapshot: &super::BackgroundExecutionSnapshot) {
+            self.snapshots
+                .lock()
+                .expect("observer lock")
+                .push(snapshot.clone());
+        }
+    }
+
+    /// A test durability-failure sink recording every exhausted-budget
+    /// report, so a regression can await the production degradation signal
+    /// deterministically.
+    #[derive(Default)]
+    struct RecordingFailureSink {
+        calls: std::sync::Mutex<Vec<(ToolExecutionId, String)>>,
+        notify: tokio::sync::Notify,
+    }
+
+    impl super::BackgroundDurabilityFailureSink for RecordingFailureSink {
+        fn terminal_publication_failed(&self, execution_id: &ToolExecutionId, diagnostic: String) {
+            self.calls
+                .lock()
+                .expect("sink lock")
+                .push((execution_id.clone(), diagnostic));
+            self.notify.notify_one();
+        }
+    }
+
+    /// Issue #63 (Blocker 2, Tests 1+2): when the real runner's first
+    /// durable terminal-inbound publication fails, the **production**
+    /// settlement continuation — never a test-only manual retry — performs
+    /// the bounded registry-owned retry: the record passes through the
+    /// explicit `PublishingTerminal` state and reaches its terminal state
+    /// exactly once, with exactly one durable terminal inbound under the
+    /// stable deterministic correlation.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn terminal_publication_failure_retains_candidate_as_publishing_terminal() {
-        let fixture = file_registry("conv-bg-fault");
+    async fn first_publication_failure_is_retried_by_the_production_runner() {
+        let fixture = file_registry("conv-bg-retry");
+        let observer = Arc::new(CollectingObserver::default());
+        fixture
+            .registry
+            .install_observer_and_snapshots(observer.clone());
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
         let prepared = fixture
@@ -1736,19 +1895,126 @@ mod tests {
         };
         await_test_started(&mut started, "runner started").await;
 
-        // Arm the acceptance fault and release the real runner: its single
-        // settlement call (inside `finish`) fails the durable acceptance.
-        fixture.store.arm_fail_next_accept_commit();
+        // Arm exactly one acceptance fault, then release the real runner:
+        // publication attempt #1 fails durably, and the runner's own
+        // bounded retry (attempt #2) must finalize the settlement.
+        fixture.store.arm_fail_accept_times(1);
         release.send_replace(true);
 
-        // The runner invokes finish exactly once; the resulting state is the
-        // explicit publication-pending state with the candidate retained.
-        let snapshot = wait_for_state(
-            &fixture,
-            &execution_id,
-            BackgroundLifecycle::PublishingTerminal,
+        // The production path itself advances the record to terminal; no
+        // test code drives the retry.
+        let terminal = tokio::time::timeout(
+            TEST_LIVENESS_GUARD,
+            fixture.registry.wait_until_terminal(&execution_id),
         )
-        .await;
+        .await
+        .expect("terminal wait exceeded liveness guard")
+        .expect("execution record");
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        assert!(terminal.result.is_some(), "the terminal result is stored");
+
+        // The transition sequence proves attempt #1 failed into the
+        // explicit publication-pending state and the production retry
+        // committed the terminal lifecycle.
+        let states: Vec<BackgroundLifecycle> = observer
+            .snapshots
+            .lock()
+            .expect("observer lock")
+            .iter()
+            .map(|snapshot| snapshot.state)
+            .collect();
+        let publishing = states
+            .iter()
+            .filter(|state| **state == BackgroundLifecycle::PublishingTerminal)
+            .count();
+        assert_eq!(
+            publishing, 1,
+            "exactly one failed publication attempt entered PublishingTerminal: {states:?}"
+        );
+        let succeeded = states
+            .iter()
+            .filter(|state| **state == BackgroundLifecycle::Succeeded)
+            .count();
+        assert_eq!(succeeded, 1, "terminal exactly once: {states:?}");
+        let publishing_at = states
+            .iter()
+            .position(|state| *state == BackgroundLifecycle::PublishingTerminal)
+            .expect("the publication-pending state was observed");
+        let succeeded_at = states
+            .iter()
+            .position(|state| *state == BackgroundLifecycle::Succeeded)
+            .expect("the terminal state was observed");
+        assert!(
+            publishing_at < succeeded_at,
+            "the retry commits the terminal lifecycle after the failed attempt: {states:?}"
+        );
+
+        // Durable terminal inbound exactly once, under the stable
+        // correlation: the retry resolved the same acceptance.
+        let items = fixture.store.load_pending().expect("load");
+        assert_eq!(items.len(), 1, "exactly one durable terminal inbound");
+        let expected_correlation = format!("background-terminal:{}", execution_id.as_str());
+        assert_eq!(
+            items[0].correlation.as_deref(),
+            Some(expected_correlation.as_str()),
+            "the bounded retry used the same deterministic correlation"
+        );
+    }
+
+    /// Issue #63 (Blocker 2, Test 3): when the bounded publication budget
+    /// (attempt #1 in `finish` plus the one registry-owned retry) is
+    /// exhausted, the terminal candidate remains retained in the explicit
+    /// non-terminal `PublishingTerminal` state, no false terminal
+    /// publication exists, and the registry reports the failure through the
+    /// narrow durability-failure seam exactly once — no hot loop, no
+    /// further attempts, no ownerless record.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exhausted_publication_budget_retains_candidate_and_reports_failure() {
+        let fixture = file_registry("conv-bg-fault");
+        let observer = Arc::new(CollectingObserver::default());
+        fixture
+            .registry
+            .install_observer_and_snapshots(observer.clone());
+        let sink = Arc::new(RecordingFailureSink::default());
+        fixture
+            .registry
+            .install_failure_sink(sink.clone() as Arc<dyn super::BackgroundDurabilityFailureSink>);
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(
+                &background_invocation("bash"),
+                &executor,
+                ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("accepted");
+        };
+        await_test_started(&mut started, "runner started").await;
+
+        // Arm exactly two acceptance faults: the full bounded publication
+        // budget of the production settlement continuation.
+        fixture.store.arm_fail_accept_times(2);
+        release.send_replace(true);
+
+        // The runner reports the exhausted budget through the failure seam
+        // after attempt #2 — deterministically, no polling.
+        tokio::time::timeout(TEST_LIVENESS_GUARD, sink.notify.notified())
+            .await
+            .expect("the exhausted budget report exceeded the liveness guard");
+
+        // The candidate remains retained in the explicit non-terminal
+        // state; no false terminal publication exists.
+        let snapshot = fixture.registry.snapshot(&execution_id).expect("record");
         assert_eq!(snapshot.state, BackgroundLifecycle::PublishingTerminal);
         assert_ne!(
             snapshot.state,
@@ -1759,86 +2025,40 @@ mod tests {
             .result
             .expect("the retained terminal candidate is not lost");
         assert_eq!(result.status, ToolExecutionStatus::Success);
-        // No durable acceptance committed (the fault rolled the transaction
-        // back).
         assert!(
             fixture.store.load_pending().expect("load").is_empty(),
-            "the failed acceptance left no durable pending record"
+            "no durable pending record committed"
         );
         assert!(
             fixture.store.load_canonical().expect("load").is_empty(),
-            "the failed acceptance left no durable canonical record"
+            "no durable canonical record committed"
         );
-    }
 
-    /// Issue #63 (Blocker 2, Test 2 + 3): the retained candidate is
-    /// finalized by the narrow owned retry — durable terminal inbound exactly
-    /// once, terminal lifecycle exactly once, and the same correlation
-    /// resolves to the same acceptance.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn retry_terminal_publication_reaches_terminal_exactly_once() {
-        let fixture = file_registry("conv-bg-retry");
-        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
-        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let prepared = fixture
-            .registry
-            .prepare_dispatch(
-                &background_invocation("bash"),
-                &executor,
-                ToolEnvironment::new(),
-            )
-            .expect("prepare");
-        let outcome = fixture
-            .registry
-            .commit_dispatch(
-                prepared,
-                &crate::runtime::cancellation::CancellationSignal::new(),
-            )
-            .expect("commit");
-        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
-            panic!("accepted");
-        };
-        await_test_started(&mut started, "runner started").await;
-
-        fixture.store.arm_fail_next_accept_commit();
-        release.send_replace(true);
-        let pending = wait_for_state(
-            &fixture,
-            &execution_id,
-            BackgroundLifecycle::PublishingTerminal,
-        )
-        .await;
-        assert_eq!(pending.state, BackgroundLifecycle::PublishingTerminal);
-
-        // The narrow owned retry finalizes the retained candidate.
-        let terminal = fixture
-            .registry
-            .retry_terminal_publication(&execution_id)
-            .expect("record");
-        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
-        assert!(terminal.result.is_some());
-
-        // Durable terminal inbound exactly once, under the stable correlation.
-        let items = fixture.store.load_pending().expect("load");
-        assert_eq!(items.len(), 1, "exactly one durable terminal inbound");
-        let expected_correlation = format!("background-terminal:{}", execution_id.as_str());
+        // Bounded: exactly two publication attempts (two `PublishingTerminal`
+        // transitions) and exactly one exhaustion report — the sink fires
+        // after the last attempt, so no further attempt can still be in
+        // flight; there is no hot loop.
+        let states: Vec<BackgroundLifecycle> = observer
+            .snapshots
+            .lock()
+            .expect("observer lock")
+            .iter()
+            .map(|snapshot| snapshot.state)
+            .collect();
+        let publishing = states
+            .iter()
+            .filter(|state| **state == BackgroundLifecycle::PublishingTerminal)
+            .count();
         assert_eq!(
-            items[0].correlation.as_deref(),
-            Some(expected_correlation.as_str()),
-            "the same correlation resolves to the same acceptance"
+            publishing, 2,
+            "exactly the bounded budget of two publication attempts ran: {states:?}"
         );
-
-        // A second retry is an idempotent no-op: no duplicate delivery.
-        let again = fixture
-            .registry
-            .retry_terminal_publication(&execution_id)
-            .expect("record");
-        assert_eq!(again.state, BackgroundLifecycle::Succeeded);
-        assert_eq!(
-            fixture.store.load_pending().expect("load").len(),
-            1,
-            "no duplicate pending delivery is manufactured"
+        assert!(
+            !states.iter().any(|state| state.is_terminal()),
+            "no false terminal publication: {states:?}"
         );
+        let calls = sink.calls.lock().expect("sink lock").len();
+        assert_eq!(calls, 1, "the exhaustion was reported exactly once");
     }
 
     /// Issue #63 (Finding 3): successful terminal settlement implies the
@@ -2010,28 +2230,6 @@ mod tests {
         .await
         .expect("terminal wait exceeded liveness guard")
         .expect("execution record")
-    }
-
-    /// Waits (with a liveness guard only) until one execution reaches an
-    /// exact non-terminal state, polling the authoritative snapshot. The
-    /// proof is the exact state, never a sleep.
-    async fn wait_for_state(
-        fixture: &FileRegistry,
-        execution_id: &ToolExecutionId,
-        want: BackgroundLifecycle,
-    ) -> super::BackgroundExecutionSnapshot {
-        tokio::time::timeout(TEST_LIVENESS_GUARD, async {
-            loop {
-                if let Some(snapshot) = fixture.registry.snapshot(execution_id)
-                    && snapshot.state == want
-                {
-                    return snapshot;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("state wait exceeded liveness guard")
     }
 
     /// The unused-reason guard: `BACKGROUND_CANCEL_REASON` is the

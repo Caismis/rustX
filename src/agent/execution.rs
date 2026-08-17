@@ -193,6 +193,17 @@ pub struct AgentExecutionResult {
     pub events: Vec<RuntimeEvent>,
     /// The authoritative conversation state, transferred back to the host.
     pub conversation: ConversationState,
+    /// The durable-authority failure the attempt encountered, when one
+    /// caused or contributed to its failure settlement (Issue #63).
+    ///
+    /// The coordinator uses this to keep its durability-health state
+    /// honest: after an active-attempt durable canonical-write failure the
+    /// runtime must not return to a false healthy state and admit further
+    /// work as though storage were fine. The in-memory conversation state
+    /// handed back stayed consistent with the durable Ledger — a failed
+    /// durable commit installed nothing — but the durable authority itself
+    /// is marked failed.
+    pub durable_failure: Option<String>,
     /// Frozen provider-neutral snapshots for every actual primary request,
     /// including a bounded overflow retry when one occurred.
     pub request_snapshots: Vec<RequestSnapshot>,
@@ -243,6 +254,12 @@ pub struct AgentExecution<'a> {
     /// conversation authority for the attempt's lifetime.
     conversation: ConversationState,
     events: Vec<RuntimeEvent>,
+    /// The durable-authority failure encountered by this attempt, when
+    /// any (Issue #63): carried into [`AgentExecutionResult`] so the
+    /// coordinator never returns to a false healthy durability state
+    /// after an active-attempt durable failure, regardless of how the
+    /// terminal outcome itself is classified.
+    durable_failure: Option<String>,
     pending_continuation: Option<ProviderContinuationState>,
     /// The committed Assistant message that established the pending
     /// continuation, when one is pending.
@@ -451,6 +468,7 @@ impl<'a> AgentExecution<'a> {
             tool_runtime,
             state: ExecutionStateMachine::new(),
             events: Vec::new(),
+            durable_failure: None,
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
@@ -573,6 +591,7 @@ impl<'a> AgentExecution<'a> {
             terminal_state: self.state.state(),
             events: self.events,
             conversation: self.conversation,
+            durable_failure: self.durable_failure,
             request_snapshots: self.request_snapshots,
         }
     }
@@ -740,15 +759,10 @@ impl<'a> AgentExecution<'a> {
         if let Err(error) =
             self.commit_assistant_message(&assistant_message_id, &turn_assembly.content)
         {
-            return Some(Terminal::Failed {
-                failure: AttemptFailure::Runtime {
-                    error: RuntimeError::ContractViolation {
-                        message: format!(
-                            "the assembled Assistant message cannot be committed: {error}"
-                        ),
-                    },
-                },
-            });
+            return Some(self.commit_failure_terminal(
+                "the assembled Assistant message cannot be committed",
+                error,
+            ));
         }
         if !has_tool_calls {
             self.emit(RuntimeEvent::TurnCompleted);
@@ -776,13 +790,9 @@ impl<'a> AgentExecution<'a> {
         {
             Ok(settled) => settled,
             Err(error) => {
-                return Some(Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::ContractViolation {
-                            message: format!("a tool result cannot be committed: {error}"),
-                        },
-                    },
-                });
+                return Some(
+                    self.commit_failure_terminal("a tool result cannot be committed", error),
+                );
             }
         };
         // Cancellation observed before the observation phase begins wins
@@ -883,20 +893,18 @@ impl<'a> AgentExecution<'a> {
         }
         // Selection freezes the finite watermark (non-destructive): an
         // acceptance that linearizes after this point can never join the
-        // selected batch.
-        let Some(batch) = mailbox
-            .select_pending_batch()
-            .map_err(|error| Terminal::Failed {
-                failure: AttemptFailure::Runtime {
-                    error: RuntimeError::ContractViolation {
-                        message: format!(
-                            "the durable pending inbound inbox cannot be selected: {error}"
-                        ),
-                    },
-                },
-            })?
-        else {
-            return Ok(false);
+        // selected batch. A durable selection failure is a
+        // durable-authority failure (Issue #63): the settled result carries
+        // it to the coordinator.
+        let batch = match mailbox.select_pending_batch() {
+            Ok(Some(batch)) => batch,
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                return Err(self.durable_failure_terminal(
+                    "the durable pending inbound inbox cannot be selected",
+                    &error,
+                ));
+            }
         };
         // Prepare the canonical transition **before** the durable adoption
         // commit: validate every fallible in-memory condition now, so the
@@ -922,16 +930,14 @@ impl<'a> AgentExecution<'a> {
             }
         }
         // Canonical adoption: the durable ledger append and the pending
-        // removal commit in one transaction.
-        mailbox
-            .adopt_pending_batch(&batch)
-            .map_err(|error| Terminal::Failed {
-                failure: AttemptFailure::Runtime {
-                    error: RuntimeError::ContractViolation {
-                        message: format!("a selected inbound batch cannot be adopted: {error}"),
-                    },
-                },
-            })?;
+        // removal commit in one transaction. A durable adoption failure is
+        // a durable-authority failure (Issue #63): the settled result
+        // carries it to the coordinator.
+        if let Err(error) = mailbox.adopt_pending_batch(&batch) {
+            return Err(
+                self.durable_failure_terminal("a selected inbound batch cannot be adopted", &error)
+            );
+        }
         let mut message_ids = Vec::with_capacity(prepared.len());
         for commit in prepared {
             // Infallible: every adopted identity was validated above under
@@ -1346,13 +1352,7 @@ impl<'a> AgentExecution<'a> {
                 timestamp: None,
             });
             self.commit_canonical(&block)
-                .map_err(|error| Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::ContractViolation {
-                            message: format!("context admission failed: {error}"),
-                        },
-                    },
-                })?;
+                .map_err(|error| self.commit_failure_terminal("context admission failed", error))?;
         }
         self.accepted_context = Some(accepted);
         Ok(())
@@ -1389,6 +1389,43 @@ impl<'a> AgentExecution<'a> {
     /// The immutable `ToolRegistry` handle of the pinned capability snapshot.
     fn tool_registry(&self) -> &ToolRegistry {
         self.capability.snapshot().tool_registry()
+    }
+
+    /// The `AttemptFailed` terminal of a durable-authority failure: the
+    /// durable Message Ledger / Pending Inbound Inbox rejected a required
+    /// durable operation of the active attempt. The failure is recorded on
+    /// the execution so the settled result carries it to the coordinator
+    /// (Issue #63): after an active-attempt durable failure the runtime
+    /// must not return to a false healthy state.
+    fn durable_failure_terminal(
+        &mut self,
+        context: &str,
+        error: &dyn core::fmt::Display,
+    ) -> Terminal {
+        let message = format!("{context}: {error}");
+        self.durable_failure = Some(message.clone());
+        Terminal::Failed {
+            failure: AttemptFailure::Runtime {
+                error: RuntimeError::DurableStore { message },
+            },
+        }
+    }
+
+    /// Maps one canonical commit failure to its honest terminal: a durable
+    /// Message Ledger failure is a durable-authority failure (recorded for
+    /// the coordinator), while an in-memory validation failure is a
+    /// contract violation and never touches the durability record.
+    fn commit_failure_terminal(&mut self, context: &str, error: CanonicalCommitError) -> Terminal {
+        match error {
+            CanonicalCommitError::Durable(error) => self.durable_failure_terminal(context, &error),
+            CanonicalCommitError::Conversation(error) => Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::ContractViolation {
+                        message: format!("{context}: {error}"),
+                    },
+                },
+            },
+        }
     }
 
     /// The `AttemptFailed` terminal of a context-plane failure that occurred
@@ -1581,10 +1618,25 @@ impl<'a> AgentExecution<'a> {
             }
             Err(error) => return Err(error),
         }
-        self.tool_runtime
+        if let Err(error) = self
+            .tool_runtime
             .inbound_store()
             .append_canonical(&summary_block)
-            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+        {
+            // A durable compaction-summary commit failure is a
+            // durable-authority failure (Issue #63): the terminal is
+            // classified as a compaction failure (it is one), and the
+            // durable failure is additionally recorded on the execution so
+            // the settled result carries it to the coordinator — the
+            // runtime must not return to a false healthy durability state.
+            self.durable_failure = Some(format!(
+                "the compaction summary cannot be committed durably: {error}"
+            ));
+            return Err(ContextError::new(
+                ContextErrorKind::Internal,
+                error.to_string(),
+            ));
+        }
         let record = self.conversation.install_prepared_compaction(prepared);
         // The committed runtime summary is a canonical Ledger fact, observed
         // at exactly the commit linearization point like every other commit.

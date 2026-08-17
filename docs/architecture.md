@@ -328,7 +328,17 @@ retry with the same committed correlation can never publish a duplicate
 notification; the durable terminal inbound commits **before** the background
 record is exposed as terminal, and a durable publication failure retains the
 terminal candidate in an explicit `PublishingTerminal` state rather than
-faking `Running`.
+faking `Running`. Retaining the candidate is not the settlement ownership
+itself: the background runner drives the production settlement continuation
+— publication attempt #1 inside `finish`, then exactly one registry-owned
+retry under the same deterministic correlation (exactly-once even when
+attempt #1 committed durably but observed an error). When that bounded
+budget is exhausted, the candidate stays retained and the failure is
+reported to the owning `ConversationRuntime` through the narrow
+`BackgroundDurabilityFailureSink` seam, which places the runtime into its
+explicit `DurabilityFailed` state; no execution can remain in
+`PublishingTerminal` without a guaranteed production continuation or an
+explicit degraded outcome.
 
 A durable Ledger append is **not** by itself a resumable runtime safe
 boundary. The durable store's complete Ledger ordering is the canonical

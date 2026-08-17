@@ -466,6 +466,153 @@ fn seed_canonical_verifies_the_initial_history() {
     ));
 }
 
+/// Issue #63 bootstrap identity: the durable store records one immutable
+/// bootstrap initial-history identity (exact message count + content
+/// digest) at the first seed, and every reopen must re-supply an initial
+/// history exactly equal to the original — never a shorter prefix, never
+/// an empty replacement, never the same identities with changed content.
+#[test]
+fn initial_history_identity_is_exact() {
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(rustx::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: text_blocks(text),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+    let original = vec![user("msg-a", "A"), user("msg-b", "B")];
+
+    // First bootstrap establishes the identity (and the seed rows).
+    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    store.seed_canonical(&original).expect("first bootstrap");
+    // Grow the durable Ledger beyond the bootstrap boundary, exactly as
+    // live execution does (adopted inbound, assistant facts, ...).
+    store.accept_inbound(human("C")).expect("accept C");
+    store
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .expect("adopt C");
+    drop(store);
+
+    // Reopen with the exact original: accepted even though the Ledger has
+    // grown past the bootstrap boundary.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    reopened
+        .seed_canonical(&original)
+        .expect("the exact original initial history is accepted");
+
+    // A shorter prefix is rejected: the boundary is not inferred from the
+    // current Ledger.
+    assert!(
+        matches!(
+            reopened.seed_canonical(&original[..1]),
+            Err(InboundStoreError::InitialHistoryMismatch)
+        ),
+        "a shorter prefix of the original bootstrap must be rejected"
+    );
+    // An empty replacement of a non-empty bootstrap is rejected.
+    assert!(
+        matches!(
+            reopened.seed_canonical(&[]),
+            Err(InboundStoreError::InitialHistoryMismatch)
+        ),
+        "an empty replacement of a non-empty bootstrap must be rejected"
+    );
+    // The same identities with changed semantic content are rejected.
+    assert!(
+        matches!(
+            reopened.seed_canonical(&[user("msg-a", "changed"), user("msg-b", "B")]),
+            Err(InboundStoreError::InitialHistoryMismatch)
+        ),
+        "changed content under the same identities must be rejected"
+    );
+    // A longer re-supply (original plus extra messages) is rejected.
+    assert!(
+        matches!(
+            reopened.seed_canonical(&[user("msg-a", "A"), user("msg-b", "B"), user("msg-c", "C")]),
+            Err(InboundStoreError::InitialHistoryMismatch)
+        ),
+        "a superset of the original bootstrap must be rejected"
+    );
+    drop(reopened);
+    // The exact original is still accepted after every rejected attempt:
+    // a failed validation mutates nothing.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    reopened
+        .seed_canonical(&original)
+        .expect("rejected validations never consume the identity");
+}
+
+/// Issue #63 bootstrap identity: an explicitly empty initial history is a
+/// valid bootstrap, recorded distinctly from "never initialized" — a later
+/// empty re-supply is accepted and a non-empty one is rejected.
+#[test]
+fn empty_initial_history_is_an_explicit_bootstrap_identity() {
+    let user = |id: &str, text: &str| {
+        MessageBlock::User(rustx::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: text_blocks(text),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    };
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+
+    // First bootstrap with an explicitly empty initial history.
+    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    store
+        .seed_canonical(&[])
+        .expect("an empty initial history is a valid bootstrap");
+    drop(store);
+
+    // Reopen: empty matches the recorded empty bootstrap exactly.
+    let reopened = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("reopen");
+    reopened
+        .seed_canonical(&[])
+        .expect("the recorded empty bootstrap accepts an empty re-supply");
+    // A non-empty re-supply is rejected: "initialized empty" is not
+    // "uninitialized".
+    assert!(
+        matches!(
+            reopened.seed_canonical(&[user("msg-a", "A")]),
+            Err(InboundStoreError::InitialHistoryMismatch)
+        ),
+        "a non-empty re-supply over an empty bootstrap must be rejected"
+    );
+}
+
+/// Issue #63 bootstrap identity: a canonical Ledger that exists without
+/// its bootstrap identity fails closed — the initial-history boundary is
+/// never guessed from the current Ledger content.
+#[test]
+fn ledger_without_bootstrap_identity_fails_closed() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("inbound.db");
+    let store = SqliteInboundStore::open(ConversationId::new("conv-1"), &path).expect("open");
+    // Build canonical content without ever seeding (accepted + adopted
+    // inbound appends to the Ledger directly).
+    store.accept_inbound(human("A")).expect("accept A");
+    store
+        .adopt_pending_batch(rustx::runtime::inbound::InboundSequence::new(1))
+        .expect("adopt A");
+    assert_eq!(store.load_canonical().expect("load").len(), 1);
+
+    // A first seed over an orphan Ledger cannot establish an exact
+    // bootstrap boundary: it fails closed instead of guessing.
+    assert!(
+        matches!(
+            store.seed_canonical(&[]),
+            Err(InboundStoreError::Storage(_))
+        ),
+        "an orphan canonical Ledger fails closed"
+    );
+}
+
 /// Issue #63 (correlation identity): reusing an idempotency key with a
 /// conflicting semantic payload is a typed conflict, never a silent return of
 /// the original acceptance.

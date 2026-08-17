@@ -139,6 +139,16 @@ pub enum RuntimeError {
         /// The tool name the model called.
         name: String,
     },
+    /// The durable canonical authority (the durable Message Ledger /
+    /// Pending Inbound Inbox) rejected a required commit of the active
+    /// attempt. The attempt settles failed, and the owning conversation
+    /// runtime records the durable-authority failure so it cannot return
+    /// to a false healthy state and admit further work as though storage
+    /// were fine (Issue #63).
+    DurableStore {
+        /// Human-readable diagnostic message.
+        message: String,
+    },
     /// The canonical model stream violated its contract (for example a
     /// non-terminal event after the terminal event, or a tool-call delta
     /// referencing an unknown call). The runtime rejects the stream

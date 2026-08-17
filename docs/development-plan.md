@@ -771,17 +771,28 @@ initial messages, adopted inbound `User` messages, `Assistant` messages,
 through the prepare → durable-append → infallible-install seam, not a
 filtered inbound-only prefix. A complete `ToolResult` sibling batch commits
 atomically. The store binds its database to one `ConversationId` and enforces
-that binding on reopen, verifies that re-supplied bootstrap initial messages
-match the persisted prefix, and rejects a correlation retry with a
-conflicting semantic payload.
+that binding on reopen, records an explicit immutable bootstrap
+initial-history identity (exact message count and content digest) at the
+first seed and requires every reopen to re-supply an exactly equal initial
+history, and rejects a correlation retry with a conflicting semantic
+payload.
 
 A durable Ledger append does not by itself imply a resumable runtime safe
 boundary: the `recovery_safety` predicate fails closed on restart for an
 incomplete tool turn or a compaction summary whose Surface `Replace` is not
-yet durably reconstructable, returning a typed `RecoveryRequired`. Persistent
-durable storage failure moves the runtime into an explicit `DurabilityFailed`
-state, and background terminal settlement retains its terminal candidate in
-an explicit `PublishingTerminal` state on publication failure. What remains
+yet durably reconstructable, returning a typed `RecoveryRequired`. Durable
+failure handling is operation-scoped: a transient `select`/`adopt` storage
+failure earns exactly one bounded retry of that same operation before the
+runtime enters the explicit `DurabilityFailed` state, while semantic
+contract failures and already-terminal durable failures (an active
+attempt's canonical-write failure, an exhausted background
+terminal-publication budget) fail closed immediately. Background terminal
+settlement is owned end-to-end by the registry: on publication failure the
+runner retains the terminal candidate in an explicit `PublishingTerminal`
+state, performs one registry-owned retry under the same exactly-once
+correlation, and reports an exhausted budget through the
+`BackgroundDurabilityFailureSink` seam so the owning runtime degrades
+explicitly. What remains
 for #11 is the durability of the remaining canonical domains (the Surface
 revision history needed to replay compaction replacements after restart) and
 full M9 recovery orchestration.

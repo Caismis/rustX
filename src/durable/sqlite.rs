@@ -15,6 +15,13 @@
 //!   authoritative in-memory Message Ledger).
 //! - `store_identity.conversation_id` binds the database to exactly one
 //!   `ConversationId` on first creation and is enforced on every reopen.
+//! - `bootstrap_identity` records the immutable bootstrap initial-history
+//!   identity (exact message count and content digest) established by the
+//!   first `seed_canonical` call; every later seed must match it exactly.
+//!   The initial-history boundary is never inferred from the current
+//!   Ledger length or content, and an explicitly empty bootstrap is
+//!   distinguishable from an uninitialized store by the presence of the
+//!   row.
 //!
 //! The sequence counter lives in `inbox_meta` so it survives adoption (which
 //! deletes pending rows) and restart. There is deliberately no second
@@ -26,7 +33,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use sha2::{Digest, Sha256};
 
 use crate::message::types::{MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
@@ -42,11 +51,17 @@ pub struct SqliteInboundStore {
     conversation_id: ConversationId,
     conn: Arc<Mutex<Connection>>,
     /// Test-only fault hooks, armed around the real transaction commit
-    /// boundary. Never present in production builds.
+    /// boundary. Each counter fails the next N commit attempts of its
+    /// operation. Never present in production builds.
     #[cfg(test)]
-    pub(crate) fail_next_accept_commit: Arc<AtomicBool>,
+    pub(crate) fail_accept_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    pub(crate) fail_next_adopt_commit: Arc<AtomicBool>,
+    pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
+    /// Test-only fault hook: the next N canonical Message Ledger appends
+    /// roll back immediately before their commit (Finding: active-attempt
+    /// durable failure). Never present in production.
+    #[cfg(test)]
+    pub(crate) fail_canonical_append_remaining: Arc<AtomicUsize>,
     /// Test-only fault hook: the next N [`InboundStore::select_pending_batch`]
     /// calls fail with a storage error (Finding 5). Never present in
     /// production.
@@ -120,6 +135,11 @@ impl SqliteInboundStore {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 conversation_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS bootstrap_identity (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                message_count INTEGER NOT NULL,
+                history_digest TEXT NOT NULL
+            );
             INSERT OR IGNORE INTO inbox_meta (key, value)
                 VALUES ('next_inbound_sequence', 0);",
         )
@@ -133,9 +153,11 @@ impl SqliteInboundStore {
             conversation_id,
             conn: Arc::new(Mutex::new(conn)),
             #[cfg(test)]
-            fail_next_accept_commit: Arc::new(AtomicBool::new(false)),
+            fail_accept_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            fail_next_adopt_commit: Arc::new(AtomicBool::new(false)),
+            fail_adopt_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            fail_canonical_append_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
         })
@@ -179,14 +201,36 @@ impl SqliteInboundStore {
     /// (the transaction boundary itself). Test-only.
     #[cfg(test)]
     pub(crate) fn arm_fail_next_accept_commit(&self) {
-        self.fail_next_accept_commit.store(true, Ordering::SeqCst);
+        self.arm_fail_accept_times(1);
+    }
+
+    /// Arms the next `n` acceptances to roll back immediately before their
+    /// commit. Test-only.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_accept_times(&self, n: usize) {
+        self.fail_accept_remaining.fetch_add(n, Ordering::SeqCst);
     }
 
     /// Arms the next adoption to roll back immediately before its commit.
     /// Test-only.
     #[cfg(test)]
     pub(crate) fn arm_fail_next_adopt_commit(&self) {
-        self.fail_next_adopt_commit.store(true, Ordering::SeqCst);
+        self.arm_fail_adopt_times(1);
+    }
+
+    /// Arms the next `n` adoptions to roll back immediately before their
+    /// commit. Test-only.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_adopt_times(&self, n: usize) {
+        self.fail_adopt_remaining.fetch_add(n, Ordering::SeqCst);
+    }
+
+    /// Arms the next `n` canonical Message Ledger appends to roll back
+    /// immediately before their commit. Test-only.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_canonical_append_times(&self, n: usize) {
+        self.fail_canonical_append_remaining
+            .fetch_add(n, Ordering::SeqCst);
     }
 
     /// Arms the next `n` pending selections to fail with a storage error.
@@ -194,6 +238,17 @@ impl SqliteInboundStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_select_times(&self, n: usize) {
         self.fail_select_remaining.fetch_add(n, Ordering::SeqCst);
+    }
+
+    /// Consumes one armed fault of `counter`: returns `true` (and
+    /// decrements) while armed faults remain. Test-only.
+    #[cfg(test)]
+    fn consume_fault(counter: &AtomicUsize) -> bool {
+        counter
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, InboundStoreError> {
@@ -371,7 +426,7 @@ impl InboundStore for SqliteInboundStore {
             .map_err(|error| storage(format!("insert correlation: {error}")))?;
         }
         #[cfg(test)]
-        if self.fail_next_accept_commit.swap(false, Ordering::SeqCst) {
+        if Self::consume_fault(&self.fail_accept_remaining) {
             return Err(storage("fault injected: accept commit"));
         }
         tx.commit()
@@ -482,7 +537,7 @@ impl InboundStore for SqliteInboundStore {
         )
         .map_err(|error| storage(format!("adopt delete: {error}")))?;
         #[cfg(test)]
-        if self.fail_next_adopt_commit.swap(false, Ordering::SeqCst) {
+        if Self::consume_fault(&self.fail_adopt_remaining) {
             return Err(storage("fault injected: adopt commit"));
         }
         tx.commit()
@@ -496,16 +551,46 @@ impl InboundStore for SqliteInboundStore {
     }
 
     fn seed_canonical(&self, messages: &[MessageBlock]) -> Result<(), InboundStoreError> {
-        if messages.is_empty() {
-            return Ok(());
-        }
         let mut conn = self.lock()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("seed transaction: {error}")))?;
-        let existing = load_canonical_rows(&tx)?;
-        if existing.is_empty() {
-            // First creation: seed the exact initial prefix.
+        // The immutable bootstrap initial-history identity of this
+        // conversation. The boundary is never inferred from the current
+        // Ledger: the first seed establishes the explicit identity
+        // (message count + content digest) atomically with the seed rows,
+        // and every later seed must equal it exactly. The row's presence
+        // also distinguishes "initialized with an empty initial history"
+        // from "never initialized".
+        let bootstrap: Option<(i64, String)> = tx
+            .query_row(
+                "SELECT message_count, history_digest FROM bootstrap_identity WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
+        if let Some((stored_count, stored_digest)) = bootstrap {
+            // Reopen: the re-supplied initial history must equal the
+            // originally seeded one exactly — never a shorter prefix,
+            // never an empty replacement (Issue #63 bootstrap
+            // identity).
+            let supplied_digest = initial_history_digest(messages)?;
+            let supplied_count = i64::try_from(messages.len())
+                .map_err(|_| storage("the initial message count is not representable"))?;
+            if supplied_count != stored_count || supplied_digest != stored_digest {
+                return Err(InboundStoreError::InitialHistoryMismatch);
+            }
+        } else {
+            // First bootstrap. A canonical ledger without its bootstrap
+            // identity cannot be validated exactly, so it fails closed
+            // instead of silently adopting a guessed boundary.
+            if !load_canonical_rows(&tx)?.is_empty() {
+                return Err(storage(
+                    "the canonical ledger exists without its bootstrap identity",
+                ));
+            }
+            let digest = initial_history_digest(messages)?;
             let mut position: i64 = 0;
             for message in messages {
                 position = position.checked_add(1).ok_or_else(|| {
@@ -521,18 +606,14 @@ impl InboundStore for SqliteInboundStore {
                 )
                 .map_err(|error| map_insert_error(&error, &id))?;
             }
-        } else {
-            // Reopen: verify the externally supplied initial messages equal
-            // the persisted initial prefix instead of silently ignoring a
-            // mismatch (Issue #63 seed identity).
-            if existing.len() < messages.len()
-                || messages
-                    .iter()
-                    .zip(&existing[..messages.len()])
-                    .any(|(supplied, stored)| supplied != stored)
-            {
-                return Err(InboundStoreError::InitialHistoryMismatch);
-            }
+            let count = i64::try_from(messages.len())
+                .map_err(|_| storage("the initial message count is not representable"))?;
+            tx.execute(
+                "INSERT INTO bootstrap_identity (id, message_count, history_digest)
+                 VALUES (1, ?1, ?2)",
+                rusqlite::params![count, digest],
+            )
+            .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
         }
         tx.commit()
             .map_err(|error| storage(format!("seed commit: {error}")))?;
@@ -587,10 +668,35 @@ impl SqliteInboundStore {
             )
             .map_err(|error| map_insert_error(&error, &id))?;
         }
+        #[cfg(test)]
+        if Self::consume_fault(&self.fail_canonical_append_remaining) {
+            return Err(storage("fault injected: canonical append commit"));
+        }
         tx.commit()
             .map_err(|error| storage(format!("canonical append commit: {error}")))?;
         Ok(())
     }
+}
+
+/// Computes the deterministic digest of one ordered bootstrap initial
+/// history: every message's canonical serialization is length-prefixed and
+/// folded in order, so the digest binds exact content, order, and count.
+fn initial_history_digest(messages: &[MessageBlock]) -> Result<String, InboundStoreError> {
+    use core::fmt::Write as _;
+    let mut hasher = Sha256::new();
+    hasher.update(b"rustx-inbound-bootstrap-v1\n");
+    for message in messages {
+        let json = serde_json::to_vec(message)
+            .map_err(|error| storage(format!("serialize bootstrap: {error}")))?;
+        hasher.update((json.len() as u64).to_be_bytes());
+        hasher.update(json);
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Ok(hex)
 }
 
 /// Loads the durable canonical Message Ledger in commit order.
