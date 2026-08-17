@@ -84,6 +84,11 @@ pub(crate) mod process_supervision;
 /// currently expose `waitid` on Apple targets.
 #[cfg(unix)]
 pub(crate) mod process_wait;
+/// Durable startup recovery (Issue #12, M9a): the reconstruct → classify →
+/// reconcile → resume pipeline the conversation runtime owns. Recovery policy
+/// lives here, above the durable store and below nothing: no client, no
+/// provider adapter, no mailbox, and no background producer participates.
+pub mod recovery;
 /// The runtime-owned provider-neutral request read handle (M8 / Issue #11):
 /// immutable request snapshots are persisted at request start and resolved on
 /// demand from the native durable conversation authority. Not client
@@ -110,6 +115,10 @@ pub use identity::{
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
+};
+pub use recovery::{
+    AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, RecoveryError,
+    RecoveryEvidence, RecoveryPlan, RecoveryReconciliation, RecoveryReport, ResumeDisposition,
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use types::{

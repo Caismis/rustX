@@ -350,6 +350,17 @@ pub enum BackgroundDispatchError {
     },
     /// The execution sequence space is exhausted.
     SequenceExhausted,
+    /// The durable background-ownership fact could not be committed, so the
+    /// detached execution must not begin (Issue #12, M9a).
+    ///
+    /// The prepared dispatch rolls back completely: the runner is aborted
+    /// before its start gate is released, no record is published, and no
+    /// external side effect exists. A restart therefore never has to reason
+    /// about an execution the durable authority never recorded.
+    Durable {
+        /// The bounded durable failure diagnostic.
+        detail: String,
+    },
     /// An internal dispatch failure.
     Internal(String),
 }
@@ -366,6 +377,10 @@ impl core::fmt::Display for BackgroundDispatchError {
                 "conversation {conversation_id} is not activated; a new background ownership commit cannot begin before the owning conversation runtime activates"
             ),
             Self::SequenceExhausted => write!(f, "the execution sequence space is exhausted"),
+            Self::Durable { detail } => write!(
+                f,
+                "the durable background ownership fact could not be committed, so no detached execution was started: {detail}"
+            ),
             Self::Internal(message) => write!(f, "background dispatch failed: {message}"),
         }
     }
@@ -732,7 +747,7 @@ impl ConversationBackgroundRegistry {
             .checked_add(1)
             .ok_or(BackgroundDispatchError::SequenceExhausted)?;
         state.next_execution_sequence = next;
-        let execution_id = ToolExecutionId::new(format!("exec_{next}"));
+        let execution_id = ToolExecutionId::background(next);
         let cancellation = CancellationSignal::new();
         let gate = Arc::new(Notify::new());
         // The effective attempt environment is captured here, at prepare
@@ -846,6 +861,32 @@ impl ConversationBackgroundRegistry {
             prepared.committed = true;
             return Ok(BackgroundDispatchOutcome::RolledBack);
         };
+        // Issue #12 (M9a): the durable ownership fact commits **before** the
+        // runner's start gate is released, so a detached external side effect
+        // can never begin without durable evidence of its `ToolExecutionId`,
+        // its owning tool call, and the fact that ownership committed. On a
+        // durable failure the dispatch rolls back completely — the runner is
+        // aborted while still parked behind its gate — so the crash-recovery
+        // fold never has to reason about an execution the store never saw.
+        let ownership = background_ownership_event(
+            &self.conversation_id,
+            &prepared.execution_id,
+            &prepared_record.record,
+            self.resources.clock.now(),
+        );
+        if let Err(error) = self
+            .resources
+            .mailbox
+            .commit_background_ownership(ownership)
+        {
+            prepared_record.runner.abort();
+            prepared.committed = true;
+            drop(state);
+            self.notify_state_change();
+            return Err(BackgroundDispatchError::Durable {
+                detail: error.to_string(),
+            });
+        }
         let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
         let execution_id = prepared.execution_id.clone();
         let next_index = state.records.len();
@@ -860,6 +901,24 @@ impl ConversationBackgroundRegistry {
             execution_id,
             result,
         })
+    }
+
+    /// Reseeds the deterministic `exec_N` allocator above every ordinal that
+    /// already entered durable authority (Issue #12, M9a).
+    ///
+    /// The registry's execution counter is process-local, so a restart would
+    /// otherwise mint `exec_1` a second time for a different logical
+    /// execution. Startup recovery folds the durable
+    /// `BackgroundExecutionCommitted` facts and installs the watermark here,
+    /// while the runtime is still inactive and no dispatch can commit. The
+    /// allocator only ever moves forward.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the registry lock is poisoned.
+    pub(crate) fn restore_execution_sequence(&self, highest_durable_ordinal: u64) {
+        let mut state = self.state();
+        state.next_execution_sequence = state.next_execution_sequence.max(highest_durable_ordinal);
     }
 
     /// Requests cancellation of one execution and returns the canonical
@@ -1387,6 +1446,32 @@ fn background_terminal_event(
     execution_id: &ToolExecutionId,
     state: BackgroundLifecycle,
 ) -> RuntimeEventEnvelope {
+    background_publication_event(
+        conversation_id,
+        event_id,
+        notification,
+        execution_id,
+        match state {
+            BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
+            BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
+            BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
+            BackgroundLifecycle::Starting
+            | BackgroundLifecycle::Running
+            | BackgroundLifecycle::Cancelling
+            | BackgroundLifecycle::PublishingTerminal => {
+                unreachable!("only terminal background states are published")
+            }
+        },
+    )
+}
+
+fn background_publication_event(
+    conversation_id: &ConversationId,
+    event_id: &EventId,
+    notification: &UserMessageBlock,
+    execution_id: &ToolExecutionId,
+    state: BackgroundTerminalState,
+) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
         schema_version: EVENT_SCHEMA_VERSION,
         event_id: event_id.clone(),
@@ -1400,19 +1485,87 @@ fn background_terminal_event(
         event: RuntimeEvent::BackgroundTerminalPublished {
             execution_id: execution_id.clone(),
             message_id: notification.id.clone(),
-            state: match state {
-                BackgroundLifecycle::Succeeded => BackgroundTerminalState::Succeeded,
-                BackgroundLifecycle::Failed => BackgroundTerminalState::Failed,
-                BackgroundLifecycle::Cancelled => BackgroundTerminalState::Cancelled,
-                BackgroundLifecycle::Starting
-                | BackgroundLifecycle::Running
-                | BackgroundLifecycle::Cancelling
-                | BackgroundLifecycle::PublishingTerminal => {
-                    unreachable!("only terminal background states are published")
-                }
-            },
+            state,
         },
     }
+}
+
+/// The durable ownership fact of one detached execution (Issue #12, M9a).
+///
+/// The fact carries exactly the identity a restart needs to answer "which
+/// `ToolExecutionId` existed, for which `ToolCall`/tool, and was ownership
+/// committed?" — never the invocation arguments, the environment, or any
+/// executor state, all of which are process-local runtime state.
+///
+/// The envelope carries no attempt identity: a committed background execution
+/// deliberately outlives the attempt that dispatched it, so binding the fact
+/// to that attempt's durable lifecycle would make the attempt's own terminal
+/// contradict a still-open background execution.
+fn background_ownership_event(
+    conversation_id: &ConversationId,
+    execution_id: &ToolExecutionId,
+    record: &BackgroundRecord,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> RuntimeEventEnvelope {
+    RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(format!("background-committed-event:{execution_id}")),
+        sequence: 0,
+        conversation_id: conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp,
+        event: RuntimeEvent::BackgroundExecutionCommitted {
+            execution_id: execution_id.clone(),
+            tool_call_id: record.tool_call_id.clone(),
+            tool_id: record.tool_id.clone(),
+            tool_name: record.tool_name.clone(),
+        },
+    }
+}
+
+/// The recovery-generated terminal publication of one detached execution that
+/// was durably owned but never settled before the process restarted (Issue
+/// #12, M9a).
+///
+/// The identity contract is deliberately **identical** to the live settlement
+/// path — the same `MessageId` and the same producer correlation — so a live
+/// publication and a recovery publication are mutually exclusive by
+/// construction: whichever commits first owns the one notification, and the
+/// other is either refused by the durable `background:{execution_id}`
+/// lifecycle terminal or resolved as an idempotent correlation retry.
+///
+/// The published state is [`BackgroundTerminalState::Interrupted`], never
+/// `Failed`: the old task/process did not survive the restart and its actual
+/// external outcome is unknown. Nothing is relaunched.
+pub(crate) fn recovery_terminal_publication(
+    conversation_id: &ConversationId,
+    execution_id: &ToolExecutionId,
+    tool_name: &str,
+    timestamp: chrono::DateTime<chrono::Utc>,
+) -> (InboundDraft, RuntimeEventEnvelope) {
+    let notification = UserMessageBlock {
+        id: MessageId::new(format!("background-{}-terminal", execution_id.as_str())),
+        content: vec![UserContentBlock::Text(TextBlock {
+            text: format!(
+                "Background execution {} ({tool_name}) was interrupted by a runtime restart: \
+                 its actual outcome is unknown and it was not restarted.",
+                execution_id.as_str()
+            ),
+        })],
+        source: UserSource::Runtime,
+        kind: InboundKind::Message,
+        timestamp: Some(timestamp),
+    };
+    let event = background_publication_event(
+        conversation_id,
+        &EventId::new(format!("background-terminal-event:{execution_id}")),
+        &notification,
+        execution_id,
+        BackgroundTerminalState::Interrupted,
+    );
+    let correlation = format!("background-terminal:{}", execution_id.as_str());
+    (inbound_draft(notification, correlation), event)
 }
 
 /// The background progress reporter handed to detached executors: it
@@ -1942,6 +2095,7 @@ mod tests {
     /// exactly once, with exactly one durable terminal inbound under the
     /// stable deterministic correlation.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // One settlement path, asserted end to end.
     async fn first_publication_failure_is_retried_by_the_production_runner() {
         let fixture = file_registry("conv-bg-retry");
         let observer = Arc::new(CollectingObserver::default());
@@ -2035,9 +2189,32 @@ mod tests {
             "the bounded retry used the same deterministic correlation"
         );
         let events = fixture.store.read_events(None, 10).expect("events").events;
-        assert_eq!(events.len(), 1, "terminal publication fact is exactly once");
+        // The durable background lifecycle is exactly two facts: the
+        // ownership commit that preceded the external side effect (Issue #12,
+        // M9a) and the one terminal publication that closes it.
+        assert!(
+            matches!(
+                &events[0].event,
+                RuntimeEvent::BackgroundExecutionCommitted {
+                    execution_id: event_execution,
+                    ..
+                } if event_execution == &execution_id
+            ),
+            "the ownership commit precedes the execution: {:?}",
+            events[0].event
+        );
+        let published: Vec<&RuntimeEvent> = events
+            .iter()
+            .map(|envelope| &envelope.event)
+            .filter(|event| matches!(event, RuntimeEvent::BackgroundTerminalPublished { .. }))
+            .collect();
+        assert_eq!(
+            published.len(),
+            1,
+            "terminal publication fact is exactly once"
+        );
         assert!(matches!(
-            &events[0].event,
+            published[0],
             RuntimeEvent::BackgroundTerminalPublished {
                 execution_id: event_execution,
                 message_id,

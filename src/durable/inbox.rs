@@ -299,13 +299,44 @@ impl core::fmt::Display for ConversationStoreError {
 
 impl std::error::Error for ConversationStoreError {}
 
+/// Commits the durable background-ownership fact of one detached execution
+/// through a store handle, rejecting every other event payload.
+///
+/// The narrow capability must not become a general Event Journal seam: the
+/// background plane may commit exactly the one execution fact that grants it
+/// the right to start a detached side effect, and nothing else.
+fn commit_background_ownership_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::BackgroundExecutionCommitted { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the background capability commits only a background ownership fact".to_owned(),
+        ));
+    }
+    store.append_event(event)
+}
+
 /// The narrow backend-independent capability used by the Pending Inbound
 /// Inbox and its process-local mailbox.
 ///
 /// This capability deliberately exposes no Ledger, Surface, Request Snapshot,
-/// or Event Journal operation. Background/tool code receives this interface
-/// only; the conversation execution plane receives the full
+/// or general Event Journal operation. Background/tool code receives this
+/// interface only; the conversation execution plane receives the full
 /// [`ConversationStore`] separately.
+///
+/// Two — and only two — Event Journal facts are reachable here, both because
+/// they are inseparable from a background execution's own durable ownership:
+///
+/// ```text
+/// commit_background_ownership  -> BackgroundExecutionCommitted   (start commit)
+/// accept_inbound_with_event    -> BackgroundTerminalPublished    (terminal commit)
+/// ```
+///
+/// Each is a typed single-purpose transition, never a generic event append.
 #[allow(clippy::missing_errors_doc)]
 pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// The conversation this capability serves.
@@ -323,6 +354,20 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
         draft: InboundDraft,
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError>;
+
+    /// Commits the durable background-ownership fact of one detached
+    /// execution (Issue #12, M9a).
+    ///
+    /// The commit happens strictly **before** the detached runner's start
+    /// gate is released, so no external background side effect can begin
+    /// without durable evidence of the owning `ToolExecutionId`. The payload
+    /// must be a
+    /// [`RuntimeEvent::BackgroundExecutionCommitted`](crate::events::types::RuntimeEvent::BackgroundExecutionCommitted);
+    /// every other event is rejected.
+    fn commit_background_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
 
     /// Selects a finite pending batch without consuming it.
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError>;
@@ -595,6 +640,13 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         ConversationStore::accept_inbound_with_event(self, draft, event)
     }
 
+    fn commit_background_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_background_ownership_through(self, event)
+    }
+
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
         ConversationStore::select_pending_batch(self)
     }
@@ -636,6 +688,13 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
         self.store.accept_inbound_with_event(draft, event)
+    }
+
+    fn commit_background_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_background_ownership_through(self.store.as_ref(), event)
     }
 
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {

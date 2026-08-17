@@ -323,6 +323,32 @@ pub enum RuntimeEvent {
         /// Human-readable failure message.
         error: String,
     },
+    /// Conversation ownership of one detached background execution
+    /// committed durably (Issue #12, M9a).
+    ///
+    /// This is the **background-start** fact: it commits strictly before the
+    /// runner's start gate is released, so no detached external side effect
+    /// can begin without durable evidence that this `ToolExecutionId`
+    /// existed, which `ToolCall`/tool it belonged to, and that ownership was
+    /// committed. Without it, a process restart could not distinguish "a
+    /// background execution was owned and never settled" from "no background
+    /// execution ever existed", and the deterministic `exec_N` allocator
+    /// could reuse an identity that already entered durable authority.
+    ///
+    /// The fact opens the `background:{execution_id}` durable lifecycle;
+    /// [`RuntimeEvent::BackgroundTerminalPublished`] closes it exactly once.
+    BackgroundExecutionCommitted {
+        /// The detached execution identity allocated by the registry.
+        execution_id: ToolExecutionId,
+        /// The model-issued tool call the execution belongs to.
+        tool_call_id: ToolCallId,
+        /// Identity of the executed tool.
+        tool_id: ToolId,
+        /// The model-facing tool name at dispatch time. Retained so a
+        /// recovery-generated terminal notification can name the tool
+        /// without consulting the current capability set.
+        tool_name: String,
+    },
     /// A detached background execution's terminal inbound notification was
     /// durably accepted. The event is committed in the same transaction as
     /// the Pending Inbound row and references that row by `MessageId`; it never
@@ -343,10 +369,21 @@ pub enum RuntimeEvent {
 pub enum BackgroundTerminalState {
     /// The executor completed successfully.
     Succeeded,
-    /// The executor failed or was interrupted.
+    /// The executor failed.
     Failed,
     /// Cancellation intent won settlement.
     Cancelled,
+    /// The owning process restarted while the execution was non-terminal:
+    /// the detached task/process did not survive the restart and its actual
+    /// external outcome is **unknown** (Issue #12, M9a).
+    ///
+    /// This is deliberately distinct from [`BackgroundTerminalState::Failed`],
+    /// exactly as [`ToolExecutionStatus::Interrupted`] is distinct from
+    /// `Failed`: recovery never converts an unknown outcome into a known
+    /// failure, and it never re-launches the execution.
+    ///
+    /// [`ToolExecutionStatus::Interrupted`]: crate::tools::types::ToolExecutionStatus::Interrupted
+    Interrupted,
 }
 
 /// The normalized failure of an attempt.

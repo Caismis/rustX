@@ -338,6 +338,27 @@ impl CapabilityCoordinator {
         true
     }
 
+    /// Reverts a conversation-runtime claim whose construction then failed.
+    ///
+    /// This exists only so a rejected `ConversationRuntime::new` leaves no
+    /// trace: the claim and the attached lifecycle are released together,
+    /// under the same capability state lock that took them, so the
+    /// coordinator returns to its exact previous standalone state. It is
+    /// never called on drop, and a successfully constructed runtime never
+    /// releases its binding.
+    pub(crate) fn release_conversation_runtime_claim(&self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned");
+        state.conversation_lifecycle = None;
+        self.inner
+            .coordinator_claimed
+            .store(false, Ordering::Release);
+        drop(state);
+    }
+
     /// Whether this coordinator identity is already bound to a conversation
     /// runtime coordinator.
     #[must_use]

@@ -2262,6 +2262,7 @@ fn persist_event_tx(
         });
     }
     validate_event_identity(&event)?;
+    validate_attempt_start_uniqueness(transaction, &event)?;
     validate_event_reference(transaction, &event)?;
     let current: i64 = transaction
         .query_row(
@@ -2369,6 +2370,37 @@ fn validate_event_identity(envelope: &RuntimeEventEnvelope) -> Result<(), Conver
         return Err(ConversationStoreError::InvalidReference(
             "event envelope attempt identity disagrees with its typed payload".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+/// An attempt identity starts exactly once in durable authority (Issue #12,
+/// M9a).
+///
+/// `AttemptStarted` is the first event of every attempt, so its lifecycle key
+/// cannot already exist. Rejecting a second start makes accidental identity
+/// reuse — most importantly a process-local attempt ordinal reset after a
+/// restart — a typed durable failure instead of two logical attempts sharing
+/// one durable identity.
+fn validate_attempt_start_uniqueness(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::AttemptStarted { attempt_id } = &envelope.event else {
+        return Ok(());
+    };
+    let key = format!("attempt:{attempt_id}");
+    let exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+            [&key],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("attempt start uniqueness probe: {error}")))?;
+    if exists {
+        return Err(ConversationStoreError::TerminalViolation(format!(
+            "attempt {attempt_id} already entered durable authority; an attempt identity starts exactly once"
+        )));
     }
     Ok(())
 }
@@ -2669,6 +2701,15 @@ fn ledger_message_exists(
 }
 
 fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
+    // The detached-execution lifecycle is opened by the ownership commit and
+    // closed exactly once by the terminal publication. Recording the open
+    // state durably is what lets a restart tell "owned and unsettled" from
+    // "never existed", and what makes a second terminal publication — live
+    // or recovery-generated — a typed `TerminalViolation` rather than a
+    // duplicate model-visible notification.
+    if let RuntimeEvent::BackgroundExecutionCommitted { execution_id, .. } = &event.event {
+        return vec![(format!("background:{execution_id}"), false)];
+    }
     if let RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } = &event.event {
         return vec![(format!("background:{execution_id}"), true)];
     }

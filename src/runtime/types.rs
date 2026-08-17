@@ -204,6 +204,21 @@ pub enum RuntimeError {
         /// Human-readable diagnostic message.
         message: String,
     },
+    /// The owning runtime process restarted while this attempt was durably
+    /// non-terminal, so startup recovery settled it (Issue #12, M9a).
+    ///
+    /// This error states exactly what rustX knows: the attempt's process-local
+    /// execution state is gone and the attempt can never continue. It is
+    /// **not** a claim about any external work the attempt had started. When a
+    /// model request or a tool execution had already crossed its durable start
+    /// commit, that external outcome stays explicitly unknown — recovery
+    /// records the indeterminate outcome instead of inventing a provider
+    /// failure, and it never resends or re-executes anything.
+    RestartInterrupted {
+        /// The bounded recovery diagnostic: which durable evidence settled
+        /// the attempt and what remained indeterminate.
+        message: String,
+    },
     /// A tool-result observation pass produced deferred context that violates
     /// the bounded deferred-context contract (Issue #56).
     ///

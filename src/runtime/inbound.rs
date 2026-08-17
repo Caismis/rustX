@@ -826,6 +826,27 @@ impl ConversationInboundMailbox {
         Ok((accepted, event))
     }
 
+    /// Commits the durable background-ownership fact of one detached
+    /// execution (Issue #12, M9a).
+    ///
+    /// This is the narrow background start-commit capability: the caller
+    /// receives neither the full conversation store nor a general Event
+    /// Journal append. The commit is the linearization point that grants a
+    /// detached execution the right to begin an external side effect, so the
+    /// background registry performs it strictly before releasing the runner's
+    /// start gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] when the durable authority rejects
+    /// the fact; the caller must then not start the execution.
+    pub(crate) fn commit_background_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_background_ownership(event)?)
+    }
+
     /// Selects the currently pending items as one finite watermark-bounded
     /// batch, without consuming them.
     ///
