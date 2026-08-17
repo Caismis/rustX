@@ -19,7 +19,7 @@
 //!
 //! All synchronization is exact; no sleep participates in any proof.
 
-use super::support;
+use super::{common, support};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -110,7 +110,6 @@ fn try_config(
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
-        durable_store: None,
     })?;
     Ok((
         conversation_runtime.clone(),
@@ -341,7 +340,7 @@ async fn a_second_host_over_the_same_runtime_is_rejected_without_side_effects() 
     // lease.
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
-            if !host_a.request_history().snapshots().is_empty() {
+            if !common::request_snapshots(&host_a.request_history()).is_empty() {
                 return;
             }
             tokio::task::yield_now().await;

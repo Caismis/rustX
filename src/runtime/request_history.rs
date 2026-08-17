@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::durable::{ConversationStore, ConversationStoreError};
+use crate::durable::{ConversationStore, ConversationStoreError, RequestSnapshotPage};
 use crate::model::{ModelRequest, RequestIdentity, RequestSnapshot};
 
 /// A durable request-history read handle for one conversation.
@@ -21,14 +21,6 @@ impl std::fmt::Debug for RequestHistory {
         formatter.write_str("RequestHistory(durable-read-handle)")
     }
 }
-
-impl PartialEq for RequestHistory {
-    fn eq(&self, other: &Self) -> bool {
-        self.snapshots() == other.snapshots()
-    }
-}
-
-impl Eq for RequestHistory {}
 
 /// A request-history lookup or durable reconstruction failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,19 +52,22 @@ impl RequestHistory {
         Self { store }
     }
 
-    /// Loads retained snapshots on demand. The returned vector is a bounded
-    /// read result and is not kept by the runtime.
+    /// Reads one bounded page of retained snapshots in durable request-start
+    /// order. The cursor is exclusive and should be passed back unchanged to
+    /// continue the walk.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the durable store rejects the read. Runtime production paths
-    /// use `reconstruct` for fallible historical reads; this convenience is
-    /// intended for projection/debug views and tests.
-    #[must_use]
-    pub fn snapshots(&self) -> Vec<RequestSnapshot> {
+    /// Returns [`RequestHistoryError::Reconstruction`] when the durable page
+    /// cannot be read or one of its keyed snapshots cannot be reconstructed.
+    pub fn page(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<RequestSnapshotPage, RequestHistoryError> {
         self.store
-            .list_request_snapshots()
-            .expect("durable request snapshot read failed")
+            .read_request_snapshots(after_sequence, limit)
+            .map_err(|error| RequestHistoryError::Reconstruction(error.to_string()))
     }
 
     /// Looks up one immutable snapshot on demand.

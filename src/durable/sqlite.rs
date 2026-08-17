@@ -34,7 +34,7 @@ use crate::runtime::inbound::InboundSequence;
 use super::inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationStore,
     ConversationStoreError, DurableConversationHead, EventPage, InboundDraft, PendingBatch,
-    PendingInboundItem,
+    PendingInboundItem, RequestSnapshotPage,
 };
 
 /// The only schema accepted by this pre-production store. Incompatible
@@ -87,6 +87,12 @@ pub struct SqliteConversationStore {
     pub(crate) fail_request_start_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_event_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) fail_terminal_event_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) terminal_event_attempts: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) request_snapshot_page_reads: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) admission_fault_script: Arc<Mutex<VecDeque<AdmissionFaultOperation>>>,
     #[cfg(test)]
@@ -162,6 +168,12 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_event_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
+            fail_terminal_event_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            terminal_event_attempts: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            request_snapshot_page_reads: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
             admission_fault_script: Arc::new(Mutex::new(VecDeque::new())),
             #[cfg(test)]
             compaction_fault_script: Arc::new(Mutex::new(VecDeque::new())),
@@ -222,6 +234,22 @@ impl SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_event_times(&self, count: usize) {
         self.fail_event_remaining.fetch_add(count, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_fail_next_terminal_event(&self) {
+        self.fail_terminal_event_remaining
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn terminal_event_attempts(&self) -> usize {
+        self.terminal_event_attempts.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_snapshot_page_reads(&self) -> usize {
+        self.request_snapshot_page_reads.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]
@@ -925,20 +953,51 @@ impl ConversationStore for SqliteConversationStore {
         })
     }
 
-    fn list_request_snapshots(&self) -> Result<Vec<RequestSnapshot>, ConversationStoreError> {
+    fn read_request_snapshots(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<RequestSnapshotPage, ConversationStoreError> {
+        #[cfg(test)]
+        self.request_snapshot_page_reads
+            .fetch_add(1, Ordering::SeqCst);
         let connection = self.lock()?;
+        let after = seq_to_i64(after_sequence.unwrap_or(0))?;
+        let limit = i64::try_from(limit)
+            .map_err(|_| storage("request snapshot page limit is too large"))?;
         let mut statement = connection
-            .prepare("SELECT snapshot_json FROM request_snapshots ORDER BY started_sequence IS NULL, started_sequence, request_id")
-            .map_err(|error| storage(format!("request snapshot list: {error}")))?;
+            .prepare(
+                "SELECT request_id,started_sequence FROM request_snapshots
+                 WHERE started_sequence IS NOT NULL AND started_sequence > ?1
+                 ORDER BY started_sequence, request_id LIMIT ?2",
+            )
+            .map_err(|error| storage(format!("request snapshot page: {error}")))?;
         let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|error| storage(format!("request snapshot list query: {error}")))?;
-        rows.map(|row| {
-            let json =
-                row.map_err(|error| storage(format!("request snapshot list row: {error}")))?;
-            decode(&json, "request snapshot list")
+            .query_map(params![after, limit], |row| {
+                let request_id: String = row.get(0)?;
+                let sequence: i64 = row.get(1)?;
+                Ok((request_id, sequence))
+            })
+            .map_err(|error| storage(format!("request snapshot page query: {error}")))?;
+        let rows: Vec<(RequestId, u64)> = rows
+            .map(|row| {
+                let (request_id, sequence) =
+                    row.map_err(|error| storage(format!("request snapshot page row: {error}")))?;
+                Ok((RequestId::new(request_id), sequence_from_i64(sequence)?))
+            })
+            .collect::<Result<_, ConversationStoreError>>()?;
+        drop(statement);
+        drop(connection);
+
+        let next_sequence = rows.last().map(|(_, sequence)| *sequence);
+        let snapshots = rows
+            .into_iter()
+            .map(|(request_id, _)| self.load_request_snapshot(&request_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RequestSnapshotPage {
+            snapshots,
+            next_sequence,
         })
-        .collect()
     }
 
     fn append_event(
@@ -954,6 +1013,20 @@ impl ConversationStore for SqliteConversationStore {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("event transaction: {error}")))?;
+        #[cfg(test)]
+        if matches!(
+            &event.event,
+            RuntimeEvent::AttemptCompleted { .. }
+                | RuntimeEvent::AttemptCancelled { .. }
+                | RuntimeEvent::AttemptTimedOut { .. }
+                | RuntimeEvent::AttemptLimitExceeded { .. }
+                | RuntimeEvent::AttemptFailed { .. }
+        ) {
+            self.terminal_event_attempts.fetch_add(1, Ordering::SeqCst);
+            if Self::consume(&self.fail_terminal_event_remaining) {
+                return Err(storage("fault injected: terminal event commit"));
+            }
+        }
         #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: event commit"));
@@ -3191,11 +3264,23 @@ mod tests {
         );
         store.arm_fail_request_start_times(1);
         assert!(store.persist_request_start(&snapshot, Utc::now()).is_err());
-        assert!(store.list_request_snapshots().unwrap().is_empty());
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
         assert!(store.read_events(None, 20).unwrap().events.is_empty());
         store.arm_fail_event_times(1);
         assert!(store.persist_request_start(&snapshot, Utc::now()).is_err());
-        assert!(store.list_request_snapshots().unwrap().is_empty());
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .unwrap()
+                .snapshots
+                .is_empty()
+        );
 
         let started = store.persist_request_start(&snapshot, Utc::now()).unwrap();
         assert_eq!(started.sequence, 1);
@@ -3234,13 +3319,98 @@ mod tests {
                 .unwrap(),
             expected
         );
-        assert_eq!(reopened.list_request_snapshots().unwrap().len(), 1);
+        assert_eq!(
+            reopened
+                .read_request_snapshots(None, 32)
+                .unwrap()
+                .snapshots
+                .len(),
+            1
+        );
         assert_eq!(
             reopened
                 .persist_request_start(&snapshot, Utc::now())
                 .unwrap()
                 .sequence,
             1
+        );
+    }
+
+    #[test]
+    fn request_snapshot_history_is_bounded_and_cursor_paged() {
+        let store = store();
+        let message = user_message("request-page-message", "request page");
+        store.initialize(std::slice::from_ref(&message)).unwrap();
+        let revision = store.load_head().unwrap().revision;
+
+        for index in 0..7_u64 {
+            let snapshot = RequestSnapshot::new(
+                RequestIdentity {
+                    attempt_id: AttemptId::new(format!("request-page-attempt-{index}")),
+                    turn: TurnId::new("1"),
+                    retry_number: 0,
+                },
+                revision,
+                "frozen".to_owned(),
+                invocation(),
+                1024,
+                None,
+                false,
+                Vec::new(),
+                crate::runtime::identity::CapabilityRevision::new(1),
+                ContextGeneration {
+                    id: index,
+                    contributors: Vec::new(),
+                },
+                None,
+            );
+            store
+                .persist_request_start(&snapshot, Utc::now())
+                .expect("persist request snapshot");
+        }
+
+        let empty = store.read_request_snapshots(None, 0).expect("empty page");
+        assert!(empty.snapshots.is_empty());
+        assert_eq!(empty.next_sequence, None);
+
+        let page_one = store.read_request_snapshots(None, 3).expect("first page");
+        let page_two = store
+            .read_request_snapshots(page_one.next_sequence, 3)
+            .expect("second page");
+        let page_three = store
+            .read_request_snapshots(page_two.next_sequence, 3)
+            .expect("third page");
+        let page_four = store
+            .read_request_snapshots(page_three.next_sequence, 3)
+            .expect("terminal empty page");
+
+        assert_eq!(page_one.snapshots.len(), 3);
+        assert_eq!(page_two.snapshots.len(), 3);
+        assert_eq!(page_three.snapshots.len(), 1);
+        assert_eq!(page_one.next_sequence, Some(3));
+        assert_eq!(page_two.next_sequence, Some(6));
+        assert_eq!(page_three.next_sequence, Some(7));
+        assert!(page_four.snapshots.is_empty());
+        assert_eq!(page_four.next_sequence, None);
+
+        let pages = [page_one, page_two, page_three];
+        let mut ids = Vec::new();
+        for page in pages {
+            for snapshot in page.snapshots {
+                assert!(
+                    !ids.contains(&snapshot.request_id),
+                    "cursor pages must not repeat a Request Snapshot"
+                );
+                ids.push(snapshot.request_id);
+            }
+        }
+        assert_eq!(ids.len(), 7);
+        assert_eq!(
+            store
+                .load_request_snapshot(&ids[4])
+                .expect("keyed snapshot lookup")
+                .request_id,
+            ids[4]
         );
     }
 

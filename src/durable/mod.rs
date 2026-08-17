@@ -47,7 +47,7 @@ pub mod sqlite;
 
 pub use inbox::{
     AcceptedInbound, CanonicalMessagePage, CompactionCommitInput, ConversationInboundCapability,
-    ConversationStore, ConversationStoreError, DurableConversationHead, EventPage, InboundDraft,
-    PendingBatch, PendingInboundItem,
+    ConversationStore, ConversationStoreBinding, ConversationStoreError, DurableConversationHead,
+    EventPage, InboundDraft, PendingBatch, PendingInboundItem, RequestSnapshotPage,
 };
 pub use sqlite::SqliteConversationStore;

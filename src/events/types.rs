@@ -9,17 +9,20 @@
 //! ```
 //!
 //! Streaming model deltas and tool progress are events, never message blocks.
-//! Events are append-only and persist before external publication through the
-//! durable `ConversationStore`. The envelope owns the durable identity and
-//! ordering: an explicit schema version, a monotonic sequence, and a stable
-//! event id, plus conversation/attempt/turn identity and a UTC timestamp.
+//! Events are append-only and a successful durable append commits before
+//! external publication through the durable `ConversationStore`. If a
+//! required append fails, the event is not published or fabricated in a
+//! local projection. The envelope owns the durable identity and ordering: an
+//! explicit schema version, a monotonic sequence, and a stable event id, plus
+//! conversation/attempt/turn identity and a UTC timestamp.
 //!
 //! AG-UI is an output projection of these events and is never the internal
 //! representation.
 //!
 //! ## Attempt settlement
 //!
-//! Exactly one terminal event settles an attempt. The terminal events are
+//! A normally settled attempt has exactly one committed terminal event. The
+//! terminal events are
 //! [`RuntimeEvent::AttemptCompleted`], [`RuntimeEvent::AttemptCancelled`],
 //! [`RuntimeEvent::AttemptTimedOut`],
 //! [`RuntimeEvent::AttemptLimitExceeded`], and
@@ -27,7 +30,11 @@
 //! [`AttemptOutcome`] variants. A terminal event carries only the data valid
 //! for that state: in particular `AttemptCompleted` carries a finish reason
 //! and no outcome payload, so a failed/cancelled/timed-out attempt can never
-//! be encoded as a completion. Unknown payload fields are rejected.
+//! be encoded as a completion. Unknown payload fields are rejected. The
+//! Agent Loop keeps its execution settlement candidate separately; if the
+//! final terminal append fails, no terminal event exists and the result
+//! reports the typed durable failure instead of deriving an outcome from a
+//! fabricated event.
 //!
 //! ## Committed messages
 //!
@@ -369,11 +376,11 @@ pub enum AttemptFailure {
 ///
 /// Provider finish reasons, runtime cancellation, timeout, limit exhaustion,
 /// and runtime failure are distinct and are never collapsed into one string.
-/// The relationship to terminal runtime events is one-to-one: each terminal
-/// [`RuntimeEvent`] maps to exactly one [`AttemptOutcome`] variant via
-/// [`AttemptOutcome::from_terminal_event`], and no non-terminal event maps
-/// to an outcome. The Agent Loop (M3) consumes this platform-level
-/// projection.
+/// When a terminal runtime event is durably committed, it maps one-to-one to
+/// an [`AttemptOutcome`] variant via
+/// [`AttemptOutcome::from_terminal_event`], and no non-terminal event maps to
+/// an outcome. The Agent Loop (M3) also reports an execution settlement
+/// candidate separately when the required terminal append fails.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AttemptOutcome {

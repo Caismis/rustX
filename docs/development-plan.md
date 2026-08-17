@@ -157,9 +157,10 @@ drain, safe-boundary agent-loop integration, and the deterministic
 mailbox/race/agent-loop/M4/provider test coverage. The remaining
 cross-issue acceptance work — Agent Status integration with the drained
 batch — is implemented by the Agent Status PR (issue-7/agent-status).
-Background runtime producers are implemented by Issue #8 (M5); M8 now owns
-the durable ConversationStore behind the mailbox while mailbox coordination
-and restart recovery policy remain separate concerns.
+Background runtime producers are implemented by Issue #8 (M5); M8 now
+composes one `ConversationStoreBinding` per conversation and derives the
+narrow mailbox capability from it, while mailbox coordination and restart
+recovery policy remain separate concerns.
 
 Exit criteria:
 
@@ -459,8 +460,9 @@ Implemented in the current architecture:
   futures settle against a finite immutable input before the final generic
   admission cancellation observation.
 - The ConversationStore durably freezes every actual primary snapshot at
-  request start. `RequestHistory` is a bounded read handle over those facts,
-  retaining no second transcript or unbounded snapshot vector.
+  request start. `RequestHistory` is a bounded, fallible, cursor-paged read
+  handle over those facts, retaining no second transcript or unbounded
+  snapshot vector.
 - Generic pre-admission cancellation linearization, no rollback after
   admission, and bounded overflow compact-and-retry that reuses the accepted
   context generation without reinvoking contributors.
@@ -537,7 +539,8 @@ Implemented in the current architecture:
   staged, and again in assembly.
 - Typed failure settlement: `PreStepRejected`, `PreStepPolicyFailed`,
   `ToolResultObservationFailed`, and `DeferredContextRejected`, each
-  preserving exactly one terminal event.
+  preserving one terminal settlement candidate; the terminal Event Journal
+  fact is published only after its durable append succeeds.
 
 ## Milestone 7.75 — Conversation runtime coordination extraction (Issue #61)
 

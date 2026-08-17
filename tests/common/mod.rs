@@ -403,6 +403,27 @@ fn tool_runtime_dir(conversation_id: &str) -> std::path::PathBuf {
     ))
 }
 
+/// Test-only full walk over the bounded `RequestHistory` page API.
+///
+/// Production code must choose an explicit page size; this helper is kept in
+/// the test support module so tests can compare complete retained histories
+/// without restoring an unbounded production API.
+pub fn request_snapshots(
+    history: &rustx::runtime::RequestHistory,
+) -> Vec<rustx::model::RequestSnapshot> {
+    let mut snapshots = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = history.page(cursor, 32).expect("request snapshot page");
+        if page.snapshots.is_empty() {
+            break;
+        }
+        cursor = page.next_sequence;
+        snapshots.extend(page.snapshots);
+    }
+    snapshots
+}
+
 /// A conversation tool runtime over a unique temporary workspace.
 ///
 /// Fake tools never touch the workspace, but the durable store now holds the
@@ -418,26 +439,6 @@ pub fn tool_runtime(conversation_id: &str) -> rustx::tools::runtime::Conversatio
         rustx::runtime::identity::ConversationId::new(conversation_id),
         dir.join("workspace"),
         dir.join("artifacts"),
-    )
-    .expect("tool runtime")
-}
-
-/// A conversation tool runtime bound to an explicitly configured canonical
-/// conversation mailbox.
-#[must_use]
-pub fn tool_runtime_with_mailbox(
-    conversation_id: &str,
-    mailbox: rustx::runtime::inbound::ConversationInboundMailbox,
-) -> rustx::tools::runtime::ConversationToolRuntime {
-    use rustx::tools::runtime::ConversationRuntimeConfig;
-    let dir = tool_runtime_dir(conversation_id);
-    let _ = std::fs::create_dir_all(dir.join("workspace"));
-    rustx::tools::runtime::ConversationToolRuntime::from_config(
-        rustx::runtime::identity::ConversationId::new(conversation_id),
-        ConversationRuntimeConfig {
-            mailbox: Some(mailbox),
-            ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
-        },
     )
     .expect("tool runtime")
 }
@@ -515,13 +516,12 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         )
         .expect("durable store"),
     );
-    let mailbox = rustx::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
     let environment = rustx::tools::environment::ToolEnvironment::from_authorized(environment)
         .expect("authorized environment");
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id,
         ConversationRuntimeConfig {
-            mailbox: Some(mailbox.clone()),
+            durable_binding: Some(rustx::durable::ConversationStoreBinding::new(store.clone())),
             environment: Some(environment),
             ..ConversationRuntimeConfig::new(&workspace_root, &artifacts)
         },
@@ -536,6 +536,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         rustx::tools::native::NativeToolPolicies::default(),
     )
     .expect("native tool registration");
+    let mailbox = runtime.mailbox();
     NativeFixture {
         _dir: dir,
         runtime,

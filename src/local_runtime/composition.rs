@@ -295,7 +295,6 @@ impl LocalConversationCore {
             capability: capability.clone(),
             clock: None,
             initial_messages: Vec::new(),
-            durable_store: None,
         })?;
 
         Ok(Self {

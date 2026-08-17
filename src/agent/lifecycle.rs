@@ -146,7 +146,8 @@ use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
 /// attempt's terminal outcome: the Agent Loop maps a pre-step failure to
 /// [`RuntimeError::PreStepPolicyFailed`] and an observation failure to
 /// [`RuntimeError::ToolResultObservationFailed`], and settles the attempt
-/// with exactly one terminal event.
+/// with the attempt terminal settlement; successful durable publication
+/// commits the corresponding terminal event.
 ///
 /// [`RuntimeError::PreStepPolicyFailed`]: crate::runtime::types::RuntimeError::PreStepPolicyFailed
 /// [`RuntimeError::ToolResultObservationFailed`]: crate::runtime::types::RuntimeError::ToolResultObservationFailed
@@ -397,7 +398,8 @@ pub trait ToolResultObserver: Send + Sync {
     /// bounded observation. The already-committed Assistant `ToolCall`
     /// message and its complete canonical `ToolMessage` batch are unaffected;
     /// the Agent Loop discards every proposal of the failed pass and settles
-    /// the attempt with exactly one terminal event.
+    /// the attempt; the terminal event is published only after its durable
+    /// append succeeds.
     fn observe_tool_result<'a>(
         &'a self,
         observation: &'a ToolResultObservation<'a>,

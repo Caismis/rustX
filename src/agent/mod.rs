@@ -5,7 +5,8 @@
 //!
 //! - [`AgentExecution`] executes one attempt: model request → canonical
 //!   `ModelEvent` stream → message assembly → optional tool execution →
-//!   continuation → exactly one terminal `RuntimeEvent`.
+//!   continuation → one terminal settlement candidate, normally committed as
+//!   exactly one terminal `RuntimeEvent`.
 //! - [`ExecutionStateMachine`] makes the attempt lifecycle explicit
 //!   (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`,
 //!   with failure/cancellation settling from any active state).
@@ -31,7 +32,9 @@ pub mod state;
 
 pub use crate::runtime::inbound::InitialTurnTrigger;
 pub use cancellation::AgentCancellation;
-pub use execution::{AgentExecution, AgentExecutionRequest, AgentExecutionResult};
+pub use execution::{
+    AgentExecution, AgentExecutionRequest, AgentExecutionResult, DurableFailureKind,
+};
 pub use lifecycle::{
     AlwaysEnter, AttemptLifecycle, LifecycleError, NoDeferredContext, ObservedToolInvocation,
     PreStepBatch, PreStepDecision, PreStepPolicy, RegisteredToolResultObserver,

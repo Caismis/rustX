@@ -8,6 +8,8 @@
 //! strategy trait: the operations are the rustX semantic transitions a
 //! `PostgreSQL` backend must reproduce exactly.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 
 use crate::conversation::{SurfaceRevision, SurfaceSpan};
@@ -142,6 +144,61 @@ pub struct EventPage {
     pub events: Vec<RuntimeEventEnvelope>,
     /// The last event sequence in this page, when non-empty.
     pub next_sequence: Option<u64>,
+}
+
+/// A bounded page of immutable Request Snapshots.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequestSnapshotPage {
+    /// Snapshots ordered by their durable `ModelRequestStarted` sequence.
+    pub snapshots: Vec<RequestSnapshot>,
+    /// The exclusive cursor for the next page, when this page is non-empty.
+    pub next_sequence: Option<u64>,
+}
+
+/// The one composition-time binding of a conversation's durable authority.
+///
+/// A binding owns the full backend-independent store handle and is the only
+/// production composition object from which the narrow inbound capability is
+/// derived. Keeping those handles together means a mailbox cannot be selected
+/// independently from the full store used by the conversation runtime.
+#[derive(Clone)]
+pub struct ConversationStoreBinding {
+    store: Arc<dyn ConversationStore>,
+}
+
+impl std::fmt::Debug for ConversationStoreBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConversationStoreBinding")
+            .field("conversation_id", self.store.conversation_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ConversationStoreBinding {
+    /// Binds one full durable authority for composition.
+    #[must_use]
+    pub fn new(store: Arc<dyn ConversationStore>) -> Self {
+        Self { store }
+    }
+
+    /// The conversation identity enforced by the bound store.
+    #[must_use]
+    pub fn conversation_id(&self) -> &ConversationId {
+        self.store.conversation_id()
+    }
+
+    /// Returns the full authority to the owning conversation runtime.
+    pub(crate) fn full_store(&self) -> Arc<dyn ConversationStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Derives the narrow producer capability from this same authority.
+    pub(crate) fn inbound_capability(&self) -> Arc<dyn ConversationInboundCapability> {
+        Arc::new(StoreInboundCapability {
+            store: Arc::clone(&self.store),
+        })
+    }
 }
 
 /// A `ConversationStore` contract violation or storage failure.
@@ -491,9 +548,14 @@ pub trait ConversationStore: Send + Sync + 'static {
         request_id: &RequestId,
     ) -> Result<ModelRequest, ConversationStoreError>;
 
-    /// Lists immutable request snapshots on demand. The returned collection is
-    /// a read result, never a long-lived runtime authority.
-    fn list_request_snapshots(&self) -> Result<Vec<RequestSnapshot>, ConversationStoreError>;
+    /// Reads a bounded page of immutable Request Snapshots in durable request
+    /// start order. `after_sequence` is an exclusive Event Journal sequence
+    /// cursor; the returned cursor is the last snapshot's start sequence.
+    fn read_request_snapshots(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<RequestSnapshotPage, ConversationStoreError>;
 
     /// Appends one standalone execution fact after validating every durable
     /// reference and lifecycle terminal rule. Canonical-message,
@@ -546,6 +608,49 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         ConversationStore::load_pending(self)
+    }
+}
+
+/// Erases the full store behind the narrow capability exposed by one binding.
+/// The wrapper carries the same store handle; it does not create another
+/// durable authority or another identity domain.
+struct StoreInboundCapability {
+    store: Arc<dyn ConversationStore>,
+}
+
+impl ConversationInboundCapability for StoreInboundCapability {
+    fn conversation_id(&self) -> &ConversationId {
+        self.store.conversation_id()
+    }
+
+    fn accept_inbound(
+        &self,
+        draft: InboundDraft,
+    ) -> Result<AcceptedInbound, ConversationStoreError> {
+        self.store.accept_inbound(draft)
+    }
+
+    fn accept_inbound_with_event(
+        &self,
+        draft: InboundDraft,
+        event: RuntimeEventEnvelope,
+    ) -> Result<(AcceptedInbound, RuntimeEventEnvelope), ConversationStoreError> {
+        self.store.accept_inbound_with_event(draft, event)
+    }
+
+    fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
+        self.store.select_pending_batch()
+    }
+
+    fn adopt_pending_batch(
+        &self,
+        watermark: InboundSequence,
+    ) -> Result<Vec<MessageBlock>, ConversationStoreError> {
+        self.store.adopt_pending_batch(watermark)
+    }
+
+    fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+        self.store.load_pending()
     }
 }
 

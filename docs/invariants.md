@@ -94,20 +94,31 @@ Surface revision and request snapshot / request-start fact.
 
 ## Attempt settlement
 
-Exactly one terminal runtime event settles an attempt: `AttemptCompleted`, `AttemptCancelled`, `AttemptTimedOut`, `AttemptLimitExceeded`, or `AttemptFailed`. Each terminal event carries only the data valid for that state and maps one-to-one to an `AttemptOutcome`. A completed attempt can never encode a failed, cancelled, or timed-out outcome. When an attempt fails because a model request exhausted its retry policy, the normalized model error is preserved.
+Normally exactly one terminal runtime event is durably committed for an
+attempt: `AttemptCompleted`, `AttemptCancelled`, `AttemptTimedOut`,
+`AttemptLimitExceeded`, or `AttemptFailed`. Each committed terminal event
+carries only the data valid for that state and maps one-to-one to an
+`AttemptOutcome`. A completed attempt can never encode a failed, cancelled,
+or timed-out outcome. If the required terminal append fails, the execution
+settlement candidate is returned with a typed Event Journal failure, but no
+terminal event enters the local trace, observer stream, or durable Journal.
+When an attempt fails because a model request exhausted its retry policy, the
+normalized model error is preserved.
 
 ## Agent loop (M3)
 
 The agent loop executes one attempt against the canonical `ModelEvent`
-stream and exactly one terminal `RuntimeEvent`:
+stream and normally commits exactly one terminal `RuntimeEvent`:
 
 - The attempt lifecycle is an explicit state machine
   (`Idle → RunningModel → WaitingForTool → RunningModel → Completed`),
   and failure or cancellation settles from any active state. The machine
   is the settlement authority: it settles (`complete()` for success,
   `fail()` for failure and cancellation) immediately before the single
-  attempt terminal `RuntimeEvent` is emitted, so the terminal event and
-  the terminal execution state represent the same settlement boundary.
+  attempt terminal `RuntimeEvent` is attempted, so a successful terminal
+  append and the terminal execution state represent the same settlement
+  boundary. A failed terminal append is reported as durable failure without
+  fabricating an event.
   Impossible transitions are rejected; a terminal state is absorbing.
 
 - The loop owns tool execution: every model-issued tool call resolves
@@ -750,14 +761,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   it at every safe boundary. An attempt over a tool runtime of a different
   conversation is rejected structurally.
 - A `ConversationToolRuntime` may only contain resources belonging to its
-  own `ConversationId`: a configured mailbox must belong to the same
-  conversation as the runtime, and the mismatch is rejected at construction
-  (before the background registry is built) with a typed
-  `MailboxConversationMismatch` error. An omitted mailbox constructs the
-  canonical mailbox of the runtime's own conversation, so
+  own `ConversationId`: it composes one `ConversationStoreBinding`, derives
+  the narrow mailbox capability and full store handle from that same binding,
+  and rejects a binding for another conversation before the background
+  registry is built with typed `DurableConversationMismatch`.
   `request.conversation_id == tool_runtime.conversation_id ==
   tool_runtime.mailbox().conversation_id == background_registry.conversation_id`
-  holds structurally.
+  therefore holds structurally, and no production configuration can split
+  mailbox and full-store authority.
 - The artifact store and the model workspace are disjoint filesystem
   regions: construction rejects an artifact root that equals the workspace
   root, nests inside it, or contains it — including symlink-resolved
@@ -1213,8 +1224,9 @@ message role, history shape, or timestamps:
   state, while `ConversationStore::persist_request_start` is the durable
   authority. `RequestHistory` is a read handle over durable snapshots, not a
   long-lived `Vec<RequestSnapshot>`. Lookup by RequestId reconstructs from
-  the retained snapshot and exact SurfaceRevision on demand; no transcript
-  or second history authority is created.
+  the retained snapshot and exact SurfaceRevision on demand; page reads are
+  bounded, cursor-based, and fallible. No transcript or second history
+  authority is created.
 
 ## Typed lifecycle interception (Issue #56)
 
@@ -1352,7 +1364,9 @@ Core invariant:
   `AttemptFailed(Runtime(ToolResultObservationFailed { message }))`. The
   finalized results stay canonical and unchanged, no second result appears,
   the batch is never partial, no provider request begins afterwards, and the
-  attempt emits exactly one terminal event, last.
+  attempt commits exactly one terminal event, last, when the required Event
+  Journal append succeeds; an append failure remains an explicit durable
+  failure with no fabricated event.
 - The pass is one transaction. Any failure — a failing observer, a bound
   violation, or invalid content — discards every proposal of the pass,
   including proposals earlier observations of the same pass already produced,
@@ -1786,6 +1800,10 @@ semantic normalization boundary. The frozen invariants:
   can replace the Runtime Client observer by another route.
 - **The `ConversationToolRuntime` is the one conversation authority at the
   conversation runtime and Runtime Client host boundary.**
+  It composes one `ConversationStoreBinding`; the narrow mailbox capability
+  and the full `ConversationStore` handle are both derived from that binding,
+  so no production configuration can pair independent mailbox and full-store
+  authorities.
   `RuntimeConversationConfig` and `RuntimeClientHostConfig` carry no
   conversation id: `ConversationRuntime::new` derives the coordinator's
   conversation identity from `ConversationToolRuntime::conversation_id`,
@@ -1913,7 +1931,10 @@ endpoint. It frames; it never becomes a second authority.
 
 ## Durability
 
-Production runtime events are persisted before external publication.
+Production runtime events are persisted before external publication when the
+append succeeds. A required terminal append failure publishes neither the
+terminal fact nor a synthetic substitute; the owning runtime enters its
+explicit durable-failure state.
 
 A complete canonical Assistant message is committed only after a model
 response has been successfully assembled. Partial model deltas may be durable

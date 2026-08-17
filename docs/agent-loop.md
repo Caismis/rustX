@@ -9,7 +9,8 @@ mailbox integration.
 
 The loop (`src/agent`) executes one attempt to its single terminal outcome:
 
-- attempt lifecycle (`AttemptStarted` → exactly one terminal event)
+- attempt lifecycle (`AttemptStarted` → one terminal settlement candidate,
+  normally one committed terminal event)
 - turn lifecycle (one model response plus its tool calls and results)
 - canonical `ModelEvent` stream consumption, validation, and message assembly
 - tool resolution and tool execution (in deterministic block order)
@@ -212,8 +213,9 @@ the exact `ModelRequestStarted` fact together. `RequestHistory` (now
 `src/runtime/request_history.rs`) is a durable read handle, never a retained
 snapshot vector or client projection state. Historical reconstruction loads
 one snapshot, its exact Surface revision, and keyed Ledger bodies on demand.
-No current model settings, contributors, Skills, clock, or status fill
-historical gaps.
+Historical listing is a bounded, fallible, cursor-paged read; no current model
+settings, contributors, Skills, clock, or status fill historical gaps, and
+runtime bootstrap never enumerates the full snapshot history.
 
 The loop's `observe_event`/`observe_committed`/`observe_status` facts are
 published as runtime-owned `ConversationObservation`s
@@ -564,7 +566,10 @@ drained by the very next primary step's assembly.
 | cancellation already observable when the batch settles | the observation phase is skipped entirely; `AttemptCancelled` |
 | cancellation while an observation is pending | the bounded observation settles; the staged proposals are never admitted; `AttemptCancelled` |
 
-In every case the attempt emits exactly one terminal event and it is last.
+In every case the attempt selects one terminal settlement candidate. When the
+required Event Journal append succeeds, that candidate is the one terminal
+event and it is last; if the append fails, no terminal event is emitted or
+fabricated and the typed durable failure is reported to the owner.
 Because the observation pass runs strictly after structural settlement,
 observer failure can never prevent a committed Assistant `ToolCall` batch from
 receiving its complete canonical `ToolMessage` result batch, and it can never
@@ -624,14 +629,15 @@ missing counters are never fabricated.
 
 ## 6. Terminal state guarantee
 
-Exactly one terminal `RuntimeEvent` settles an attempt:
+Normally exactly one terminal `RuntimeEvent` settles an attempt:
 `AttemptCompleted`, `AttemptCancelled`, or `AttemptFailed`. The terminal
-event is always the last recorded event, the platform outcome maps
-one-to-one from it (`AttemptOutcome::from_terminal_event`), and the loop
-structure makes later events impossible. The execution state machine is
-settled immediately before the terminal event is emitted, so the machine's
-terminal state (`Completed` or `Failed`) and the terminal event describe
-the same settlement.
+event is the last recorded event when its durable append succeeds, the
+platform outcome maps one-to-one from it
+(`AttemptOutcome::from_terminal_event`), and the loop structure makes later
+events impossible. The execution state machine is settled immediately before
+the terminal event append is attempted. A failed append leaves the machine
+terminal and the execution result with its settlement candidate, but no
+terminal Journal fact or observer event.
 
 ## 7. Cancellation
 

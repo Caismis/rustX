@@ -469,7 +469,10 @@ provider-neutral request. `ConversationStore::persist_request_start` commits
 that immutable snapshot and its `ModelRequestStarted` Event Journal fact in
 one transaction before the adapter is invoked. `RequestHistory` is a durable
 read handle, not an append-only `Vec<RequestSnapshot>` and not a second
-transcript.
+transcript. Keyed lookup reconstructs one request on demand; historical
+listing uses a bounded, fallible page with an exclusive durable sequence
+cursor, so runtime bootstrap and normal admission never enumerate the full
+history.
 
 `ConversationStore::reconstruct_model_request` loads one snapshot, replays its
 immutable Surface revision, and resolves only the referenced Ledger bodies.

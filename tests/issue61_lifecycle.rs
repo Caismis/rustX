@@ -331,7 +331,7 @@ async fn headless_production_turn_runs_without_any_client_host() {
         "the real resolved binding drove the request"
     );
     assert_eq!(
-        runtime.runtime().request_history().snapshots().len(),
+        common::request_snapshots(&runtime.runtime().request_history()).len(),
         1,
         "the settled attempt retained its request facts"
     );

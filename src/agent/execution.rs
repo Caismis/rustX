@@ -33,7 +33,7 @@
 //!  ↓
 //! continuation (or proactive compaction / compact-and-retry on overflow)
 //!  ↓
-//! exactly one terminal RuntimeEvent
+//! terminal settlement candidate → durable terminal RuntimeEvent when commit succeeds
 //! ```
 //!
 //! Ownership: the loop owns execution semantics, message assembly, tool
@@ -169,14 +169,39 @@ pub struct AgentExecutionRequest {
     pub model: AttemptModelSnapshot,
 }
 
+/// The durable authority stage that failed while an attempt was executing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurableFailureKind {
+    /// A canonical Message Ledger/Surface commit failed.
+    CanonicalCommit,
+    /// The immutable request-start snapshot/event transaction failed.
+    RequestStart,
+    /// The atomic compaction transition failed.
+    Compaction,
+    /// A standalone or terminal Event Journal append failed.
+    EventJournal,
+}
+
+impl DurableFailureKind {
+    /// The stable coordinator diagnostic name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CanonicalCommit => "canonical_commit",
+            Self::RequestStart => "request_start",
+            Self::Compaction => "compaction",
+            Self::EventJournal => "event_journal",
+        }
+    }
+}
+
 /// The deterministic result of one attempt execution.
 ///
-/// The recorded [`RuntimeEvent`] trace is the attempt-local projection of
-/// events persisted by the durable Event Journal; the platform-level outcome
-/// maps one-to-one with the single terminal event, and the committed messages
-/// are the final hot conversation state of the attempt. The terminal
-/// execution state is the state-machine settlement that produced the terminal
-/// event: they always represent the same settlement boundary.
+/// The recorded [`RuntimeEvent`] trace contains only events that committed to
+/// the durable Event Journal. The `outcome` field is the execution
+/// state-machine settlement candidate; it remains meaningful when the final
+/// terminal Event Journal append fails, in which case `events` deliberately
+/// contains no terminal fact and `durable_failure_kind` is `EventJournal`.
 ///
 /// `conversation` is the bounded current working state handed back to the
 /// host: active Ledger bodies and the current Conversation Surface. The
@@ -186,14 +211,18 @@ pub struct AgentExecutionRequest {
 pub struct AgentExecutionResult {
     /// The executed attempt.
     pub attempt_id: AttemptId,
-    /// The one-to-one platform outcome of the single terminal event.
+    /// The platform outcome of the execution settlement candidate. For a
+    /// normally settled attempt it is also the outcome of the one committed
+    /// terminal event; a terminal Event Journal failure can leave that event
+    /// absent while this value remains available to the coordinator.
     pub outcome: AttemptOutcome,
     /// The terminal state-machine settlement that produced the terminal
     /// event: [`ExecutionState::Completed`] for successful settlement and
     /// [`ExecutionState::Failed`] for failure and cancellation settlement.
     pub terminal_state: ExecutionState,
-    /// The ordered runtime event trace, ending with exactly one terminal
-    /// event.
+    /// The ordered runtime event trace of committed Event Journal facts. A
+    /// terminal persistence failure intentionally leaves this without a
+    /// terminal event.
     pub events: Vec<RuntimeEvent>,
     /// The bounded current conversation read model, transferred back to the
     /// runtime. Historical durable facts remain in `ConversationStore`.
@@ -209,6 +238,8 @@ pub struct AgentExecutionResult {
     /// durable commit installed nothing — but the durable authority itself
     /// is marked failed.
     pub durable_failure: Option<String>,
+    /// The typed durable stage associated with [`Self::durable_failure`].
+    pub durable_failure_kind: Option<DurableFailureKind>,
     /// Frozen provider-neutral snapshots for every actual primary request,
     /// including a bounded overflow retry when one occurred.
     pub request_snapshots: Vec<RequestSnapshot>,
@@ -270,6 +301,7 @@ pub struct AgentExecution<'a> {
     /// after an active-attempt durable failure, regardless of how the
     /// terminal outcome itself is classified.
     durable_failure: Option<String>,
+    durable_failure_kind: Option<DurableFailureKind>,
     pending_continuation: Option<ProviderContinuationState>,
     /// The committed Assistant message that established the pending
     /// continuation, when one is pending.
@@ -369,6 +401,22 @@ enum Terminal {
     Failed { failure: AttemptFailure },
 }
 
+impl Terminal {
+    /// Projects the execution state-machine settlement candidate without
+    /// requiring a durable terminal event to exist.
+    fn outcome(&self) -> AttemptOutcome {
+        match self {
+            Self::Completed { finish_reason } => AttemptOutcome::Completed {
+                finish_reason: finish_reason.clone(),
+            },
+            Self::Cancelled { reason } => AttemptOutcome::Cancelled { reason: *reason },
+            Self::Failed { failure } => AttemptOutcome::Failed {
+                error: failure.clone(),
+            },
+        }
+    }
+}
+
 /// A canonical commit failure in the attempt loop.
 ///
 /// The prepare → durable → install canonical-commit seam (Issue #63, Finding
@@ -450,21 +498,8 @@ impl<'a> AgentExecution<'a> {
                 actual: tool_runtime.conversation_id().clone(),
             });
         }
-        let store = tool_runtime
-            .durable_store_path()
-            .ok_or_else(|| {
-                MailboxError::Durable(crate::durable::inbox::ConversationStoreError::Storage(
-                    "a custom inbound capability requires an explicit execution store".to_owned(),
-                ))
-            })
-            .and_then(|path| {
-                crate::durable::SqliteConversationStore::open(request.conversation_id.clone(), path)
-                    .map(|store| {
-                        std::sync::Arc::new(store) as std::sync::Arc<dyn ConversationStore>
-                    })
-                    .map_err(MailboxError::Durable)
-            })?;
-        Self::new_with_store(
+        let store = tool_runtime.durable_store();
+        Self::new_bound(
             request,
             capability,
             cancellation,
@@ -475,9 +510,9 @@ impl<'a> AgentExecution<'a> {
         )
     }
 
-    /// Creates an attempt over a full conversation durability authority that
-    /// was opened by the conversation runtime. Tool/background code never
-    /// receives this handle; it receives only the mailbox capability.
+    /// Completes construction over the full authority obtained from the
+    /// conversation tool runtime's single composition binding. This helper
+    /// is private so callers cannot pair an arbitrary store with a mailbox.
     ///
     /// # Errors
     ///
@@ -486,7 +521,7 @@ impl<'a> AgentExecution<'a> {
     /// [`MailboxError::Durable`] when the supplied authority belongs to a
     /// different conversation, cannot load its current head, or cannot
     /// initialize the standalone fixture history.
-    pub fn new_with_store(
+    fn new_bound(
         request: AgentExecutionRequest,
         capability: AttemptCapabilityLease,
         cancellation: &'a AgentCancellation,
@@ -546,6 +581,7 @@ impl<'a> AgentExecution<'a> {
             state: ExecutionStateMachine::new(),
             events: Vec::new(),
             durable_failure: None,
+            durable_failure_kind: None,
             pending_continuation: None,
             continuation_owner: None,
             pending_fresh_inbound: None,
@@ -579,20 +615,19 @@ impl<'a> AgentExecution<'a> {
         self.observer = Some(observer);
     }
 
-    /// Runs the attempt to its single terminal outcome.
+    /// Runs the attempt to its execution settlement candidate.
     ///
     /// The execution state machine is the settlement authority: the machine
     /// is settled (`complete()` for success, `fail()` for failure and
     /// cancellation) immediately before the single attempt terminal
-    /// `RuntimeEvent` is emitted, so the terminal event and the terminal
-    /// state represent the same settlement boundary.
+    /// `RuntimeEvent` is attempted. A terminal Event Journal append failure
+    /// does not fabricate an event; the result reports that durable failure
+    /// separately.
     ///
     /// # Panics
     ///
-    /// Panics only when the loop violates its own invariants (the state
-    /// machine rejects the settlement, an attempt that never settles, or a
-    /// terminal event that does not map to an outcome); these are
-    /// unreachable by construction.
+    /// Panics only when the loop violates its own state-machine invariants;
+    /// a durable terminal write failure is an explicit result, not a panic.
     pub async fn run(mut self) -> AgentExecutionResult {
         self.emit(RuntimeEvent::AttemptStarted {
             attempt_id: self.request.attempt_id.clone(),
@@ -665,9 +700,7 @@ impl<'a> AgentExecution<'a> {
         };
         self.settle(&terminal);
         self.emit_terminal(&terminal);
-        let terminal_event = self.events.last().expect("terminal event emitted");
-        let outcome =
-            AttemptOutcome::from_terminal_event(terminal_event).expect("terminal maps to outcome");
+        let outcome = terminal.outcome();
         AgentExecutionResult {
             attempt_id: self.request.attempt_id,
             outcome,
@@ -675,6 +708,7 @@ impl<'a> AgentExecution<'a> {
             events: self.events,
             conversation: self.conversation,
             durable_failure: self.durable_failure,
+            durable_failure_kind: self.durable_failure_kind,
             request_snapshots: self.request_snapshots,
         }
     }
@@ -1357,6 +1391,7 @@ impl<'a> AgentExecution<'a> {
             .store
             .persist_request_start(&snapshot, Utc::now())
             .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
                 self.durable_failure = Some(format!(
                     "request start could not be committed durably: {error}"
                 ));
@@ -1369,6 +1404,7 @@ impl<'a> AgentExecution<'a> {
             .store
             .reconstruct_model_request(&snapshot.request_id)
             .map_err(|error| {
+                self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
                 self.durable_failure = Some(format!(
                     "durable request reconstruction failed after start: {error}"
                 ));
@@ -1378,6 +1414,7 @@ impl<'a> AgentExecution<'a> {
                 ))
             })?;
         if reconstructed != request {
+            self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
             self.durable_failure = Some(
                 "durable request reconstruction differs from the live provider-neutral request"
                     .to_owned(),
@@ -1530,6 +1567,7 @@ impl<'a> AgentExecution<'a> {
         error: &dyn core::fmt::Display,
     ) -> Terminal {
         let message = format!("{context}: {error}");
+        self.durable_failure_kind = Some(DurableFailureKind::CanonicalCommit);
         self.durable_failure = Some(message.clone());
         Terminal::Failed {
             failure: AttemptFailure::Runtime {
@@ -1786,6 +1824,7 @@ impl<'a> AgentExecution<'a> {
                     // durable-authority failure (Issue #11): the terminal is
                     // classified as a compaction failure and the owning
                     // runtime is marked unhealthy.
+                    self.durable_failure_kind = Some(DurableFailureKind::Compaction);
                     self.durable_failure = Some(format!(
                         "the compaction transition cannot be committed durably: {error}"
                     ));
@@ -2822,6 +2861,7 @@ impl<'a> AgentExecution<'a> {
         match self.store.append_event(self.event_envelope(event)) {
             Ok(envelope) => self.record_persisted_event(envelope),
             Err(error) => {
+                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
                 self.durable_failure = Some(format!(
                     "runtime event could not be persisted before publication: {error}"
                 ));
@@ -2846,13 +2886,16 @@ impl<'a> AgentExecution<'a> {
         };
         debug_assert!(!self.terminal_emitted, "exactly one terminal event");
         self.terminal_emitted = true;
-        match self.store.append_event(self.event_envelope(event.clone())) {
+        match self.store.append_event(self.event_envelope(event)) {
             Ok(envelope) => self.record_persisted_event(envelope),
             Err(error) => {
+                // The execution state machine has settled, but the durable
+                // Event Journal has not. The uncommitted candidate must never
+                // enter the persisted-event projection or observer stream.
+                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
                 self.durable_failure = Some(format!(
                     "terminal event could not be persisted before publication: {error}"
                 ));
-                self.events.push(event);
             }
         }
     }
@@ -3079,13 +3122,14 @@ mod test_sync {
 mod tests {
     use crate::conversation::ConversationState;
     use crate::durable::inbox::ConversationStore;
-    use crate::events::types::RuntimeEvent;
+    use crate::events::types::{AttemptOutcome, RuntimeEvent};
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     use futures_util::future::BoxFuture;
     use tokio::sync::watch;
 
+    use crate::agent::observer::{AgentExecutionObserver, AgentStatusObservation};
     use crate::message::types::{
         ContentBlockIndex, ContextKind, InboundKind, MessageBlock, UserContentBlock,
         UserMessageBlock, UserSource,
@@ -3100,7 +3144,7 @@ mod tests {
     use crate::runtime::identity::{
         AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
     };
-    use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
+    use crate::runtime::inbound::InitialTurnTrigger;
     use crate::runtime::types::CancellationReason;
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::{ToolExecutor, ToolRegistry};
@@ -3168,6 +3212,24 @@ mod tests {
                 .unwrap_or_default();
             Box::pin(futures_util::stream::iter(script))
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingObserver {
+        events: Mutex<Vec<RuntimeEvent>>,
+    }
+
+    impl AgentExecutionObserver for RecordingObserver {
+        fn observe_event(&self, _attempt_id: &AttemptId, event: &RuntimeEvent) {
+            self.events
+                .lock()
+                .expect("observer event lock")
+                .push(event.clone());
+        }
+
+        fn observe_committed(&self, _attempt_id: &AttemptId, _block: &MessageBlock) {}
+
+        fn observe_status(&self, _observation: &AgentStatusObservation) {}
     }
 
     /// A contributor whose bounded work is explicitly held at an awaited
@@ -3266,13 +3328,13 @@ mod tests {
     /// request, so no compaction ever triggers in these tests.
     /// A conversation tool runtime over a temporary workspace.
     fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
-        tool_runtime_with_mailbox(None)
+        tool_runtime_with_store(None)
     }
 
     /// A conversation tool runtime over a temporary workspace with an
-    /// optional explicitly configured conversation mailbox.
-    fn tool_runtime_with_mailbox(
-        mailbox: Option<ConversationInboundMailbox>,
+    /// optional explicitly configured durable authority.
+    fn tool_runtime_with_store(
+        store: Option<Arc<dyn ConversationStore>>,
     ) -> crate::tools::runtime::ConversationToolRuntime {
         use crate::tools::runtime::ConversationRuntimeConfig;
         let dir = std::env::temp_dir().join(format!(
@@ -3284,7 +3346,7 @@ mod tests {
         crate::tools::runtime::ConversationToolRuntime::from_config(
             ConversationId::new("conv-1"),
             ConversationRuntimeConfig {
-                mailbox,
+                durable_binding: store.map(crate::durable::ConversationStoreBinding::new),
                 ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
             },
         )
@@ -3511,19 +3573,17 @@ mod tests {
                 .expect("in-memory store"),
         );
         store.arm_fail_request_start_times(1);
-        let mailbox = ConversationInboundMailbox::over_store(store.clone());
-        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox));
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
 
-        let result = AgentExecution::new_with_store(
+        let result = AgentExecution::new(
             request(&adapter),
             lease,
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
-            store.clone(),
             crate::agent::AttemptLifecycle::inert(),
         )
         .expect("execution construction")
@@ -3538,8 +3598,9 @@ mod tests {
         assert!(result.durable_failure.is_some());
         assert!(
             store
-                .list_request_snapshots()
+                .read_request_snapshots(None, 32)
                 .expect("request snapshots")
+                .snapshots
                 .is_empty()
         );
         assert!(
@@ -3550,6 +3611,104 @@ mod tests {
                 .iter()
                 .any(|envelope| matches!(envelope.event, RuntimeEvent::ModelRequestStarted { .. }))
         );
+    }
+
+    /// A terminal Event Journal append is a required durable publication.
+    /// If it fails, the execution settlement candidate remains available to
+    /// the caller, but neither the local event projection nor an observer may
+    /// fabricate the uncommitted terminal fact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        store.arm_fail_next_terminal_event();
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let observer = RecordingObserver::default();
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("execution construction");
+        execution.observe(&observer);
+
+        let result = execution.run().await;
+
+        assert!(matches!(
+            result.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        ));
+        assert_eq!(
+            result.durable_failure_kind,
+            Some(super::DurableFailureKind::EventJournal)
+        );
+        assert!(result.durable_failure.is_some());
+        assert!(
+            !result.events.iter().any(|event| matches!(
+                event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )),
+            "an uncommitted terminal candidate never enters the local projection"
+        );
+        assert!(
+            !observer
+                .events
+                .lock()
+                .expect("observer event lock")
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    RuntimeEvent::AttemptCompleted { .. }
+                        | RuntimeEvent::AttemptCancelled { .. }
+                        | RuntimeEvent::AttemptTimedOut { .. }
+                        | RuntimeEvent::AttemptLimitExceeded { .. }
+                        | RuntimeEvent::AttemptFailed { .. }
+                )),
+            "publication follows the durable Event Journal commit"
+        );
+        let persisted = store.read_events(None, 64).expect("event journal").events;
+        assert!(
+            persisted
+                .iter()
+                .any(|envelope| matches!(envelope.event, RuntimeEvent::AttemptStarted { .. }))
+        );
+        assert!(
+            !persisted.iter().any(|envelope| matches!(
+                envelope.event,
+                RuntimeEvent::AttemptCompleted { .. }
+                    | RuntimeEvent::AttemptCancelled { .. }
+                    | RuntimeEvent::AttemptTimedOut { .. }
+                    | RuntimeEvent::AttemptLimitExceeded { .. }
+                    | RuntimeEvent::AttemptFailed { .. }
+            )),
+            "the failed terminal transaction leaves no durable terminal fact"
+        );
+        assert_eq!(store.terminal_event_attempts(), 1);
     }
 
     #[tokio::test]
@@ -3986,7 +4145,8 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        let mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-a", "A"))
             .expect("enqueue A before the attempt");
@@ -3994,15 +4154,13 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let execution = AgentExecution::new_with_store(
+        let execution = AgentExecution::new(
             request(&adapter),
             lease,
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
-            store,
             crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");
@@ -4154,7 +4312,8 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        let mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-human", "hello"))
             .expect("accept the human message");
@@ -4196,7 +4355,6 @@ mod tests {
             .register(tool.definition.clone(), Arc::new(tool))
             .expect("register bg tool");
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime_with_mailbox(Some(mailbox.clone()));
         let background = tool_runtime.background().clone();
         let (pause, mut pause_reached, pause_release) = ContinuationBoundaryPause::install();
         let controller = tokio::spawn(async move {
@@ -4232,13 +4390,12 @@ mod tests {
                 .expect("release the second continuation boundary");
         });
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
-        let execution = AgentExecution::new_with_store(
+        let execution = AgentExecution::new(
             request(&adapter),
             lease,
             &cancellation,
             runtime(&adapter),
             &tool_runtime,
-            store,
             crate::agent::AttemptLifecycle::inert(),
         )
         .expect("conversation identity matches the tool runtime");

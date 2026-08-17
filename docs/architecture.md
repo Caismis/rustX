@@ -318,8 +318,8 @@ reasoning-enabled state.
 
 ### 2.2 Attempt settlement invariant
 
-Exactly one terminal runtime event settles an attempt, and each terminal
-event carries only the data valid for that state:
+Normally exactly one terminal runtime event is durably committed for an
+attempt, and each terminal event carries only the data valid for that state:
 
 ```text
 AttemptCompleted      finish reason
@@ -336,6 +336,12 @@ type maps one-to-one with these terminal events via
 `AttemptOutcome::from_terminal_event`. When an attempt fails because a model
 request exhausted its retry policy, `AttemptFailure::Model` preserves the
 normalized `ModelError` without degrading it to a runtime error string.
+
+The Agent Loop settles its execution state before attempting the terminal
+Event Journal append. If that required append fails, no terminal event is
+published or fabricated in the local trace; the typed execution result carries
+the settlement candidate and the durable failure, and the owning runtime
+enters `DurabilityFailed`.
 
 ### 2.3 Streaming assembly identity
 
@@ -499,7 +505,7 @@ ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
         |
 deterministic scheduling phases (sequential barriers, parallel groups)
         |
-RuntimeEvent trace, ending in exactly one terminal event
+RuntimeEvent trace, ending in one terminal event when its durable append succeeds
 ```
 
 The loop owns execution semantics, message assembly, tool execution,
@@ -508,9 +514,10 @@ trace. Adapters own provider protocol translation only; the validating
 [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
 [`ToolExecutor`] implementations and never falls back id-first.
 Continuation state propagates losslessly without fabrication, cancellation
-always settles as a terminal cancellation, and every attempt emits exactly
-one terminal `RuntimeEvent`. See `docs/agent-loop.md` for the full
-boundary description.
+always settles as a terminal cancellation candidate, and a normally settled
+attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append
+is an explicit durable failure, not a fabricated event. See
+`docs/agent-loop.md` for the full boundary description.
 
 The M3 test suite drives the loop with scripted fixture models and tools
 (`tests/common/fake.rs`), asserts behavior through the recorded
@@ -823,9 +830,9 @@ During execution, `AgentExecution` keeps only the current attempt's bounded
 request references. At request start the ConversationStore durably commits
 the immutable snapshot and its `ModelRequestStarted` fact. The runtime's
 `RequestHistory` is now a durable read handle, not a `Vec<RequestSnapshot>`
-and not a second transcript. Historical inspection loads one snapshot and
-reconstructs its exact Surface revision on demand; it does not retain every
-request in process memory.
+and not a second transcript. Historical inspection either loads one snapshot
+by key or reads a bounded, fallible page with an exclusive sequence cursor;
+it never retains every request in process memory.
 
 An overflow retry reuses the admitted ContextGeneration and canonical
 context facts. `ContextWindowExceeded` does not prove that fresh inbound was
@@ -1012,7 +1019,8 @@ definitions reach the model in deterministic registration order, and the
 context engine accounts the exact compiled definitions.
 
 One conversation owns one `ConversationToolRuntime`, constructed exactly
-once from a bounded `ConversationRuntimeConfig` that binds the mailbox,
+once from a bounded `ConversationRuntimeConfig` that binds one
+`ConversationStoreBinding` (the mailbox capability is derived from it),
 the clock, the event sink, the environment, the workspace, and the
 artifact store; after construction the conversation background registry
 identity and its execution records are stable and can never be replaced
@@ -3075,11 +3083,19 @@ RuntimeEvent = execution fact
 MessageBlock = model-context fact
 ```
 
-Runtime events are append-only. In production, events must be persisted before being published to external subscribers.
+Runtime events are append-only. In production, a successful Event Journal
+append must commit before the event is published to external subscribers. A
+failed required terminal append publishes neither the terminal event nor a
+synthetic replacement; the owning runtime reports the durable failure.
 
 Partial model deltas are execution facts. A canonical `AssistantMessageBlock` is committed only when a complete model response has been assembled. The model plane communicates through the normalized `ModelEvent` streaming protocol, which is an adapter-to-kernel fact stream and is never inserted into the canonical conversation history; the agent kernel assembles one `AssistantMessageBlock` from it.
 
-Exactly one terminal runtime event settles an attempt (see section 2.2). Committed-message events reference the message by identity only: canonical message content exists solely in the Message Ledger, and the Event Journal records the commit fact (see section 2.5).
+Normally exactly one terminal runtime event settles an attempt (see section
+2.2). If its required append fails, the attempt has a typed settlement
+candidate but no terminal Journal fact. Committed-message events reference
+the message by identity only: canonical message content exists solely in the
+Message Ledger, and the Event Journal records the commit fact (see section
+2.5).
 
 Persist-before-publish is the frozen event-publication invariant:
 

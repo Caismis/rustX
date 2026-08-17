@@ -1327,6 +1327,7 @@ mod tests {
         InboundAdmissionError, ModelUpdateError, RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId, ToolCallId, ToolExecutionId, ToolId};
+    use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::RuntimeClock;
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::HostConstructionError;
@@ -1345,6 +1346,20 @@ mod tests {
         ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
         ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
     };
+
+    fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
+        let mut snapshots = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = history.page(cursor, 32).expect("request snapshot page");
+            if page.snapshots.is_empty() {
+                break;
+            }
+            cursor = page.next_sequence;
+            snapshots.extend(page.snapshots);
+        }
+        snapshots
+    }
 
     /// One scripted step of the gated adapter.
     enum GatedStep {
@@ -1674,7 +1689,6 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
-            durable_store: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -1745,7 +1759,6 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
-                durable_store: None,
             },
             probe,
         )
@@ -2052,8 +2065,9 @@ mod tests {
         // current configuration nor a live contributor is consulted.
         let requests = adapter.requests();
         let history = fixture.host.request_history();
-        assert_eq!(history.snapshots().len(), 1);
-        let retained = history.snapshots()[0].clone();
+        let snapshots = request_snapshots(&history);
+        assert_eq!(snapshots.len(), 1);
+        let retained = snapshots[0].clone();
         let mut live_config = fixture.runtime.model_config();
         live_config.request_params.insert(
             "live_mutation".to_owned(),
@@ -2139,22 +2153,21 @@ mod tests {
         await_request_history_len(&fixture.host, 3).await;
 
         let history = fixture.host.request_history();
-        assert_eq!(history.snapshots().len(), 3);
-        assert_eq!(history.snapshots()[0].identity.retry_number, 0);
-        assert_eq!(history.snapshots()[1].identity.retry_number, 0);
-        assert_eq!(history.snapshots()[2].identity.retry_number, 1);
+        let snapshots = request_snapshots(&history);
+        assert_eq!(snapshots.len(), 3);
+        assert_eq!(snapshots[0].identity.retry_number, 0);
+        assert_eq!(snapshots[1].identity.retry_number, 0);
+        assert_eq!(snapshots[2].identity.retry_number, 1);
         assert_eq!(
-            history.snapshots()[1].identity.attempt_id,
-            history.snapshots()[2].identity.attempt_id
+            snapshots[1].identity.attempt_id,
+            snapshots[2].identity.attempt_id
         );
         assert_eq!(
-            history.snapshots()[1].context_generation,
-            history.snapshots()[2].context_generation,
+            snapshots[1].context_generation, snapshots[2].context_generation,
             "overflow retry keeps the one admitted context generation"
         );
         assert_ne!(
-            history.snapshots()[1].surface_revision,
-            history.snapshots()[2].surface_revision,
+            snapshots[1].surface_revision, snapshots[2].surface_revision,
             "compaction gives the retry its own historical Surface revision"
         );
 
@@ -2164,7 +2177,7 @@ mod tests {
             4,
             "three primary requests plus summary"
         );
-        for (snapshot, request) in history.snapshots().iter().zip([
+        for (snapshot, request) in snapshots.iter().zip([
             &provider_requests[0],
             &provider_requests[1],
             &provider_requests[3],
@@ -2207,7 +2220,7 @@ mod tests {
     async fn await_request_history_len(host: &RuntimeClientHost, expected: usize) {
         tokio::time::timeout(std::time::Duration::from_secs(120), async {
             loop {
-                if host.request_history().snapshots().len() == expected {
+                if request_snapshots(&host.request_history()).len() == expected {
                     return;
                 }
                 tokio::task::yield_now().await;
@@ -4515,7 +4528,7 @@ mod tests {
         assert!(committed.revision() > revision_at_admission);
         let history = fixture.host.request_history();
         assert_eq!(
-            history.snapshots()[0].capability_revision,
+            request_snapshots(&history)[0].capability_revision,
             revision_at_admission,
             "the later capability change never retroactively mutates the admitted attempt"
         );
@@ -4570,7 +4583,6 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
-            durable_store: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::with_probe(
@@ -4645,7 +4657,6 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
-                durable_store: None,
             },
             runtime_probe,
         )
@@ -4729,7 +4740,6 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
-            durable_store: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5284,7 +5294,6 @@ mod tests {
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
-            durable_store: None,
         }
     }
 

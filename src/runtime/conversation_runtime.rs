@@ -249,7 +249,7 @@ use crate::capabilities::{CapabilityCoordinator, CapabilityObserver, CapabilityS
 use crate::context::tokens::TokenEstimator;
 use crate::context::{AgentStatusComposer, ContextRuntime, SessionContextPolicy};
 use crate::conversation::ConversationState;
-use crate::durable::{ConversationStore, InboundDraft, SqliteConversationStore};
+use crate::durable::{ConversationStore, InboundDraft};
 use crate::events::types::RuntimeEvent;
 use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use crate::model::catalog::ModelCatalogView;
@@ -425,11 +425,6 @@ pub struct RuntimeConversationConfig {
     /// The conversation tool runtime (owns the canonical mailbox and the
     /// authoritative background registry).
     pub tool_runtime: ConversationToolRuntime,
-    /// The full conversation durability authority. When omitted, the runtime
-    /// opens the default file-backed store located by the tool runtime. A
-    /// custom mailbox capability (for example an in-memory test backend) must
-    /// supply the matching full store explicitly here.
-    pub durable_store: Option<Arc<dyn ConversationStore>>,
     /// The capability coordinator (owns the active capability snapshot).
     pub capability: CapabilityCoordinator,
     /// The runtime clock stamping submitted inbound messages; the system
@@ -481,6 +476,8 @@ enum DurableOperation {
     IncompleteToolTurn,
     /// An active attempt hit a durable canonical-write failure.
     CanonicalCommit,
+    /// An active attempt could not append a required Event Journal fact.
+    EventJournal,
     /// The background settlement owner exhausted its bounded terminal
     /// publication budget.
     BackgroundTerminalPublication,
@@ -501,6 +498,7 @@ impl DurableOperation {
             Self::PrepareAdoption => "prepare_adoption",
             Self::IncompleteToolTurn => "incomplete_tool_turn",
             Self::CanonicalCommit => "canonical_commit",
+            Self::EventJournal => "event_journal",
             Self::BackgroundTerminalPublication => "background_terminal_publication",
         }
     }
@@ -1180,13 +1178,12 @@ impl RuntimeInner {
             timezone: self.timezone,
             model,
         };
-        let mut execution = AgentExecution::new_with_store(
+        let mut execution = AgentExecution::new(
             request,
             lease,
             cancellation,
             context_runtime,
             &self.tool_runtime,
-            Arc::clone(&self.store),
             // The identity lifecycle configuration: enter every step, defer
             // no context. The runtime has no native pre-step policy or
             // tool-result observer consumer, exactly as it has no certified
@@ -1232,11 +1229,17 @@ impl RuntimeInner {
             let durable_failure = result.durable_failure.clone();
             state.conversation = Some(result.conversation);
             if let Some(diagnostic) = durable_failure {
-                self.record_durability_failure(
-                    &mut state,
-                    DurableOperation::CanonicalCommit,
-                    diagnostic,
-                );
+                let operation = match result.durable_failure_kind {
+                    Some(crate::agent::DurableFailureKind::Compaction) => {
+                        DurableOperation::CanonicalCommit
+                    }
+                    Some(
+                        crate::agent::DurableFailureKind::RequestStart
+                        | crate::agent::DurableFailureKind::EventJournal,
+                    ) => DurableOperation::EventJournal,
+                    _ => DurableOperation::CanonicalCommit,
+                };
+                self.record_durability_failure(&mut state, operation, diagnostic);
             }
             if state
                 .current_attempt
@@ -1612,30 +1615,12 @@ impl ConversationRuntime {
         // admission, where there is no caller left to report to.
         validate_context_policy(&config.context.policy, &config.model.snapshot())
             .map_err(|error| ConversationRuntimeError::Context(error.message))?;
-        // The durable store is the sole authority for bootstrap, current
-        // Surface identity/order, and keyed active Ledger hydration. The
-        // runtime owns this full handle; the tool/background plane only has
-        // the mailbox's narrow inbound capability.
-        let store: Arc<dyn ConversationStore> = if let Some(store) = config.durable_store {
-            store
-        } else {
-            let Some(path) = config.tool_runtime.durable_store_path() else {
-                return Err(ConversationRuntimeError::Storage(
-                    "a custom inbound capability requires an explicit durable_store".to_owned(),
-                ));
-            };
-            Arc::new(
-                SqliteConversationStore::open(conversation_id.clone(), path)
-                    .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?,
-            )
-        };
-        if store.conversation_id() != &conversation_id {
-            return Err(ConversationRuntimeError::Storage(format!(
-                "the configured durable store belongs to {}, not {}",
-                store.conversation_id(),
-                conversation_id
-            )));
-        }
+        // The durable store is composed once by the tool runtime's
+        // `ConversationStoreBinding`. The runtime receives the full handle
+        // from that binding, while the mailbox/background plane receives
+        // only the derived narrow capability. An independently selected
+        // mailbox and store therefore have no production construction path.
+        let store = config.tool_runtime.durable_store();
         store
             .initialize(&config.initial_messages)
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
@@ -2663,9 +2648,24 @@ mod tests {
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::identity::{AgentId, ConversationId};
     use crate::runtime::observation::ConversationObservation;
+    use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
+
+    fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
+        let mut snapshots = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = history.page(cursor, 32).expect("request snapshot page");
+            if page.snapshots.is_empty() {
+                break;
+            }
+            cursor = page.next_sequence;
+            snapshots.extend(page.snapshots);
+        }
+        snapshots
+    }
 
     /// A headless runtime fixture: the conversation runtime with zero
     /// Runtime Client attachments, over a scripted model adapter and an
@@ -2749,7 +2749,6 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
-            durable_store: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -2758,13 +2757,12 @@ mod tests {
         (runtime, model)
     }
 
-    /// Builds the conversation runtime of one headless fixture over a custom
-    /// canonical mailbox (used by the storage-fault regression, which needs
-    /// direct access to the durable store).
-    async fn headless_runtime_over_mailbox(
+    /// Builds the conversation runtime of one headless fixture over a supplied
+    /// durable authority. The runtime derives its mailbox from this same
+    /// authority binding.
+    async fn headless_runtime_over_store(
         dir: &tempfile::TempDir,
         conversation_id: &str,
-        mailbox: crate::runtime::inbound::ConversationInboundMailbox,
         store: Arc<dyn ConversationStore>,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new(conversation_id);
@@ -2773,7 +2771,7 @@ mod tests {
         let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
             conversation_id.clone(),
             crate::tools::runtime::ConversationRuntimeConfig {
-                mailbox: Some(mailbox),
+                durable_binding: Some(crate::durable::ConversationStoreBinding::new(store.clone())),
                 ..crate::tools::runtime::ConversationRuntimeConfig::new(
                     &workspace,
                     dir.path().join("artifacts"),
@@ -2814,7 +2812,6 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
-            durable_store: Some(store),
         };
         let runtime = ConversationRuntime::new(config).expect("runtime");
         (runtime, model)
@@ -2924,7 +2921,58 @@ mod tests {
         // The attempt was admitted exactly once and the runtime is idle
         // again.
         assert!(!fixture.runtime.has_current_attempt());
-        assert_eq!(fixture.runtime.request_history().snapshots().len(), 1);
+        assert_eq!(
+            request_snapshots(&fixture.runtime.request_history()).len(),
+            1
+        );
+    }
+
+    /// The mailbox and every full-store operation are derived from one
+    /// `ConversationStoreBinding`. Two independent stores may happen to use
+    /// the same `ConversationId`, but there is no production constructor that
+    /// can pair one store's mailbox with the other's canonical/event store.
+    /// The runtime also performs a normal turn without enumerating its
+    /// historical Request Snapshots.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_uses_one_durable_binding_without_snapshot_enumeration() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation_id = ConversationId::new("conv-one-binding");
+        let store_a = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("store A"),
+        );
+        let store_b = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id).expect("store B"),
+        );
+        let (runtime, model) =
+            headless_runtime_over_store(&dir, "conv-one-binding", store_a.clone()).await;
+        runtime.activate();
+
+        let accepted = runtime
+            .submit_inbound(text_content("one durable authority"))
+            .expect("accepted");
+        let ledger = await_settled_ledger(&runtime).await;
+
+        assert!(ledger.iter().any(|message| {
+            matches!(message, MessageBlock::User(user) if user.id == accepted.message_id)
+        }));
+        assert_eq!(model.requests().len(), 1, "one normal admitted turn");
+        assert_eq!(store_a.request_snapshot_page_reads(), 0);
+        assert!(
+            store_b
+                .load_canonical()
+                .expect("store B canonical")
+                .is_empty(),
+            "an independent same-id store never becomes a hidden second authority"
+        );
+        assert!(
+            store_b
+                .read_events(None, 32)
+                .expect("store B events")
+                .events
+                .is_empty(),
+            "the Event Journal also remains on the bound store"
+        );
     }
 
     /// The headless real tool cycle (Issue #61): a conversation runtime
@@ -3092,7 +3140,11 @@ mod tests {
         // the authoritative state again, with the request facts retained.
         assert!(!runtime.has_current_attempt());
         let history = runtime.request_history();
-        assert_eq!(history.snapshots().len(), 2, "both requests retained");
+        assert_eq!(
+            request_snapshots(&history).len(),
+            2,
+            "both requests retained"
+        );
         // The coordinator owns the one authoritative ConversationState
         // again: the runtime keeps no second derived read model to reset.
         assert!(runtime.coordinator_ledger().is_some());
@@ -3387,7 +3439,6 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
-            durable_store: None,
         })
         .expect_err("mismatched ownership is rejected");
         assert!(matches!(
@@ -3443,7 +3494,6 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
-            durable_store: None,
         })
         .expect_err("construction outside Tokio is rejected");
         assert!(matches!(
@@ -3609,11 +3659,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-select-transient", mailbox, store.clone())
-                .await;
+            headless_runtime_over_store(&dir, "conv-select-transient", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3672,11 +3719,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-select-persistent", mailbox, store.clone())
-                .await;
+            headless_runtime_over_store(&dir, "conv-select-persistent", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3735,11 +3779,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-ops-independent", mailbox, store.clone())
-                .await;
+            headless_runtime_over_store(&dir, "conv-ops-independent", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -3813,15 +3854,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
-        let (runtime, model) = headless_runtime_over_mailbox(
-            &dir,
-            "conv-alternating-retry-cycle",
-            mailbox,
-            store.clone(),
-        )
-        .await;
+        let (runtime, model) =
+            headless_runtime_over_store(&dir, "conv-alternating-retry-cycle", store.clone()).await;
         let host = crate::runtime_client::RuntimeClientHost::new(
             crate::runtime_client::RuntimeClientHostConfig {
                 runtime: runtime.clone(),
@@ -3935,11 +3969,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-adopt-persistent", mailbox, store.clone())
-                .await;
+            headless_runtime_over_store(&dir, "conv-adopt-persistent", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -4002,11 +4033,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, model) =
-            headless_runtime_over_mailbox(&dir, "conv-attempt-durable", mailbox, store.clone())
-                .await;
+            headless_runtime_over_store(&dir, "conv-attempt-durable", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -4071,6 +4099,76 @@ mod tests {
             matches!(&canonical[0], MessageBlock::User(user) if user.id == admission.message_id),
             "the adopted inbound survived intact"
         );
+    }
+
+    /// A terminal Event Journal failure must degrade the owning runtime while
+    /// leaving the execution settlement candidate and the durable Journal
+    /// truthful: no observer or local read model may see a terminal event that
+    /// `SQLite` rejected.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn terminal_event_durable_failure_degrades_without_fabricated_terminal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-terminal-durable",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, model) =
+            headless_runtime_over_store(&dir, "conv-terminal-durable", store.clone()).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        store.arm_fail_next_terminal_event();
+        let admission = runtime
+            .submit_inbound(text_content("terminal fault"))
+            .expect("accepted");
+        let observations = await_observation(pending.as_ref(), |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { operation, .. }
+                    if operation == "event_journal"
+            )
+        })
+        .await;
+
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "the model turn completed normally"
+        );
+        assert!(
+            !observations.iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::Event { event, .. } if is_terminal_event(event)
+            )),
+            "the rejected terminal candidate never reaches the runtime observer"
+        );
+        let journal = store.read_events(None, 128).expect("event journal").events;
+        assert!(
+            !journal
+                .iter()
+                .any(|envelope| is_terminal_event(&envelope.event)),
+            "the failed terminal transaction leaves no durable terminal event"
+        );
+        assert!(
+            store
+                .load_canonical()
+                .expect("canonical ledger")
+                .iter()
+                .any(|message| {
+                    matches!(message, MessageBlock::User(user) if user.id == admission.message_id)
+                })
+        );
+        assert_eq!(store.terminal_event_attempts(), 1);
+        assert!(!runtime.has_current_attempt());
+        assert!(matches!(
+            runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::DurabilityFailed { .. })
+        ));
     }
 
     /// A gated background executor for the owning-runtime degradation
@@ -4141,10 +4239,8 @@ mod tests {
             ))
             .expect("in-memory store"),
         );
-        let mailbox =
-            crate::runtime::inbound::ConversationInboundMailbox::over_store(store.clone());
         let (runtime, _model) =
-            headless_runtime_over_mailbox(&dir, "conv-bg-degrade", mailbox, store.clone()).await;
+            headless_runtime_over_store(&dir, "conv-bg-degrade", store.clone()).await;
         let pending = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(pending.clone())
@@ -4301,7 +4397,6 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages,
-            durable_store: None,
         };
         ConversationRuntime::new(config)
     }
