@@ -101,7 +101,7 @@ carries only the data valid for that state and maps one-to-one to an
 `AttemptOutcome`. A completed attempt can never encode a failed, cancelled,
 or timed-out outcome. If the required terminal append fails, the execution
 settlement candidate is returned with a typed Event Journal failure, but no
-terminal event enters the local trace, observer stream, or durable Journal.
+terminal event enters the observer stream or durable Journal.
 When an attempt fails because a model request exhausted its retry policy, the
 normalized model error is preserved.
 
@@ -1227,6 +1227,13 @@ message role, history shape, or timestamps:
   the retained snapshot and exact SurfaceRevision on demand; page reads are
   bounded, cursor-based, and fallible. No transcript or second history
   authority is created.
+
+M8's bounded-working-set invariant covers Event Journal facts as well:
+`AgentExecution` has no complete event vector, and `AgentExecutionResult`
+has no attempt trace or Request Snapshot collection. A committed event is
+published to the live observer only after durable append and is then released
+from hot execution state. Complete request and event history remains
+inspectable through keyed reads and bounded `ConversationStore` pages.
 
 ## Typed lifecycle interception (Issue #56)
 

@@ -36,8 +36,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use rustx::agent::state::ExecutionState;
+use rustx::agent::{AgentExecutionResult, state::ExecutionState};
+use rustx::durable::ConversationStore;
 use rustx::events::types::RuntimeEvent;
+use rustx::runtime::identity::AttemptId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -422,6 +424,106 @@ pub fn request_snapshots(
         snapshots.extend(page.snapshots);
     }
     snapshots
+}
+
+/// A test-only audit that loads committed Event Journal facts from the durable
+/// authority in bounded pages after an attempt settles. It deliberately does
+/// not alter [`AgentExecutionResult`]: production settlement has no complete
+/// attempt-local event trace.
+pub struct DurableExecutionAudit {
+    /// The bounded settlement handoff returned by the Agent Loop.
+    pub result: AgentExecutionResult,
+    /// The durable Event Journal facts read through fixed-size pages for a
+    /// test that is explicitly auditing execution history.
+    pub event_history: Vec<RuntimeEvent>,
+    /// The durable Request Snapshots read through fixed-size pages for a
+    /// test that is explicitly auditing request history.
+    snapshot_history: Vec<rustx::model::RequestSnapshot>,
+}
+
+impl std::ops::Deref for DurableExecutionAudit {
+    type Target = AgentExecutionResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.result
+    }
+}
+
+/// Reads one attempt's complete Event Journal history through bounded pages.
+///
+/// This helper is intentionally test-only. Production callers should use the
+/// store's page API directly and retain only the page they need.
+pub fn read_event_history(
+    store: &dyn ConversationStore,
+    attempt_id: &AttemptId,
+) -> Vec<RuntimeEvent> {
+    const PAGE_SIZE: usize = 32;
+    let mut cursor = None;
+    let mut events = Vec::new();
+    loop {
+        let page = store
+            .read_events(cursor, PAGE_SIZE)
+            .expect("durable Event Journal page");
+        if page.events.is_empty() {
+            break;
+        }
+        events.extend(
+            page.events
+                .iter()
+                .filter(|envelope| envelope.attempt_id.as_ref() == Some(attempt_id))
+                .map(|envelope| envelope.event.clone()),
+        );
+        cursor = page.next_sequence;
+    }
+    events
+}
+
+/// Reads one conversation's retained Request Snapshots through bounded pages.
+pub fn read_request_snapshot_history(
+    store: &dyn ConversationStore,
+    attempt_id: &AttemptId,
+) -> Vec<rustx::model::RequestSnapshot> {
+    const PAGE_SIZE: usize = 32;
+    let mut cursor = None;
+    let mut snapshots = Vec::new();
+    loop {
+        let page = store
+            .read_request_snapshots(cursor, PAGE_SIZE)
+            .expect("durable Request Snapshot page");
+        if page.snapshots.is_empty() {
+            break;
+        }
+        snapshots.extend(
+            page.snapshots
+                .into_iter()
+                .filter(|snapshot| snapshot.identity.attempt_id == *attempt_id),
+        );
+        cursor = page.next_sequence;
+    }
+    snapshots
+}
+
+impl DurableExecutionAudit {
+    /// Returns the test's explicitly paged durable Request Snapshot audit.
+    #[must_use]
+    pub fn snapshot_history(&self) -> &[rustx::model::RequestSnapshot] {
+        &self.snapshot_history
+    }
+}
+
+/// Builds the test-only history view from the durable store after settlement.
+#[must_use]
+pub fn durable_agent_result(
+    result: AgentExecutionResult,
+    store: &dyn ConversationStore,
+) -> DurableExecutionAudit {
+    let event_history = read_event_history(store, &result.attempt_id);
+    let snapshot_history = read_request_snapshot_history(store, &result.attempt_id);
+    DurableExecutionAudit {
+        result,
+        event_history,
+        snapshot_history,
+    }
 }
 
 /// A conversation tool runtime over a unique temporary workspace.

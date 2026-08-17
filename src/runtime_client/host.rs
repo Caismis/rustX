@@ -2059,10 +2059,11 @@ mod tests {
         // wait on that exact condition, never a delay.
         await_canonical_history(&fixture.host, &snapshot.messages).await;
 
-        // Request facts survive the AgentExecutionResult transfer. Mutate
-        // the live session configuration after settlement and reconstruct
-        // from the durable snapshot plus its historical Surface; neither
-        // current configuration nor a live contributor is consulted.
+        // Request facts remain in the durable ConversationStore after the
+        // AgentExecutionResult transfer. Mutate the live session
+        // configuration after settlement and reconstruct from the durable
+        // snapshot plus its historical Surface; neither current
+        // configuration nor a live contributor is consulted.
         let requests = adapter.requests();
         let history = fixture.host.request_history();
         let snapshots = request_snapshots(&history);
@@ -2089,11 +2090,11 @@ mod tests {
         );
     }
 
-    /// A composed runtime retains every actual primary request, including
-    /// an overflow retry, after the `AgentExecutionResult` has been
-    /// transferred and dropped. The retry keeps the pending fresh inbound
-    /// visible while both request facts remain reconstructable from their
-    /// own Surface revisions.
+    /// A composed runtime keeps every actual primary request, including an
+    /// overflow retry, reconstructable in the durable `ConversationStore`
+    /// after the `AgentExecutionResult` has been transferred and dropped. The
+    /// retry keeps the pending fresh inbound visible while both request facts
+    /// remain reconstructable from their own Surface revisions.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn settled_host_retains_distinct_overflow_request_snapshots() {
         let (adapter, fixture) = host_fixture(

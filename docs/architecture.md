@@ -339,9 +339,9 @@ normalized `ModelError` without degrading it to a runtime error string.
 
 The Agent Loop settles its execution state before attempting the terminal
 Event Journal append. If that required append fails, no terminal event is
-published or fabricated in the local trace; the typed execution result carries
-the settlement candidate and the durable failure, and the owning runtime
-enters `DurabilityFailed`.
+published or fabricated; the typed execution result carries the settlement
+candidate and the durable failure, and the owning runtime enters
+`DurabilityFailed`.
 
 ### 2.3 Streaming assembly identity
 
@@ -505,12 +505,13 @@ ToolRegistry preflight: resolve -> extract -> strip -> validate -> dispatch
         |
 deterministic scheduling phases (sequential barriers, parallel groups)
         |
-RuntimeEvent trace, ending in one terminal event when its durable append succeeds
+        durable Event Journal facts, ending in one terminal event when its durable append succeeds
 ```
 
 The loop owns execution semantics, message assembly, tool execution,
-continuation state, cancellation observation, and the runtime event
-trace. Adapters own provider protocol translation only; the validating
+continuation state, cancellation observation, and runtime-event emission.
+The durable Event Journal owns historical execution facts; the observer is
+only the live projection seam. Adapters own provider protocol translation only; the validating
 [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
 [`ToolExecutor`] implementations and never falls back id-first.
 Continuation state propagates losslessly without fabrication, cancellation
@@ -833,6 +834,14 @@ the immutable snapshot and its `ModelRequestStarted` fact. The runtime's
 and not a second transcript. Historical inspection either loads one snapshot
 by key or reads a bounded, fallible page with an exclusive sequence cursor;
 it never retains every request in process memory.
+
+The same rule applies to execution facts: `AgentExecution` owns bounded active
+state and the current conversation working set, not a complete attempt
+Event Journal. Each event is durably appended first, then delivered to the
+live observer when one is attached, and its full body is released from the
+loop. `AgentExecutionResult` transfers the settlement candidate, durability
+status, and current conversation only; historical events are inspected from
+`ConversationStore::read_events` through bounded pages.
 
 An overflow retry reuses the admitted ContextGeneration and canonical
 context facts. `ContextWindowExceeded` does not prove that fresh inbound was
@@ -3108,6 +3117,9 @@ generate RuntimeEvent
 It applies to every externally published runtime fact. Facts that reference a
 Ledger body, Surface revision, or Request Snapshot use the shared
 ConversationStore transaction so publication never outruns its authority.
+Successful publication does not add the committed event to an attempt-local
+trace: the observer is a live projection seam, while the durable Event
+Journal remains the historical authority.
 
 ## 7. Recovery model
 

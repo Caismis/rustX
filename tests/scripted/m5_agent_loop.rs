@@ -78,10 +78,11 @@ async fn run(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
 ) -> (
-    AgentExecutionResult,
+    common::DurableExecutionAudit,
     rustx::capabilities::CapabilityCoordinator,
 ) {
     let tool_runtime = common::tool_runtime("conv-1");
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (lease, coordinator) = capability.into_lease_and_coordinator();
     let result = AgentExecution::new(
@@ -95,7 +96,10 @@ async fn run(
     .expect("conversation identity matches the tool runtime")
     .run()
     .await;
-    (result, coordinator)
+    (
+        common::durable_agent_result(result, store.as_ref()),
+        coordinator,
+    )
 }
 
 fn started() -> ModelEvent {
@@ -652,7 +656,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         "no next model request starts after cancellation"
     );
     let terminal_events: Vec<&RuntimeEvent> = result
-        .events
+        .event_history
         .iter()
         .filter(|event| {
             matches!(
@@ -665,7 +669,7 @@ async fn cancellation_during_mixed_batch_settles_structurally() {
         .collect();
     assert_eq!(terminal_events.len(), 1);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert_eq!(

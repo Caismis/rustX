@@ -217,6 +217,14 @@ Historical listing is a bounded, fallible, cursor-paged read; no current model
 settings, contributors, Skills, clock, or status fill historical gaps, and
 runtime bootstrap never enumerates the full snapshot history.
 
+`AgentExecution` applies the same ownership rule to the Event Journal. It
+retains only active state needed to continue the current turn, not every
+committed `RuntimeEvent`. A successful event append is followed by live
+observer publication, if attached, and the event body is then dropped. The
+settlement handoff contains current `ConversationState`, outcome, terminal
+state, and durability status; historical events are read from the durable
+store with `read_events` pages.
+
 The loop's `observe_event`/`observe_committed`/`observe_status` facts are
 published as runtime-owned `ConversationObservation`s
 (`src/runtime/observation.rs`) into one leaf queue. That stream is folded

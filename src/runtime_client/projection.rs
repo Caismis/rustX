@@ -1556,7 +1556,7 @@ mod tests {
     async fn run_compaction_order_case(
         fail_summary: bool,
     ) -> (
-        crate::agent::AgentExecutionResult,
+        crate::scripted_suites::common::DurableExecutionAudit,
         Arc<EventPathObserver>,
         Arc<Mutex<Vec<CompactionOrderFact>>>,
     ) {
@@ -1604,6 +1604,7 @@ mod tests {
             CompactionBudgets::new(1, 1, 1_000_000),
         );
         let tool_runtime = crate::scripted_suites::common::tool_runtime("projection-order");
+        let store = tool_runtime.durable_store();
         let capability =
             crate::scripted_suites::common::capability_lease(ToolRegistry::new(), &tool_runtime)
                 .await;
@@ -1630,6 +1631,7 @@ mod tests {
         .expect("conversation identity matches the tool runtime");
         execution.observe(observer.as_ref());
         let result = execution.run().await;
+        let result = crate::scripted_suites::common::durable_agent_result(result, store.as_ref());
         (result, observer, facts)
     }
 
@@ -1653,7 +1655,7 @@ mod tests {
             ]
         );
         assert!(matches!(
-            result.events.last(),
+            result.event_history.last(),
             Some(RuntimeEvent::AttemptCompleted { .. })
         ));
         assert_eq!(result.conversation.surface().compaction_generation(), 1);
@@ -1667,7 +1669,7 @@ mod tests {
         assert_eq!(
             latest.surface_revision,
             result
-                .events
+                .event_history
                 .iter()
                 .find_map(|event| match event {
                     RuntimeEvent::CompactionCompleted {
@@ -1701,24 +1703,24 @@ mod tests {
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .any(|event| matches!(event, RuntimeEvent::CompactionStarted))
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .any(|event| matches!(event, RuntimeEvent::CompactionFailed { .. }))
         );
         assert!(
             result
-                .events
+                .event_history
                 .iter()
                 .all(|event| { !matches!(event, RuntimeEvent::CompactionCompleted { .. }) })
         );
         assert!(matches!(
-            result.events.last(),
+            result.event_history.last(),
             Some(RuntimeEvent::AttemptFailed { .. })
         ));
         assert_eq!(result.conversation.surface().compaction_generation(), 0);

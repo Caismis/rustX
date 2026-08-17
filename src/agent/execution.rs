@@ -41,9 +41,9 @@
 //! request admission/snapshots, fresh-inbound lifecycle, safe-boundary inbound
 //! consumption, and lifecycle-extension coordination. The durable
 //! `ConversationStore` owns canonical facts and the Event Journal; the loop
-//! keeps only an attempt-local projection of persisted events for settlement
-//! handoff. The adapter owns provider protocol translation only. No provider
-//! protocol concept appears in this module.
+//! keeps only bounded active execution state and the current conversation
+//! working set. The adapter owns provider protocol translation only. No
+//! provider protocol concept appears in this module.
 //!
 //! The typed lifecycle seams of Issue #56 live on the required immutable
 //! [`AttemptLifecycle`]: exactly one [`PreStepPolicy`] evaluation per primary
@@ -197,11 +197,10 @@ impl DurableFailureKind {
 
 /// The deterministic result of one attempt execution.
 ///
-/// The recorded [`RuntimeEvent`] trace contains only events that committed to
-/// the durable Event Journal. The `outcome` field is the execution
-/// state-machine settlement candidate; it remains meaningful when the final
-/// terminal Event Journal append fails, in which case `events` deliberately
-/// contains no terminal fact and `durable_failure_kind` is `EventJournal`.
+/// The `outcome` field is the execution state-machine settlement candidate;
+/// it remains meaningful when the final terminal Event Journal append fails,
+/// in which case no terminal fact is published and `durable_failure_kind` is
+/// `EventJournal`.
 ///
 /// `conversation` is the bounded current working state handed back to the
 /// host: active Ledger bodies and the current Conversation Surface. The
@@ -220,10 +219,6 @@ pub struct AgentExecutionResult {
     /// event: [`ExecutionState::Completed`] for successful settlement and
     /// [`ExecutionState::Failed`] for failure and cancellation settlement.
     pub terminal_state: ExecutionState,
-    /// The ordered runtime event trace of committed Event Journal facts. A
-    /// terminal persistence failure intentionally leaves this without a
-    /// terminal event.
-    pub events: Vec<RuntimeEvent>,
     /// The bounded current conversation read model, transferred back to the
     /// runtime. Historical durable facts remain in `ConversationStore`.
     pub conversation: ConversationState,
@@ -240,9 +235,6 @@ pub struct AgentExecutionResult {
     pub durable_failure: Option<String>,
     /// The typed durable stage associated with [`Self::durable_failure`].
     pub durable_failure_kind: Option<DurableFailureKind>,
-    /// Frozen provider-neutral snapshots for every actual primary request,
-    /// including a bounded overflow retry when one occurred.
-    pub request_snapshots: Vec<RequestSnapshot>,
 }
 
 impl AgentExecutionResult {
@@ -265,12 +257,6 @@ impl AgentExecutionResult {
     pub fn active_ids(&self) -> &[MessageId] {
         self.conversation.active_ids()
     }
-
-    /// The frozen request boundaries in provider-request order.
-    #[must_use]
-    pub fn request_snapshots(&self) -> &[RequestSnapshot] {
-        &self.request_snapshots
-    }
 }
 
 /// One agent attempt execution.
@@ -279,8 +265,8 @@ impl AgentExecutionResult {
 /// attempt cancellation signal, and owns the attempt capability lease, the
 /// mandatory M4 context runtime, the conversation tool runtime (whose
 /// canonical mailbox the loop drains), the execution state machine, the
-/// bounded current read model, the retained continuation state, the pending
-/// fresh inbound trigger, and the attempt-local event projection.
+/// bounded current read model, the retained continuation state, and the
+/// pending fresh inbound trigger.
 pub struct AgentExecution<'a> {
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,
@@ -294,7 +280,6 @@ pub struct AgentExecution<'a> {
     /// The attempt's owned conversation state: the single mutable
     /// conversation authority for the attempt's lifetime.
     conversation: ConversationState,
-    events: Vec<RuntimeEvent>,
     /// The durable-authority failure encountered by this attempt, when
     /// any (Issue #63): carried into [`AgentExecutionResult`] so the
     /// coordinator never returns to a false healthy durability state
@@ -337,15 +322,13 @@ pub struct AgentExecution<'a> {
     deferred_context: Vec<DeferredContextProposal>,
     /// Per-attempt context-generation allocator owned by the Agent Loop.
     context_generation_serial: u64,
-    /// Historical frozen request boundaries.
-    request_snapshots: Vec<RequestSnapshot>,
     observed: Option<ProviderObservedInput>,
     last_request_fingerprint: Option<u64>,
     /// The optional live observation seam: when attached, every emitted
     /// runtime fact, every committed canonical message, and every composed
     /// Agent Status is observed at its commit linearization point. The
-    /// attempt-local ordered `events` trace remains the authoritative
-    /// record regardless of attachment.
+    /// durable Event Journal remains the historical authority regardless of
+    /// attachment.
     observer: Option<&'a dyn AgentExecutionObserver>,
     /// Test-only control point parked at the turn-continuation boundary:
     /// after a completed turn (and all its mailbox drain/append work)
@@ -579,7 +562,6 @@ impl<'a> AgentExecution<'a> {
             tool_runtime,
             store,
             state: ExecutionStateMachine::new(),
-            events: Vec::new(),
             durable_failure: None,
             durable_failure_kind: None,
             pending_continuation: None,
@@ -590,7 +572,6 @@ impl<'a> AgentExecution<'a> {
             lifecycle,
             deferred_context: Vec::new(),
             context_generation_serial: 0,
-            request_snapshots: Vec::new(),
             observed: None,
             last_request_fingerprint: None,
             observer: None,
@@ -609,8 +590,8 @@ impl<'a> AgentExecution<'a> {
     /// committed canonical messages, and composed Agent Status at their
     /// commit linearization points, and it never influences execution. It
     /// must be attached before [`AgentExecution::run`] to observe the whole
-    /// attempt; attaching is optional, and the attempt-local ordered event
-    /// trace in the result is recorded regardless.
+    /// attempt; attaching is optional, and the durable Event Journal remains
+    /// available for historical reads regardless.
     pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
         self.observer = Some(observer);
     }
@@ -705,11 +686,9 @@ impl<'a> AgentExecution<'a> {
             attempt_id: self.request.attempt_id,
             outcome,
             terminal_state: self.state.state(),
-            events: self.events,
             conversation: self.conversation,
             durable_failure: self.durable_failure,
             durable_failure_kind: self.durable_failure_kind,
-            request_snapshots: self.request_snapshots,
         }
     }
 
@@ -1425,7 +1404,6 @@ impl<'a> AgentExecution<'a> {
             )));
         }
         self.record_persisted_event(started);
-        self.request_snapshots.push(snapshot);
         self.last_request_fingerprint = Some(projection.fingerprint());
         Ok(request)
     }
@@ -2842,12 +2820,11 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    fn record_persisted_event(&mut self, envelope: RuntimeEventEnvelope) {
+    fn record_persisted_event(&self, envelope: RuntimeEventEnvelope) {
         let event = envelope.event;
         if let Some(observer) = self.observer {
             observer.observe_event(&self.request.attempt_id, &event);
         }
-        self.events.push(event);
     }
 
     fn emit(&mut self, event: RuntimeEvent) {
@@ -3488,6 +3465,44 @@ mod tests {
         ]
     }
 
+    /// Reads committed Event Journal facts through bounded pages for tests
+    /// that explicitly audit the complete attempt history.
+    fn event_history(store: &dyn ConversationStore) -> Vec<RuntimeEvent> {
+        const PAGE_SIZE: usize = 32;
+        let mut cursor = None;
+        let mut events = Vec::new();
+        loop {
+            let page = store.read_events(cursor, PAGE_SIZE).expect("event page");
+            if page.events.is_empty() {
+                break;
+            }
+            events.extend(page.events.into_iter().map(|envelope| envelope.event));
+            cursor = page.next_sequence;
+        }
+        events
+    }
+
+    /// Reads retained Request Snapshots through bounded pages for tests that
+    /// explicitly audit historical request facts.
+    fn request_snapshot_history(
+        store: &dyn ConversationStore,
+    ) -> Vec<crate::model::RequestSnapshot> {
+        const PAGE_SIZE: usize = 32;
+        let mut cursor = None;
+        let mut snapshots = Vec::new();
+        loop {
+            let page = store
+                .read_request_snapshots(cursor, PAGE_SIZE)
+                .expect("request snapshot page");
+            if page.snapshots.is_empty() {
+                break;
+            }
+            snapshots.extend(page.snapshots);
+            cursor = page.next_sequence;
+        }
+        snapshots
+    }
+
     /// Spawns the controller that parks until the continuation boundary,
     /// makes cancellation observable there, and releases the execution.
     fn boundary_controller(
@@ -3613,6 +3628,160 @@ mod tests {
         );
     }
 
+    /// A long scripted tool loop grows the durable authorities while the
+    /// active execution retains only its current working state. Event and
+    /// Request Snapshot inspection deliberately walks the store in bounded
+    /// pages; the settlement result has no historical trace collections to
+    /// retain or transfer.
+    #[tokio::test]
+    async fn long_attempt_history_is_durable_and_boundedly_inspectable() {
+        const TOOL_TURNS: usize = 40;
+        const PAGE_SIZE: usize = 7;
+
+        let mut scripts = Vec::with_capacity(TOOL_TURNS + 1);
+        for turn in 0..TOOL_TURNS {
+            let call = ToolCall {
+                id: ToolCallId::new(format!("call-{turn}")),
+                tool_id: ToolId::new("tool-alpha"),
+                name: "alpha".to_owned(),
+                arguments: serde_json::json!({}),
+            };
+            scripts.push(tool_call_script(&call));
+        }
+        scripts.push(vec![
+            ModelEvent::Started,
+            ModelEvent::TextDelta {
+                block_index: ContentBlockIndex::new(0),
+                text: "final".to_owned(),
+            },
+            ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            },
+        ]);
+
+        let adapter = Arc::new(ScriptedAdapter::new(scripts));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("in-memory store"),
+        );
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(
+                InstantTool::definition("tool-alpha", "alpha"),
+                Arc::new(InstantTool),
+            )
+            .expect("register scripted tool");
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+
+        let result = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await;
+
+        assert!(matches!(
+            result.outcome,
+            AttemptOutcome::Completed {
+                finish_reason: ModelFinishReason::Stop
+            }
+        ));
+        assert_eq!(adapter.request_count(), TOOL_TURNS + 1);
+
+        assert_bounded_event_history(store.as_ref(), PAGE_SIZE);
+        assert_bounded_request_history(
+            store.as_ref(),
+            PAGE_SIZE,
+            TOOL_TURNS + 1,
+            &adapter.requests(),
+        );
+    }
+
+    fn assert_bounded_event_history(store: &dyn ConversationStore, page_size: usize) {
+        let mut cursor = None;
+        let mut sequences = Vec::new();
+        let mut pages = 0;
+        let mut last_event = None;
+        loop {
+            let page = store
+                .read_events(cursor, page_size)
+                .expect("event journal page");
+            assert!(page.events.len() <= page_size);
+            if page.events.is_empty() {
+                break;
+            }
+            pages += 1;
+            sequences.extend(page.events.iter().map(|event| event.sequence));
+            last_event = page.events.last().map(|event| event.event.clone());
+            cursor = page.next_sequence;
+        }
+        assert!(pages > 1, "the journal must be inspected in pages");
+        assert!(!sequences.is_empty());
+        assert!(sequences.windows(2).all(|window| window[0] < window[1]));
+        assert!(matches!(
+            store
+                .read_events(sequences.last().copied(), page_size)
+                .expect("terminal journal page")
+                .events
+                .as_slice(),
+            []
+        ));
+        assert!(matches!(
+            last_event,
+            Some(RuntimeEvent::AttemptCompleted { .. })
+        ));
+    }
+
+    fn assert_bounded_request_history(
+        store: &dyn ConversationStore,
+        page_size: usize,
+        expected_count: usize,
+        provider_requests: &[ModelRequest],
+    ) {
+        let mut cursor = None;
+        let mut snapshots = Vec::new();
+        let mut pages = 0;
+        loop {
+            let page = store
+                .read_request_snapshots(cursor, page_size)
+                .expect("request snapshot page");
+            assert!(page.snapshots.len() <= page_size);
+            if page.snapshots.is_empty() {
+                break;
+            }
+            pages += 1;
+            snapshots.extend(page.snapshots);
+            cursor = page.next_sequence;
+        }
+        assert!(pages > 1, "request history must be inspected in pages");
+        assert_eq!(snapshots.len(), expected_count);
+        assert!(
+            snapshots
+                .windows(2)
+                .all(|window| window[0].request_id != window[1].request_id)
+        );
+        assert!(snapshots.iter().enumerate().all(|(index, snapshot)| {
+            snapshot.identity.turn.as_str() == (index + 1).to_string()
+                && snapshot.identity.retry_number == 0
+        }));
+        for (snapshot, request) in snapshots.iter().zip(provider_requests.iter()) {
+            assert_eq!(
+                store
+                    .reconstruct_model_request(&snapshot.request_id)
+                    .expect("historical request reconstruction"),
+                *request
+            );
+        }
+    }
+
     /// A terminal Event Journal append is a required durable publication.
     /// If it fails, the execution settlement candidate remains available to
     /// the caller, but neither the local event projection nor an observer may
@@ -3664,8 +3833,9 @@ mod tests {
             Some(super::DurableFailureKind::EventJournal)
         );
         assert!(result.durable_failure.is_some());
+        let events = event_history(store.as_ref());
         assert!(
-            !result.events.iter().any(|event| matches!(
+            !events.iter().any(|event| matches!(
                 event,
                 RuntimeEvent::AttemptCompleted { .. }
                     | RuntimeEvent::AttemptCancelled { .. }
@@ -3863,6 +4033,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("cancellation controller");
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             invocation_count.load(std::sync::atomic::Ordering::SeqCst),
@@ -3875,7 +4046,7 @@ mod tests {
                 reason: CancellationReason::UserRequested
             }
         ));
-        assert_eq!(result.request_snapshots(), &[]);
+        assert!(snapshots.is_empty());
         assert_eq!(
             result.conversation.revision(),
             crate::conversation::SurfaceRevision::INITIAL
@@ -3955,6 +4126,7 @@ mod tests {
         .run()
         .await;
         controller.await.expect("cancellation controller");
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             invocations.load(std::sync::atomic::Ordering::SeqCst),
@@ -3967,7 +4139,7 @@ mod tests {
                 reason: CancellationReason::UserRequested
             }
         ));
-        assert!(result.request_snapshots().is_empty());
+        assert!(snapshots.is_empty());
         assert_eq!(
             result.conversation.revision(),
             crate::conversation::SurfaceRevision::INITIAL
@@ -4011,13 +4183,14 @@ mod tests {
         .expect("conversation identity matches the tool runtime")
         .run()
         .await;
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
 
         assert!(matches!(
             result.outcome,
             crate::events::types::AttemptOutcome::Failed { .. }
         ));
         assert_eq!(adapter.request_count(), 1);
-        assert_eq!(result.request_snapshots().len(), 1);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(result.conversation.revision().get(), 2);
         assert!(result.messages().iter().any(|message| {
             matches!(
@@ -4026,8 +4199,9 @@ mod tests {
                     if user.kind == InboundKind::Context(ContextKind::AgentStatus)
             )
         }));
-        let reconstructed = result.request_snapshots()[0]
-            .reconstruct(&result.conversation)
+        let reconstructed = tool_runtime
+            .durable_store()
+            .reconstruct_model_request(&snapshots[0].request_id)
             .expect("historical reconstruction");
         assert_eq!(reconstructed, adapter.requests()[0]);
     }
@@ -4076,6 +4250,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
+        let events = event_history(tool_runtime.durable_store().as_ref());
 
         assert_eq!(
             adapter.request_count(),
@@ -4083,8 +4258,7 @@ mod tests {
             "exactly one model request total: the second model turn never begins"
         );
         assert_eq!(
-            result
-                .events
+            events
                 .iter()
                 .filter(|event| matches!(event, crate::events::types::RuntimeEvent::TurnStarted))
                 .count(),
@@ -4092,8 +4266,7 @@ mod tests {
             "exactly one TurnStarted total"
         );
         assert_eq!(
-            result
-                .events
+            events
                 .iter()
                 .filter(|event| {
                     matches!(
@@ -4106,7 +4279,7 @@ mod tests {
             "exactly one ModelRequestStarted total"
         );
         assert_eq!(
-            result.events,
+            events,
             expected_trace(),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );
@@ -4171,6 +4344,7 @@ mod tests {
             .replace(pause);
         let result = execution.run().await;
         controller.await.expect("controller task");
+        let events = event_history(store.as_ref());
 
         assert_eq!(
             adapter.request_count(),
@@ -4178,7 +4352,7 @@ mod tests {
             "no next model turn begins after the drained batch is committed"
         );
         assert_eq!(
-            result.events,
+            events,
             expected_trace(),
             "the exact trace ends with the single AttemptCancelled terminal event"
         );

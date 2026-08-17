@@ -809,9 +809,9 @@ async fn bash_still_settles_its_process_lifecycle_behind_the_typed_contract() {
 }
 
 /// The canonical tool lifecycle event names of one attempt, in order.
-fn lifecycle_events(result: &AgentExecutionResult) -> Vec<&'static str> {
+fn lifecycle_events(result: &common::DurableExecutionAudit) -> Vec<&'static str> {
     result
-        .events
+        .event_history
         .iter()
         .filter_map(|event| match event {
             RuntimeEvent::ToolExecutionStarted { .. } => Some("ToolExecutionStarted"),
@@ -839,12 +839,13 @@ fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
 async fn run_through_agent_loop(
     fixture: &common::NativeFixture,
     call: &ScriptedCall,
-) -> AgentExecutionResult {
+) -> common::DurableExecutionAudit {
     let model = fake_model(tool_turn_then_stop(call));
+    let store = fixture.runtime.durable_store();
     let capability = common::capability_lease(fixture.registry.clone(), &fixture.runtime).await;
     let (lease, _coordinator) = capability.into_lease_and_coordinator();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    AgentExecution::new(
+    let result = AgentExecution::new(
         request(fixture.runtime.conversation_id().clone(), &model),
         lease,
         &cancellation,
@@ -854,7 +855,8 @@ async fn run_through_agent_loop(
     )
     .expect("conversation identity matches the tool runtime")
     .run()
-    .await
+    .await;
+    common::durable_agent_result(result, store.as_ref())
 }
 
 /// One tool-call turn followed by a plain stop turn.

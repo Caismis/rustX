@@ -464,6 +464,12 @@ reconstructions.
 
 ## 9. Durable RequestSnapshot ownership (M8 / Issue #11)
 
+`AgentExecution` is the bounded active execution owner: it carries the
+current ConversationState, current request/turn assembly, continuation and
+tool work needed to proceed, but no complete Request Snapshot or Event
+Journal history. `AgentExecutionResult` returns the settlement candidate and
+current conversation state, not a historical archive.
+
 During execution, the current request snapshot is prepared from the exact
 provider-neutral request. `ConversationStore::persist_request_start` commits
 that immutable snapshot and its `ModelRequestStarted` Event Journal fact in
@@ -473,6 +479,10 @@ transcript. Keyed lookup reconstructs one request on demand; historical
 listing uses a bounded, fallible page with an exclusive durable sequence
 cursor, so runtime bootstrap and normal admission never enumerate the full
 history.
+
+The Event Journal follows the same boundary: append durably, publish the live
+observer, then release the committed event body from the attempt. Historical
+execution facts are read with bounded `ConversationStore::read_events` pages.
 
 `ConversationStore::reconstruct_model_request` loads one snapshot, replays its
 immutable Surface revision, and resolves only the referenced Ledger bodies.

@@ -60,10 +60,10 @@ pub struct AgentStatusObservation {
 pub trait AgentExecutionObserver: Sync {
     /// Observes one canonical runtime execution fact at its emission point.
     ///
-    /// The attempt-local ordered trace in `AgentExecutionResult.events`
-    /// remains the authoritative record; this callback observes the same
-    /// fact at the same emission linearization point, so attempt recording
-    /// and external observation share one emission path.
+    /// The durable Event Journal remains the historical authority; this
+    /// callback observes the committed fact at the same publication
+    /// linearization point, so live projections do not need an attempt-local
+    /// duplicate journal.
     fn observe_event(&self, attempt_id: &AttemptId, event: &RuntimeEvent);
 
     /// Observes one canonical message commit at its commit point.

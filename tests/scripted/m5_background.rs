@@ -742,9 +742,10 @@ async fn run_with_mailbox(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     tool_runtime: &ConversationToolRuntime,
-) -> AgentExecutionResult {
+) -> common::DurableExecutionAudit {
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, tool_runtime).await;
-    AgentExecution::new(
+    let result = AgentExecution::new(
         request(model),
         capability.into_lease(),
         cancellation,
@@ -754,7 +755,8 @@ async fn run_with_mailbox(
     )
     .expect("conversation identity matches the tool runtime")
     .run()
-    .await
+    .await;
+    common::durable_agent_result(result, store.as_ref())
 }
 
 fn tool_messages(result: &AgentExecutionResult) -> Vec<&ToolMessageBlock> {
@@ -845,7 +847,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     assert_eq!(accepted["execution_id"], "exec_1");
     let committed_count = result.messages().len();
     let terminal_events = result
-        .events
+        .event_history
         .iter()
         .filter(|event| matches!(event, RuntimeEvent::AttemptCompleted { .. }))
         .count();
@@ -878,7 +880,7 @@ async fn background_completion_after_attempt_terminal_does_not_alter_the_attempt
     );
     assert_eq!(
         result
-            .events
+            .event_history
             .iter()
             .filter(|event| { matches!(event, RuntimeEvent::AttemptCompleted { .. }) })
             .count(),

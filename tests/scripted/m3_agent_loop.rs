@@ -14,9 +14,7 @@ use super::{common, support};
 use std::path::Path;
 
 use common::replay_execution_states;
-use rustx::agent::{
-    AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult, ExecutionState,
-};
+use rustx::agent::{AgentCancellation, AgentExecution, AgentExecutionRequest, ExecutionState};
 use rustx::events::types::{AttemptFailure, AttemptOutcome, RuntimeEvent};
 use rustx::message::types::{
     AssistantContentBlock, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
@@ -95,10 +93,11 @@ async fn run(
     model: &std::sync::Arc<FakeModel>,
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
-) -> AgentExecutionResult {
+) -> common::DurableExecutionAudit {
     let tool_runtime = common::tool_runtime("conv-1");
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, &tool_runtime).await;
-    AgentExecution::new(
+    let result = AgentExecution::new(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
@@ -108,7 +107,8 @@ async fn run(
     )
     .expect("conversation identity matches the tool runtime")
     .run()
-    .await
+    .await;
+    common::durable_agent_result(result, store.as_ref())
 }
 
 /// The terminal events of an attempt.
@@ -141,13 +141,9 @@ fn assert_single_terminal(events: &[RuntimeEvent]) -> &RuntimeEvent {
 }
 
 /// Asserts the platform outcome equals the outcome of the terminal event.
-fn assert_outcome(result: &AgentExecutionResult, expected: AttemptOutcome) {
-    assert_eq!(
-        result.outcome, expected,
-        "platform outcome mismatch: {:?}",
-        result.events
-    );
-    let terminal = result.events.last().expect("terminal event");
+fn assert_outcome(result: &common::DurableExecutionAudit, expected: AttemptOutcome) {
+    assert_eq!(result.outcome, expected, "platform outcome mismatch");
+    let terminal = result.event_history.last().expect("terminal event");
     assert_eq!(
         AttemptOutcome::from_terminal_event(terminal),
         Some(expected),
@@ -273,8 +269,8 @@ async fn text_execution_completes_with_exact_trace() {
             finish_reason: ModelFinishReason::Stop,
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -306,7 +302,7 @@ async fn several_deltas_assemble_in_stream_order() {
     let result = run(&model, tools, &cancellation).await;
 
     let deltas: Vec<&str> = result
-        .events
+        .event_history
         .iter()
         .filter_map(|event| match event {
             RuntimeEvent::AssistantTextDelta { delta, .. } => Some(delta.as_str()),
@@ -364,8 +360,8 @@ async fn model_failure_before_content_fails_attempt() {
             error: AttemptFailure::Model { error },
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Failed {
@@ -404,12 +400,12 @@ async fn model_failure_after_partial_content_commits_nothing() {
 
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
         "streamed deltas remain in the trace"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
         result.outcome,
         AttemptOutcome::Failed {
@@ -442,7 +438,7 @@ async fn exactly_one_terminal_event_across_scenarios() {
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
     }
 }
 
@@ -462,8 +458,12 @@ async fn no_events_after_completed_terminal() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
-    assert_single_terminal(&result.events);
-    assert_eq!(result.events.len(), 9, "exact event count of a text turn");
+    assert_single_terminal(&result.event_history);
+    assert_eq!(
+        result.event_history.len(),
+        9,
+        "exact event count of a text turn"
+    );
 }
 
 /// A tool turn's calls execute in block order.
@@ -517,7 +517,7 @@ async fn tool_calls_execute_in_block_order() {
     let result = run(&model, tools, &cancellation).await;
 
     let executed: Vec<(String, String)> = result
-        .events
+        .event_history
         .iter()
         .filter_map(|event| match event {
             RuntimeEvent::ToolExecutionCompleted {
@@ -537,7 +537,7 @@ async fn tool_calls_execute_in_block_order() {
         ],
         "tool calls execute in block order"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -576,12 +576,12 @@ async fn continuation_starts_after_tool_completion() {
     let result = run(&model, tools, &cancellation).await;
 
     let last_completion = result
-        .events
+        .event_history
         .iter()
         .rposition(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
         .expect("tool completion recorded");
     let continuation_start = result
-        .events
+        .event_history
         .iter()
         .skip(last_completion + 1)
         .position(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
@@ -589,7 +589,7 @@ async fn continuation_starts_after_tool_completion() {
         .expect("continuation starts after completion");
     assert_eq!(model.requests().len(), 2, "exactly two model invocations");
     assert!(continuation_start > last_completion);
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -723,8 +723,8 @@ async fn single_tool_call_then_continuation() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert_trace(&result.events, &expected_single_tool_trace());
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected_single_tool_trace());
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -780,7 +780,7 @@ async fn tool_receives_exact_canonical_arguments() {
     assert_eq!(received[0].tool_name, "alpha");
     assert_eq!(received[0].tool_id, ToolId::new("tool-alpha"));
     assert_eq!(received[0].call_id, ToolCallId::new("call-1"));
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// The tool result is passed back to the model without fabricated data.
@@ -900,10 +900,10 @@ async fn unknown_tool_fails_deterministically() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert_trace(&result.events, &expected_unknown_tool_trace());
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected_unknown_tool_trace());
+    assert_single_terminal(&result.event_history);
     assert!(
-        result.events.iter().all(|event| {
+        result.event_history.iter().all(|event| {
             !matches!(
                 event,
                 RuntimeEvent::ToolExecutionStarted { .. }
@@ -971,7 +971,7 @@ async fn tool_execution_failure_is_passed_back_and_continues() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -1042,7 +1042,7 @@ async fn multiple_ordered_tool_calls_continue_once() {
         .filter(|block| matches!(block, MessageBlock::Tool(_)))
         .collect();
     assert_eq!(tool_messages.len(), 2, "both results in the continuation");
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -1085,8 +1085,8 @@ async fn cancellation_before_start_settles_cancelled() {
             reason: CancellationReason::UserRequested,
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Cancelled {
@@ -1145,8 +1145,8 @@ async fn cancellation_during_generation_after_partial_text() {
             reason: CancellationReason::UserRequested,
         },
     ];
-    assert_trace(&result.events, &expected);
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Cancelled {
@@ -1202,12 +1202,12 @@ async fn cancellation_interrupts_waiting_for_tool() {
     .expect("run must terminate without the tool returning");
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
-    let terminal = result.events.last().expect("terminal event");
+    assert_single_terminal(&result.event_history);
+    let terminal = result.event_history.last().expect("terminal event");
     assert!(matches!(terminal, RuntimeEvent::AttemptCancelled { .. }));
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .filter(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
             .count()
@@ -1215,7 +1215,7 @@ async fn cancellation_interrupts_waiting_for_tool() {
         "the interrupted execution still settles exactly once with a cancelled result"
     );
     let completed = result
-        .events
+        .event_history
         .iter()
         .find_map(|event| match event {
             RuntimeEvent::ToolExecutionCompleted { result, .. } => Some(result.clone()),
@@ -1231,10 +1231,10 @@ async fn cancellation_interrupts_waiting_for_tool() {
     );
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .position(|event| matches!(event, RuntimeEvent::TurnCompleted))
-            .is_some_and(|position| position < result.events.len() - 1),
+            .is_some_and(|position| position < result.event_history.len() - 1),
         "the structurally complete batch commits before the terminal event"
     );
     assert_eq!(
@@ -1320,7 +1320,7 @@ async fn cancellation_interrupts_later_tool_call() {
     controller.await.expect("controller task");
 
     let executed: Vec<&str> = result
-        .events
+        .event_history
         .iter()
         .filter_map(|event| match event {
             RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. } => {
@@ -1335,7 +1335,7 @@ async fn cancellation_interrupts_later_tool_call() {
         "both executions settle exactly once; the second settles as cancelled"
     );
     let second_result = result
-        .events
+        .event_history
         .iter()
         .find_map(|event| match event {
             RuntimeEvent::ToolExecutionCompleted {
@@ -1353,9 +1353,9 @@ async fn cancellation_interrupts_later_tool_call() {
         },
         "the later call receives a cancelled result slot"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     let tool_messages: Vec<&MessageBlock> = result
@@ -1437,14 +1437,14 @@ async fn cancellation_during_continuation_generation() {
         2,
         "the continuation request was sent"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
-        result.events.last(),
+        result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
     assert!(
         result
-            .events
+            .event_history
             .iter()
             .any(|event| matches!(event, RuntimeEvent::AssistantTextDelta { .. })),
         "continuation deltas before cancellation remain in the trace"
@@ -1483,7 +1483,7 @@ async fn cancellation_never_results_in_completed() {
         });
         let result = run(&model, tools, &cancellation).await;
         controller.await.expect("controller task");
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         assert!(
             !matches!(result.outcome, AttemptOutcome::Completed { .. }),
             "cancellation must never complete"
@@ -1602,7 +1602,7 @@ async fn opaque_continuation_is_never_inspected() {
         Some(state),
         "opaque items pass through byte-for-byte"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -1645,7 +1645,7 @@ async fn missing_required_continuation_fails_explicitly() {
         None,
         "the loop passes exactly what the stream reported: nothing"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Failed {
@@ -1718,7 +1718,7 @@ async fn unsupported_capability_stays_terminal_failure() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Failed {
@@ -1806,7 +1806,7 @@ async fn usage_folds_updates_and_terminal_usage() {
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
         let reported = result
-            .events
+            .event_history
             .iter()
             .find_map(|event| match event {
                 RuntimeEvent::ModelRequestCompleted { usage, .. } => Some(usage.clone()),
@@ -1814,7 +1814,7 @@ async fn usage_folds_updates_and_terminal_usage() {
             })
             .expect("model request completion event");
         assert_eq!(reported, expected, "folded final usage");
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
     }
 }
 
@@ -1832,7 +1832,7 @@ async fn refusal_semantics_preserved() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -1873,7 +1873,7 @@ async fn replay_text_execution() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
     assert_eq!(
-        replay_execution_states(&result.events).expect("valid trace"),
+        replay_execution_states(&result.event_history).expect("valid trace"),
         vec![
             ExecutionState::Idle,
             ExecutionState::RunningModel,
@@ -1911,7 +1911,7 @@ async fn replay_tool_execution() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
     assert_eq!(
-        replay_execution_states(&result.events).expect("valid trace"),
+        replay_execution_states(&result.event_history).expect("valid trace"),
         vec![
             ExecutionState::Idle,
             ExecutionState::RunningModel,
@@ -1934,7 +1934,7 @@ async fn replay_failed_execution() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
     assert_eq!(
-        replay_execution_states(&result.events).expect("valid trace"),
+        replay_execution_states(&result.event_history).expect("valid trace"),
         vec![
             ExecutionState::Idle,
             ExecutionState::RunningModel,
@@ -1965,7 +1965,7 @@ async fn replay_cancelled_execution() {
     let result = run(&model, tools, &cancellation).await;
     controller.await.expect("controller task");
     assert_eq!(
-        replay_execution_states(&result.events).expect("valid trace"),
+        replay_execution_states(&result.event_history).expect("valid trace"),
         vec![
             ExecutionState::Idle,
             ExecutionState::RunningModel,
@@ -1992,7 +1992,7 @@ async fn identical_inputs_produce_identical_traces() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result_first = run(&first, tools_first, &cancellation).await;
     let result_second = run(&second, tools_second, &cancellation).await;
-    assert_eq!(result_first.events, result_second.events);
+    assert_eq!(result_first.event_history, result_second.event_history);
     assert_eq!(result_first.messages(), result_second.messages());
     assert_eq!(result_first.outcome, result_second.outcome);
     assert_eq!(result_first.terminal_state, result_second.terminal_state);
@@ -2016,7 +2016,7 @@ async fn successful_settlement_completes_the_machine() {
         "success settles the machine to Completed"
     );
     assert!(result.terminal_state.is_terminal());
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
 }
 
 /// Model failure settles the real machine to Failed.
@@ -2200,7 +2200,7 @@ async fn replay_settlement_cannot_diverge_from_machine() {
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     for (model, tools) in scenarios {
         let result = run(&model, tools, &cancellation).await;
-        let replay = replay_execution_states(&result.events).expect("valid trace");
+        let replay = replay_execution_states(&result.event_history).expect("valid trace");
         assert_eq!(
             replay.last(),
             Some(&result.terminal_state),
@@ -2411,7 +2411,7 @@ async fn malformed_streams_are_rejected() {
         let tools = ToolRegistry::new();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let result = run(&model, tools, &cancellation).await;
-        assert_single_terminal(&result.events);
+        assert_single_terminal(&result.event_history);
         assert!(
             matches!(
                 result.outcome,
@@ -2422,7 +2422,7 @@ async fn malformed_streams_are_rejected() {
                 }
             ),
             "malformed streams fail with ContractViolation: {:?}",
-            result.events
+            result.event_history
         );
     }
 }
@@ -2444,7 +2444,7 @@ async fn unfinished_tool_call_at_terminal_is_rejected() {
     let tools = ToolRegistry::new();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let result = run(&model, tools, &cancellation).await;
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(
         matches!(
             result.outcome,
@@ -2521,9 +2521,10 @@ async fn run_with_mailbox(
     tools: ToolRegistry,
     cancellation: &AgentCancellation,
     tool_runtime: &rustx::tools::runtime::ConversationToolRuntime,
-) -> AgentExecutionResult {
+) -> common::DurableExecutionAudit {
+    let store = tool_runtime.durable_store();
     let capability = common::capability_lease(tools, tool_runtime).await;
-    AgentExecution::new(
+    let result = AgentExecution::new(
         request("attempt-1", model),
         capability.into_lease(),
         cancellation,
@@ -2533,7 +2534,8 @@ async fn run_with_mailbox(
     )
     .expect("conversation identity matches the tool runtime")
     .run()
-    .await
+    .await;
+    common::durable_agent_result(result, store.as_ref())
 }
 
 /// An attempt over a tool runtime of a different conversation is rejected
@@ -2593,8 +2595,8 @@ async fn foreground_tools_with_empty_mailbox_keep_exact_behavior() {
     let tool_runtime = common::tool_runtime("conv-1");
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
-    assert_trace(&result.events, &expected_single_tool_trace());
-    assert_single_terminal(&result.events);
+    assert_trace(&result.event_history, &expected_single_tool_trace());
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -2681,7 +2683,7 @@ async fn foreground_tools_with_inbound_batch_attach_one_ordered_batch() {
         "the drained batch is consumed"
     );
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -2786,7 +2788,7 @@ async fn later_correction_ships_one_batch_and_one_continuation() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -2877,7 +2879,7 @@ async fn stop_with_pending_inbound_does_not_settle_until_batch_consumed() {
         2,
         "the first Stop must not settle the attempt while inbound work is pending"
     );
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -2925,7 +2927,7 @@ async fn empty_snapshot_settlement_is_finite_and_never_reopens() {
     let mailbox = tool_runtime.mailbox().clone();
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -2993,7 +2995,7 @@ async fn cancellation_before_safe_boundary_leaves_mailbox_untouched() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Cancelled {
@@ -3081,7 +3083,7 @@ async fn cancellation_mid_continuation_keeps_drained_batch_canonical() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Cancelled {
@@ -3142,7 +3144,7 @@ async fn terminal_model_failure_leaves_pending_inbound_untouched() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert!(matches!(
         result.outcome,
         AttemptOutcome::Failed {
@@ -3203,7 +3205,7 @@ async fn unknown_tool_failure_leaves_pending_inbound_untouched() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Failed {
@@ -3271,7 +3273,7 @@ async fn continuation_retained_across_inbound_drain() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {
@@ -3353,7 +3355,7 @@ async fn one_attempt_consumes_multiple_batches_at_different_boundaries() {
     let result = run_with_mailbox(&model, tools, &cancellation, &tool_runtime).await;
     controller.await.expect("controller task");
 
-    assert_single_terminal(&result.events);
+    assert_single_terminal(&result.event_history);
     assert_outcome(
         &result,
         AttemptOutcome::Completed {

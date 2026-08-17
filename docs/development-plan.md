@@ -463,6 +463,10 @@ Implemented in the current architecture:
   request start. `RequestHistory` is a bounded, fallible, cursor-paged read
   handle over those facts, retaining no second transcript or unbounded
   snapshot vector.
+- The active `AgentExecution` retains only bounded continuation state and the
+  current `ConversationState`. It retains neither a complete Request Snapshot
+  collection nor a duplicate Event Journal trace; durable request and event
+  history is read from the store by key or bounded page.
 - Generic pre-admission cancellation linearization, no rollback after
   admission, and bounded overflow compact-and-retry that reuses the accepted
   context generation without reinvoking contributors.
