@@ -1361,18 +1361,25 @@ mod tests {
     struct GatedAdapter {
         scripts: Mutex<VecDeque<VecDeque<GatedStep>>>,
         requests: Arc<Mutex<Vec<ModelRequest>>>,
+        request_count: Arc<watch::Sender<usize>>,
     }
 
     impl GatedAdapter {
         fn new(scripts: Vec<Vec<GatedStep>>) -> Self {
+            let (request_count, _receiver) = watch::channel(0);
             Self {
                 scripts: Mutex::new(scripts.into_iter().map(VecDeque::from).collect()),
                 requests: Arc::new(Mutex::new(Vec::new())),
+                request_count: Arc::new(request_count),
             }
         }
 
         fn requests(&self) -> Vec<ModelRequest> {
             self.requests.lock().expect("requests lock").clone()
+        }
+
+        fn request_count(&self) -> watch::Receiver<usize> {
+            self.request_count.subscribe()
         }
     }
 
@@ -1386,7 +1393,12 @@ mod tests {
             request: ModelRequest,
             cancellation: CancellationSignal,
         ) -> ModelEventStream {
-            self.requests.lock().expect("requests lock").push(request);
+            let request_count = {
+                let mut requests = self.requests.lock().expect("requests lock");
+                requests.push(request);
+                requests.len()
+            };
+            self.request_count.send_replace(request_count);
             let script = self
                 .scripts
                 .lock()
@@ -2203,6 +2215,21 @@ mod tests {
         })
         .await
         .expect("request history transfer must settle");
+    }
+
+    /// Waits until the fake provider has actually received the expected
+    /// number of provider-neutral requests. Request snapshots are durable
+    /// before adapter invocation, so request-history visibility alone is not
+    /// a sufficient synchronization point for provider-side assertions.
+    async fn await_adapter_request_count(adapter: &GatedAdapter, expected: usize) {
+        let mut count = adapter.request_count();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            count.wait_for(|actual| *actual >= expected),
+        )
+        .await
+        .expect("provider invocation must settle")
+        .expect("provider request-count signal must stay open");
     }
 
     /// Submitting while an attempt is running queues the message in the
@@ -4098,6 +4125,7 @@ mod tests {
         // before the assertions below.
         settlement_gate.release();
         await_request_history_len(&fixture.host, 2).await;
+        await_adapter_request_count(&adapter, 2).await;
         let requests = adapter.requests();
         assert_eq!(
             requests.len(),
