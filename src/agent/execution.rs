@@ -3696,7 +3696,7 @@ mod tests {
         ));
         assert_eq!(adapter.request_count(), TOOL_TURNS + 1);
 
-        assert_bounded_event_history(store.as_ref(), PAGE_SIZE);
+        assert_bounded_event_history(store.as_ref(), PAGE_SIZE, TOOL_TURNS);
         assert_bounded_request_history(
             store.as_ref(),
             PAGE_SIZE,
@@ -3705,7 +3705,11 @@ mod tests {
         );
     }
 
-    fn assert_bounded_event_history(store: &dyn ConversationStore, page_size: usize) {
+    fn assert_bounded_event_history(
+        store: &dyn ConversationStore,
+        page_size: usize,
+        minimum_event_count: usize,
+    ) {
         let mut cursor = None;
         let mut sequences = Vec::new();
         let mut pages = 0;
@@ -3725,6 +3729,10 @@ mod tests {
         }
         assert!(pages > 1, "the journal must be inspected in pages");
         assert!(!sequences.is_empty());
+        assert!(
+            sequences.len() > minimum_event_count,
+            "the long attempt must commit more events than tool turns"
+        );
         assert!(sequences.windows(2).all(|window| window[0] < window[1]));
         assert!(matches!(
             store
