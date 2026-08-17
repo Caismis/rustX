@@ -117,8 +117,9 @@ pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
 };
 pub use recovery::{
-    AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, RecoveryError,
-    RecoveryEvidence, RecoveryPlan, RecoveryReconciliation, RecoveryReport, ResumeDisposition,
+    AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,
+    RecoveryError, RecoveryEvidence, RecoveryPlan, RecoveryReconciliation, RecoveryReport,
+    RequestOutcome, ResumeDisposition,
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use types::{

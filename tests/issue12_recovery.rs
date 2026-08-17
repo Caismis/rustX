@@ -38,8 +38,8 @@ use rustx::events::types::{
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
-    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock,
-    UserMessageBlock, UserSource,
+    AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, ToolMessageBlock,
+    UserContentBlock, UserMessageBlock, UserSource,
 };
 use rustx::model::catalog::{ModelCapabilities, ModelCompat};
 use rustx::model::{
@@ -50,8 +50,8 @@ use rustx::runtime::identity::{
     ToolId, TurnId,
 };
 use rustx::runtime::recovery::{
-    AttemptRecoveryClass, RecoveryError, RecoveryEvidence, RecoveryPlan, RecoveryReport,
-    ResumeDisposition, recover,
+    AttemptRecoveryClass, KnownModelOutcome, RecoveryError, RecoveryEvidence, RecoveryPlan,
+    RecoveryReport, RequestOutcome, ResumeDisposition, recover,
 };
 use rustx::runtime::types::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
 use rustx::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
@@ -159,6 +159,41 @@ fn success_result(body: &str) -> ToolExecutionResult {
         artifacts: Vec::new(),
         truncation: None,
     }
+}
+
+/// Commits exactly the durable transition `repair_tool_turns` commits: the
+/// canonical `ToolResult` sibling plus its `ToolMessageCommitted` fact, with
+/// the recovery envelope carrying **no** attempt identity.
+///
+/// This is the narrow, deterministic hook the second-crash regressions use:
+/// it builds the "recovery repair committed, attempt terminal absent" durable
+/// prefix without sleeps or timing — the exact prefix that must reclassify
+/// truthfully on the next startup.
+fn commit_recovery_tool_repair(
+    store: &SqliteConversationStore,
+    assistant_message_id: &str,
+    call_id: &str,
+    result: ToolExecutionResult,
+) {
+    let message_id = MessageId::new(format!("{assistant_message_id}-recovered-tool-{call_id}"));
+    let block = MessageBlock::Tool(ToolMessageBlock {
+        id: message_id.clone(),
+        tool_call_id: ToolCallId::new(call_id),
+        tool_id: ToolId::new("tool-a"),
+        result,
+    });
+    let event = envelope(
+        &format!("recovery-tool-committed:{message_id}"),
+        None,
+        None,
+        RuntimeEvent::ToolMessageCommitted {
+            message_id,
+            tool_call_id: ToolCallId::new(call_id),
+        },
+    );
+    store
+        .append_canonical_batch_with_events(&[block], &[event])
+        .expect("recovery tool repair commits atomically");
 }
 
 fn envelope(
@@ -573,6 +608,269 @@ fn started_request_with_unknown_outcome_is_indeterminate_and_never_resent() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests E1 / E2 — external outcome durably known, canonical settlement missing
+// ---------------------------------------------------------------------------
+
+/// A model request whose provider outcome completed **durably** before the
+/// crash — but whose canonical Assistant message never committed — must not
+/// become the Class-B "no external start" continuation.
+///
+/// The provider already executed the request; resending would re-execute a
+/// turn whose outcome rustX durably observed. The Assistant message content
+/// is never recoverable from `ModelRequestCompleted`, so recovery neither
+/// fabricates a body nor resends: it classifies the external work as
+/// durably started with a known outcome, settles the attempt honestly, and
+/// permits no automatic continuation.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn completed_model_request_before_assistant_commit_is_not_class_b() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    let request_id;
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        let accepted = store
+            .accept_inbound(human("the model answered"))
+            .expect("accept");
+        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        let snapshot = snapshot_at(&store, &attempt, "0", "model-before-restart");
+        request_id = snapshot.request_id.clone();
+        // The one request-start transaction: snapshot + ModelRequestStarted.
+        store
+            .persist_request_start(&snapshot, fixed_time())
+            .expect("request start");
+        // The provider completed the request; rustX observed and committed
+        // the outcome. The canonical Assistant message never committed.
+        store
+            .append_event(envelope(
+                "request-completed",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ModelRequestCompleted {
+                    finish_reason: rustx::model::ModelFinishReason::Stop,
+                    usage: None,
+                },
+            ))
+            .expect("request completed");
+        // CRASH: no AssistantMessageCommitted, no attempt terminal.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::ExternalOutcomeKnown {
+            attempt_id: attempt.clone(),
+            model_request: Some(KnownModelOutcome {
+                request_id: Some(request_id.clone()),
+                outcome: RequestOutcome::Completed,
+            }),
+            tool_calls: Vec::new(),
+        },
+        "a durably completed model request is never 'never started'"
+    );
+    assert_ne!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt.clone(),
+        },
+        "the completed request must never classify as Class B"
+    );
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "no automatic continuation of the answered model turn"
+    );
+
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert_eq!(
+        report.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt),
+        "the dead attempt settles exactly once"
+    );
+    assert!(
+        report.reconciliation().repaired_tool_results.is_empty(),
+        "no tool repair applies"
+    );
+
+    // Recovery starts no replacement request and fabricates no Assistant
+    // body.
+    let events = all_events(&store);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        1,
+        "recovery performs zero automatic resend"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::AssistantMessageCommitted { .. })),
+        "a known request outcome never fabricates an Assistant body"
+    );
+    let canonical = store.load_canonical().expect("canonical");
+    assert_eq!(canonical.len(), 1, "only the User turn is canonical");
+    let terminal = events.iter().find_map(|event| match event {
+        RuntimeEvent::AttemptFailed { attempt_id, error } if attempt_id == &attempt => {
+            Some(error.clone())
+        }
+        _ => None,
+    });
+    let AttemptFailure::Runtime {
+        error: RuntimeError::RestartInterrupted { message },
+    } = terminal.expect("one interrupted recovery terminal")
+    else {
+        panic!("the recovery terminal is an explicit restart interruption");
+    };
+    assert!(
+        message.contains("completed durably") && message.contains("no response body is fabricated"),
+        "the diagnostic records the durable completion and the non-fabrication: {message}"
+    );
+    assert_eq!(terminal_count(&events, &attempt), 1, "terminal is unique");
+}
+
+/// A model request whose provider outcome **failed** durably before the
+/// crash must not become a safe Class-B continuation either: converting it
+/// into "no external start" would create an implicit generic retry policy,
+/// which M9a explicitly does not have.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn failed_model_request_before_terminal_is_not_retried() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    let request_id;
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        let accepted = store.accept_inbound(human("ask")).expect("accept");
+        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        let snapshot = snapshot_at(&store, &attempt, "0", "model-before-restart");
+        request_id = snapshot.request_id.clone();
+        store
+            .persist_request_start(&snapshot, fixed_time())
+            .expect("request start");
+        // The provider failed durably; the crash happened before the attempt
+        // could settle.
+        store
+            .append_event(envelope(
+                "request-failed",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ModelRequestFailed {
+                    error: rustx::model::error::ModelError {
+                        kind: rustx::model::error::ModelErrorKind::ProviderError,
+                        message: "durable provider failure".to_owned(),
+                        retry_after_ms: None,
+                        provider_code: None,
+                    },
+                },
+            ))
+            .expect("request failed");
+        // CRASH: no attempt terminal.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::ExternalOutcomeKnown {
+            attempt_id: attempt.clone(),
+            model_request: Some(KnownModelOutcome {
+                request_id: Some(request_id),
+                outcome: RequestOutcome::Failed,
+            }),
+            tool_calls: Vec::new(),
+        },
+        "a durably failed model request is never 'never started'"
+    );
+    assert_ne!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt.clone(),
+        },
+        "the durable failure must never authorize a Class-B continuation"
+    );
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::PendingInboundOnly,
+        "no implicit generic retry"
+    );
+
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert_eq!(
+        report.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt)
+    );
+
+    // No automatic provider retry: recovery appends no request start, no
+    // retry schedule, and no invented success.
+    let events = all_events(&store);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        1,
+        "the failed request is never re-issued"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRetryScheduled { .. })),
+        "M9a has no generic retry engine"
+    );
+    // The historical failure remains durable.
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ModelRequestFailed { .. })),
+        "the historical request failure stays a durable fact"
+    );
+    let terminal = events.iter().find_map(|event| match event {
+        RuntimeEvent::AttemptFailed { attempt_id, error } if attempt_id == &attempt => {
+            Some(error.clone())
+        }
+        _ => None,
+    });
+    let AttemptFailure::Runtime {
+        error: RuntimeError::RestartInterrupted { message },
+    } = terminal.expect("one interrupted recovery terminal")
+    else {
+        panic!("the recovery terminal is an explicit restart interruption");
+    };
+    assert!(
+        message.contains("failed durably") && message.contains("was not retried"),
+        "the diagnostic preserves the historical failure: {message}"
+    );
+    assert_eq!(terminal_count(&events, &attempt), 1, "terminal is unique");
+}
+
+// ---------------------------------------------------------------------------
 // Test F — a durable terminal survives repeated restarts
 // ---------------------------------------------------------------------------
 
@@ -759,6 +1057,109 @@ fn started_tool_with_unknown_outcome_becomes_interrupted_and_is_never_replayed()
     );
 }
 
+/// The mixed plane: the request outcome is durably **known**, but a started
+/// tool execution's outcome is unknown. The unknown tool is the blocking
+/// fact: the attempt must stay indeterminate (never "no external start",
+/// never an automatic continuation) even though the request itself is not
+/// ambiguous.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    {
+        let store = durable.open();
+        store
+            .initialize(&[user_block("msg-u0", "run the tool")])
+            .expect("bootstrap");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        let snapshot = snapshot_at(&store, &attempt, "0", "model-before-restart");
+        store
+            .persist_request_start(&snapshot, fixed_time())
+            .expect("request start");
+        store
+            .append_event(envelope(
+                "request-completed",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ModelRequestCompleted {
+                    finish_reason: rustx::model::ModelFinishReason::ToolCalls,
+                    usage: None,
+                },
+            ))
+            .expect("request completed");
+        store
+            .append_canonical_with_event(
+                &assistant_with_calls("assistant-1", &["call-1"]),
+                envelope(
+                    "assistant-committed",
+                    Some(attempt.clone()),
+                    Some(TurnId::new("0")),
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("assistant-1"),
+                    },
+                ),
+            )
+            .expect("assistant tool-call turn");
+        store
+            .append_event(envelope(
+                "tool-started",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                },
+            ))
+            .expect("tool started");
+        // CRASH: the tool's external outcome is unknown.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::IndeterminateExternalOutcome {
+            attempt_id: attempt.clone(),
+            model_request: None,
+            tool_calls: vec![ToolCallId::new("call-1")],
+        },
+        "the unknown tool outcome dominates the known request outcome"
+    );
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::BlockedIndeterminate,
+        "no automatic continuation while a tool outcome is unknown"
+    );
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![ToolCallId::new("call-1")],
+        "the unknown call is repaired as interrupted"
+    );
+    let canonical = store.load_canonical().expect("canonical");
+    let repaired = canonical
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the repair result");
+    assert_eq!(repaired.status, ToolExecutionStatus::Interrupted);
+}
+
 // ---------------------------------------------------------------------------
 // Test H — mixed sibling tool recovery
 // ---------------------------------------------------------------------------
@@ -922,6 +1323,572 @@ fn a_failed_sibling_repair_commits_no_prefix() {
             .iter()
             .any(|block| message_id_of(block).as_str() == "assistant-1-recovered-tool-call-a"),
         "no member of the failed batch became canonical"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Tests E3 — known foreground tool result before the canonical ToolMessage
+// ---------------------------------------------------------------------------
+
+/// A foreground tool whose **exact** durable result committed before the
+/// crash — but whose canonical `ToolMessage` batch did not — is recovered
+/// from that exact result, never re-executed, and never described as "no
+/// external start".
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn known_foreground_tool_result_is_recovered_verbatim_and_never_replayed() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    let exact = success_result("the exact durable output");
+    {
+        let store = durable.open();
+        store
+            .initialize(&[user_block("msg-u0", "run the tool")])
+            .expect("bootstrap");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        store
+            .append_canonical_with_event(
+                &assistant_with_calls("assistant-1", &["call-1"]),
+                envelope(
+                    "assistant-committed",
+                    Some(attempt.clone()),
+                    Some(TurnId::new("0")),
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("assistant-1"),
+                    },
+                ),
+            )
+            .expect("assistant tool-call turn");
+        store
+            .append_event(envelope(
+                "tool-started",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                },
+            ))
+            .expect("tool started");
+        store
+            .append_event(envelope(
+                "tool-completed",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                    result: exact.clone(),
+                },
+            ))
+            .expect("tool completed");
+        // CRASH: the canonical ToolMessage batch never committed.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::ExternalOutcomeKnown {
+            attempt_id: attempt.clone(),
+            model_request: None,
+            tool_calls: vec![ToolCallId::new("call-1")],
+        },
+        "a started tool with a known outcome is external-outcome-known, never 'no external start'"
+    );
+    assert_ne!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt.clone(),
+        },
+        "the known tool outcome must never claim no external work started"
+    );
+    assert_eq!(plan.resume(), ResumeDisposition::PendingInboundOnly);
+
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![ToolCallId::new("call-1")]
+    );
+    assert_eq!(
+        report.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt)
+    );
+
+    // The exact durable result — body, status, duration, artifacts — becomes
+    // the canonical ToolResult, verbatim.
+    let canonical = store.load_canonical().expect("canonical");
+    let repaired = canonical
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the missing sibling is canonical after recovery");
+    assert_eq!(repaired, exact, "the durable result is used verbatim");
+    assert_eq!(repaired.duration_ms, 7, "the durable duration is preserved");
+    assert!(
+        !repaired.content.is_empty(),
+        "the durable result body is preserved"
+    );
+    // The tool is never re-executed.
+    assert_eq!(
+        all_events(&store)
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        1,
+        "no tool is silently replayed"
+    );
+    let active_ids = store.load_head().expect("head").active_message_ids;
+    let active = store.load_messages(&active_ids).expect("active");
+    rustx::conversation::recovery_safety(&active).expect("safe boundary");
+}
+
+// ---------------------------------------------------------------------------
+// Tests E4 / E5 — the second crash after a recovery repair
+// ---------------------------------------------------------------------------
+
+/// The current PR review finding, deterministically: a crash **after** the
+/// recovery tool-turn repair committed but **before** the attempt terminal
+/// commits must not erase the historical `ToolExecutionStarted`.
+///
+/// ```text
+/// prefix 1: AttemptStarted, Assistant ToolCall canonical, ToolExecutionStarted, CRASH #1
+/// repair committed: ToolMessage(Interrupted) + ToolMessageCommitted   (no attempt terminal)
+/// CRASH #2
+/// ```
+///
+/// On restart the attempt is still non-terminal, but it must still be known
+/// to have crossed a tool external-start commit — never reclassified as the
+/// safe Class-B continuation.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn second_crash_after_tool_repair_preserves_external_start_evidence() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    {
+        let store = durable.open();
+        store
+            .initialize(&[user_block("msg-u0", "run the tool")])
+            .expect("bootstrap");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        store
+            .append_canonical_with_event(
+                &assistant_with_calls("assistant-1", &["call-1"]),
+                envelope(
+                    "assistant-committed",
+                    Some(attempt.clone()),
+                    Some(TurnId::new("0")),
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("assistant-1"),
+                    },
+                ),
+            )
+            .expect("assistant tool-call turn");
+        store
+            .append_event(envelope(
+                "tool-started",
+                Some(attempt.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                },
+            ))
+            .expect("tool started");
+        // CRASH #1: the external tool ran (or did not) and rustX cannot know.
+    }
+
+    // Recovery #1 runs only the tool-turn repair transition — the exact
+    // durable prefix "repair committed, attempt terminal absent".
+    let first = {
+        let store = durable.open();
+        let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+        let plan = RecoveryPlan::classify(&evidence);
+        assert_eq!(
+            plan.attempt_class(),
+            &AttemptRecoveryClass::IndeterminateExternalOutcome {
+                attempt_id: attempt.clone(),
+                model_request: None,
+                tool_calls: vec![ToolCallId::new("call-1")],
+            },
+            "the first recovery still sees the unknown outcome"
+        );
+        // Narrow, deterministic hook: commit exactly the repair transaction.
+        commit_recovery_tool_repair(
+            &store,
+            "assistant-1",
+            "call-1",
+            ToolExecutionResult {
+                status: ToolExecutionStatus::Interrupted,
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        );
+        plan
+    };
+    // CRASH #2: the process dies before the recovery attempt terminal.
+    drop(first);
+
+    // The next startup reconstructs and classifies again.
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::IndeterminateExternalOutcome {
+            attempt_id: attempt.clone(),
+            model_request: None,
+            tool_calls: vec![ToolCallId::new("call-1")],
+        },
+        "the committed canonical repair does not erase the historical start"
+    );
+    assert_ne!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt.clone(),
+        },
+        "the second crash must never turn the attempt into Class B"
+    );
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::BlockedIndeterminate,
+        "the unknown external outcome still blocks automatic continuation"
+    );
+
+    // The second recovery writes at most the missing attempt terminal; it
+    // does not create a second ToolResult.
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert!(
+        report.reconciliation().repaired_tool_results.is_empty(),
+        "the repair already committed; no second ToolResult is created"
+    );
+    assert_eq!(
+        report.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt),
+        "the second recovery writes the missing attempt terminal"
+    );
+    let canonical = store.load_canonical().expect("canonical");
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|block| matches!(block, MessageBlock::Tool(_)))
+            .count(),
+        1,
+        "exactly one canonical ToolResult exists"
+    );
+    let repaired = canonical
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the repair result");
+    assert_eq!(
+        repaired.status,
+        ToolExecutionStatus::Interrupted,
+        "the unknown external outcome stays represented as interrupted"
+    );
+
+    // Repeated restart after the terminal is fully idempotent.
+    for restart in 0..2 {
+        let report = recover_reopened(&durable);
+        assert!(
+            report.reconciliation().is_empty(),
+            "restart #{restart} committed a new fact"
+        );
+        assert_eq!(
+            report.attempt_class(),
+            &AttemptRecoveryClass::AlreadyTerminal
+        );
+        let store = durable.open();
+        assert_eq!(terminal_count(&all_events(&store), &attempt), 1);
+    }
+}
+
+/// The known-outcome twin of the second-crash regression: the recovery
+/// repair committed the **exact** durable tool result, crashed before the
+/// attempt terminal, and the next startup must still know that external
+/// work crossed a start commit.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn second_crash_after_known_outcome_repair_preserves_external_start() {
+    let durable = Durable::new();
+    let attempt = AttemptId::for_conversation(&conversation_id(), 0);
+    let exact = success_result("the exact durable output");
+    {
+        let store = durable.open();
+        store
+            .initialize(&[user_block("msg-u0", "run the tool")])
+            .expect("bootstrap");
+        store
+            .append_event(envelope(
+                "attempt-started",
+                Some(attempt.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .expect("attempt started");
+        store
+            .append_canonical_with_event(
+                &assistant_with_calls("assistant-1", &["call-1"]),
+                envelope(
+                    "assistant-committed",
+                    Some(attempt.clone()),
+                    Some(TurnId::new("0")),
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("assistant-1"),
+                    },
+                ),
+            )
+            .expect("assistant tool-call turn");
+        for (index, event) in [
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-a"),
+            },
+            RuntimeEvent::ToolExecutionCompleted {
+                tool_call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-a"),
+                result: exact.clone(),
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            store
+                .append_event(envelope(
+                    &format!("tool-fact-{index}"),
+                    Some(attempt.clone()),
+                    Some(TurnId::new("0")),
+                    event,
+                ))
+                .expect("tool fact");
+        }
+        // Recovery #1 repair transition: the exact result becomes canonical.
+        commit_recovery_tool_repair(&store, "assistant-1", "call-1", exact.clone());
+        // CRASH #2: before the recovery attempt terminal.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::ExternalOutcomeKnown {
+            attempt_id: attempt.clone(),
+            model_request: None,
+            tool_calls: vec![ToolCallId::new("call-1")],
+        },
+        "the attempt still had external execution; the outcome is durably known"
+    );
+    assert_ne!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: attempt.clone(),
+        },
+        "a committed repair result never means 'no external side effect crossed a start commit'"
+    );
+
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert!(
+        report.reconciliation().repaired_tool_results.is_empty(),
+        "no replay and no second ToolResult"
+    );
+    assert_eq!(
+        report.reconciliation().attempt_terminal.as_ref(),
+        Some(&attempt)
+    );
+    let canonical = store.load_canonical().expect("canonical");
+    let repaired = canonical
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the repair result");
+    assert_eq!(repaired, exact, "the exact durable result is preserved");
+    assert_eq!(
+        all_events(&store)
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        1,
+        "no tool is re-executed across the second crash"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Finding-15 regression — historical attempt evidence never aliases the
+// current unresolved call
+// ---------------------------------------------------------------------------
+
+/// The recovery fold keys tool evidence by owning attempt **and** call id
+/// because the durable authority does not guarantee `ToolCallId` uniqueness
+/// across the conversation lifetime (providers mint call ids; only the
+/// active Surface rejects duplicates).
+///
+/// Here a **terminal** historical attempt still carries a started-unknown
+/// tool call whose owning Assistant turn is active (the Class-D repair
+/// shape). A new attempt then crashes with zero external starts. The
+/// historical ambiguity belongs to the settled attempt's own terminal, so
+/// the new attempt must classify as Class B — the old bare-call-id fold
+/// would have made it indeterminate from the historical entry.
+#[test]
+#[allow(clippy::too_many_lines)] // One crash prefix, one recovery, one place.
+fn historical_attempt_tool_evidence_never_aliases_the_unsettled_attempt() {
+    let durable = Durable::new();
+    let conversation = conversation_id();
+    let first = AttemptId::for_conversation(&conversation, 0);
+    let current = AttemptId::for_conversation(&conversation, 1);
+    {
+        let store = durable.open();
+        store
+            .initialize(&[user_block("msg-u0", "turn one")])
+            .expect("bootstrap");
+        // Attempt 1: a tool call started, outcome unknown, and the attempt
+        // settled anyway — its owning Assistant turn stays active, so its
+        // missing result still needs the Class-D repair.
+        store
+            .append_event(envelope(
+                "attempt-1-started",
+                Some(first.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: first.clone(),
+                },
+            ))
+            .expect("attempt 1 started");
+        store
+            .append_canonical_with_event(
+                &assistant_with_calls("assistant-1", &["call-1"]),
+                envelope(
+                    "assistant-1-committed",
+                    Some(first.clone()),
+                    Some(TurnId::new("0")),
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: MessageId::new("assistant-1"),
+                    },
+                ),
+            )
+            .expect("assistant 1 tool-call turn");
+        store
+            .append_event(envelope(
+                "tool-started-1",
+                Some(first.clone()),
+                Some(TurnId::new("0")),
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: ToolCallId::new("call-1"),
+                    tool_id: ToolId::new("tool-a"),
+                },
+            ))
+            .expect("tool 1 started");
+        store
+            .append_event(envelope(
+                "attempt-1-failed",
+                Some(first.clone()),
+                None,
+                RuntimeEvent::AttemptFailed {
+                    attempt_id: first.clone(),
+                    error: AttemptFailure::Runtime {
+                        error: RuntimeError::Internal {
+                            message: "the live batch commit failed".to_owned(),
+                        },
+                    },
+                },
+            ))
+            .expect("attempt 1 terminal");
+        // Attempt 2: the provider reuses the same call id in its next
+        // response, but the process crashes before anything starts.
+        let accepted = store.accept_inbound(human("turn two")).expect("accept");
+        store.adopt_pending_batch(accepted.sequence).expect("adopt");
+        store
+            .append_event(envelope(
+                "attempt-2-started",
+                Some(current.clone()),
+                None,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: current.clone(),
+                },
+            ))
+            .expect("attempt 2 started");
+        // CRASH: no ModelRequestStarted, no ToolExecutionStarted.
+    }
+
+    let store = durable.open();
+    let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
+    let plan = RecoveryPlan::classify(&evidence);
+    assert_eq!(
+        plan.attempt_class(),
+        &AttemptRecoveryClass::AdmittedWithoutExternalStart {
+            attempt_id: current.clone(),
+        },
+        "the historical attempt's unresolved tool never aliases the current attempt"
+    );
+    assert_eq!(
+        plan.resume(),
+        ResumeDisposition::ContinueAdoptedTurn,
+        "the current attempt has zero external-start evidence of its own"
+    );
+
+    // The Class-D repair still uses the **historical** attempt's own durable
+    // evidence — attributed exactly, not by bare call id.
+    let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![ToolCallId::new("call-1")],
+        "the settled attempt's incomplete turn is still repaired"
+    );
+    let canonical = store.load_canonical().expect("canonical");
+    let repaired = canonical
+        .iter()
+        .find_map(|block| match block {
+            MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                Some(tool.result.clone())
+            }
+            _ => None,
+        })
+        .expect("the Class-D repair result");
+    assert_eq!(
+        repaired.status,
+        ToolExecutionStatus::Interrupted,
+        "the historical unknown outcome stays interrupted, never invented"
+    );
+    assert_eq!(
+        terminal_count(&all_events(&store), &current),
+        1,
+        "the current attempt settles exactly once"
     );
 }
 

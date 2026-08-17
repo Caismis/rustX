@@ -3160,12 +3160,20 @@ what is safe to do next*. The governing invariant is:
 > silently replays an ambiguous external side effect, and never regenerates
 > historical request/context from current configuration.
 
-and, twice over:
+and, three times over:
 
 ```text
 exact historical reconstruction  !=  safe replay permission
 started + outcome unknown        !=  safe retry
+started + outcome known          !=  never externally started
 ```
+
+The recovery evidence model keeps the **external execution lifecycle** and
+the **canonical structure lifecycle** on separate axes. Only an attempt with
+zero durable external-start evidence — no `ModelRequestStarted`, no
+`ToolExecutionStarted`, ever — may be classified as the safe Class-B
+continuation case; a crash/restart/recovery cycle never turns historical
+external-start evidence into a later claim that no external work started.
 
 ### 7.1 Owner
 
@@ -3229,27 +3237,54 @@ registry contents. Current configuration configures **future** work only.
 | Class | Durable evidence | Recovery action | Resume |
 | --- | --- | --- | --- |
 | **A — not started** | no attempt fact at all; accepted Pending Inbound may exist | none | ordinary Pending Inbound admission |
-| **B — admitted, no external start** | `AttemptStarted`, no `ModelRequestStarted`, no `ToolExecutionStarted` | one interrupted attempt terminal | the already-canonical turn may continue through a **new** attempt |
+| **B — admitted, no external start** | `AttemptStarted`, **no `ModelRequestStarted` ever**, **no `ToolExecutionStarted` ever** | one interrupted attempt terminal | the already-canonical turn may continue through a **new** attempt |
 | **C — external start committed, outcome unknown** | `ModelRequestStarted` with no durable outcome, and/or `ToolExecutionStarted` with no durable outcome | canonical tool-turn repair, then one interrupted attempt terminal | blocked: recovery starts nothing |
 | **D — durable terminal exists** | one terminal attempt fact | none (absorbing) | ordinary Pending Inbound admission |
+| **E — external start committed, outcome durably known, settlement incomplete** | a `ModelRequestStarted` followed by `ModelRequestCompleted`/`ModelRequestFailed`, and/or `ToolExecutionStarted` followed by a durable outcome — with no attempt terminal | canonical tool-turn repair (exact durable result), then one interrupted attempt terminal | ordinary Pending Inbound admission; **no** automatic continuation, resend, or replay |
+
+Class B is the **only** state whose meaning is "no external work started": it
+requires durable proof that **zero** external-start commits ever occurred for
+this attempt. A resolved outcome is not "never started" — the two facts live
+on separate axes and never collapse:
+
+```text
+started + outcome known   !=  never started
+canonical ToolResult committed  !=  historical ToolExecutionStarted erased
+```
 
 Per plane:
 
-- **Model.** `ModelRequestStarted` + no `ModelRequestCompleted`/`ModelRequestFailed`
-  means the provider may have received and executed the request. Recovery
-  reconstructs the exact provider-neutral request for diagnosis, classification,
-  and audit — and performs **zero** automatic resend. No fake
-  `ModelRequestFailed` is written to make the lifecycle look symmetrical.
-  Request ambiguity and attempt settlement are different facts: the request
-  outcome stays unknown while the attempt settles.
-- **Foreground tools.** Each unanswered call on the current Surface is
+- **Model.** The request lifecycle is monotonic: `NeverStarted` →
+  `StartedOutcomeUnknown` → `StartedOutcomeKnown`. `ModelRequestCompleted` or
+  `ModelRequestFailed` never moves an attempt back to "no request started".
+  `ModelRequestStarted` + no outcome means the provider may have received and
+  executed the request: recovery reconstructs the exact provider-neutral
+  request for diagnosis, classification, and audit — and performs **zero**
+  automatic resend. A durably known request outcome (Class E) is preserved as
+  a durable fact: the attempt settles honestly, but the canonical Assistant
+  message never committed, so **no response body is fabricated** from
+  `ModelRequestCompleted`, and **nothing is resent**. A durably **failed**
+  request is never converted into a silent retry: M9a has no generic retry
+  engine, and the historical failure stays durable. Request ambiguity and
+  attempt settlement are different facts: the request outcome stays unknown
+  while the attempt settles.
+- **Foreground tools.** External execution evidence and canonical repair
+  state are separate axes. Each unanswered call on the current Surface is
   answered from durable evidence only: a durably known outcome is used
   verbatim; a started call with no outcome becomes
   `ToolExecutionStatus::Interrupted`; a call with no start evidence at all
   becomes `Cancelled { ParentCancelled }` because nothing external happened.
-  No tool is re-executed. The missing siblings of one Assistant turn commit as
-  one atomic batch in canonical model-call order, so no durable prefix of a
-  sibling batch is ever observable.
+  A committed canonical `ToolResult` means the Surface no longer needs the
+  repair — it never erases the historical `ToolExecutionStarted` while the
+  owning attempt is still non-terminal, so a crash between the repair commit
+  and the attempt terminal can never reclassify an indeterminate attempt as
+  Class B. Tool evidence is keyed by owning attempt **and** call id: the
+  durable authority does not guarantee `ToolCallId` uniqueness across the
+  conversation lifetime (providers mint call ids; only the active Surface
+  rejects duplicates), so historical attempts can never alias the current
+  unresolved call. No tool is re-executed. The missing siblings of one
+  Assistant turn commit as one atomic batch in canonical model-call order, so
+  no durable prefix of a sibling batch is ever observable.
 - **Background.** A committed async background execution survives the starting
   *attempt*, not the *process*. A durably owned, never-published execution is
   terminalized as `BackgroundTerminalState::Interrupted` — never `Failed`,
@@ -3325,13 +3360,38 @@ the other.
 
 The evidence fold pages the Event Journal and retains only the *unresolved*
 state: non-terminal attempts (at most one by the admission invariant), that
-attempt's in-flight request, tool calls whose canonical `ToolResult` is not
-committed (one finite foreground batch), and background executions whose
-terminal publication is not committed. A resolved entry is dropped the moment
-its resolving fact is read, so complete Event Journal, Request Snapshot, and
-Ledger history are never materialized as recovery state.
+attempt's model-request lifecycle, tool executions whose owning attempt is
+still unresolved or whose canonical `ToolResult` is not committed, and
+background executions whose terminal publication is not committed. A
+resolved entry is dropped the moment its resolving fact is read, so complete
+Event Journal, Request Snapshot, and Ledger history are never materialized
+as recovery state.
 
-### 7.11 Replay policy
+The retention rule for tool evidence is: keep the entry while the owning
+attempt is non-terminal (classification needs to know whether external work
+started and whether its outcome is known), and keep it after the terminal
+only while the canonical `ToolResult` is missing (the Class-D repair case).
+Once the owning attempt is terminal **and** the canonical result is
+committed, the entry is dropped. A recovery repair commit resolves the entry
+immediately when its owner is already terminal, so no resolved history
+lingers.
+
+### 7.11 Recovery-prefix invariant
+
+> Every successfully committed prefix of recovery reconciliation is itself a
+> valid, truth-preserving input to a subsequent recovery.
+
+Reconciliation commits tool-turn repair, the attempt recovery terminal, and
+background terminal publication as **separate** atomic transitions on
+purpose; each is a useful semantic commit point. A crash between any two of
+them must leave a durable state that the next startup classifies exactly as
+truthfully as the first did. In particular, a `ToolMessageCommitted`
+committed by a repair — with the attempt terminal still absent — keeps the
+attempt's external-start evidence intact, so the next recovery still sees an
+indeterminate (or known-outcome) attempt and never reclassifies it as
+Class B.
+
+### 7.12 Replay policy
 
 `ToolReplayPolicy::Idempotent` remains metadata. M9a implements no replay
 engine, no retry framework, no configurable recovery strategy, and no

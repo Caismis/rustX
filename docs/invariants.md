@@ -1986,8 +1986,27 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
 - recovery reconstructs what durably happened; it never invents success, never
   silently replays an ambiguous external side effect, and never regenerates
   historical request/context from current configuration. Therefore
-  `exact historical reconstruction != safe replay permission` and
-  `started + outcome unknown != safe retry`;
+  `exact historical reconstruction != safe replay permission`,
+  `started + outcome unknown != safe retry`, and
+  `started + outcome known != never externally started`;
+
+- the recovery evidence model keeps the **external execution lifecycle** and
+  the **canonical structure lifecycle** on separate axes. Only an attempt
+  with **zero** durable external-start evidence — no `ModelRequestStarted`
+  and no `ToolExecutionStarted`, ever — may be classified as the safe
+  Class-B continuation case. A `ToolMessageCommitted` means the Surface no
+  longer needs that repair; it never erases the historical
+  `ToolExecutionStarted` while the owning attempt is still non-terminal, and
+  a crash/restart/recovery cycle never turns historical external-start
+  evidence into a later claim that no external work started;
+
+- **the recovery-prefix invariant**: every successfully committed prefix of
+  recovery reconciliation is itself a valid, truth-preserving input to a
+  subsequent recovery. Reconciliation commits tool-turn repair, the attempt
+  recovery terminal, and background terminal publication as separate atomic
+  transitions on purpose, so a crash between any two of them must leave a
+  durable state that the next startup classifies exactly as truthfully as the
+  first did;
 
 - recovery policy is owned by `ConversationRuntime` and consumes
   `ConversationStore` evidence. It is never located in the SQLite backend, the
@@ -2014,18 +2033,31 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
   **B (admitted, no external start)** — the interrupted attempt receives an
   explicit recovery terminal and the already-canonical turn may continue
   through a *new* attempt without re-adopting or duplicating the
-  `UserMessage`;
+  `UserMessage`. Class B requires durable proof that **zero** external-start
+  commits ever occurred for this attempt;
   **C (external start committed, outcome unknown)** — the ambiguity is a
   first-class state, recovery starts nothing, and no request is resent and no
   tool re-executed;
   **D (durable terminal exists)** — absorbing;
+  **E (external start committed, outcome durably known, settlement
+  incomplete)** — the known outcome is preserved (exact durable tool results
+  are repaired into the Surface), the dead attempt is terminalized honestly,
+  and the attempt is **never** described as "no external start": no
+  automatic continuation, no resend, and no replay;
 
-- `ModelRequestStarted` with no durable outcome never produces a fabricated
+- the model-request lifecycle is monotonic: `NeverStarted` →
+  `StartedOutcomeUnknown` → `StartedOutcomeKnown`. `ModelRequestCompleted`
+  or `ModelRequestFailed` never moves an attempt back to "no request
+  started". A durably completed request whose Assistant message never
+  committed never fabricates the response body and is never resent; a
+  durably **failed** request is never converted into a silent generic retry
+  (M9a has no retry engine), and the historical failure stays durable. A
+  `ModelRequestStarted` with no durable outcome never produces a fabricated
   `ModelRequestFailed` or `ModelRequestCompleted`. The historical
   provider-neutral request reconstructs exactly from its frozen Request
   Snapshot, historical Surface revision, and Ledger bodies — for diagnosis,
-  classification, and audit only. Request ambiguity and attempt settlement are
-  distinct facts;
+  classification, and audit only. Request ambiguity and attempt settlement
+  are distinct facts;
 
 - an unresolved foreground tool call is never automatically replayed. A
   durably known outcome is committed verbatim; a started call with an unknown
@@ -2034,7 +2066,13 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
   of one Assistant tool turn commit as **one** atomic batch in canonical
   model-call order, so no durable prefix of a sibling batch is observable and
   the conversation is never left structurally unable to form a later model
-  request;
+  request. A committed canonical `ToolResult` is **not** the erasure of the
+  historical `ToolExecutionStarted` while the owning attempt is still
+  non-terminal. Tool evidence is keyed by owning attempt **and** call id: the
+  durable authority does not guarantee `ToolCallId` uniqueness across the
+  conversation lifetime (providers mint call ids; only the active Surface
+  rejects duplicates), so historical attempts never alias the current
+  unresolved call;
 
 - a committed background execution survives its starting *attempt*, not the
   *process*. Recovery never assumes the old task/process is alive and never

@@ -826,16 +826,25 @@ to continue. It builds on the completed #61 (conversation runtime ownership),
 durable facts -> reconstruct -> classify -> reconcile -> recovered state -> resume
 ```
 
-The full contract — owner, evidence sources, the four phases, the A/B/C/D
+The full contract — owner, evidence sources, the four phases, the A/B/C/D/E
 classification matrix, reconciliation transaction boundaries, terminal
-uniqueness, identity recovery, and the bounded working set — is frozen in
+uniqueness, identity recovery, the external-lifecycle/canonical-lifecycle
+separation, the recovery-prefix invariant, and the bounded working set — is
+frozen in
 [architecture.md §7](architecture.md#7-recovery-model) and
-[invariants.md](invariants.md#recovery). The two rules that govern all of it:
+[invariants.md](invariants.md#recovery). The three rules that govern all of it:
 
 ```text
 exact historical reconstruction  !=  safe replay permission
 started + outcome unknown        !=  safe retry
+started + outcome known          !=  never externally started
 ```
+
+Only an attempt with zero durable external-start evidence — no
+`ModelRequestStarted`, no `ToolExecutionStarted`, ever — may receive the
+Class-B continuation, and a committed canonical `ToolResult` never erases
+the historical `ToolExecutionStarted` while its owning attempt is still
+non-terminal.
 
 Exit criteria (met): accepted Pending Inbound survives a crash unchanged and
 is auto-admitted headlessly; a crash after the adoption commit leaves the

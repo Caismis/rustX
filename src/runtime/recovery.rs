@@ -31,12 +31,35 @@
 //! > never silently replays an ambiguous external side effect, and never
 //! > regenerates historical request/context from current configuration.
 //!
-//! and therefore, twice over:
+//! and therefore, three times over:
 //!
 //! ```text
 //! exact historical reconstruction  !=  safe replay permission
 //! external outcome unknown         !=  retry
+//! external outcome known           !=  never externally started
 //! ```
+//!
+//! The evidence model keeps the **external execution lifecycle** and the
+//! **canonical structure lifecycle** on separate axes. A committed canonical
+//! `ToolResult` means the Surface no longer needs that repair; it never
+//! means the historical `ToolExecutionStarted` is forgotten. A durably
+//! known provider outcome means the request definitely executed; it never
+//! means "nothing started". Only an attempt with **zero** durable
+//! external-start evidence — no `ModelRequestStarted`, no
+//! `ToolExecutionStarted`, ever — may be classified as the safe Class-B
+//! continuation case.
+//!
+//! # The recovery-prefix invariant
+//!
+//! > Every successfully committed prefix of recovery reconciliation is
+//! > itself a valid, truth-preserving input to a subsequent recovery.
+//!
+//! Reconciliation commits repair, attempt terminal, and background
+//! publication as **separate** atomic transitions on purpose. A crash
+//! between any two of them must leave a durable state that the next startup
+//! classifies exactly as truthfully as the first did — in particular a
+//! `ToolMessageCommitted` committed by a repair must not erase the
+//! external-start evidence of the still-non-terminal owning attempt.
 //!
 //! # Ownership
 //!
@@ -120,36 +143,92 @@ impl From<ConversationStoreError> for RecoveryError {
 // Phase 1 — reconstruct
 // ---------------------------------------------------------------------------
 
+/// The durable lifecycle of the model request(s) of one attempt.
+///
+/// The transition is **monotonic**: `NeverStarted` can move to
+/// `StartedOutcomeUnknown` and then to `StartedOutcomeKnown`, but a resolved
+/// outcome can never move back to `NeverStarted`. A later turn of the same
+/// attempt starts its own request by re-entering `StartedOutcomeUnknown`
+/// with the new request identity; the earlier request's durable outcome
+/// remains in the Event Journal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExternalRequestLifecycle {
+    /// No `ModelRequestStarted` ever committed for this attempt. Only this
+    /// state is eligible for the Class-B "no external start" continuation.
+    NeverStarted,
+    /// The request start committed; no durable outcome followed. The
+    /// provider may or may not have executed the request.
+    StartedOutcomeUnknown {
+        /// The in-flight request.
+        request_id: RequestId,
+    },
+    /// The request start committed and the provider outcome is durably
+    /// known. This is **never** convertible back to `NeverStarted`.
+    ///
+    /// The `request_id` is `None` only for the journal anomaly of a durable
+    /// outcome with no start fact; the outcome is still durably known and
+    /// still proves external work happened.
+    StartedOutcomeKnown {
+        /// The request, when its start fact committed durably.
+        request_id: Option<RequestId>,
+        /// What the provider outcome was.
+        outcome: RequestOutcome,
+    },
+}
+
+/// The durably known provider outcome of one model request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOutcome {
+    /// `ModelRequestCompleted` committed durably.
+    Completed,
+    /// `ModelRequestFailed` committed durably.
+    Failed,
+}
+
 /// What durable evidence says about one non-terminal attempt.
 ///
 /// The entry exists only while the attempt is unresolved; the attempt's
 /// terminal fact removes it from the fold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AttemptEvidence {
-    /// The one model request whose start committed durably and whose outcome
-    /// is not durably known.
-    open_request: Option<RequestId>,
+    /// The durable model-request lifecycle of this attempt.
+    request: ExternalRequestLifecycle,
 }
 
-/// What durable evidence says about one tool execution whose canonical
-/// `ToolResult` is not committed.
+/// The external execution lifecycle of one tool call.
+///
+/// Separate from the canonical structure lifecycle: a committed canonical
+/// `ToolResult` never erases the fact that the external execution started.
 #[derive(Debug, Clone, PartialEq)]
-enum ToolEvidence {
+enum ToolExternalLifecycle {
     /// `ToolExecutionStarted` committed; no outcome fact followed. The
     /// external outcome is **unknown**.
-    StartedOutcomeUnknown {
-        /// The executed tool.
-        tool_id: ToolId,
-    },
-    /// A durable outcome fact exists; the canonical `ToolResult` message was
-    /// simply never committed. Recovery uses this exact result, never an
+    StartedOutcomeUnknown,
+    /// A durable outcome fact exists (`ToolExecutionCompleted` or
+    /// `ToolExecutionFailed`). Recovery uses this exact result, never an
     /// invented one.
-    OutcomeKnown {
-        /// The executed tool.
-        tool_id: ToolId,
-        /// The exact durable result.
-        result: Box<ToolExecutionResult>,
-    },
+    OutcomeKnown(Box<ToolExecutionResult>),
+}
+
+/// What durable evidence says about one tool execution of one attempt.
+///
+/// The evidence is keyed by its owning attempt **and** call id: the durable
+/// authority does not guarantee `ToolCallId` uniqueness across the whole
+/// conversation lifetime (providers mint call ids; only the active Surface
+/// is uniqueness-checked), so events of historical attempts must never
+/// alias the current unresolved call.
+#[derive(Debug, Clone, PartialEq)]
+struct ToolEvidence {
+    /// The executed tool.
+    tool_id: ToolId,
+    /// The external execution lifecycle.
+    lifecycle: ToolExternalLifecycle,
+    /// Whether the canonical `ToolResult` message committed (repair state).
+    ///
+    /// This is deliberately **not** the removal condition of the external
+    /// evidence: while the owning attempt is still non-terminal, a committed
+    /// canonical result must not make the historical start disappear.
+    canonical_result_committed: bool,
 }
 
 /// What durable evidence says about one detached background execution whose
@@ -184,8 +263,25 @@ pub struct RecoveryEvidence {
     /// reconciliation reports and fails closed on, rather than silently
     /// settling whichever attempt happens to sort first.
     unsettled_attempts: BTreeMap<AttemptId, AttemptEvidence>,
-    /// Tool executions with durable evidence and no committed `ToolResult`.
-    unsettled_tools: BTreeMap<ToolCallId, ToolEvidence>,
+    /// Tool executions with durable external-start evidence, keyed by
+    /// owning attempt and call id.
+    ///
+    /// The composite key is the identity fix of the evidence model: the
+    /// durable authority does not guarantee `ToolCallId` uniqueness across
+    /// the whole conversation lifetime (only the active Surface rejects
+    /// duplicates), so evidence of historical attempts can never alias the
+    /// current unresolved call.
+    unsettled_tools: BTreeMap<(AttemptId, ToolCallId), ToolEvidence>,
+    /// The owning attempt of every **active** Assistant message, resolved
+    /// from the `AssistantMessageCommitted` envelope.
+    ///
+    /// Bounded by the active Surface. This is what lets the tool repair
+    /// attribute an active call to the exact attempt that issued it — a
+    /// historical attempt's same-named call can never be mistaken for the
+    /// current one.
+    assistant_attempts: BTreeMap<MessageId, AttemptId>,
+    /// The active message identities, for the bounded attribution above.
+    active_ids: std::collections::BTreeSet<MessageId>,
     /// Background executions durably owned and not durably published.
     unsettled_background: Vec<BackgroundEvidence>,
     /// The highest conversation-scoped attempt ordinal that entered durable
@@ -222,10 +318,17 @@ impl RecoveryEvidence {
             unsettled_attempts: BTreeMap::new(),
             unsettled_tools: BTreeMap::new(),
             unsettled_background: Vec::new(),
+            assistant_attempts: BTreeMap::new(),
+            active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
             highest_background_ordinal: 0,
             saw_any_attempt: false,
         };
+        evidence.active_ids = evidence
+            .active
+            .iter()
+            .map(crate::conversation::message_id_of)
+            .collect();
 
         // The bounded fold. Each page is decoded, folded, and dropped; only
         // the unresolved working set survives a page boundary.
@@ -260,7 +363,9 @@ impl RecoveryEvidence {
                 self.note_attempt(attempt_id);
                 self.unsettled_attempts
                     .entry(attempt_id.clone())
-                    .or_insert(AttemptEvidence { open_request: None });
+                    .or_insert(AttemptEvidence {
+                        request: ExternalRequestLifecycle::NeverStarted,
+                    });
             }
             RuntimeEvent::AttemptCompleted { attempt_id, .. }
             | RuntimeEvent::AttemptCancelled { attempt_id, .. }
@@ -271,69 +376,187 @@ impl RecoveryEvidence {
                 // A durable terminal is absorbing: the attempt leaves the
                 // unresolved working set and never returns to it.
                 self.unsettled_attempts.remove(attempt_id);
+                // Its tool evidence is resolved once the canonical result is
+                // committed; an entry with no committed canonical result is
+                // a structurally incomplete turn that outlived its owning
+                // attempt (Class D) and must stay repairable from its
+                // durable outcome.
+                self.unsettled_tools.retain(|(owning, _), evidence| {
+                    owning != attempt_id || !evidence.canonical_result_committed
+                });
             }
             RuntimeEvent::ModelRequestStarted { request_id, .. } => {
                 if let Some(attempt) = self.current_attempt_mut(envelope) {
-                    attempt.open_request = Some(request_id.clone());
+                    // The newest start is the in-flight request. The
+                    // transition is monotonic: a started request can never
+                    // become "never started" again.
+                    attempt.request = ExternalRequestLifecycle::StartedOutcomeUnknown {
+                        request_id: request_id.clone(),
+                    };
                 }
             }
             RuntimeEvent::ModelRequestCompleted { .. }
             | RuntimeEvent::ModelRequestFailed { .. } => {
                 if let Some(attempt) = self.current_attempt_mut(envelope) {
-                    // The provider outcome is durably known, whatever it was.
-                    attempt.open_request = None;
+                    let completed =
+                        matches!(&envelope.event, RuntimeEvent::ModelRequestCompleted { .. });
+                    let outcome = if completed {
+                        RequestOutcome::Completed
+                    } else {
+                        RequestOutcome::Failed
+                    };
+                    // The provider outcome is durably known, whatever it
+                    // was. This transition is **monotonic**: the known
+                    // outcome is never converted back into "never started".
+                    attempt.request = match &attempt.request {
+                        ExternalRequestLifecycle::StartedOutcomeUnknown { request_id } => {
+                            ExternalRequestLifecycle::StartedOutcomeKnown {
+                                request_id: Some(request_id.clone()),
+                                outcome,
+                            }
+                        }
+                        ExternalRequestLifecycle::StartedOutcomeKnown {
+                            request_id,
+                            outcome: _,
+                        } => ExternalRequestLifecycle::StartedOutcomeKnown {
+                            request_id: request_id.clone(),
+                            outcome,
+                        },
+                        // A durable outcome with no start fact is a journal
+                        // anomaly; the outcome is still durably known and
+                        // still proves external work happened.
+                        ExternalRequestLifecycle::NeverStarted => {
+                            ExternalRequestLifecycle::StartedOutcomeKnown {
+                                request_id: None,
+                                outcome,
+                            }
+                        }
+                    };
+                }
+            }
+            RuntimeEvent::AssistantMessageCommitted { message_id } => {
+                // Attribute every **active** Assistant message to the attempt
+                // that committed it. A message retired from the Surface is
+                // not retained, so the map is bounded by the active working
+                // set.
+                if let Some(attempt) = envelope.attempt_id.clone()
+                    && self.active_ids.contains(message_id)
+                {
+                    self.assistant_attempts.insert(message_id.clone(), attempt);
                 }
             }
             RuntimeEvent::ToolExecutionStarted {
                 tool_call_id,
                 tool_id,
             } => {
-                self.unsettled_tools.insert(
-                    tool_call_id.clone(),
-                    ToolEvidence::StartedOutcomeUnknown {
-                        tool_id: tool_id.clone(),
-                    },
-                );
+                if let Some(attempt) = envelope.attempt_id.clone() {
+                    self.unsettled_tools.insert(
+                        (attempt.clone(), tool_call_id.clone()),
+                        ToolEvidence {
+                            tool_id: tool_id.clone(),
+                            lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
+                            canonical_result_committed: false,
+                        },
+                    );
+                }
             }
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id,
                 tool_id,
                 result,
             } => {
-                self.unsettled_tools.insert(
-                    tool_call_id.clone(),
-                    ToolEvidence::OutcomeKnown {
-                        tool_id: tool_id.clone(),
-                        result: Box::new(result.clone()),
-                    },
-                );
+                if let Some(attempt) = envelope.attempt_id.clone() {
+                    self.unsettled_tools.insert(
+                        (attempt.clone(), tool_call_id.clone()),
+                        ToolEvidence {
+                            tool_id: tool_id.clone(),
+                            lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
+                                result.clone(),
+                            )),
+                            canonical_result_committed: false,
+                        },
+                    );
+                }
             }
             RuntimeEvent::ToolExecutionFailed {
                 tool_call_id,
                 tool_id,
                 error,
             } => {
-                self.unsettled_tools.insert(
-                    tool_call_id.clone(),
-                    ToolEvidence::OutcomeKnown {
-                        tool_id: tool_id.clone(),
-                        result: Box::new(ToolExecutionResult {
-                            status: ToolExecutionStatus::Failed {
-                                error: error.clone(),
-                            },
-                            content: Vec::new(),
-                            duration_ms: 0,
-                            exit_code: None,
-                            artifacts: Vec::new(),
-                            truncation: None,
-                        }),
-                    },
-                );
+                if let Some(attempt) = envelope.attempt_id.clone() {
+                    self.unsettled_tools.insert(
+                        (attempt.clone(), tool_call_id.clone()),
+                        ToolEvidence {
+                            tool_id: tool_id.clone(),
+                            lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
+                                ToolExecutionResult {
+                                    status: ToolExecutionStatus::Failed {
+                                        error: error.clone(),
+                                    },
+                                    content: Vec::new(),
+                                    duration_ms: 0,
+                                    exit_code: None,
+                                    artifacts: Vec::new(),
+                                    truncation: None,
+                                },
+                            )),
+                            canonical_result_committed: false,
+                        },
+                    );
+                }
             }
-            RuntimeEvent::ToolMessageCommitted { tool_call_id, .. } => {
-                // The canonical `ToolResult` exists: this call is settled and
-                // leaves the unresolved working set.
-                self.unsettled_tools.remove(tool_call_id);
+            RuntimeEvent::ToolMessageCommitted {
+                message_id,
+                tool_call_id,
+            } => {
+                // Canonical repair state and external execution evidence are
+                // separate axes. A committed `ToolResult` means the Surface
+                // no longer needs this repair; it never means the historical
+                // external start is forgotten while the owning attempt is
+                // still non-terminal.
+                if let Some(attempt) = &envelope.attempt_id {
+                    // A live commit names its owning attempt exactly.
+                    let key = (attempt.clone(), tool_call_id.clone());
+                    let was_marked = self
+                        .unsettled_tools
+                        .get_mut(&key)
+                        .map(|evidence| evidence.canonical_result_committed = true)
+                        .is_some();
+                    // The entry is resolved as soon as its owning attempt is
+                    // terminal: the canonical repair is done and the
+                    // external start of a settled attempt is no longer
+                    // needed. A non-terminal owner (the crash between repair
+                    // and attempt terminal) keeps its external evidence.
+                    if was_marked && !self.unsettled_attempts.contains_key(attempt) {
+                        self.unsettled_tools.remove(&key);
+                    }
+                } else {
+                    // A recovery-generated repair commit carries no attempt
+                    // identity. The recovery message identity is
+                    // "{assistant_id}-recovered-tool-{call_id}", so the
+                    // owning attempt resolves through the active assistant
+                    // attribution — never through a bare call-id scan that
+                    // could mark a historical leftover.
+                    let mut owned_by = None;
+                    for (assistant_id, attempt) in &self.assistant_attempts {
+                        let expected = format!("{assistant_id}-recovered-tool-{tool_call_id}");
+                        if message_id.as_str() == expected {
+                            owned_by = Some(attempt.clone());
+                            break;
+                        }
+                    }
+                    if let Some(attempt) = owned_by {
+                        let key = (attempt.clone(), tool_call_id.clone());
+                        let was_marked = self
+                            .unsettled_tools
+                            .get_mut(&key)
+                            .map(|evidence| evidence.canonical_result_committed = true)
+                            .is_some();
+                        if was_marked && !self.unsettled_attempts.contains_key(&attempt) {
+                            self.unsettled_tools.remove(&key);
+                        }
+                    }
+                }
             }
             RuntimeEvent::BackgroundExecutionCommitted {
                 execution_id,
@@ -387,6 +610,26 @@ impl RecoveryEvidence {
         let attempt_id = envelope.attempt_id.clone()?;
         self.note_attempt(&attempt_id);
         self.unsettled_attempts.get_mut(&attempt_id)
+    }
+
+    /// The durable tool evidence answering `call_id`, attributed to the
+    /// exact owning attempt of the active Assistant message that issued it.
+    ///
+    /// The durable authority does not guarantee `ToolCallId` uniqueness
+    /// across the conversation lifetime, so a bare call-id lookup could let
+    /// a historical attempt's evidence alias the current unresolved call.
+    /// The attribution comes from the `AssistantMessageCommitted` envelope
+    /// (see [`RecoveryEvidence::assistant_attempts`]); a message without an
+    /// attributed attempt (a bootstrapped turn) has no start evidence by
+    /// construction and answers `None` — the honest "never started" case.
+    fn tool_evidence_for(
+        &self,
+        call_id: &ToolCallId,
+        owning_attempt: Option<&AttemptId>,
+    ) -> Option<&ToolEvidence> {
+        let attempt = owning_attempt?;
+        self.unsettled_tools
+            .get(&(attempt.clone(), call_id.clone()))
     }
 
     /// The active model-visible messages of the current durable Surface head.
@@ -463,6 +706,36 @@ pub enum AttemptRecoveryClass {
     /// fact. The state is absorbing: recovery adds no second terminal, and
     /// repeated restarts change nothing.
     AlreadyTerminal,
+    /// **Class E.** External work crossed a durable start commit and its
+    /// outcome is **durably known**, but the canonical/attempt settlement
+    /// did not commit before the crash.
+    ///
+    /// The known outcome is preserved (the exact durable tool result is
+    /// repaired into the canonical Surface; the provider outcome stays a
+    /// durable fact), the dead attempt is terminalized honestly, and —
+    /// critically — this is **never** described as "no external start": no
+    /// automatic resend and no automatic re-execution. A known request
+    /// completion also never fabricates the Assistant response body, which
+    /// never became canonical.
+    ExternalOutcomeKnown {
+        /// The interrupted attempt.
+        attempt_id: AttemptId,
+        /// The started model request whose outcome is durably known, if
+        /// any. Carries the outcome so the recovery terminal can state the
+        /// strongest honest fact.
+        model_request: Option<KnownModelOutcome>,
+        /// The started tool calls whose outcome is durably known.
+        tool_calls: Vec<ToolCallId>,
+    },
+}
+
+/// The durably known outcome of the one started model request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownModelOutcome {
+    /// The request, when its start fact committed durably.
+    pub request_id: Option<RequestId>,
+    /// What the provider outcome was.
+    pub outcome: RequestOutcome,
 }
 
 /// The recovery classification of one detached background execution.
@@ -528,8 +801,6 @@ struct MissingToolResult {
     call_id: ToolCallId,
     tool_id: ToolId,
     result: ToolExecutionResult,
-    /// Whether the external outcome was durably unknown.
-    indeterminate: bool,
 }
 
 impl RecoveryPlan {
@@ -539,7 +810,7 @@ impl RecoveryPlan {
     #[must_use]
     pub fn classify(evidence: &RecoveryEvidence) -> Self {
         let tool_repairs = Self::plan_tool_repairs(evidence);
-        let attempt = Self::classify_attempt(evidence, &tool_repairs);
+        let attempt = Self::classify_attempt(evidence);
         let resume = match &attempt {
             AttemptRecoveryClass::AdmittedWithoutExternalStart { .. }
                 if awaits_model_turn(&evidence.active) =>
@@ -570,10 +841,7 @@ impl RecoveryPlan {
         }
     }
 
-    fn classify_attempt(
-        evidence: &RecoveryEvidence,
-        repairs: &[ToolTurnRepair],
-    ) -> AttemptRecoveryClass {
+    fn classify_attempt(evidence: &RecoveryEvidence) -> AttemptRecoveryClass {
         let Some((attempt_id, attempt)) = evidence.unsettled_attempts.iter().next() else {
             return if evidence.saw_any_attempt {
                 AttemptRecoveryClass::AlreadyTerminal
@@ -581,39 +849,79 @@ impl RecoveryPlan {
                 AttemptRecoveryClass::NotStarted
             };
         };
-        // Every tool call whose external start committed and whose outcome is
-        // not durably known, from both directions:
-        //
-        //   - the Surface-visible repair plan (the ordinary case), and
-        //   - any unresolved `StartedOutcomeUnknown` fold entry, so a started
-        //     call whose owning Assistant message is no longer active still
-        //     counts as an indeterminate external effect.
-        //
-        // The union is the honest answer: indeterminacy is a property of the
-        // external world, not of what the current Surface happens to show.
-        let mut indeterminate: std::collections::BTreeSet<ToolCallId> = repairs
-            .iter()
-            .flat_map(|repair| repair.missing.iter())
-            .filter(|missing| missing.indeterminate)
-            .map(|missing| missing.call_id.clone())
-            .collect();
-        indeterminate.extend(
-            evidence
-                .unsettled_tools
-                .iter()
-                .filter(|(_, tool)| matches!(tool, ToolEvidence::StartedOutcomeUnknown { .. }))
-                .map(|(call_id, _)| call_id.clone()),
-        );
-        let indeterminate_tools: Vec<ToolCallId> = indeterminate.into_iter().collect();
-        if attempt.open_request.is_some() || !indeterminate_tools.is_empty() {
-            AttemptRecoveryClass::IndeterminateExternalOutcome {
-                attempt_id: attempt_id.clone(),
-                model_request: attempt.open_request.clone(),
-                tool_calls: indeterminate_tools,
+        // External-start evidence owned by **this** attempt only. A
+        // historical attempt's unresolved tool (a Class-D leftover) must
+        // never make the crash-time attempt indeterminate: the ambiguity of
+        // a settled attempt belongs to that attempt's own terminal, not to
+        // the current one.
+        let mut indeterminate_tools = Vec::new();
+        let mut known_tools = Vec::new();
+        for ((owning, call), tool) in &evidence.unsettled_tools {
+            if owning != attempt_id {
+                continue;
             }
-        } else {
-            AttemptRecoveryClass::AdmittedWithoutExternalStart {
-                attempt_id: attempt_id.clone(),
+            match &tool.lifecycle {
+                ToolExternalLifecycle::StartedOutcomeUnknown => {
+                    indeterminate_tools.push(call.clone());
+                }
+                ToolExternalLifecycle::OutcomeKnown(_) => {
+                    known_tools.push(call.clone());
+                }
+            }
+        }
+        match &attempt.request {
+            // The in-flight request's outcome is unknown: indeterminate,
+            // never resendable.
+            ExternalRequestLifecycle::StartedOutcomeUnknown { request_id } => {
+                AttemptRecoveryClass::IndeterminateExternalOutcome {
+                    attempt_id: attempt_id.clone(),
+                    model_request: Some(request_id.clone()),
+                    tool_calls: indeterminate_tools,
+                }
+            }
+            // A tool execution with an unknown outcome is indeterminate,
+            // whatever the request plane says: no request start ever, or a
+            // durably known request outcome — the started tool may have
+            // completed its external effect, so no resend and no
+            // re-execution. The `model_request` field names only a request
+            // whose outcome is unknown, which neither case is.
+            ExternalRequestLifecycle::NeverStarted
+            | ExternalRequestLifecycle::StartedOutcomeKnown { .. }
+                if !indeterminate_tools.is_empty() =>
+            {
+                AttemptRecoveryClass::IndeterminateExternalOutcome {
+                    attempt_id: attempt_id.clone(),
+                    model_request: None,
+                    tool_calls: indeterminate_tools,
+                }
+            }
+            // **Zero** durable external-start evidence: only this state is
+            // eligible for the Class-B continuation.
+            ExternalRequestLifecycle::NeverStarted if known_tools.is_empty() => {
+                AttemptRecoveryClass::AdmittedWithoutExternalStart {
+                    attempt_id: attempt_id.clone(),
+                }
+            }
+            // External work crossed a start commit and every durable
+            // outcome is known, but the canonical/attempt settlement did
+            // not commit before the crash. Never "no external start",
+            // never replayed.
+            _ => {
+                let model_request = match &attempt.request {
+                    ExternalRequestLifecycle::StartedOutcomeKnown {
+                        request_id,
+                        outcome,
+                    } => Some(KnownModelOutcome {
+                        request_id: request_id.clone(),
+                        outcome: *outcome,
+                    }),
+                    _ => None,
+                };
+                AttemptRecoveryClass::ExternalOutcomeKnown {
+                    attempt_id: attempt_id.clone(),
+                    model_request,
+                    tool_calls: known_tools,
+                }
             }
         }
     }
@@ -646,23 +954,37 @@ impl RecoveryPlan {
                 if answered.contains(&call.id) {
                     continue;
                 }
-                missing.push(match evidence.unsettled_tools.get(&call.id) {
+                // The exact owning attempt of this active call, from the
+                // `AssistantMessageCommitted` envelope. A call of a message
+                // with no attributed attempt (a bootstrapped turn) has no
+                // start evidence by construction.
+                let owning = evidence
+                    .assistant_attempts
+                    .get(&crate::conversation::message_id_of(message));
+                let tool_evidence = evidence.tool_evidence_for(&call.id, owning);
+                missing.push(match tool_evidence {
                     // The external effect started and no outcome is durably
                     // known: the strongest honest native status.
-                    Some(ToolEvidence::StartedOutcomeUnknown { tool_id }) => MissingToolResult {
+                    Some(ToolEvidence {
+                        lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
+                        tool_id,
+                        ..
+                    }) => MissingToolResult {
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
                         result: interrupted_result(),
-                        indeterminate: true,
                     },
                     // The outcome *is* durably known; the canonical message
                     // simply never committed. The durable result is used
                     // verbatim — no invented body, no completion race.
-                    Some(ToolEvidence::OutcomeKnown { tool_id, result }) => MissingToolResult {
+                    Some(ToolEvidence {
+                        lifecycle: ToolExternalLifecycle::OutcomeKnown(result),
+                        tool_id,
+                        ..
+                    }) => MissingToolResult {
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
                         result: (**result).clone(),
-                        indeterminate: false,
                     },
                     // Durable evidence says this sibling never started, so
                     // nothing external happened and nothing is unknown: it was
@@ -680,7 +1002,6 @@ impl RecoveryPlan {
                             artifacts: Vec::new(),
                             truncation: None,
                         },
-                        indeterminate: false,
                     },
                 });
             }
@@ -844,7 +1165,7 @@ impl RecoveryPlan {
                 tool_calls,
             } => {
                 let request = model_request.as_ref().map_or_else(
-                    || "no model request was in flight".to_owned(),
+                    || "no model request outcome was unknown".to_owned(),
                     |request| {
                         format!(
                             "model request {request} started and its provider outcome is unknown"
@@ -869,6 +1190,53 @@ impl RecoveryPlan {
                         "the runtime restarted while attempt {attempt_id} was durably \
                          non-terminal; {request}; {tools}. Nothing was resent and nothing was \
                          re-executed"
+                    ),
+                )
+            }
+            AttemptRecoveryClass::ExternalOutcomeKnown {
+                attempt_id,
+                model_request,
+                tool_calls,
+            } => {
+                let request = model_request.as_ref().map_or_else(
+                    || "no model request outcome was pending".to_owned(),
+                    |known| match known.outcome {
+                        RequestOutcome::Completed => format!(
+                            "model request {} completed durably; its Assistant message \
+                             never became canonical, so no response body is fabricated",
+                            known
+                                .request_id
+                                .as_ref()
+                                .map_or_else(|| "(identity not durable)", RequestId::as_str)
+                        ),
+                        RequestOutcome::Failed => format!(
+                            "model request {} failed durably; the historical failure is \
+                             preserved and was not retried",
+                            known
+                                .request_id
+                                .as_ref()
+                                .map_or_else(|| "(identity not durable)", RequestId::as_str)
+                        ),
+                    },
+                );
+                let tools = if tool_calls.is_empty() {
+                    "no tool execution outcome was pending".to_owned()
+                } else {
+                    format!(
+                        "the durably known outcome of tool call(s) {} is preserved",
+                        tool_calls
+                            .iter()
+                            .map(ToolCallId::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                (
+                    attempt_id,
+                    format!(
+                        "the runtime restarted while attempt {attempt_id} was durably \
+                         non-terminal; {request}; {tools}. Nothing was resent and nothing \
+                         was re-executed"
                     ),
                 )
             }
@@ -1126,5 +1494,281 @@ fn interrupted_result() -> ToolExecutionResult {
         exit_code: None,
         artifacts: Vec::new(),
         truncation: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::types::EVENT_SCHEMA_VERSION;
+    use crate::model::finish::ModelFinishReason;
+    use crate::runtime::identity::{
+        AttemptId, ConversationId, EventId, MessageId, RequestId, ToolCallId, ToolId,
+    };
+
+    fn conversation() -> ConversationId {
+        ConversationId::new("conv-fold")
+    }
+
+    fn attempt(ordinal: u64) -> AttemptId {
+        AttemptId::for_conversation(&conversation(), ordinal)
+    }
+
+    fn envelope(event: RuntimeEvent, attempt_id: Option<AttemptId>) -> RuntimeEventEnvelope {
+        // The fold never reads the event identity; a stable fixture id is
+        // sufficient for the state-machine regressions.
+        RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new("evt"),
+            sequence: 0,
+            conversation_id: conversation(),
+            attempt_id,
+            turn_id: None,
+            timestamp: Utc::now(),
+            event,
+        }
+    }
+
+    fn base_evidence() -> RecoveryEvidence {
+        RecoveryEvidence {
+            conversation_id: conversation(),
+            active: Vec::new(),
+            pending: Vec::new(),
+            unsettled_attempts: BTreeMap::new(),
+            unsettled_tools: BTreeMap::new(),
+            unsettled_background: Vec::new(),
+            assistant_attempts: BTreeMap::new(),
+            active_ids: std::collections::BTreeSet::new(),
+            highest_attempt_ordinal: None,
+            highest_background_ordinal: 0,
+            saw_any_attempt: false,
+        }
+    }
+
+    fn fold_all(evidence: &mut RecoveryEvidence, events: &[RuntimeEventEnvelope]) {
+        let mut background = BTreeMap::new();
+        for envelope in events {
+            evidence.fold(envelope, &mut background);
+        }
+        evidence.unsettled_background = background.into_values().collect();
+    }
+
+    fn started(attempt_id: AttemptId) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt_id.clone(),
+            },
+            Some(attempt_id),
+        )
+    }
+
+    fn tool_started(attempt_id: AttemptId, call: &str) -> RuntimeEventEnvelope {
+        envelope(
+            RuntimeEvent::ToolExecutionStarted {
+                tool_call_id: ToolCallId::new(call),
+                tool_id: ToolId::new("tool-a"),
+            },
+            Some(attempt_id),
+        )
+    }
+
+    /// The fold is a bounded working set: a fully settled tool lifecycle —
+    /// start, outcome, canonical `ToolResult`, attempt terminal — leaves no
+    /// evidence behind, so complete history is never materialized.
+    #[test]
+    fn a_settled_tool_lifecycle_leaves_no_evidence() {
+        let a = attempt(0);
+        let mut evidence = base_evidence();
+        fold_all(
+            &mut evidence,
+            &[
+                started(a.clone()),
+                tool_started(a.clone(), "call-1"),
+                envelope(
+                    RuntimeEvent::ToolExecutionCompleted {
+                        tool_call_id: ToolCallId::new("call-1"),
+                        tool_id: ToolId::new("tool-a"),
+                        result: interrupted_result(),
+                    },
+                    Some(a.clone()),
+                ),
+                envelope(
+                    RuntimeEvent::ToolMessageCommitted {
+                        message_id: MessageId::new("a-tool-call-1"),
+                        tool_call_id: ToolCallId::new("call-1"),
+                    },
+                    Some(a.clone()),
+                ),
+                envelope(
+                    RuntimeEvent::AttemptCompleted {
+                        attempt_id: a.clone(),
+                        finish_reason: ModelFinishReason::Stop,
+                    },
+                    Some(a),
+                ),
+            ],
+        );
+        assert!(
+            evidence.unsettled_attempts.is_empty(),
+            "no unsettled attempt"
+        );
+        assert!(
+            evidence.unsettled_tools.is_empty(),
+            "no retained tool evidence"
+        );
+    }
+
+    /// The Finding-B prefix at the fold level: a recovery-generated
+    /// `ToolMessageCommitted` marks the canonical repair done but keeps the
+    /// external-start evidence while the owning attempt is non-terminal.
+    #[test]
+    fn recovery_repair_keeps_external_evidence_for_nonterminal_attempt() {
+        let a = attempt(0);
+        let assistant_id = MessageId::new("assistant-1");
+        let mut evidence = base_evidence();
+        evidence.active = vec![crate::message::types::MessageBlock::Assistant(
+            crate::message::types::AssistantMessageBlock {
+                id: assistant_id.clone(),
+                content: Vec::new(),
+            },
+        )];
+        evidence.active_ids.insert(assistant_id.clone());
+        fold_all(
+            &mut evidence,
+            &[
+                started(a.clone()),
+                envelope(
+                    RuntimeEvent::AssistantMessageCommitted {
+                        message_id: assistant_id.clone(),
+                    },
+                    Some(a.clone()),
+                ),
+                tool_started(a.clone(), "call-1"),
+                // The recovery repair commit: canonical ToolResult exists,
+                // envelope carries no attempt identity.
+                envelope(
+                    RuntimeEvent::ToolMessageCommitted {
+                        message_id: MessageId::new("assistant-1-recovered-tool-call-1"),
+                        tool_call_id: ToolCallId::new("call-1"),
+                    },
+                    None,
+                ),
+            ],
+        );
+        assert_eq!(
+            evidence.unsettled_attempts.len(),
+            1,
+            "attempt still non-terminal"
+        );
+        let entry = evidence
+            .unsettled_tools
+            .get(&(a, ToolCallId::new("call-1")))
+            .expect("the external-start evidence survives the canonical repair");
+        assert!(
+            entry.canonical_result_committed,
+            "the repair state is recorded"
+        );
+        assert!(
+            matches!(
+                entry.lifecycle,
+                ToolExternalLifecycle::StartedOutcomeUnknown
+            ),
+            "the external outcome stays unknown; the start is never erased"
+        );
+    }
+
+    /// A resolved model request never returns to `NeverStarted`: the fold
+    /// transition is monotonic, so `ModelRequestStarted` +
+    /// `ModelRequestCompleted` can never be read back as \"nothing started\".
+    #[test]
+    fn a_resolved_request_never_returns_to_never_started() {
+        let a = attempt(0);
+        let request_id = RequestId::new("req-1");
+        let mut evidence = base_evidence();
+        fold_all(
+            &mut evidence,
+            &[
+                started(a.clone()),
+                envelope(
+                    RuntimeEvent::ModelRequestStarted {
+                        request_id: request_id.clone(),
+                        model: "model-x".to_owned(),
+                    },
+                    Some(a.clone()),
+                ),
+                envelope(
+                    RuntimeEvent::ModelRequestCompleted {
+                        finish_reason: ModelFinishReason::Stop,
+                        usage: None,
+                    },
+                    Some(a),
+                ),
+            ],
+        );
+        let attempt = evidence
+            .unsettled_attempts
+            .values()
+            .next()
+            .expect("the attempt is still unresolved");
+        assert_eq!(
+            attempt.request,
+            ExternalRequestLifecycle::StartedOutcomeKnown {
+                request_id: Some(request_id),
+                outcome: RequestOutcome::Completed,
+            }
+        );
+        assert_ne!(
+            attempt.request,
+            ExternalRequestLifecycle::NeverStarted,
+            "resolved outcome is never 'never started'"
+        );
+    }
+
+    /// A terminal attempt keeps its non-canonical tool evidence (Class D) for
+    /// repair, and drops it the moment its canonical result commits.
+    #[test]
+    fn attempt_terminal_keeps_class_d_evidence_then_drops_it_on_repair() {
+        let a = attempt(0);
+        let mut evidence = base_evidence();
+        fold_all(
+            &mut evidence,
+            &[
+                started(a.clone()),
+                tool_started(a.clone(), "call-1"),
+                envelope(
+                    RuntimeEvent::AttemptFailed {
+                        attempt_id: a.clone(),
+                        error: AttemptFailure::Runtime {
+                            error: RuntimeError::Internal {
+                                message: "batch commit failed".to_owned(),
+                            },
+                        },
+                    },
+                    Some(a.clone()),
+                ),
+            ],
+        );
+        assert!(
+            evidence
+                .unsettled_tools
+                .contains_key(&(a.clone(), ToolCallId::new("call-1"))),
+            "a started call of a terminal attempt stays repairable (Class D)"
+        );
+        // The recovery repair commits the canonical result; the owning
+        // attempt is already terminal, so the entry resolves immediately.
+        fold_all(
+            &mut evidence,
+            &[envelope(
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: MessageId::new("assistant-1-recovered-tool-call-1"),
+                    tool_call_id: ToolCallId::new("call-1"),
+                },
+                Some(a.clone()),
+            )],
+        );
+        assert!(
+            evidence.unsettled_tools.is_empty(),
+            "resolved tool evidence of a settled attempt is dropped"
+        );
     }
 }

@@ -5159,6 +5159,123 @@ mod tests {
         );
     }
 
+    /// Issue #12 (M9a), recovery Class E: a restart after a **durably
+    /// completed** model request — whose canonical Assistant message never
+    /// committed — starts nothing either.
+    ///
+    /// The provider already executed the request; rustX durably observed the
+    /// outcome. The proof mirrors Class C: a new user-driven turn is
+    /// submitted and awaited, and because at most one attempt runs per
+    /// conversation, its settlement happens-after any recovery-initiated
+    /// attempt would have. Exactly one provider request exists at that
+    /// point, so the recovered runtime itself initiated no replacement
+    /// request — and it fabricated no Assistant body.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn class_e_restart_issues_no_replacement_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation = ConversationId::new("conv-m9a-classe");
+        let dead_attempt = AttemptId::for_conversation(&conversation, 0);
+        let dead = dead_attempt.clone();
+        seed_crash_prefix(&dir, "conv-m9a-classe", &[], |store, conversation_id| {
+            let accepted = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("ask the model"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept");
+            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "attempt-started",
+                    &dead,
+                    crate::events::types::RuntimeEvent::AttemptStarted {
+                        attempt_id: dead.clone(),
+                    },
+                ))
+                .expect("attempt started");
+            let snapshot = crate::model::RequestSnapshot::new(
+                crate::model::RequestIdentity {
+                    attempt_id: dead.clone(),
+                    turn: crate::runtime::identity::TurnId::new("0"),
+                    retry_number: 0,
+                },
+                store.load_head().expect("head").revision,
+                "frozen prompt".to_owned(),
+                crate::model::ModelInvocationConfig {
+                    model: "model-before-restart".to_owned(),
+                    protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
+                    max_output_tokens: 64,
+                    request_params: crate::model::RequestParams::new(),
+                    capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                    compat: crate::model::catalog::ModelCompat::default(),
+                },
+                64_000,
+                None,
+                false,
+                Vec::new(),
+                crate::runtime::identity::CapabilityRevision::new(1),
+                crate::context::ContextGeneration {
+                    id: 1,
+                    contributors: Vec::new(),
+                },
+                None,
+            );
+            store
+                .persist_request_start(&snapshot, fixed_time())
+                .expect("request start");
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "request-completed",
+                    &dead,
+                    crate::events::types::RuntimeEvent::ModelRequestCompleted {
+                        finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                        usage: None,
+                    },
+                ))
+                .expect("request completed");
+            // CRASH: the provider outcome is durably known, but the
+            // canonical Assistant message never committed.
+        });
+
+        let (runtime, model) =
+            runtime_with_model_at(&dir, "conv-m9a-classe", Vec::new(), vec![one_turn_script()])
+                .await
+                .expect("runtime recovers");
+        assert!(matches!(
+            runtime.recovery().attempt_class(),
+            crate::runtime::recovery::AttemptRecoveryClass::ExternalOutcomeKnown {
+                attempt_id,
+                model_request: Some(_),
+                ..
+            } if attempt_id == &dead_attempt
+        ));
+        assert_eq!(
+            runtime.recovery().resume(),
+            crate::runtime::recovery::ResumeDisposition::PendingInboundOnly,
+            "the answered model turn is never automatically continued"
+        );
+
+        runtime.activate();
+        // A later user-driven turn proceeds according to the intended runtime
+        // semantics — startup itself must not replay the missing Assistant
+        // turn.
+        runtime
+            .submit_inbound(text_content("a new turn"))
+            .expect("accepted after recovery");
+        runtime.settlement_signal().notified().await;
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "exactly the user-driven turn reached the provider; recovery initiated no replacement request"
+        );
+    }
+
     /// Issue #12 (M9a), Test L (runtime half): a restart never reuses an
     /// `AttemptId` that already appears in durable history.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
