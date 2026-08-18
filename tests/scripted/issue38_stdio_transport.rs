@@ -794,8 +794,8 @@ async fn a_partly_read_record_survives_an_event_winning_the_select() {
     //      subscription arm wins the select and the input future is dropped
     //      mid-record; the event reaching the wire is the proof.
     assert_eq!(
-        fixture.host.shutdown(),
-        Ok(RuntimeClientResult::ShutdownAccepted)
+        fixture.host.shutdown().await,
+        Ok(RuntimeClientResult::ShutdownCompleted)
     );
     sink.await_record(|record| {
         is_event(record) && matches!(as_event(record).event, RuntimeClientEvent::RuntimeShutdown)
@@ -1362,7 +1362,7 @@ async fn shutdown_does_not_close_the_transport() {
     );
     assert_eq!(
         responses[2].result,
-        Some(RuntimeClientResult::ShutdownAccepted)
+        Some(RuntimeClientResult::ShutdownCompleted)
     );
     assert!(
         matches!(
@@ -1381,7 +1381,8 @@ async fn shutdown_does_not_close_the_transport() {
         Some(RuntimeClientResult::Capability { .. })
     ));
 
-    // Shutdown is not cancellation: canonical history is untouched.
+    // This idle shutdown has no attempt to cancel, so canonical history is
+    // untouched.
     assert!(
         fixture
             .host

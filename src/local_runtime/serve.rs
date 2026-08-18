@@ -20,13 +20,15 @@
 //!   one-session process **successfully**;
 //! - malformed framing or any other transport error writes a diagnostic to
 //!   stderr and exits **non-zero**;
-//! - semantic `shutdown` keeps its Issue #38 behaviour — it responds, stops
-//!   admitting inbound work, lets the current attempt settle, and does
-//!   **not** close the transport. A controlling client closes the transport
-//!   or the process according to its own lifecycle policy.
+//! - semantic `shutdown` responds only after the conversation runtime reaches
+//!   quiescence, and does **not** close the transport. A controlling client
+//!   closes the transport or the process according to its own lifecycle
+//!   policy.
 //!
 //! Transport EOF remains a detach, never an Agent Loop cancellation
-//! primitive, and this module implements no M9 recovery or quiescence.
+//! primitive, and this module delegates semantic M9 recovery and runtime
+//! quiescence to the conversation runtime rather than implementing either
+//! concern in the transport process.
 
 use std::io::Write;
 

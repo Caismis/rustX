@@ -62,8 +62,9 @@ canonical boundary in `src/tools/executor.rs`:
   `ToolInvocation` (call id, tool id, model-facing name, resolved
   foreground/background mode, and the stripped business arguments) inside a
   `ToolExecutionContext` that carries conversation identity, the runtime
-  `CancellationSignal`, the workspace boundary, the progress reporter, the
-  artifact store, and the explicit authorized environment.
+  `CancellationSignal`, its first-winner semantic cancellation cause, the
+  workspace boundary, the progress reporter, the artifact store, and the
+  explicit authorized environment.
 - The loop preflights every model-issued call **before** the Assistant
   tool-call message is committed: registry identity resolution,
   execution-policy resolution, reserved-metadata extraction, and business
@@ -751,6 +752,52 @@ structurally exactly once:
   runs strictly after that point (see section 4.3), so an observer failure
   can never split the batch or prevent a committed Assistant tool-call
   message from receiving its complete canonical result batch.
+
+### 7.2 Runtime drain composition (M9c)
+
+The Agent Loop remains the owner of foreground tool-batch structure and the
+current attempt's terminal settlement. `ConversationRuntime::shutdown()`
+owns the lifetime boundary around it:
+
+```text
+Running -> Draining
+    request RuntimeShutdown on current AgentCancellation
+    -> Agent Loop cancels/settles model and foreground tools
+    -> finish_attempt clears the current-attempt slot
+    -> runtime drain may continue toward Quiescent
+```
+
+The M9b `arbitrate_model_turn_start` gate is unchanged. If runtime drain
+wins before the durable start commit, there is no provider request,
+`ModelRequestStarted` fact, or request snapshot. If the start commit already
+won, the provider request is an owned started operation and the Agent Loop
+waits for its native settlement before `finish_attempt` returns. The first
+cancellation authority wins the absorbing cause, so runtime drain reports
+`RuntimeShutdown` rather than relabeling a user cancellation.
+
+For a parallel foreground batch, cancellation closes the start frontier: no
+not-yet-started sibling receives a start fact or execution future. Started
+siblings receive the shared signal, settle through their native executor
+contract, and retain one result slot each. Canonical tool messages still
+commit in model-call order; the runtime does not add a second tool state
+machine.
+
+Background dispatch ownership is separate from the attempt. Once the
+registry's prepared-to-committed boundary wins, attempt cancellation does not
+reclaim the execution. Runtime drain does: it cancels every active
+conversation-owned record and waits for the registry's explicit terminal
+state. Terminal visibility follows the durable terminal Pending Inbound
+acceptance, so an inbound notification already accepted before drain remains
+durable even though no new attempt adopts it during shutdown.
+
+Cancellation requested, operation settled, and runtime quiescent are distinct
+observations. `ConversationRuntime::shutdown()` completes only after the
+current attempt, foreground tools, background terminal publication, counted
+capability/environment preparation, retained MCP process closure, owned
+process terminality, and the admission worker have settled. A stale callback
+after `Quiescent` cannot mutate the conversation; an unproven owned process
+settlement is returned as a shutdown failure instead of being called
+quiescent.
 
 ### Generic Agent Loop cancellation
 

@@ -79,7 +79,11 @@ struct ModelTurnStartGate {
 #[derive(Clone, Debug)]
 pub struct AgentCancellation {
     signal: CancellationSignal,
-    reason: CancellationReason,
+    /// The default cause is used only if cancellation has not yet been
+    /// requested. The first request that wins the start gate stores the
+    /// absorbing semantic cause; later requests cannot rewrite it.
+    default_reason: CancellationReason,
+    reason: Arc<Mutex<Option<CancellationReason>>>,
     start_gate: Arc<ModelTurnStartGate>,
 }
 
@@ -90,15 +94,24 @@ impl AgentCancellation {
     pub fn new(reason: CancellationReason) -> Self {
         Self {
             signal: CancellationSignal::new(),
-            reason,
+            default_reason: reason,
+            reason: Arc::new(Mutex::new(None)),
             start_gate: Arc::new(ModelTurnStartGate::default()),
         }
     }
 
     /// The cancellation reason reported by the terminal cancellation event.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cancellation-reason mutex is poisoned, which would mean
+    /// a previous cancellation critical section panicked.
     #[must_use]
     pub fn reason(&self) -> CancellationReason {
         self.reason
+            .lock()
+            .expect("cancellation reason lock poisoned")
+            .unwrap_or(self.default_reason)
     }
 
     /// Requests cancellation of the attempt.
@@ -116,13 +129,42 @@ impl AgentCancellation {
     /// Panics if the start-gate mutex is poisoned (a panicking critical
     /// section is a defect, not a recoverable state).
     pub fn cancel(&self) {
+        let _ = self.request_cancel(self.default_reason);
+    }
+
+    /// Requests cancellation with an explicit semantic cause.
+    ///
+    /// The first cancellation request that enters the M9b start gate owns
+    /// the attempt's terminal cancellation cause. Later requests still
+    /// deliver the signal, but cannot relabel the already-winning cause.
+    /// This is the runtime-drain seam: it can report `RuntimeShutdown` even
+    /// though ordinary attempts are constructed with `UserRequested` as
+    /// their default cause.
+    ///
+    /// Returns `true` only when this request established the cause.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the start-gate or cancellation-reason mutex is poisoned,
+    /// which would mean a previous cancellation critical section panicked.
+    #[must_use]
+    pub fn request_cancel(&self, reason: CancellationReason) -> bool {
         {
             let _critical = self
                 .start_gate
                 .critical
                 .lock()
                 .expect("model-turn start gate poisoned");
+            let mut cause = self
+                .reason
+                .lock()
+                .expect("cancellation reason lock poisoned");
+            let first = cause.is_none();
+            if first {
+                *cause = Some(reason);
+            }
             self.signal.cancel();
+            first
         }
     }
 
@@ -229,6 +271,21 @@ mod tests {
         assert!(!tool_signal.is_cancelled());
         signal.cancel();
         assert!(tool_signal.is_cancelled());
+    }
+
+    /// The first cancellation authority owns the absorbing semantic cause;
+    /// later requests only repeat the signal transition.
+    #[tokio::test]
+    async fn first_cancellation_cause_wins() {
+        let signal = AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(signal.request_cancel(CancellationReason::RuntimeShutdown));
+        assert!(!signal.request_cancel(CancellationReason::ParentCancelled));
+        assert_eq!(signal.reason(), CancellationReason::RuntimeShutdown);
+
+        let user_first = AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(user_first.request_cancel(CancellationReason::UserRequested));
+        assert!(!user_first.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(user_first.reason(), CancellationReason::UserRequested);
     }
 
     /// Cancellation that linearized before the arbitration wins: the commit

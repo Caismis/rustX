@@ -43,7 +43,7 @@ use crate::durable::inbox::{
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock};
 use crate::runtime::identity::{ConversationId, MessageId};
-use crate::runtime::types::ConversationLifecycle;
+use crate::runtime::types::{ConversationLifecycle, LifecycleAdmission};
 
 /// The read-only observation seam of the conversation inbound boundary.
 ///
@@ -274,11 +274,11 @@ impl Error for MailboxError {}
 /// claims its owning tool runtime, the mailbox carries that runtime's
 /// shared activation lifecycle
 /// ([`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)):
-/// an inactive conversation accepts no inbound work.
+/// a conversation accepts new inbound only while its lifecycle is `Running`.
 ///
-/// The mailbox stores **no activation state of its own**: runtime ownership
-/// is the presence of the lifecycle handle, and active/inactive is answered
-/// by the lifecycle itself.
+/// The mailbox stores **no lifecycle state of its own**: runtime ownership is
+/// the presence of the lifecycle handle, and admission is answered by the
+/// lifecycle itself.
 struct MailboxState {
     /// The shared activation lifecycle of the conversation runtime that
     /// owns this mailbox, when one does. `None` = standalone/unbound.
@@ -295,10 +295,10 @@ impl core::fmt::Debug for MailboxState {
             .field(
                 "lifecycle",
                 &self.lifecycle.as_ref().map(|lifecycle| {
-                    if lifecycle.is_active() {
-                        "runtime-owned/active"
+                    if lifecycle.is_running() {
+                        "runtime-owned/running"
                     } else {
-                        "runtime-owned/inactive"
+                        "runtime-owned/not-running"
                     }
                 }),
             )
@@ -612,7 +612,7 @@ impl ConversationInboundMailbox {
                 state
                     .lifecycle
                     .as_ref()
-                    .is_some_and(|lifecycle| !lifecycle.is_active()),
+                    .is_some_and(|lifecycle| !lifecycle.is_running()),
                 "the bootstrap handshake runs only while the owning runtime is inactive"
             );
             state.observer = Some(observer);
@@ -622,10 +622,10 @@ impl ConversationInboundMailbox {
 
     /// Marks this mailbox as owned by a conversation runtime that has not
     /// been activated yet: inbound is refused until the owning runtime's
-    /// shared lifecycle transitions to `Active`.
+    /// shared lifecycle transitions to `Running`.
     ///
     /// This is part of the tool-runtime ownership transfer (Issue #61). The
-    /// mailbox keeps no activation state of its own: the lifecycle handle
+    /// mailbox keeps no lifecycle state of its own: the lifecycle handle
     /// *is* the runtime ownership.
     ///
     /// # Panics
@@ -652,7 +652,7 @@ impl ConversationInboundMailbox {
     }
 
     /// Whether a conversation runtime owns this mailbox and its shared
-    /// lifecycle has not transitioned to `Active` yet.
+    /// lifecycle is not currently `Running`.
     ///
     /// # Panics
     ///
@@ -663,7 +663,99 @@ impl ConversationInboundMailbox {
         state
             .lifecycle
             .as_ref()
-            .is_some_and(|lifecycle| !lifecycle.is_active())
+            .is_some_and(|lifecycle| !lifecycle.is_running())
+    }
+
+    /// Enters the normal inbound/ownership admission boundary of the shared
+    /// runtime lifecycle. The guard remains held by the concrete owner until
+    /// its durable commit and publication seam return.
+    pub(crate) fn begin_running_admission(
+        &self,
+    ) -> Result<Option<LifecycleAdmission>, MailboxError> {
+        let lifecycle = self
+            .state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .lifecycle
+            .clone();
+        let Some(lifecycle) = lifecycle else {
+            return Ok(None);
+        };
+        lifecycle
+            .try_enter_running()
+            .map(Some)
+            .map_err(|_| MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })
+    }
+
+    /// Enters the counted capability/background preparation boundary. The
+    /// shared lifecycle permits this during inactive composition and while
+    /// running, but closes it once drain begins.
+    pub(crate) fn begin_preparation_admission(
+        &self,
+    ) -> Result<Option<LifecycleAdmission>, MailboxError> {
+        let lifecycle = self
+            .state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .lifecycle
+            .clone();
+        let Some(lifecycle) = lifecycle else {
+            return Ok(None);
+        };
+        lifecycle.try_enter_preparation().map(Some).map_err(|_| {
+            MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            }
+        })
+    }
+
+    /// Runs one concrete non-coordinator semantic commit under the shared
+    /// lifecycle commit boundary. This is used by the background registry's
+    /// prepared-to-owned transfer; drain and that transfer therefore have a
+    /// deterministic total order at the actual durable ownership point.
+    pub(crate) fn with_running_commit<T>(
+        &self,
+        operation: impl FnOnce() -> T,
+    ) -> Result<T, MailboxError> {
+        let lifecycle = self
+            .state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .lifecycle
+            .clone();
+        let Some(lifecycle) = lifecycle else {
+            return Ok(operation());
+        };
+        lifecycle
+            .with_running_commit(operation)
+            .map_err(|_| MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })
+    }
+
+    /// Enters the narrow durable settlement boundary used by already-owned
+    /// background terminal publication. It is allowed during `Draining`,
+    /// but refused after `Quiescent`.
+    pub(crate) fn begin_settlement_admission(
+        &self,
+    ) -> Result<Option<LifecycleAdmission>, MailboxError> {
+        let lifecycle = self
+            .state
+            .lock()
+            .expect("inbound mailbox lock poisoned")
+            .lifecycle
+            .clone();
+        let Some(lifecycle) = lifecycle else {
+            return Ok(None);
+        };
+        lifecycle
+            .try_enter_settlement()
+            .map(Some)
+            .map_err(|_| MailboxError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })
     }
 
     /// The conversation this mailbox belongs to.
@@ -758,32 +850,23 @@ impl ConversationInboundMailbox {
         if draft.kind == InboundKind::CompactionSummary {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
-        {
-            let state = self.state.lock().expect("inbound mailbox lock poisoned");
-            if state
-                .lifecycle
-                .as_ref()
-                .is_some_and(|lifecycle| !lifecycle.is_active())
-            {
-                return Err(MailboxError::ConversationInactive {
-                    conversation_id: self.conversation_id.clone(),
-                });
-            }
-        }
-        let accepted = self.inbound.accept_inbound(draft)?;
-        if !accepted.retried {
-            {
-                let state = self.state.lock().expect("inbound mailbox lock poisoned");
-                let item = InboundItem {
-                    sequence: accepted.sequence,
-                    message: accepted.message.clone(),
-                };
-                if let Some(observer) = &state.observer {
-                    observer.on_enqueued(&item);
+        let accepted = self.with_running_commit(|| {
+            let accepted = self.inbound.accept_inbound(draft)?;
+            if !accepted.retried {
+                {
+                    let state = self.state.lock().expect("inbound mailbox lock poisoned");
+                    let item = InboundItem {
+                        sequence: accepted.sequence,
+                        message: accepted.message.clone(),
+                    };
+                    if let Some(observer) = &state.observer {
+                        observer.on_enqueued(&item);
+                    }
                 }
+                self.wake.notify_one();
             }
-            self.wake.notify_one();
-        }
+            Ok::<_, MailboxError>(accepted)
+        })??;
         Ok(accepted)
     }
 
@@ -799,18 +882,10 @@ impl ConversationInboundMailbox {
         if draft.kind == InboundKind::CompactionSummary {
             return Err(MailboxError::CompactionSummaryNotEligible);
         }
-        {
-            let state = self.state.lock().expect("inbound mailbox lock poisoned");
-            if state
-                .lifecycle
-                .as_ref()
-                .is_some_and(|lifecycle| !lifecycle.is_active())
-            {
-                return Err(MailboxError::ConversationInactive {
-                    conversation_id: self.conversation_id.clone(),
-                });
-            }
-        }
+        // This path is intentionally settlement-owned rather than normal
+        // admission: a committed background execution must be able to
+        // durably publish its terminal inbound while the conversation drains.
+        let _settlement = self.begin_settlement_admission()?;
         let (accepted, event) = self.inbound.accept_inbound_with_event(draft, event)?;
         if !accepted.retried {
             let state = self.state.lock().expect("inbound mailbox lock poisoned");

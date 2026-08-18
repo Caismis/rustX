@@ -78,6 +78,14 @@ impl RuntimeAttachment {
         if self.detached.load(Ordering::SeqCst) {
             return Self::error_response(id, RuntimeClientError::NotAttached);
         }
+        if matches!(request, RuntimeClientRequest::Shutdown { .. }) {
+            return Self::error_response(
+                id,
+                RuntimeClientError::InvalidRequest {
+                    message: "shutdown must be awaited through handle_request_async".to_owned(),
+                },
+            );
+        }
         let result = match request {
             RuntimeClientRequest::Initialize { .. } => Err(RuntimeClientError::InvalidRequest {
                 message: "the attachment is already initialized".to_owned(),
@@ -118,8 +126,33 @@ impl RuntimeAttachment {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)
             }
-            RuntimeClientRequest::Shutdown { .. } => self.inner.shutdown(),
+            RuntimeClientRequest::Shutdown { .. } => unreachable!("shutdown handled above"),
         };
+        match result {
+            Ok(result) => RuntimeClientResponse {
+                id,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => Self::error_response(id, error),
+        }
+    }
+
+    /// Handles a request whose semantic operation may await runtime-owned
+    /// settlement. In particular, a successful shutdown response means the
+    /// conversation runtime is already quiescent.
+    pub async fn handle_request_async(
+        &self,
+        request: RuntimeClientRequest,
+    ) -> RuntimeClientResponse {
+        let id = request.id();
+        if self.detached.load(Ordering::SeqCst) {
+            return Self::error_response(id, RuntimeClientError::NotAttached);
+        }
+        if !matches!(request, RuntimeClientRequest::Shutdown { .. }) {
+            return self.handle_request(request);
+        }
+        let result = self.inner.shutdown().await;
         match result {
             Ok(result) => RuntimeClientResponse {
                 id,

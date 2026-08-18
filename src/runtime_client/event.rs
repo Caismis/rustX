@@ -297,9 +297,10 @@ pub enum RuntimeClientEvent {
         model: Box<SessionModelView>,
     },
 
-    /// The runtime accepted a shutdown request and no longer admits
-    /// inbound work. Detach remains available; the current attempt
-    /// continues to its settlement.
+    /// Runtime drain began and no longer admits new inbound work. Detach
+    /// remains available; the correlated shutdown response is not returned
+    /// until the current attempt and all other conversation-owned work
+    /// settle at quiescence.
     RuntimeShutdown,
 
     /// The runtime's durable authority failed persistently: it has entered

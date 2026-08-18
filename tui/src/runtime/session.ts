@@ -247,13 +247,13 @@ export class RuntimeClientSession {
   /**
    * Requests runtime shutdown.
    *
-   * Shutdown is not detach, not cancellation, and not process exit: the
-   * current attempt continues to its settlement under runtime semantics, and
-   * the transport stays open.
+   * Shutdown is not detach or process exit: the runtime cancels and settles
+   * all conversation-owned work before this method resolves, and the
+   * transport stays open.
    */
   async shutdown(): Promise<void> {
     const result = await this.#connection.request({ method: "shutdown" });
-    if (result.type !== "shutdown_accepted") {
+    if (result.type !== "shutdown_completed") {
       throw new Error(`shutdown returned ${result.type}`);
     }
   }

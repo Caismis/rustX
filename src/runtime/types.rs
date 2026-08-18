@@ -5,42 +5,103 @@
 //! are plain runtime-owned data and never reference provider SDK or storage
 //! types.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// The one authoritative activation lifecycle of a conversation (Issue #61).
+/// The authoritative lifecycle state of one conversation runtime.
 ///
-/// A conversation is either `Inactive` or `Active`, and exactly one
-/// `Inactive -> Active` transition exists for the conversation's lifetime.
-/// The lifecycle is composed by the [`ConversationRuntime`](crate::runtime::ConversationRuntime)
-/// and shared with every runtime-owned semantic boundary that gates on
-/// conversation activation — the inbound mailbox, the background registry
-/// (through the mailbox it owns), the capability coordinator, and the
-/// coordinator itself. All of them observe the **same** state, so no
-/// runtime-owned subsystem can disagree about whether the conversation is
-/// active.
+/// `Running -> Draining` is the single drain linearization point. The
+/// lifecycle is shared by the coordinator, inbound mailbox, background
+/// registry, and capability coordinator, so every runtime-owned semantic
+/// commit observes the same admission boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationLifecycleState {
+    /// Composition has completed, but semantic runtime work cannot begin yet.
+    Inactive,
+    /// New semantic work may be admitted.
+    Running,
+    /// New semantic work is closed; already-owned work may settle.
+    Draining,
+    /// No runtime-owned operation remains capable of a semantic effect.
+    Quiescent,
+}
+
+impl ConversationLifecycleState {
+    const INACTIVE: u8 = 0;
+    const RUNNING: u8 = 1;
+    const DRAINING: u8 = 2;
+    const QUIESCENT: u8 = 3;
+
+    const fn from_raw(raw: u8) -> Self {
+        match raw {
+            Self::RUNNING => Self::Running,
+            Self::DRAINING => Self::Draining,
+            Self::QUIESCENT => Self::Quiescent,
+            _ => Self::Inactive,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LifecycleInner {
+    state: AtomicU8,
+    /// Number of concrete runtime-owned subsystem operations that have
+    /// crossed an admission boundary and have not yet returned. A drain
+    /// waits for this to reach zero before observing quiescence.
+    admissions: AtomicUsize,
+    /// Serializes the short native commit sections that do not take the
+    /// conversation coordinator lock. A drain takes this boundary before
+    /// publishing `Draining`; a background ownership or capability commit
+    /// takes it before its authoritative swap. This makes their race a
+    /// total order instead of relying on a check followed by an unrelated
+    /// write.
+    commit_boundary: Mutex<()>,
+    changed: tokio::sync::Notify,
+}
+
+/// One counted runtime lifecycle admission.
 ///
-/// The activation transition
-/// ([`ConversationLifecycle::activate`]) is the one activation
-/// linearization point: an operation that observes `Inactive` linearizes
-/// before activation and is refused, one that observes `Active` linearizes
-/// after activation and follows the normal subsystem rules. There is no
-/// subsystem-specific intermediate activation state.
+/// The guard is intentionally private to runtime-owned subsystem seams. It
+/// is not a generic shutdown hook: it only proves that one concrete semantic
+/// operation remains inside its native ownership boundary.
+pub(crate) struct LifecycleAdmission {
+    inner: Arc<LifecycleInner>,
+}
+
+impl Drop for LifecycleAdmission {
+    fn drop(&mut self) {
+        self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
+    }
+}
+
+/// The one authoritative lifecycle of a conversation runtime.
 ///
-/// # Memory ordering
-///
-/// The transition is a `compare_exchange(Inactive, Active)` with `AcqRel`
-/// (failure `Acquire`) and every observation is a plain `Acquire` load. The
-/// ordering contract is exactly the activation decision: a reader that
-/// observes `Active` synchronizes-with the winning transition and sees
-/// everything the transition published. The token does not impose ordering
-/// on unrelated subsystem data.
-#[derive(Debug, Clone, Default)]
+/// Activation is `Inactive -> Running`. Explicit shutdown performs one
+/// `Running -> Draining` transition, after which new semantic admission is
+/// refused while already-owned work retains a narrow settlement path.
+/// `Quiescent` is published only after all counted subsystem admissions,
+/// retained capability-owned processes, and the runtime's higher-level owners
+/// have settled.
+#[derive(Debug, Clone)]
 pub struct ConversationLifecycle {
-    active: Arc<AtomicBool>,
+    inner: Arc<LifecycleInner>,
+}
+
+impl Default for ConversationLifecycle {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(LifecycleInner {
+                state: AtomicU8::new(ConversationLifecycleState::INACTIVE),
+                admissions: AtomicUsize::new(0),
+                commit_boundary: Mutex::new(()),
+                changed: tokio::sync::Notify::new(),
+            }),
+        }
+    }
 }
 
 impl ConversationLifecycle {
@@ -50,13 +111,25 @@ impl ConversationLifecycle {
         Self::default()
     }
 
-    /// Whether the conversation is currently active.
+    /// The current lifecycle state.
     #[must_use]
-    pub fn is_active(&self) -> bool {
-        self.active.load(Ordering::Acquire)
+    pub fn state(&self) -> ConversationLifecycleState {
+        ConversationLifecycleState::from_raw(self.inner.state.load(Ordering::Acquire))
     }
 
-    /// Performs the one `Inactive -> Active` transition.
+    /// Whether new semantic work may currently be admitted.
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.state() == ConversationLifecycleState::Running
+    }
+
+    /// Whether activation has happened, including during or after drain.
+    #[must_use]
+    pub fn is_activated(&self) -> bool {
+        self.state() != ConversationLifecycleState::Inactive
+    }
+
+    /// Performs the one `Inactive -> Running` transition.
     ///
     /// Returns `true` for exactly the one call that committed the
     /// transition and `false` for every concurrent or later call, which
@@ -64,11 +137,217 @@ impl ConversationLifecycle {
     /// perform exactly the one-time post-activation work (for example
     /// spawning the admission worker), and a caller that receives `false`
     /// must not.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the lifecycle commit boundary is poisoned, which would
+    /// mean a previous lifecycle critical section panicked.
     #[must_use]
     pub fn activate(&self) -> bool {
-        self.active
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        self.inner
+            .state
+            .compare_exchange(
+                ConversationLifecycleState::INACTIVE,
+                ConversationLifecycleState::RUNNING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_ok()
+    }
+
+    /// Linearizes the one `Running -> Draining` transition.
+    ///
+    /// Returns `true` only for the caller that closes semantic admission.
+    /// Repeated callers observe the already-draining or quiescent lifecycle
+    /// and converge on the same drain operation.
+    #[must_use]
+    pub(crate) fn begin_drain(&self) -> bool {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        self.inner
+            .state
+            .compare_exchange(
+                ConversationLifecycleState::RUNNING,
+                ConversationLifecycleState::DRAINING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    /// Runs one concrete non-coordinator semantic commit while holding the
+    /// lifecycle commit boundary. The drain transition cannot linearize
+    /// between the `Running` observation and the operation's authoritative
+    /// commit. The returned admission is also counted so quiescence waits
+    /// for the operation's publication handoff.
+    pub(crate) fn with_running_commit<T>(
+        &self,
+        operation: impl FnOnce() -> T,
+    ) -> Result<T, ConversationLifecycleState> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        if self.state() != ConversationLifecycleState::Running {
+            return Err(self.state());
+        }
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        let admission = LifecycleAdmission {
+            inner: Arc::clone(&self.inner),
+        };
+        let result = operation();
+        drop(admission);
+        Ok(result)
+    }
+
+    /// Enters a normal semantic commit boundary.
+    ///
+    /// The state is checked both before and after incrementing the admission
+    /// count. If drain wins between those observations, the operation is
+    /// refused and its count is removed before the guard is returned.
+    pub(crate) fn try_enter_running(
+        &self,
+    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+        if self.state() != ConversationLifecycleState::Running {
+            return Err(self.state());
+        }
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        if self.state() == ConversationLifecycleState::Running {
+            return Ok(LifecycleAdmission {
+                inner: Arc::clone(&self.inner),
+            });
+        }
+        self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
+        Err(self.state())
+    }
+
+    /// Enters capability preparation during composition or normal runtime
+    /// execution. Preparation is allowed while `Inactive` because it is a
+    /// composition operation rather than semantic admission; the counted
+    /// guard still keeps an activation/drain race from escaping quiescence.
+    /// Once `Draining` begins, no new preparation may start.
+    pub(crate) fn try_enter_preparation(
+        &self,
+    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+        let state = self.state();
+        if !matches!(
+            state,
+            ConversationLifecycleState::Inactive | ConversationLifecycleState::Running
+        ) {
+            return Err(state);
+        }
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        let after = self.state();
+        if matches!(
+            after,
+            ConversationLifecycleState::Inactive | ConversationLifecycleState::Running
+        ) {
+            return Ok(LifecycleAdmission {
+                inner: Arc::clone(&self.inner),
+            });
+        }
+        self.inner.admissions.fetch_sub(1, Ordering::AcqRel);
+        self.inner.changed.notify_waiters();
+        Err(after)
+    }
+
+    /// Enters the narrow settlement path of an already-owned operation.
+    ///
+    /// Settlement is allowed while `Running` or `Draining`, but never after
+    /// `Quiescent` (and never during pre-activation composition).
+    pub(crate) fn try_enter_settlement(
+        &self,
+    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+        // Settlement entry shares the native commit boundary with drain
+        // publication. Without this short lock, a settlement caller could
+        // observe `Draining` and increment `admissions` after
+        // `mark_quiescent` had already checked zero but before its CAS to
+        // `Quiescent`, allowing a real callback to begin after quiescence.
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        let state = self.state();
+        if !matches!(
+            state,
+            ConversationLifecycleState::Running | ConversationLifecycleState::Draining
+        ) {
+            return Err(state);
+        }
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        Ok(LifecycleAdmission {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Attempts to publish `Quiescent` after all counted admissions settle.
+    #[must_use]
+    pub(crate) fn mark_quiescent(&self) -> bool {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        if self.inner.admissions.load(Ordering::Acquire) != 0 {
+            return false;
+        }
+        let changed = self
+            .inner
+            .state
+            .compare_exchange(
+                ConversationLifecycleState::DRAINING,
+                ConversationLifecycleState::QUIESCENT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
+        if changed {
+            self.inner.changed.notify_waiters();
+        }
+        changed
+    }
+
+    /// Waits until no counted subsystem operation remains in flight.
+    pub(crate) async fn wait_for_no_admissions(&self) {
+        loop {
+            if self.inner.admissions.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            let notified = self.inner.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.inner.admissions.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Waits until the lifecycle has reached its terminal quiescent state.
+    pub(crate) async fn wait_until_quiescent(&self) {
+        loop {
+            if self.state() == ConversationLifecycleState::Quiescent {
+                return;
+            }
+            let notified = self.inner.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.state() == ConversationLifecycleState::Quiescent {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -257,7 +536,38 @@ impl RuntimeClock for SystemClock {
 
 #[cfg(test)]
 mod tests {
-    use super::{CancellationReason, RuntimeClock, RuntimeError, SystemClock};
+    use super::{
+        CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
+        RuntimeError, SystemClock,
+    };
+
+    /// The shared lifecycle has one monotonic activation/drain path, normal
+    /// admission closes at drain, and quiescence waits for the last counted
+    /// settlement owner to leave its native boundary.
+    #[tokio::test]
+    async fn lifecycle_closes_admission_before_publishing_quiescence() {
+        let lifecycle = ConversationLifecycle::new();
+        assert_eq!(lifecycle.state(), ConversationLifecycleState::Inactive);
+        assert!(lifecycle.activate());
+        assert_eq!(lifecycle.state(), ConversationLifecycleState::Running);
+
+        let admission = lifecycle
+            .try_enter_running()
+            .expect("running lifecycle admits semantic work");
+        assert!(lifecycle.begin_drain());
+        assert_eq!(lifecycle.state(), ConversationLifecycleState::Draining);
+        assert!(lifecycle.try_enter_running().is_err());
+        assert!(lifecycle.try_enter_settlement().is_ok());
+        assert!(!lifecycle.mark_quiescent());
+
+        drop(admission);
+        lifecycle.wait_for_no_admissions().await;
+        assert!(lifecycle.mark_quiescent());
+        assert_eq!(lifecycle.state(), ConversationLifecycleState::Quiescent);
+        assert!(!lifecycle.begin_drain());
+        assert!(lifecycle.try_enter_settlement().is_err());
+        lifecycle.wait_until_quiescent().await;
+    }
 
     /// Cancellation reasons use a stable serialized representation.
     #[test]

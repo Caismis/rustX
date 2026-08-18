@@ -699,25 +699,29 @@ impl ClientInner {
         })
     }
 
-    /// Accepts the local-runtime shutdown request through the conversation
-    /// runtime.
-    ///
-    /// Shutdown is not detach and not cancellation: the current attempt
-    /// continues to its settlement, semantic runtime work is never mutated,
-    /// and no further inbound admission occurs.
+    /// Drains the conversation runtime and returns only after it is
+    /// quiescent. Runtime Client remains a control adapter: the semantic
+    /// lifecycle and all settlement ownership remain in `ConversationRuntime`.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::InvalidState`] while the runtime is
     /// not yet activated: an inert conversation has no runtime lifecycle
     /// to end, so the request is refused and nothing is published.
-    pub(crate) fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.runtime
-            .shutdown()
-            .map_err(|_error| RuntimeClientError::InvalidState {
-                message: "the conversation runtime is not activated".to_owned(),
-            })?;
-        Ok(RuntimeClientResult::ShutdownAccepted)
+    pub(crate) async fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.runtime.shutdown().await.map_err(|error| match error {
+            crate::runtime::conversation_runtime::ShutdownError::Inactive => {
+                RuntimeClientError::InvalidState {
+                    message: "the conversation runtime is not activated".to_owned(),
+                }
+            }
+            crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                detail,
+            } => RuntimeClientError::RuntimeFailure {
+                message: format!("runtime-owned shutdown settlement failed: {detail}"),
+            },
+        })?;
+        Ok(RuntimeClientResult::ShutdownCompleted)
     }
 }
 
@@ -1097,14 +1101,14 @@ impl RuntimeClientHost {
         self.inner.background_cancel(execution_id)
     }
 
-    /// Accepts the local-runtime shutdown request.
+    /// Drains the local runtime and completes only at runtime quiescence.
     ///
     /// # Errors
     ///
     /// Returns [`RuntimeClientError::InvalidState`] while the runtime is
     /// not yet activated.
-    pub fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.shutdown()
+    pub async fn shutdown(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.shutdown().await
     }
 
     /// Convenience for tests: host-level conversation-state accessors that
@@ -3433,6 +3437,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             },
         )
         .await;
@@ -3515,6 +3521,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             },
         )
         .await;
@@ -3880,11 +3888,11 @@ mod tests {
         );
     }
 
-    /// Shutdown is distinct from detach: it stops further admission, the
-    /// current attempt continues, and detach remains available.
+    /// Shutdown is distinct from detach: it drains the current attempt to
+    /// quiescence, and detach remains available afterwards.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     #[allow(clippy::too_many_lines)] // one complete shutdown lifecycle
-    async fn shutdown_is_not_detach_and_not_cancellation() {
+    async fn shutdown_is_not_detach_and_reaches_quiescence() {
         let (release_tx, release_rx) = model_release();
         let (_, fixture) = host_fixture(
             vec![vec![
@@ -3915,12 +3923,17 @@ mod tests {
         })
         .await;
 
-        let response = attachment.handle_request(RuntimeClientRequest::Shutdown {
-            id: crate::runtime_client::RequestId::new(2),
-        });
+        release_tx
+            .send(true)
+            .expect("release current model request");
+        let response = attachment
+            .handle_request_async(RuntimeClientRequest::Shutdown {
+                id: crate::runtime_client::RequestId::new(2),
+            })
+            .await;
         assert!(matches!(
             response.result,
-            Some(RuntimeClientResult::ShutdownAccepted)
+            Some(RuntimeClientResult::ShutdownCompleted)
         ));
 
         let (after_shutdown, _) = fixture.host.snapshot().expect("snapshot after shutdown");
@@ -3936,12 +3949,14 @@ mod tests {
                 .count(),
             1
         );
-        let repeated = attachment.handle_request(RuntimeClientRequest::Shutdown {
-            id: crate::runtime_client::RequestId::new(5),
-        });
+        let repeated = attachment
+            .handle_request_async(RuntimeClientRequest::Shutdown {
+                id: crate::runtime_client::RequestId::new(5),
+            })
+            .await;
         assert!(matches!(
             repeated.result,
-            Some(RuntimeClientResult::ShutdownAccepted)
+            Some(RuntimeClientResult::ShutdownCompleted)
         ));
         let mut duplicate_shutdown = false;
         loop {
@@ -3976,12 +3991,8 @@ mod tests {
             Some(RuntimeClientError::RuntimeShutdown)
         ));
 
-        // The current attempt continues to settlement; detach still works.
-        release_tx.send(true).expect("release");
-        receive_until(&subscription, |event| {
-            matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
-        })
-        .await;
+        // The current attempt settled before shutdown completed; detach still
+        // works independently of runtime lifetime.
         attachment.detach();
         let (reattached, initialized) = fixture
             .host
@@ -4028,6 +4039,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             },
         )
         .await;
@@ -4109,6 +4122,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             },
         )
         .await;
@@ -4334,6 +4349,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             },
         )
         .await;
@@ -5666,18 +5683,18 @@ mod tests {
     }
 
     /// The activation regression: `ConversationRuntime::activate` performs
-    /// one shared `Inactive -> Active` lifecycle transition, and every
+    /// one shared `Inactive -> Running` lifecycle transition, and every
     /// runtime-owned semantic boundary observes exactly that transition.
     ///
     /// The activation gate parks `activate` before the lifecycle
     /// transition: while parked, a background commit, a capability commit,
     /// and a mailbox enqueue all observe `Inactive` and are refused typed
     /// (consuming nothing); after the gate is released the same operations
-    /// observe `Active` and follow the normal active semantics. The park
+    /// observe `Running` and follow the normal running semantics. The park
     /// proves both sides against the *one* shared decision — the mailbox,
     /// the background registry, and the capability coordinator can never
     /// observe contradictory lifecycle states, because there is only one
-    /// activation state to observe.
+    /// lifecycle authority to observe.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn activation_is_one_shared_lifecycle_transition() {
@@ -5692,6 +5709,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             }),
         )
         .await;
@@ -5763,8 +5782,8 @@ mod tests {
         activate_task.await.expect("activate completes");
         assert!(fixture.runtime.is_activated());
 
-        // Post-side: the same operations observe Active and follow the
-        // normal active semantics.
+        // Post-side: the same operations observe Running and follow the
+        // normal running semantics.
         let prepared = registry
             .prepare_dispatch(
                 &claim_background_invocation("call-activation-post"),
@@ -5817,10 +5836,10 @@ mod tests {
     /// shared lifecycle authority that history is structurally impossible.
     ///
     /// The registry commit-boundary hook parks a background commit after
-    /// it has already observed `Active` inside its critical section; a
+    /// it has already observed `Running` inside its critical section; a
     /// capability commit that begins afterwards — and a second one that
     /// begins after the background commit completed — must observe the
-    /// same `Active` lifecycle. The park and the task join prove the
+    /// same `Running` lifecycle. The park and the task join prove the
     /// real-time ordering with no timing assumptions.
     #[allow(clippy::too_many_lines)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5840,7 +5859,7 @@ mod tests {
 
         // Prepare a background dispatch and park its commit at the
         // registry ownership-commit boundary: the commit has already
-        // observed the shared lifecycle (Active) inside its critical
+        // observed the shared lifecycle (Running) inside its critical
         // section when the hook fires.
         let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
         registry.install_commit_boundary_hook(hook.clone());
@@ -5861,15 +5880,15 @@ mod tests {
             let hook = hook.clone();
             tokio::task::spawn_blocking(move || hook.wait_entered())
                 .await
-                .expect("the background commit entered its boundary after observing Active");
+                .expect("the background commit entered its boundary after observing Running");
         }
 
         // A capability commit that begins now — real-time after the
         // background commit's lifecycle observation — must observe the
-        // same Active lifecycle: it cannot fail ConversationInactive.
+        // same Running lifecycle: it cannot fail ConversationInactive.
         let committed = coordinator
             .commit(coordinator.prepare_candidate().await.expect("prepare"))
-            .expect("the capability observes Active, never a stale Inactive");
+            .expect("the capability observes Running, never a stale Inactive");
         assert_eq!(committed.revision().get(), 1);
 
         // The background commit completes successfully.
@@ -5882,14 +5901,14 @@ mod tests {
         let outcome = commit_task
             .await
             .expect("commit outcome")
-            .expect("the background commit succeeds after observing Active");
+            .expect("the background commit succeeds after observing Running");
         let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
             panic!("accepted");
         };
         await_background_started(&mut started, "the runner starts").await;
 
         // The old contradiction shape: B completed successfully, then C
-        // begins — C must still observe Active, never a stale Inactive.
+        // begins — C must still observe Running, never a stale Inactive.
         write_probe_skill(&fixture.workspace, "docx");
         let committed = coordinator
             .commit(coordinator.prepare_candidate().await.expect("prepare"))
@@ -5934,6 +5953,8 @@ mod tests {
                 submit_gate: None,
                 shutdown_arrival: None,
                 start_boundary_pause: None,
+                drain_linearization: None,
+                tool_start_pause: None,
             }),
         )
         .await;
@@ -5998,9 +6019,9 @@ mod tests {
     }
 
     /// Concurrent `activate` calls are idempotent: exactly one call
-    /// commits the lifecycle transition (`Inactive -> Active` CAS) and
+    /// commits the lifecycle transition (`Inactive -> Running` CAS) and
     /// performs the one-time post-transition work — worker spawn and the
-    /// admission kick — and every other call observes `Active` and returns
+    /// admission kick — and every other call observes `Running` and returns
     /// without changing anything. A single inbound item therefore admits
     /// exactly one attempt, never two.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -6137,7 +6158,7 @@ mod tests {
         .expect("host construction");
 
         assert_eq!(
-            fixture.runtime.shutdown(),
+            fixture.runtime.shutdown().await,
             Err(crate::runtime::conversation_runtime::ShutdownError::Inactive),
             "a shutdown while inactive is refused typed"
         );
@@ -6158,12 +6179,14 @@ mod tests {
             "the refused shutdown published no event"
         );
 
-        // After activation shutdown keeps its existing semantics: accepted,
-        // published exactly once, and inbound is gated afterwards.
+        // After activation shutdown completes its one semantic drain,
+        // publishes the drain observation exactly once, and gates inbound
+        // afterwards.
         fixture.runtime.activate();
         fixture
             .runtime
             .shutdown()
+            .await
             .expect("accepted after activation");
         let events = receive_until(&subscription, |event| {
             matches!(event.event, RuntimeClientEvent::RuntimeShutdown)

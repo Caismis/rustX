@@ -17,7 +17,7 @@
 //! ConversationToolRuntime / ConversationBackgroundRegistry
 //! CapabilityCoordinator
 //! context/request assembly dependencies (policy, estimator, status composer)
-//! the shutdown/admission gate
+//! the lifecycle/drain authority
 //! attempt settlement handoff back into conversation state
 //! ```
 //!
@@ -72,16 +72,32 @@
 //! or after it (affects only future attempts). See the deterministic race
 //! regressions in the test module.
 //!
-//! # Lifecycle: construction, optional client binding, activation
+//! # Lifecycle: activation, drain, and quiescence
 //!
-//! A conversation runtime has exactly two lifecycle states, and the
-//! transition between them is the one explicit composition boundary:
+//! The runtime has one authoritative lifecycle, shared with every
+//! conversation-owned semantic boundary:
 //!
 //! ```text
-//! ConversationRuntime::new(..)          -> runtime-owned / inactive
+//! ConversationRuntime::new(..)          -> Inactive
 //!     [optional] RuntimeClientHost::new(..)   binds the client adapter
-//! ConversationRuntime::activate()       -> active: semantic execution may begin
+//! ConversationRuntime::activate()       -> Running
+//! ConversationRuntime::shutdown()       -> Draining, then awaits Quiescent
 //! ```
+//!
+//! `Running -> Draining` is the exact drain linearization point. It is
+//! performed under the coordinator lock that also serializes inbound
+//! acceptance, model updates, and attempt admission. Background ownership and
+//! capability revision commits use the same lifecycle at their native
+//! synchronization boundaries. After the transition, no new semantic work
+//! may begin; already-owned work retains only its typed settlement path.
+//!
+//! Cancellation requested, operation settled, and runtime quiescent are
+//! different facts. A cancellation signal, a dropped waiter, an OS signal,
+//! or an empty registry is not settlement. Quiescence is published only
+//! after the current Agent Execution, foreground tools, conversation-owned
+//! background terminal publication, counted capability/environment
+//! preparation, retained MCP process closure, owned process terminality, and
+//! the admission worker's exit boundary have all settled.
 //!
 //! Construction performs one **tool-runtime ownership transfer** over the
 //! `ConversationToolRuntime` it claims (Issue #61): under the background
@@ -98,40 +114,44 @@
 //! plane, and the inactive phase can never inherit a detached semantic
 //! transition.
 //!
-//! # One activation lifecycle authority
+//! # One lifecycle authority
 //!
-//! The conversation has exactly **one** authoritative activation state:
+//! The conversation has exactly **one** authoritative lifecycle state:
 //! the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
 //! composed by the runtime and shared with every runtime-owned semantic
 //! boundary — the inbound mailbox (runtime ownership is the lifecycle
 //! handle; the mailbox keeps no activation flag), the background registry
 //! (reads the same gate through its mailbox), the capability coordinator
 //! (reads the same handle attached at its claim), and the coordinator
-//! itself. `activate` performs the single `Inactive -> Active` transition
-//! of that one lifecycle, and every runtime-owned semantic commit observes
-//! it:
+//! itself. `activate` performs the single `Inactive -> Running` transition
+//! and `shutdown` performs the single `Running -> Draining` transition of
+//! that one lifecycle. Every runtime-owned semantic commit observes it:
 //!
 //! ```text
 //! operation observes Inactive
 //!     -> it linearizes before activation
 //!     -> runtime-semantic commit is refused (typed, consumes nothing)
 //!
-//! operation observes Active
-//!     -> it linearizes after activation
+//! operation observes Running
+//!     -> it linearizes before drain
 //!     -> normal subsystem rules apply
+//!
+//! operation observes Draining or Quiescent
+//!     -> new semantic admission is refused
+//!     -> required settlement remains allowed only while Draining
 //! ```
 //!
-//! There is no subsystem-specific intermediate activation state, so two
-//! runtime-owned subsystems can never disagree about whether the
-//! conversation is active: a background commit that has observed `Active`
-//! and a capability commit that starts afterwards necessarily observes
-//! `Active` too (the lifecycle transition is monotonic). The ownership
-//! transfer (`standalone -> runtime-owned/inactive`) and activation
-//! (`inactive -> active`) are two distinct commit points.
+//! There is no subsystem-specific lifecycle state, so two runtime-owned
+//! subsystems cannot disagree about whether the conversation admits new
+//! work. The ownership transfer (`standalone -> runtime-owned/inactive`),
+//! activation (`Inactive -> Running`), drain (`Running -> Draining`), and
+//! quiescence publication (`Draining -> Quiescent`) are distinct commit
+//! points with distinct contracts.
 //!
-//! An **inactive** runtime is inert, and this is enforced, not merely
-//! documented. Once a `ConversationRuntime` owns its semantic subsystems,
-//! the inactive phase admits no conversation-semantic mutation at all:
+//! An **inactive** runtime is inert for semantic mutation, and this is
+//! enforced, not merely documented. The one composition/readiness exception
+//! is counted capability/background preparation; it cannot publish a live
+//! revision or owned execution until a later `Running` commit:
 //!
 //! ```text
 //! ConversationRuntime constructed
@@ -142,23 +162,24 @@
 //!     |    no shutdown transition      (shutdown:  ShutdownError::Inactive)
 //!     |    no background dispatch commit (registry: BackgroundDispatchError::ConversationInactive)
 //!     |    no active capability commit (coordinator: CapabilityCommitError::ConversationInactive)
+//!     |    counted candidate preparation (composition only; no live commit)
 //!     |
 //! [optional RuntimeClientHost bootstrap]
 //!     |
-//! ConversationRuntime::activate()      <- the one Inactive -> Active transition
+//! ConversationRuntime::activate()      <- the one Inactive -> Running transition
 //!     |
 //! all runtime semantic mutations may begin
 //! ```
 //!
-//! The lifecycle is an `AcqRel/ Acquire` atomic token, read-only from every
-//! subsystem critical section: no subsystem ever takes the coordinator
-//! lock, and the coordinator lock is held only for the coordinator's own
-//! operations and the host-binding handshake. `activate` performs the
-//! transition under that lock, which is what serializes it against the
-//! host-binding decision: a bootstrap that acquires the lock first sees
-//! `Inactive` and completes before activation, one that acquires it after
-//! sees `Active` and is refused
-//! ([`RuntimeBootstrapError::RuntimeAlreadyActivated`]).
+//! The lifecycle state is an `AcqRel/Acquire` atomic, and its short native
+//! commit boundary also serializes activation, drain, background ownership,
+//! and capability revision commits. The coordinator lock remains the
+//! conversation authority for inbound acceptance, attempt admission, model
+//! changes, and the host-binding handshake; the shared lifecycle boundary
+//! covers the runtime-owned commits that do not take that lock. A bootstrap
+//! that acquires the coordinator lock first sees `Inactive` and completes
+//! before activation, one that acquires it after sees `Running` and is
+//! refused ([`RuntimeBootstrapError::RuntimeAlreadyActivated`]).
 //!
 //! Binding a Runtime Client host is a **pre-activation** composition
 //! decision, not a hot operation: a host bind after activation is refused
@@ -226,7 +247,7 @@
 //!
 //! The bootstrap cut `R` **precedes** the activation transition: the
 //! handshake completes over the inert runtime, and activation (the shared
-//! `ConversationLifecycle` `Inactive -> Active` CAS) happens afterwards.
+//! `ConversationLifecycle` `Inactive -> Running` CAS) happens afterwards.
 //! Because the runtime remains semantically inert from `R` until that
 //! transition — the mailbox refuses `enqueue`, the background registry
 //! refuses `commit_dispatch`, the capability coordinator refuses a
@@ -264,7 +285,10 @@ use crate::runtime::inbound::{
 };
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
-use crate::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeClock, SystemClock};
+use crate::runtime::types::{
+    CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
+    SystemClock,
+};
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
 
@@ -618,9 +642,6 @@ struct CoordinatorState {
     conversation: Option<ConversationState>,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
-    /// Whether shutdown was accepted: no further inbound admission, no
-    /// further attempt admission; the current attempt continues.
-    shutting_down: bool,
     /// The next attempt identity ordinal.
     ///
     /// Seeded by startup recovery to one past the highest ordinal that
@@ -650,8 +671,13 @@ struct CoordinatorState {
 struct WakeGate {
     /// The wake signal.
     notify: tokio::sync::Notify,
-    /// Set by the runtime's `Drop`. Terminal for the worker.
+    /// Set by explicit drain or by the runtime's `Drop`. Terminal for the
+    /// worker.
     closed: AtomicBool,
+    /// Set by the worker after it has observed the closed gate and exited.
+    exited: AtomicBool,
+    /// Wakes a drain waiter after worker exit.
+    exit_notify: tokio::sync::Notify,
     /// Test-only worker-exit signal.
     #[cfg(test)]
     worker_exit: Mutex<Option<std::sync::mpsc::Sender<()>>>,
@@ -662,6 +688,8 @@ impl WakeGate {
         Self {
             notify: tokio::sync::Notify::new(),
             closed: AtomicBool::new(false),
+            exited: AtomicBool::new(false),
+            exit_notify: tokio::sync::Notify::new(),
             #[cfg(test)]
             worker_exit: Mutex::new(None),
         }
@@ -674,6 +702,26 @@ impl WakeGate {
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.notify.notify_one();
+    }
+
+    fn mark_exited(&self) {
+        self.exited.store(true, Ordering::Release);
+        self.exit_notify.notify_waiters();
+    }
+
+    async fn wait_until_exited(&self) {
+        loop {
+            if self.exited.load(Ordering::Acquire) {
+                return;
+            }
+            let notified = self.exit_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.exited.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Installs the test-only worker-exit signal.
@@ -699,6 +747,49 @@ impl WakeGate {
     }
 }
 
+/// The one shared completion of the runtime drain. Every concurrent shutdown
+/// caller waits on this same object; no caller creates a competing drain
+/// state machine.
+#[derive(Debug, Default)]
+struct DrainCompletion {
+    completed: AtomicBool,
+    result: Mutex<Option<Result<(), ShutdownError>>>,
+    notify: tokio::sync::Notify,
+}
+
+impl DrainCompletion {
+    fn complete(&self, result: Result<(), ShutdownError>) {
+        *self.result.lock().expect("drain completion lock poisoned") = Some(result);
+        self.completed.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    async fn wait(&self) -> Result<(), ShutdownError> {
+        loop {
+            if self.completed.load(Ordering::Acquire) {
+                return self
+                    .result
+                    .lock()
+                    .expect("drain completion lock poisoned")
+                    .clone()
+                    .expect("completed drain has a result");
+            }
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.completed.load(Ordering::Acquire) {
+                return self
+                    .result
+                    .lock()
+                    .expect("drain completion lock poisoned")
+                    .clone()
+                    .expect("completed drain has a result");
+            }
+            notified.await;
+        }
+    }
+}
+
 /// Test-only synchronization hooks of the conversation coordinator.
 ///
 /// Every hook is an armed gate that parks exactly one operation and then
@@ -719,7 +810,7 @@ impl WakeGate {
 ///   transition, so while the park holds the conversation is provably
 ///   still `Inactive` and every competing runtime-owned commit or host
 ///   bind can still proceed. Releasing the gate commits the one
-///   `Inactive -> Active` transition.
+///   `Inactive -> Running` transition.
 ///
 /// All synchronization is `std` (mutex + condvar) because the coordinator
 /// boundary is a `std` mutex critical section; the parking blocks the OS
@@ -746,10 +837,16 @@ pub(crate) struct CoordinatorProbe {
     /// coordinator lock. This makes the submit-vs-shutdown ordering provable
     /// by mutex exclusion instead of a timing assumption.
     pub(crate) shutdown_arrival: Option<Arc<tokio::sync::Notify>>,
+    /// Signals immediately after `Running -> Draining` linearizes.
+    pub(crate) drain_linearization: Option<Arc<tokio::sync::Notify>>,
     /// Installed into the **next** admitted attempt's execution: the M9b
     /// model-turn start-boundary pause (Issue #12). `take`n by the next
     /// `run_attempt`, so it arms exactly one attempt.
     pub(crate) start_boundary_pause: Option<crate::agent::execution::test_sync::StartBoundaryPause>,
+    /// Installed into the next admitted attempt's foreground tool batch:
+    /// parks after the first `ToolExecutionStarted` fact so a test can
+    /// linearize drain against the sibling start frontier.
+    pub(crate) tool_start_pause: Option<crate::agent::execution::test_sync::ToolStartPause>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -827,10 +924,12 @@ pub(crate) struct RuntimeInner {
     /// `AgentExecution`. Request/event history is read through this handle.
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
-    /// The one authoritative activation lifecycle of this conversation
-    /// (Issue #61): the single `Inactive -> Active` transition, shared with
-    /// the mailbox, the background registry, and the capability
-    /// coordinator. The coordinator keeps no activation state of its own.
+    /// The one authoritative lifecycle and drain authority of this
+    /// conversation (Issue #61 / M9c): the single `Inactive -> Running`
+    /// activation transition and the `Running -> Draining -> Quiescent`
+    /// shutdown transitions, shared with the mailbox, background registry,
+    /// and capability coordinator. The coordinator keeps no lifecycle state
+    /// of its own.
     lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
@@ -854,6 +953,10 @@ pub(crate) struct RuntimeInner {
     wake: Arc<WakeGate>,
     /// Whether the admission worker task was spawned.
     worker_started: AtomicBool,
+    /// The one shared semantic drain completion.
+    drain: std::sync::OnceLock<Arc<DrainCompletion>>,
+    /// Guards creation of the one drain task.
+    drain_started: AtomicBool,
     /// The observation queue shared with the Runtime Client projection;
     /// set exactly once when a projection consumer installs itself through
     /// [`RuntimeInner::install_observation_bridge`].
@@ -862,6 +965,10 @@ pub(crate) struct RuntimeInner {
     /// headless drivers await the authoritative state transfer
     /// deterministically instead of by polling.
     settlement: tokio::sync::Notify,
+    /// Wakes the drain waiter when a runtime-owned durable settlement enters
+    /// the explicit `DurabilityFailed` state instead of reaching terminal
+    /// publication.
+    durability_failure: tokio::sync::Notify,
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
@@ -885,6 +992,198 @@ impl RuntimeInner {
         self.state
             .lock()
             .expect("conversation runtime lock poisoned")
+    }
+
+    /// Begins or joins the one semantic runtime drain.
+    ///
+    /// The coordinator lock serializes the lifecycle transition with inbound
+    /// acceptance, model updates, and attempt admission. The shared
+    /// lifecycle admission guards serialize it with background ownership and
+    /// capability commits that have their own native synchronization owner.
+    fn begin_drain(self: &Arc<Self>) -> Result<Arc<DrainCompletion>, ShutdownError> {
+        let mut first = false;
+        {
+            let state = self.lock_state();
+            match self.lifecycle.state() {
+                ConversationLifecycleState::Inactive => {
+                    return Err(ShutdownError::Inactive);
+                }
+                ConversationLifecycleState::Running => {
+                    if let Some(current) = &state.current_attempt {
+                        // Take the same M9b model-turn start gate as user
+                        // cancellation *before* publishing `Draining`. If a
+                        // start critical section already owns the gate, it
+                        // linearizes before runtime drain and is allowed to
+                        // settle; if this request wins the gate, no later
+                        // model arbitration can start a request.
+                        let _ = current
+                            .cancellation
+                            .request_cancel(CancellationReason::RuntimeShutdown);
+                    }
+                    debug_assert!(
+                        self.lifecycle.begin_drain(),
+                        "the coordinator lock owns the runtime drain transition"
+                    );
+                    first = true;
+                    self.observe(ConversationObservation::Shutdown);
+                    #[cfg(test)]
+                    if let Some(linearized) = self
+                        .probe
+                        .lock()
+                        .expect("coordinator probe lock poisoned")
+                        .as_ref()
+                        .and_then(|probe| probe.drain_linearization.clone())
+                    {
+                        linearized.notify_one();
+                    }
+                    self.wake.close();
+                }
+                ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent => {}
+            }
+        }
+
+        let completion = self
+            .drain
+            .get_or_init(|| Arc::new(DrainCompletion::default()))
+            .clone();
+        if first {
+            // Cancellation intent is requested synchronously after the drain
+            // transition wins, so a client-side background cancel cannot
+            // create an unchecked post-drain ownership window. The registry
+            // still owns the physical/native settlement and is awaited by the
+            // drain task below.
+            for execution in self.tool_runtime.background().active_snapshot() {
+                self.tool_runtime.background().cancel_with_reason(
+                    &execution.execution_id,
+                    CancellationReason::RuntimeShutdown,
+                );
+            }
+            self.tool_runtime.background().abort_prepared_for_drain();
+            if self
+                .drain_started
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let inner = Arc::clone(self);
+                let completion_for_task = completion.clone();
+                self.executor.spawn(async move {
+                    let result = inner.drain_to_quiescence(completion_for_task.clone()).await;
+                    completion_for_task.complete(result);
+                });
+            }
+        }
+        Ok(completion)
+    }
+
+    /// Waits for the current Agent Execution to return its terminal result to
+    /// `finish_attempt`. The current-attempt slot is the ownership handoff;
+    /// cancellation alone never clears it.
+    async fn wait_for_current_attempt(&self) {
+        loop {
+            if self.lock_state().current_attempt.is_none() {
+                return;
+            }
+            let notified = self.settlement.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.lock_state().current_attempt.is_none() {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Waits for all conversation-owned background executions and their
+    /// durable terminal publication, then publishes `Quiescent` only after
+    /// the admission worker and all counted subsystem admissions have also
+    /// settled.
+    async fn drain_to_quiescence(
+        self: &Arc<Self>,
+        _completion: Arc<DrainCompletion>,
+    ) -> Result<(), ShutdownError> {
+        loop {
+            if let Some(detail) = self.durability_failure_diagnostic() {
+                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            }
+            self.wait_for_current_attempt().await;
+
+            let active = self.tool_runtime.background().active_snapshot();
+            if !active.is_empty() {
+                for execution in &active {
+                    self.tool_runtime.background().cancel_with_reason(
+                        &execution.execution_id,
+                        CancellationReason::RuntimeShutdown,
+                    );
+                }
+                for execution in active {
+                    self.wait_for_background_settlement(&execution.execution_id)
+                        .await?;
+                }
+                continue;
+            }
+
+            self.lifecycle.wait_for_no_admissions().await;
+            self.tool_runtime.background().abort_prepared_for_drain();
+            if !self.tool_runtime.background().active_snapshot().is_empty() {
+                continue;
+            }
+            if self.worker_started.load(Ordering::Acquire) {
+                self.wake.wait_until_exited().await;
+            }
+            self.lifecycle.wait_for_no_admissions().await;
+            if let Err(detail) = self.capability.drain_conversation_owned().await {
+                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            }
+            self.lifecycle.wait_for_no_admissions().await;
+            if let Some(detail) = self.durability_failure_diagnostic() {
+                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            }
+            if self.lifecycle.mark_quiescent() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Waits for one conversation-owned background record to become
+    /// terminal, or returns as soon as its owner enters the explicit
+    /// durability-failure state. `PublishingTerminal` is therefore never
+    /// mistaken for quiescence and cannot strand the public shutdown waiter
+    /// indefinitely after the owner's bounded publication budget is spent.
+    async fn wait_for_background_settlement(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Result<(), ShutdownError> {
+        loop {
+            if let Some(detail) = self.durability_failure_diagnostic() {
+                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            }
+            let terminal = self
+                .tool_runtime
+                .background()
+                .wait_until_terminal(execution_id);
+            let failed = self.durability_failure.notified();
+            tokio::pin!(terminal);
+            tokio::pin!(failed);
+            failed.as_mut().enable();
+            if let Some(detail) = self.durability_failure_diagnostic() {
+                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            }
+            tokio::select! {
+                biased;
+                _ = terminal => return Ok(()),
+                () = failed => {}
+            }
+        }
+    }
+
+    /// Returns the durable failure that prevents this runtime from claiming
+    /// successful quiescence, if one has been recorded.
+    fn durability_failure_diagnostic(&self) -> Option<String> {
+        let state = self.lock_state();
+        match &state.durability_health {
+            DurabilityHealth::DurabilityFailed { diagnostic, .. } => Some(diagnostic.clone()),
+            DurabilityHealth::AdmissionCycle { .. } => None,
+        }
     }
 
     /// Builds the `ContextRuntime` of one admitted attempt.
@@ -960,6 +1259,7 @@ impl RuntimeInner {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
             });
+            self.durability_failure.notify_waiters();
             return;
         }
         let retry_armed = match &mut state.durability_health {
@@ -996,6 +1296,7 @@ impl RuntimeInner {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
             });
+            self.durability_failure.notify_waiters();
         }
     }
 
@@ -1061,9 +1362,9 @@ impl RuntimeInner {
         // for its lifecycle transition, is what makes the host-binding
         // decision race atomically against activation: a bootstrap that
         // acquires the lock first sees `Inactive` and completes before
-        // activation, one that acquires it after sees `Active` and is
+        // activation, one that acquires it after sees `Running` and is
         // refused.
-        if self.lifecycle.is_active() {
+        if self.lifecycle.is_activated() {
             return Err(RuntimeBootstrapError::RuntimeAlreadyActivated {
                 conversation_id: self.conversation_id.clone(),
             });
@@ -1089,7 +1390,9 @@ impl RuntimeInner {
         // An inactive runtime never moved its conversation state into an
         // attempt. Bootstrap only hydrates the current Surface working set;
         // the append-only Ledger remains a paged durable read authority.
-        let shutting_down = state.shutting_down;
+        // The observation bridge is installed only before activation, so its
+        // shutdown projection seed is necessarily false.
+        let shutting_down = false;
         let model = state.model.view();
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
@@ -1179,6 +1482,7 @@ impl RuntimeInner {
                     inner.admit_next_attempt();
                 }
             }
+            wake.mark_exited();
             #[cfg(test)]
             wake.signal_worker_exit();
         });
@@ -1246,6 +1550,15 @@ impl RuntimeInner {
                 .and_then(|probe| probe.start_boundary_pause.take());
             if let Some(pause) = pause {
                 execution.install_start_boundary_pause(pause);
+            }
+            let pause = self
+                .probe
+                .lock()
+                .expect("coordinator probe lock poisoned")
+                .as_mut()
+                .and_then(|probe| probe.tool_start_pause.take());
+            if let Some(pause) = pause {
+                execution.install_tool_start_pause(pause);
             }
         }
         execution.observe(&observer);
@@ -1364,7 +1677,7 @@ impl RuntimeInner {
             gate.enter();
         }
         let mut state = self.lock_state();
-        if !self.lifecycle.is_active() || state.shutting_down || state.current_attempt.is_some() {
+        if !self.lifecycle.is_running() || state.current_attempt.is_some() {
             return;
         }
         // Persistent durable failure: no new admission may begin. The runtime
@@ -1591,7 +1904,7 @@ impl RuntimeInner {
         });
         drop(state);
         let inner = Arc::clone(self);
-        tokio::spawn(async move {
+        self.executor.spawn(async move {
             let result = inner
                 .run_attempt(
                     attempt_id.clone(),
@@ -1884,7 +2197,6 @@ impl ConversationRuntime {
                 model: config.model,
                 conversation: Some(conversation),
                 current_attempt: None,
-                shutting_down: false,
                 next_attempt_seq,
                 recovered_continuation,
                 // Durability health after a successful recovery is an
@@ -1902,8 +2214,11 @@ impl ConversationRuntime {
             }),
             wake: Arc::new(WakeGate::new()),
             worker_started: AtomicBool::new(false),
+            drain: std::sync::OnceLock::new(),
+            drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
             settlement: tokio::sync::Notify::new(),
+            durability_failure: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
         });
@@ -2071,7 +2386,7 @@ impl ConversationRuntime {
     /// Activates the runtime: semantic execution may begin.
     ///
     /// This is the one explicit lifecycle boundary of Issue #61: the single
-    /// `Inactive -> Active` transition of the shared
+    /// `Inactive -> Running` transition of the shared
     /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
     /// every runtime-owned semantic boundary observes. Before it, the
     /// runtime is inert and a `RuntimeClientHost` may bind over it; at it,
@@ -2079,15 +2394,17 @@ impl ConversationRuntime {
     /// the bootstrap cut a bound Runtime Client projection is seeded
     /// against.
     ///
-    /// The transition is a `compare_exchange` under the one coordinator
-    /// lock — the same lock the host-binding handshake takes — so the
-    /// host-binding decision races atomically against it: a bootstrap that
-    /// acquires the lock first sees `Inactive` and completes before
-    /// activation, one that acquires it after sees `Active` and is refused
-    /// with [`RuntimeBootstrapError::RuntimeAlreadyActivated`]. The
-    /// transition itself is the linearization point; spawning the
-    /// admission worker and the initial admission kick are the one-time
-    /// post-transition steps of the single winning caller.
+    /// The `compare_exchange` runs while the one coordinator lock is held and
+    /// the lifecycle's native commit boundary is acquired, so the
+    /// host-binding decision races atomically against activation and the
+    /// lifecycle also has a total order with non-coordinator runtime commits.
+    /// A bootstrap that acquires the coordinator lock first sees `Inactive`
+    /// and completes before activation, one that acquires it after sees
+    /// `Running` and is refused with
+    /// [`RuntimeBootstrapError::RuntimeAlreadyActivated`]. The transition
+    /// itself is the linearization point; spawning the admission worker and
+    /// the initial admission kick are the one-time post-transition steps of
+    /// the single winning caller.
     ///
     /// Runtime Client *attachments* remain fully dynamic afterwards: this
     /// boundary freezes only which adapter (if any) observes the runtime,
@@ -2095,7 +2412,7 @@ impl ConversationRuntime {
     ///
     /// Activating twice is a no-op: exactly one concurrent call commits the
     /// transition and performs the one-time post-activation work; every
-    /// other call observes `Active` and returns without changing anything.
+    /// other call observes `Running` and returns without changing anything.
     ///
     /// # Panics
     ///
@@ -2128,8 +2445,12 @@ impl ConversationRuntime {
             if !self.inner.lifecycle.activate() {
                 return;
             }
+            // Spawn the worker before releasing the same lock that drain
+            // takes. This closes the activation-vs-drain window in which a
+            // successful activation could otherwise leave `worker_started`
+            // false while drain observes quiescence.
+            self.inner.ensure_worker();
         }
-        self.inner.ensure_worker();
         // Any inbound published before activation (there can be none: the
         // mailbox refused it) and any inbound racing this activation is
         // admitted here rather than depending on a wake permit.
@@ -2139,7 +2460,7 @@ impl ConversationRuntime {
     /// Whether this runtime was activated.
     #[must_use]
     pub fn is_activated(&self) -> bool {
-        self.inner.lifecycle.is_active()
+        self.inner.lifecycle.is_activated()
     }
 
     /// Submits one ordinary inbound user message.
@@ -2184,11 +2505,14 @@ impl ConversationRuntime {
         // takes; no mailbox/store → coordinator edge exists, so the lock
         // graph stays acyclic.
         let state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_active() {
-            return Err(InboundAdmissionError::Inactive);
-        }
-        if state.shutting_down {
-            return Err(InboundAdmissionError::Shutdown);
+        match self.inner.lifecycle.state() {
+            ConversationLifecycleState::Inactive => {
+                return Err(InboundAdmissionError::Inactive);
+            }
+            ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent => {
+                return Err(InboundAdmissionError::Shutdown);
+            }
+            ConversationLifecycleState::Running => {}
         }
         if state.durability_health.is_failed() {
             let message = match &state.durability_health {
@@ -2262,7 +2586,9 @@ impl ConversationRuntime {
         else {
             return Err(CancelAttemptError::NoCurrentAttempt);
         };
-        current.cancellation.cancel();
+        let _ = current
+            .cancellation
+            .request_cancel(CancellationReason::UserRequested);
         Ok(current.attempt_id.clone())
     }
 
@@ -2309,7 +2635,7 @@ impl ConversationRuntime {
         config: SessionModelConfig,
     ) -> Result<SessionModelView, ModelUpdateError> {
         let mut state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_active() {
+        if !self.inner.lifecycle.is_running() {
             return Err(ModelUpdateError::Inactive);
         }
         if state.durability_health.is_failed() {
@@ -2357,31 +2683,31 @@ impl ConversationRuntime {
         self.inner.lock_state().model.config().clone()
     }
 
-    /// Accepts the local-runtime shutdown request.
+    /// Drains the conversation runtime to quiescence.
     ///
-    /// Shutdown is not detach and not cancellation: the current attempt
-    /// continues to its settlement, semantic runtime work is never mutated,
-    /// and no further inbound admission occurs. The acceptance is published
-    /// as the [`ConversationObservation::Shutdown`] observation.
+    /// Successful completion means the current attempt, all conversation-
+    /// owned background executions, required durable terminal publication,
+    /// counted subsystem commits, and the admission worker have settled. It
+    /// is therefore stronger than cancellation request acceptance.
     ///
     /// # Lifecycle
     ///
-    /// Shutdown is a live semantic mutation: shutting down a conversation
-    /// that has never activated is refused with the typed
-    /// [`ShutdownError::Inactive`] and consumes nothing — no shutting-down
-    /// state, no cursor, no [`ConversationObservation::Shutdown`] event. An
-    /// inactive conversation has no runtime lifecycle to end.
+    /// The `Running -> Draining` transition is linearized under the same
+    /// coordinator lock as inbound acceptance and attempt admission. Repeated
+    /// callers join the same drain completion, and only the first transition
+    /// publishes [`ConversationObservation::Shutdown`].
     ///
     /// # Errors
     ///
     /// Returns [`ShutdownError::Inactive`] before activation. After
-    /// activation shutdown is accepted (idempotently) and never fails.
+    /// activation, repeated shutdown calls are idempotent and complete only
+    /// once the lifecycle is `Quiescent`.
     ///
     /// # Panics
     ///
     /// Panics only if the test-only coordinator probe lock is poisoned,
     /// which would mean a previous test hook panicked while holding it.
-    pub fn shutdown(&self) -> Result<(), ShutdownError> {
+    pub async fn shutdown(&self) -> Result<(), ShutdownError> {
         // Test-only: signal that shutdown reached the point just before it
         // attempts the coordinator lock. Combined with the submit gate this
         // makes the submit-vs-shutdown ordering provable by mutex exclusion.
@@ -2396,14 +2722,9 @@ impl ConversationRuntime {
         {
             arrival.notify_one();
         }
-        let mut state = self.inner.lock_state();
-        if !self.inner.lifecycle.is_active() {
-            return Err(ShutdownError::Inactive);
-        }
-        if !state.shutting_down {
-            state.shutting_down = true;
-            self.inner.observe(ConversationObservation::Shutdown);
-        }
+        let completion = self.inner.begin_drain()?;
+        completion.wait().await?;
+        self.inner.lifecycle.wait_until_quiescent().await;
         Ok(())
     }
 
@@ -2449,7 +2770,30 @@ impl ConversationRuntime {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Option<BackgroundExecutionSnapshot> {
-        self.inner.tool_runtime.background().cancel(execution_id)
+        let reason = if matches!(
+            self.inner.lifecycle.state(),
+            ConversationLifecycleState::Draining | ConversationLifecycleState::Quiescent
+        ) {
+            CancellationReason::RuntimeShutdown
+        } else {
+            CancellationReason::UserRequested
+        };
+        self.inner
+            .tool_runtime
+            .background()
+            .cancel_with_reason(execution_id, reason)
+    }
+
+    /// The authoritative lifecycle state of this runtime.
+    #[must_use]
+    pub fn lifecycle_state(&self) -> ConversationLifecycleState {
+        self.inner.lifecycle.state()
+    }
+
+    /// Whether explicit drain has reached the terminal ownership boundary.
+    #[must_use]
+    pub fn is_quiescent(&self) -> bool {
+        self.inner.lifecycle.state() == ConversationLifecycleState::Quiescent
     }
 
     /// The settlement handoff signal of this runtime: fired once per
@@ -2527,7 +2871,7 @@ impl std::error::Error for RuntimeBootstrapError {}
 pub(crate) struct RuntimeBootstrapSnapshot {
     /// The conversation identity.
     pub conversation_id: ConversationId,
-    /// Whether the runtime accepted shutdown.
+    /// Whether runtime drain has begun and new admission is closed.
     pub shutting_down: bool,
     /// The current model-visible Surface at the cut. Historical Ledger rows
     /// are deliberately not hydrated into the client projection; callers
@@ -2567,7 +2911,7 @@ pub enum InboundAdmissionError {
     /// The runtime was not activated: an inert conversation accepts no
     /// inbound work.
     Inactive,
-    /// The runtime accepted shutdown: no further inbound admission occurs.
+    /// Runtime drain has begun: no further inbound admission occurs.
     Shutdown,
     /// Inbound content must not be empty.
     EmptyContent,
@@ -2629,6 +2973,13 @@ pub enum ShutdownError {
     /// runtime lifecycle to end, so the request is refused and nothing is
     /// published.
     Inactive,
+    /// A runtime-owned process/capability settlement reported an explicit
+    /// physical failure, so the lifecycle remains `Draining` and successful
+    /// quiescence is not claimed.
+    RuntimeOwnedSettlement {
+        /// The owner-provided settlement diagnostic.
+        detail: String,
+    },
 }
 
 /// Projects a model-resolution failure into a descriptive message.
@@ -2856,7 +3207,9 @@ mod tests {
     use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId};
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
-    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
+    use crate::runtime::types::{
+        CancellationReason, ConversationLifecycleState, TokenMeasurement, TokenMeasurementSource,
+    };
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
 
@@ -3403,8 +3756,10 @@ mod tests {
             settlement_gate: None,
             activation_gate: None,
             submit_gate: None,
-            shutdown_arrival: None,
+            shutdown_arrival: Some(Arc::new(tokio::sync::Notify::new())),
+            drain_linearization: None,
             start_boundary_pause: None,
+            tool_start_pause: None,
         }))
         .await;
         gate.arm();
@@ -3710,18 +4065,37 @@ mod tests {
         ));
     }
 
-    /// Shutdown gates further inbound admission.
+    /// Shutdown closes further semantic admission.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn shutdown_gates_further_admission() {
         let fixture = headless_fixture().await;
         fixture
             .runtime
             .shutdown()
+            .await
             .expect("accepted after activation");
         assert!(matches!(
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)
         ));
+    }
+
+    /// Repeated concurrent shutdown calls join one drain completion and
+    /// publish one lifecycle transition.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_shutdown_is_one_idempotent_drain() {
+        let fixture = headless_fixture().await;
+        let first = fixture.runtime.clone();
+        let second = fixture.runtime.clone();
+        let (left, right) = tokio::join!(first.shutdown(), second.shutdown());
+        assert_eq!(left, Ok(()));
+        assert_eq!(right, Ok(()));
+        assert_eq!(
+            fixture.runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+        let third = fixture.runtime.shutdown().await;
+        assert_eq!(third, Ok(()));
     }
 
     /// Issue #63 (Finding 1): a successful acceptance and shutdown have one
@@ -3739,7 +4113,9 @@ mod tests {
             activation_gate: None,
             submit_gate: Some(gate.clone()),
             shutdown_arrival: Some(shutdown_arrival.clone()),
+            drain_linearization: None,
             start_boundary_pause: None,
+            tool_start_pause: None,
         }))
         .await;
         gate.arm();
@@ -3768,8 +4144,11 @@ mod tests {
         // section.
         let shutdown_runtime = fixture.runtime.clone();
         let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
-        let shutdown_task = tokio::task::spawn_blocking(move || {
-            let _ = shutdown_runtime.shutdown();
+        let shutdown_task = tokio::spawn(async move {
+            shutdown_runtime
+                .shutdown()
+                .await
+                .expect("shutdown reaches quiescence");
             let _ = shutdown_tx.send(());
         });
         shutdown_arrival.notified().await;
@@ -3805,13 +4184,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn shutdown_linearizes_before_acceptance_commits_nothing() {
         let admission_gate = Arc::new(super::Gate::default());
+        let shutdown_arrival = Arc::new(tokio::sync::Notify::new());
         let fixture = headless_fixture_with(Some(CoordinatorProbe {
             admission_gate: Some(admission_gate.clone()),
             settlement_gate: None,
             activation_gate: None,
             submit_gate: None,
-            shutdown_arrival: None,
+            shutdown_arrival: Some(shutdown_arrival.clone()),
+            drain_linearization: None,
             start_boundary_pause: None,
+            tool_start_pause: None,
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -3822,11 +4204,23 @@ mod tests {
             .expect("pre-shutdown acceptance");
         assert_eq!(first.inbound_sequence.get(), 1);
         admission_gate.wait_entered();
-        // Shutdown linearizes first.
-        fixture
-            .runtime
-            .shutdown()
-            .expect("shutdown accepted after activation");
+        // Shutdown linearizes first. The worker is still parked at its
+        // pre-admission test boundary, so release that boundary only after
+        // the explicit shutdown-arrival signal proves drain owns admission.
+        let shutdown_runtime = fixture.runtime.clone();
+        let shutdown_task = tokio::spawn(async move {
+            shutdown_runtime
+                .shutdown()
+                .await
+                .expect("shutdown reaches quiescence");
+        });
+        shutdown_arrival.notified().await;
+        let release = {
+            let admission_gate = admission_gate.clone();
+            tokio::task::spawn_blocking(move || admission_gate.release())
+        };
+        release.await.expect("release parked admission");
+        shutdown_task.await.expect("shutdown completed");
         assert!(matches!(
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)
@@ -3852,7 +4246,7 @@ mod tests {
             "the refused acceptance consumed no sequence"
         );
         // Release the frozen admission worker so the test's tokio runtime can
-        // shut down: the worker observes `shutting_down` and returns without
+        // shut down: the worker observes the closed wake gate and returns without
         // adopting the pending item.
         admission_gate.release();
     }
@@ -4545,6 +4939,441 @@ mod tests {
             runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::DurabilityFailed { .. })
         ));
+
+        // M9c: shutdown does not wait forever for the intentionally retained
+        // PublishingTerminal record. The owner has entered its explicit
+        // durability-failure state, so shutdown returns a typed settlement
+        // failure and the runtime remains Draining rather than claiming
+        // false quiescence.
+        let shutdown = runtime.shutdown().await;
+        assert!(matches!(
+            shutdown,
+            Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                detail
+            }) if detail.contains("terminal publication")
+        ));
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining
+        );
+    }
+
+    /// M9c: a conversation-owned background execution survives attempt
+    /// settlement but not conversation lifetime. Drain requests cancellation,
+    /// waits for the executor and its exactly-once terminal Pending Inbound
+    /// publication, and only then becomes quiescent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_drains_active_background_and_publishes_terminal_inbound() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let (runtime, _model) = runtime_with_model_probe_at(
+            &dir,
+            "conv-m9c-background",
+            Vec::new(),
+            vec![one_turn_script()],
+            Some(CoordinatorProbe {
+                drain_linearization: Some(drain_linearization.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await
+        .expect("runtime");
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: crate::runtime::identity::ToolCallId::new("call-m9c-background"),
+            tool_id: crate::runtime::identity::ToolId::new("tool-m9c-background"),
+            tool_name: "background_gate".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let background = runtime.tool_runtime().background();
+        let prepared = background
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            background
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .expect("ownership commit")
+        else {
+            panic!("active background dispatch must commit ownership");
+        };
+        started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("background start channel stays open");
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let result = shutdown_runtime.shutdown().await;
+            let _ = done_tx.send(result);
+        });
+        drain_linearization.notified().await;
+        background
+            .wait_until_cancelling(&execution_id)
+            .await
+            .expect("runtime drain requests background cancellation");
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "cancellation intent is not background terminality"
+        );
+
+        release.send_replace(true);
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("background drain completes");
+        let terminal = background
+            .snapshot(&execution_id)
+            .expect("terminal background record");
+        assert_eq!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Cancelled
+        );
+        assert!(matches!(
+            terminal.result.as_ref().map(|result| &result.status),
+            Some(crate::tools::types::ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            })
+        ));
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+        let pending_rows = runtime
+            .tool_runtime()
+            .mailbox()
+            .select_pending_batch()
+            .expect("pending terminal notification")
+            .expect("terminal notification remains pending after admission closure");
+        assert_eq!(pending_rows.items().len(), 1);
+        assert_eq!(
+            runtime
+                .tool_runtime()
+                .mailbox()
+                .select_pending_batch()
+                .expect("retry select")
+                .expect("same pending row")
+                .items()[0]
+                .sequence(),
+            pending_rows.items()[0].sequence(),
+            "terminal publication is exactly once and retains its identity"
+        );
+        let terminal_events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("events")
+            .events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event.event,
+                    crate::events::types::RuntimeEvent::BackgroundTerminalPublished { .. }
+                )
+            })
+            .count();
+        assert_eq!(terminal_events, 1);
+    }
+
+    /// M9c: the foreground Bash path composes its existing physical process
+    /// proof into runtime quiescence. Drain requests cancellation while the
+    /// supervised process is owned; the test observes the real process-group
+    /// terminal frame, parks before the direct supervisor-child reap, and
+    /// proves shutdown cannot complete until that native settlement handoff
+    /// is released.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_waits_for_foreground_process_terminality() {
+        use crate::runtime::process_runner::RunnerLifecycleHook;
+        use crate::runtime::types::ConversationLifecycleState;
+        use crate::tools::executor::ToolRegistry;
+        use crate::tools::native::{BashTestControl, BashTool};
+        use crate::tools::types::{
+            ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+            ToolReplayPolicy,
+        };
+
+        let control = BashTestControl::new().hold_terminal_event();
+        let process_lifecycle: RunnerLifecycleHook = control.runner_control().lifecycle.clone();
+        let terminal_hold = control
+            .terminal_hold()
+            .expect("terminal hold is armed")
+            .clone();
+        let definition = ToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            description: "run one supervised bash command".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "minLength": 1},
+                    "timeout": {"type": "integer", "minimum": 1}
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(
+                definition.clone(),
+                Arc::new(BashTool::with_test_control(control.clone())),
+            )
+            .expect("test Bash registration");
+        let call_id = crate::runtime::identity::ToolCallId::new("call-m9c-process");
+        let first_request = vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallStarted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallArgumentsDelta {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call_id: call_id.clone(),
+                arguments_delta: r#"{"command":"sleep 30"}"#.to_owned(),
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallCompleted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCall {
+                    id: call_id,
+                    tool_id: definition.id,
+                    name: definition.name,
+                    arguments: serde_json::json!({"command": "sleep 30"}),
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+                finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ];
+        let dir = tempfile::tempdir().expect("temp dir");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let (runtime, _model) = headless_runtime(
+            &dir,
+            vec![first_request, one_turn_script()],
+            Some(registry),
+            Some(CoordinatorProbe {
+                drain_linearization: Some(drain_linearization.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("run the supervised process"))
+            .expect("accepted");
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            process_lifecycle.await_ownership_established(),
+        )
+        .await
+        .expect("the foreground process reaches physical ownership");
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        drain_linearization.notified().await;
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            terminal_hold.await_held(),
+        )
+        .await
+        .expect("TERM/KILL and process-group terminality are observed");
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "group terminality without direct-child reap is not runtime quiescence"
+        );
+        assert!(
+            control
+                .recorded_signals()
+                .iter()
+                .any(|signal| signal.signal == "SIGTERM" && signal.emitted),
+            "runtime cancellation reaches the owned process group"
+        );
+
+        terminal_hold.release();
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("foreground process drain completes");
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+    }
+
+    /// M9c: the Agent Loop remains the foreground batch owner while runtime
+    /// drain cancels it. A deterministic tool-start frontier parks after the
+    /// first parallel sibling; drain wins there, the second sibling is never
+    /// announced or invoked, and the first started sibling still settles
+    /// before runtime quiescence.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
+        use crate::agent::execution::test_sync::ToolStartPause;
+        use crate::tools::executor::ToolRegistry;
+        use crate::tools::types::{
+            ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+            ToolReplayPolicy,
+        };
+
+        let definition = |id: &str, name: &str| ToolDefinition {
+            id: crate::runtime::identity::ToolId::new(id),
+            name: name.to_owned(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type": "object"}),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Parallel,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let (tool_a, mut started_a, release_a) = GatedBackgroundExecutor::new();
+        let (tool_b, started_b, _release_b) = GatedBackgroundExecutor::new();
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(definition("tool-a", "alpha"), Arc::new(tool_a))
+            .expect("tool A registration");
+        registry
+            .register(definition("tool-b", "beta"), Arc::new(tool_b))
+            .expect("tool B registration");
+
+        let call_a = crate::scripted_suites::support::fake::ScriptedCall {
+            id: "call-a",
+            tool_id: "tool-a",
+            name: "alpha",
+            arguments: serde_json::json!({}),
+        };
+        let call_b = crate::scripted_suites::support::fake::ScriptedCall {
+            id: "call-b",
+            tool_id: "tool-b",
+            name: "beta",
+            arguments: serde_json::json!({}),
+        };
+        let mut script = vec![FakeStep::Emit(crate::model::event::ModelEvent::Started)];
+        script.extend(
+            crate::scripted_suites::support::fake::tool_call_events(0, &call_a)
+                .into_iter()
+                .map(FakeStep::Emit),
+        );
+        script.extend(
+            crate::scripted_suites::support::fake::tool_call_events(1, &call_b)
+                .into_iter()
+                .map(FakeStep::Emit),
+        );
+        script.push(FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+            finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
+            usage: None,
+        }));
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let (tool_start_pause, mut tool_start_reached, tool_start_release) =
+            ToolStartPause::install();
+        let (runtime, _model) = headless_runtime(
+            &dir,
+            vec![script],
+            Some(registry),
+            Some(CoordinatorProbe {
+                drain_linearization: Some(drain_linearization.clone()),
+                tool_start_pause: Some(tool_start_pause),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("run parallel tools"))
+            .expect("accepted");
+        tool_start_reached
+            .wait_for(|reached| *reached)
+            .await
+            .expect("tool-start gate stays open");
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        drain_linearization.notified().await;
+        assert!(matches!(
+            done_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        tool_start_release
+            .send(())
+            .expect("release the first start frontier");
+        started_a
+            .wait_for(|started| *started)
+            .await
+            .expect("first foreground sibling starts");
+        release_a.send_replace(true);
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("parallel foreground work settles");
+
+        assert!(!*started_b.borrow(), "the second sibling never executes");
+        let events = runtime
+            .tool_runtime()
+            .durable_store()
+            .read_events(None, 256)
+            .expect("event journal")
+            .events;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event.event,
+                    crate::events::types::RuntimeEvent::ToolExecutionStarted { .. }
+                ))
+                .count(),
+            1,
+            "only the first parallel sibling crossed the start frontier"
+        );
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
     }
 
     /// Cancelling an unknown attempt identity fails explicitly and never
@@ -5210,6 +6039,90 @@ mod tests {
         );
     }
 
+    /// M9c: runtime drain uses the same M9b start gate as explicit attempt
+    /// cancellation. Drain wins while the turn is parked before arbitration,
+    /// so the attempt settles with the runtime-owned cause and no provider or
+    /// durable request-start fact exists.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_shutdown_before_model_turn_start_never_starts_the_request() {
+        use crate::agent::execution::test_sync::StartBoundaryPause;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let (runtime, model) = headless_runtime(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            Some(CoordinatorProbe {
+                drain_linearization: Some(drain_linearization.clone()),
+                start_boundary_pause: Some(pause),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("shutdown before start"))
+            .expect("accepted");
+        pre_start.await_park(1).await;
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        drain_linearization.notified().await;
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "drain waits for the parked attempt rather than treating cancellation as settlement"
+        );
+
+        pre_start.release();
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("runtime reaches quiescence");
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+        assert!(model.requests().is_empty(), "provider request never starts");
+
+        let store = runtime.tool_runtime().durable_store();
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .is_empty(),
+            "runtime cancellation before arbitration creates no request snapshot"
+        );
+        let journal = store.read_events(None, 128).expect("journal").events;
+        assert!(
+            !journal.iter().any(|envelope| matches!(
+                envelope.event,
+                crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+            )),
+            "runtime cancellation before arbitration creates no start fact"
+        );
+        assert!(matches!(
+            journal.last().map(|envelope| &envelope.event),
+            Some(crate::events::types::RuntimeEvent::AttemptCancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                ..
+            })
+        ));
+    }
+
     /// Issue #12 (M9b), start wins, then cancellation: the durable start
     /// commit linearizes first, the provider request is in flight, and the
     /// later cancellation settles exactly that started request — it can
@@ -5307,6 +6220,139 @@ mod tests {
                 .iter()
                 .any(|message| matches!(message, MessageBlock::Assistant(_))),
             "the cancelled in-flight request commits no assistant message"
+        );
+    }
+
+    /// M9c: a provider request that crossed the durable start boundary keeps
+    /// runtime drain pending until the native request future settles. The
+    /// release handle is then exercised again after quiescence to prove that
+    /// a stale callback cannot create a late semantic effect.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn runtime_shutdown_waits_for_started_model_settlement_and_blocks_late_effects() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (release_tx, release_rx) = crate::scripted_suites::support::fake::model_release();
+        let script = vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::Emit(crate::model::event::ModelEvent::TextDelta {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                text: "partial".to_owned(),
+            }),
+            FakeStep::ParkUntilReleased(release_rx),
+            FakeStep::Emit(crate::model::event::ModelEvent::Failed {
+                error: crate::model::error::ModelError {
+                    kind: crate::model::error::ModelErrorKind::Cancelled,
+                    message: "provider settled cancellation".to_owned(),
+                    retry_after_ms: None,
+                    provider_code: None,
+                },
+            }),
+        ];
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let (runtime, model) = headless_runtime(
+            &dir,
+            vec![script],
+            None,
+            Some(CoordinatorProbe {
+                drain_linearization: Some(drain_linearization.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("park the provider"))
+            .expect("accepted");
+
+        let mut parked = model.parked();
+        parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("provider gate stays open");
+        let store = runtime.tool_runtime().durable_store();
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "provider crossed the start boundary"
+        );
+        assert_eq!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .len(),
+            1,
+            "the durable request-start boundary is committed"
+        );
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let result = shutdown_runtime.shutdown().await;
+            let _ = done_tx.send(result);
+        });
+        drain_linearization.notified().await;
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining,
+            "drain linearized before the provider was released"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "cancellation request is not provider settlement"
+        );
+
+        // The provider emulator deliberately ignores cancellation until this
+        // explicit release. This is the physical settlement proof.
+        release_tx.send_replace(true);
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("runtime reaches quiescence");
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+        assert!(matches!(
+            store
+                .read_events(None, 256)
+                .expect("terminal events")
+                .events
+                .last()
+                .map(|envelope| &envelope.event),
+            Some(crate::events::types::RuntimeEvent::AttemptCancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                ..
+            })
+        ));
+        let requests_before = model.requests().len();
+        let events_before = store.read_events(None, 256).expect("events").events;
+        let canonical_before = store.load_canonical().expect("canonical");
+        let head_before = store.load_head().expect("head");
+        let pending_before = store.load_pending().expect("pending inbound");
+
+        // A stale release/callback handle retained by the old owner is now a
+        // no-op: it cannot start another provider request or append a fact.
+        release_tx.send_replace(false);
+        release_tx.send_replace(true);
+        assert_eq!(model.requests().len(), requests_before);
+        assert_eq!(
+            store.read_events(None, 256).expect("events").events,
+            events_before,
+            "quiescence is a terminal ownership boundary"
+        );
+        assert_eq!(store.load_canonical().expect("canonical"), canonical_before);
+        assert_eq!(store.load_head().expect("head"), head_before);
+        assert_eq!(
+            store.load_pending().expect("pending inbound"),
+            pending_before
         );
     }
 

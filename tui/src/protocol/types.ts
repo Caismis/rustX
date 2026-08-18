@@ -797,7 +797,7 @@ export type RuntimeClientResult =
       execution: RuntimeClientBackgroundExecution;
     }
   | { type: "detached" }
-  | { type: "shutdown_accepted" };
+  | { type: "shutdown_completed" };
 
 export type RuntimeClientError =
   | { type: "unsupported_protocol_version"; supported: number; requested: number }

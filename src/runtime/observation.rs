@@ -120,7 +120,7 @@ pub(crate) enum ConversationObservation {
         /// The redacted session model state after the update.
         model: Box<SessionModelView>,
     },
-    /// The runtime accepted shutdown.
+    /// Runtime drain began and new semantic admission closed.
     Shutdown,
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow

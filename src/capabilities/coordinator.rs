@@ -105,12 +105,14 @@ struct CoordinatorInner {
 /// prepare_candidate()  →  commit(candidate)  →  acquire_attempt_lease()
 /// ```
 ///
-/// A candidate may be prepared independently (including environment
-/// materialization); only its activation respects the commit boundary.
-/// Commit succeeds only when no attempt lease is active and the candidate
-/// is not stale; an identical rediscovery/preparation is a no-op that does
-/// not fabricate a new revision. Failed preparation/commit leaves the
-/// current active revision authoritative.
+/// A candidate may be prepared independently (including shared environment
+/// materialization); once this coordinator is claimed by a conversation
+/// runtime, preparation itself is counted as runtime-owned work so drain
+/// waits for its owner to settle. Only its activation respects the commit
+/// boundary. Commit succeeds only when no attempt lease is active and the
+/// candidate is not stale; an identical rediscovery/preparation is a no-op
+/// that does not fabricate a new revision. Failed preparation/commit leaves
+/// the current active revision authoritative.
 #[derive(Clone)]
 pub struct CapabilityCoordinator {
     inner: Arc<CoordinatorInner>,
@@ -403,6 +405,28 @@ impl CapabilityCoordinator {
     pub async fn prepare_candidate(
         &self,
     ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        // Shared EnvironmentStore work is not cancelled by one conversation,
+        // but a claimed conversation still counts the preparation owner
+        // until it returns. This prevents an in-flight MCP/environment
+        // preparation from creating a process or later callback after the
+        // conversation reaches quiescence. A standalone coordinator keeps
+        // its existing independent preparation semantics.
+        let lifecycle = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .conversation_lifecycle
+            .clone();
+        let _admission = if let Some(lifecycle) = lifecycle {
+            Some(
+                lifecycle
+                    .try_enter_preparation()
+                    .map_err(|_| CapabilityPreparationError::ConversationInactive)?,
+            )
+        } else {
+            None
+        };
         let base_revision = self
             .inner
             .state
@@ -529,6 +553,45 @@ impl CapabilityCoordinator {
         })
     }
 
+    /// Settles the conversation-owned capability process plane before the
+    /// conversation runtime publishes quiescence. Shared environment-store
+    /// materialization is handled by the counted preparation admission above;
+    /// this method closes only the MCP runtimes retained by this capability
+    /// coordinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a physical-settlement diagnostic when an owned MCP stdio
+    /// process cannot prove its terminality.
+    pub(crate) async fn drain_conversation_owned(&self) -> Result<(), String> {
+        let lifecycle = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .conversation_lifecycle
+            .clone();
+        let _settlement =
+            if let Some(lifecycle) = lifecycle {
+                Some(lifecycle.try_enter_settlement().map_err(|state| {
+                    format!("capability drain entered lifecycle state {state:?}")
+                })?)
+            } else {
+                None
+            };
+        let runtimes = {
+            let runtimes = self.inner.mcp_runtimes.lock().await;
+            runtimes.values().cloned().collect::<Vec<_>>()
+        };
+        for runtime in runtimes {
+            runtime
+                .close()
+                .await
+                .map_err(|error| format!("MCP server {}: {error}", runtime.server_id()))?;
+        }
+        Ok(())
+    }
+
     /// Activates the prepared candidate (the quiescent atomic commit).
     ///
     /// Both the quiescence decision (zero active attempt leases) and the
@@ -596,6 +659,22 @@ impl CapabilityCoordinator {
             .state
             .lock()
             .expect("capability state lock poisoned");
+        // Hold the shared lifecycle admission guard across the capability
+        // state lock, MCP validation, snapshot swap, and observer callback.
+        // The final revision swap below also takes the lifecycle commit
+        // boundary, so drain and this non-coordinator commit have one exact
+        // order at the authoritative revision point. Standalone
+        // coordinators have no conversation lifecycle and retain their
+        // existing independent semantics.
+        let _admission = if let Some(lifecycle) = &state.conversation_lifecycle {
+            Some(
+                lifecycle
+                    .try_enter_running()
+                    .map_err(|_| CapabilityCommitError::ConversationInactive)?,
+            )
+        } else {
+            None
+        };
         // TEST-ONLY commit-boundary hook: the lock is held and the deciding
         // quiescence observation is next.
         #[cfg(test)]
@@ -608,69 +687,73 @@ impl CapabilityCoordinator {
         {
             hook.enter();
         }
-        // The runtime-owned activation gate: observed under this same
-        // boundary, so the commit linearizes cleanly against the shared
-        // lifecycle transition (`ConversationLifecycle::activate`). The
-        // capability stores no activation state of its own — the lifecycle
-        // handle attached by the claim *is* the runtime ownership, and
-        // active/inactive is answered by the lifecycle itself, the same
-        // authority the mailbox, the background registry, and the
-        // coordinator observe. An unclaimed (standalone) coordinator
-        // commits unconditionally.
-        if let Some(lifecycle) = &state.conversation_lifecycle
-            && !lifecycle.is_active()
-        {
-            return Err(CapabilityCommitError::ConversationInactive);
-        }
-        if candidate.base_revision != state.revision {
-            return Err(CapabilityCommitError::StaleCandidate {
-                prepared_from: candidate.base_revision,
-                current: state.revision,
-            });
-        }
-        if state.active_attempts > 0 {
-            return Err(CapabilityCommitError::Busy);
-        }
-        // The MCP invalidation guard: final epoch validation and the
-        // snapshot swap are one atomic step against notification epoch
-        // mutation. Lock order: capability state lock -> invalidation guard.
-        let invalidation = self.inner.mcp_invalidation.lock();
-        for (server_id, candidate_epoch) in &candidate.mcp_epochs {
-            if invalidation.epoch(server_id) != *candidate_epoch {
-                return Err(CapabilityCommitError::StaleMcpCandidate {
-                    server_id: server_id.clone(),
+        let lifecycle = state.conversation_lifecycle.clone();
+        let commit = || {
+            // The lifecycle commit boundary is held around the final
+            // validation and revision swap. If drain won while the
+            // deterministic hook was parked, this operation is refused
+            // before it can mutate the candidate revision. If it acquires
+            // the boundary first, drain follows the complete observer
+            // handoff.
+            if candidate.base_revision != state.revision {
+                return Err(CapabilityCommitError::StaleCandidate {
+                    prepared_from: candidate.base_revision,
+                    current: state.revision,
                 });
             }
-        }
-        if candidate_is_noop(&candidate, &state.snapshot) {
-            return Ok(state.snapshot.clone());
-        }
-        let revision = CapabilityRevision::new(state.revision.get() + 1);
-        let snapshot = Arc::new(CapabilitySnapshot::new(
-            self.inner.conversation_id.clone(),
-            self.inner.workspace.root().to_path_buf(),
-            revision,
-            candidate.candidate_registry,
-            candidate.skills,
-            candidate.python,
-            candidate.node,
-            candidate.effective_environment,
-        ));
-        state.revision = revision;
-        state.snapshot = snapshot.clone();
-        drop(invalidation);
-        let observer = self
-            .inner
-            .observer
-            .lock()
-            .expect("capability observer lock poisoned")
-            .clone();
-        if let Some(observer) = &observer {
-            observer.on_snapshot(&snapshot);
-        }
+            if state.active_attempts > 0 {
+                return Err(CapabilityCommitError::Busy);
+            }
+            // The MCP invalidation guard: final epoch validation and the
+            // snapshot swap are one atomic step against notification epoch
+            // mutation. Lock order: capability state lock -> invalidation
+            // guard.
+            let invalidation = self.inner.mcp_invalidation.lock();
+            for (server_id, candidate_epoch) in &candidate.mcp_epochs {
+                if invalidation.epoch(server_id) != *candidate_epoch {
+                    return Err(CapabilityCommitError::StaleMcpCandidate {
+                        server_id: server_id.clone(),
+                    });
+                }
+            }
+            if candidate_is_noop(&candidate, &state.snapshot) {
+                return Ok(state.snapshot.clone());
+            }
+            let revision = CapabilityRevision::new(state.revision.get() + 1);
+            let snapshot = Arc::new(CapabilitySnapshot::new(
+                self.inner.conversation_id.clone(),
+                self.inner.workspace.root().to_path_buf(),
+                revision,
+                candidate.candidate_registry,
+                candidate.skills,
+                candidate.python,
+                candidate.node,
+                candidate.effective_environment,
+            ));
+            state.revision = revision;
+            state.snapshot = snapshot.clone();
+            drop(invalidation);
+            let observer = self
+                .inner
+                .observer
+                .lock()
+                .expect("capability observer lock poisoned")
+                .clone();
+            if let Some(observer) = &observer {
+                observer.on_snapshot(&snapshot);
+            }
+            Ok(snapshot)
+        };
+        let result = if let Some(lifecycle) = lifecycle {
+            lifecycle
+                .with_running_commit(commit)
+                .map_err(|_| CapabilityCommitError::ConversationInactive)?
+        } else {
+            commit()
+        };
         drop(state);
         self.inner.condvar.notify_all();
-        Ok(snapshot)
+        result
     }
 
     /// Acquires one attempt capability lease (RAII).
@@ -758,6 +841,7 @@ impl CapabilityCoordinator {
     /// The shared MCP invalidation state (test observability). Only
     /// available under `#[cfg(test)]`; never used by production code.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn mcp_invalidation(&self) -> Arc<McpInvalidationState> {
         self.inner.mcp_invalidation.clone()
     }
@@ -1057,6 +1141,35 @@ body
         assert_eq!(lease.revision(), snapshot.revision());
         assert_eq!(lease.snapshot().as_ref(), &*snapshot);
         drop(lease);
+    }
+
+    /// Runtime drain wins the capability commit boundary: a candidate may be
+    /// prepared while the runtime is running, but the revision swap is
+    /// refused when drain linearizes before the final lifecycle read.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runtime_drain_wins_capability_commit_boundary() {
+        let (_dir, coordinator) = coordinator();
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        assert!(coordinator.claim_conversation_runtime(&lifecycle));
+        assert!(lifecycle.activate());
+        let candidate = prepare(&coordinator).await;
+        let hook = Arc::new(CommitBoundaryHook::default());
+        coordinator.install_commit_boundary_hook(hook.clone());
+
+        let coordinator_for_task = coordinator.clone();
+        let commit_task = std::thread::spawn(move || coordinator_for_task.commit(candidate));
+        hook.wait_entered();
+        assert!(lifecycle.begin_drain());
+        hook.proceed();
+        let result = commit_task.join().expect("commit task");
+        assert_eq!(result, Err(CapabilityCommitError::ConversationInactive));
+        assert_eq!(
+            coordinator.current_snapshot().revision(),
+            CapabilityRevision::default(),
+            "drain wins before the capability revision swap"
+        );
+        lifecycle.wait_for_no_admissions().await;
+        assert!(lifecycle.mark_quiescent());
     }
 
     /// A second commit while the first is parked at the boundary serializes
@@ -1369,6 +1482,7 @@ mod mcp_race_tests {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
                 cancellation: crate::runtime::CancellationSignal::new(),
+                cancellation_reason: crate::runtime::types::CancellationReason::UserRequested,
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),

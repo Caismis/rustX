@@ -64,8 +64,8 @@ pub struct RuntimeDurabilityFailure {
 pub struct RuntimeClientSnapshot {
     /// The conversation this snapshot belongs to.
     pub conversation_id: ConversationId,
-    /// Whether the runtime has accepted shutdown and stopped admitting new
-    /// inbound work. This is runtime-owned state, not a client observation.
+    /// Whether runtime drain has begun and new inbound admission is closed.
+    /// The correlated shutdown response resolves only after quiescence.
     pub shutting_down: bool,
     /// The runtime's durable-authority failure, when it has entered the
     /// explicit degraded state. While set, no new durable admission/execution

@@ -24,6 +24,9 @@ pub enum CapabilityPreparationError {
     Python(String),
     /// The composed canonical registry was rejected as invalid or colliding.
     ToolRegistry(String),
+    /// Preparation was requested after the owning conversation runtime
+    /// closed new capability admission.
+    ConversationInactive,
 }
 
 impl core::fmt::Display for CapabilityPreparationError {
@@ -40,6 +43,10 @@ impl core::fmt::Display for CapabilityPreparationError {
             Self::Mcp(error) => write!(f, "MCP preparation failed: {error}"),
             Self::Python(error) => write!(f, "Python tool preparation failed: {error}"),
             Self::ToolRegistry(error) => write!(f, "tool registry composition failed: {error}"),
+            Self::ConversationInactive => write!(
+                f,
+                "capability preparation is closed because the conversation runtime is draining"
+            ),
         }
     }
 }

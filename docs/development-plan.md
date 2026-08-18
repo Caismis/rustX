@@ -554,8 +554,9 @@ Implemented in the current architecture:
   semantic conversation coordinator: session model authority, attempt-id
   allocation, the current-attempt slot, attempt admission, between-attempt
   `ConversationState`, `RequestHistory` (now `src/runtime/request_history.rs`),
-  the shutdown gate, the mailbox/admission relationship, and settlement
-  handoff. It installs no client-bound observation seams, so a conversation
+  the shared lifecycle/drain authority, the mailbox/admission relationship,
+  and settlement handoff through quiescence. It installs no client-bound
+  observation seams, so a conversation
   executes identically with zero Runtime Client attachments and with no
   Runtime Client host at all (headless composition is the same
   `AgentExecution`/Context Assembly/ToolRuntime/Capability/provider path).
@@ -607,15 +608,15 @@ Implemented in the current architecture:
   mailbox (runtime ownership is the handle itself), the background
   registry (through its mailbox), the capability coordinator (attached at
   its claim), and the coordinator itself. `ConversationRuntime::activate`
-  performs the single `Inactive -> Active` transition of that one token
+  performs the single `Inactive -> Running` transition of that one token
   under the one coordinator lock — the activation linearization point —
   and the one winning caller spawns the admission worker and performs the
   initial admission kick; concurrent calls are idempotent. No
   subsystem-specific intermediate activation state exists, so background
   and capability commits can never disagree about whether the
-  conversation is active. The ownership transfer
+  conversation admits new work. The ownership transfer
   (`standalone -> runtime-owned/inactive`) and activation
-  (`inactive -> active`) are two distinct commit points.
+  (`Inactive -> Running`) are two distinct commit points.
   A `RuntimeClientHost` may then optionally bind;
   `ConversationRuntime::activate` is the one explicit composition boundary
   after which semantic execution may begin. Binding a client host is a
@@ -671,8 +672,8 @@ Implemented in the current architecture:
   transition and proves both sides: while parked, background commit,
   capability commit, and mailbox enqueue all observe `Inactive` and are
   refused typed; after the transition the same operations follow the
-  normal active semantics; a real-time ordered cross-subsystem regression
-  parks a background commit after it has observed `Active` at the
+  normal running semantics; a real-time ordered cross-subsystem regression
+  parks a background commit after it has observed `Running` at the
   registry ownership-commit boundary and proves a capability commit that
   begins afterwards — and one that begins after the background completed —
   cannot observe a stale `Inactive`; a host-bind-vs-activate race proves
@@ -913,38 +914,66 @@ retry engine, and any replay/resend policy for ambiguous side effects.
 
 ### M9c — supervision and quiescence
 
-The M5 tool plane PR implements the concrete ownership seams required by
-the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
-cancellable foreground executions (including Bash process-group
-termination), conversation-owned background executions with the
-`background_task` cancel path, and explicit runtime shutdown cancellation of
-active background work.
+M9c is delivered as a concrete ownership composition, not as a generic
+supervisor framework. `ConversationLifecycle` is the one authority:
 
-The M6 skills PR implements the minimal concrete capability
-snapshot/mutation semantics required for Skills: the immutable attempt
-capability snapshot, the attempt capability lease, the quiescent capability
-commit (zero active attempt leases for the conversation), the
-`CapabilityRevision` swap, and background environment capture — all owned
-by `src/capabilities`. Remaining M9 work is the broader runtime-wide
-machinery that M6 deliberately does not implement:
+```text
+Inactive -> Running -> Draining -> Quiescent
+```
 
-- Hierarchical runtime supervisor tree and generic process supervision
-  (beyond the concrete shared supervised command runner and the Bash
-  supervisor units)
-- Quiescent runtime state machine and graceful draining (runtime-wide busy
-  state beyond attempt capability leases: active tool calls, foreground or
-  background processes, event-writer and drain transitions)
-- General scheduler/runtime busy state and generic process supervision
-  beyond the concrete current ownership seam
-- Process TERM/KILL/reap cancellation orchestration (M9c; the model-turn
-  cancellation-vs-start boundary itself is delivered in M9b)
+`ConversationRuntime::shutdown()` linearizes `Running -> Draining` under the
+coordinator lock shared with inbound acceptance and attempt admission. It
+requests `RuntimeShutdown` on the current `AgentCancellation`, closes new
+semantic admission, and awaits one shared idempotent drain completion. It
+returns successfully only after the current attempt, foreground tool batch,
+conversation-owned background registry, runtime-owned capability commits,
+counted capability/environment preparation, retained MCP stdio runtimes,
+existing supervised process terminality, and admission worker exit have
+settled. `Draining` retains narrow durable settlement paths; `Quiescent`
+rejects stale callbacks. An unproven owned process settlement returns a
+runtime failure and does not claim `Quiescent`.
 
-Exit criteria:
+The M9b `arbitrate_model_turn_start` gate remains the model-start
+linearization primitive. A cancellation before that gate commits no provider
+request, Request Snapshot, or `ModelRequestStarted`; a started request is
+awaited to native settlement. Cancellation causes are first-winner absorbing,
+so runtime drain reports `RuntimeShutdown` rather than a fixed
+`UserRequested` construction default.
 
-- Capability changes are rejected while the conversation runtime is busy
-  (the M6 attempt-lease guard is the concrete first instance; M9 extends
-  the busy definition to the full runtime state machine).
-- Attempt cancellation does not incorrectly terminate conversation-owned background work.
+The Agent Loop still owns foreground structural result settlement. Started
+foreground siblings receive cancellation and settle physically/logically;
+the start frontier closes before an unstarted parallel sibling can begin;
+result slots and canonical model-call ordering remain unchanged. A committed
+background execution remains conversation-owned after attempt cancellation,
+but runtime drain cancels and awaits its registry terminal state. Terminal
+visibility follows exactly-once durable Pending Inbound publication, and an
+inbox item accepted before drain remains durable without being adopted into a
+new shutdown-time attempt.
+
+The existing Bash/process contract is composed transitively:
+`TERM -> grace -> KILL -> process-group terminality -> reap or explicit
+containment proof -> execution settlement`. No global process registry or
+generic task manager was added. Shared `EnvironmentStore` work remains
+store-owned and is not globally cancelled by one conversation, while counted
+preparation prevents a late completion from escaping the runtime boundary.
+Retained conversation-owned MCP stdio runtimes close through their existing
+physical settlement contract before quiescence; a late runtime capability
+commit is refused at its lifecycle boundary.
+
+Runtime Client remains a projection/control/attachment adapter. Detach,
+stdio EOF, TUI exit, and attachment drop do not drain the conversation. The
+async client shutdown request awaits `ConversationRuntime::shutdown`; its
+`shutdown_completed` result therefore means quiescence, while the
+`RuntimeShutdown` event only reports that new admission has closed.
+
+Deterministic coverage includes admission-vs-drain and Pending Inbound
+ordering, pre-start and post-start model settlement, parallel foreground
+start-frontier closure, active background drain and terminal publication,
+both background ownership-vs-drain outcomes, capability commit-vs-drain,
+physical process terminality, repeated shutdown, client detach, and the
+late-callback terminal ownership boundary. No SQLite schema change was
+required, and M9c does not implement interaction (#64), subagents (#60), or
+the DSH sidecar (#57).
 
 ## Milestone 10 — Local runtime product
 

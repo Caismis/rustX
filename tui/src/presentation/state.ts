@@ -127,7 +127,7 @@ export interface PresentationState {
   capabilities: CapabilityView;
   /** The session's *desired* model configuration. */
   sessionModel: SessionModelView;
-  /** True once the runtime accepted shutdown; no further inbound is admitted. */
+  /** True once runtime drain begins; shutdown responses complete at quiescence. */
   runtimeShutdown: boolean;
   pendingSubmissions: PendingSubmission[];
   notices: ClientNotice[];

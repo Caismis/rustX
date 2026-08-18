@@ -28,6 +28,7 @@ use futures_util::future::BoxFuture;
 
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
+use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::schema::{
@@ -72,6 +73,10 @@ pub struct ToolExecutionContext<'a> {
     /// executions receive the attempt signal; background executions receive
     /// their conversation-owned background signal.
     pub cancellation: CancellationSignal,
+    /// The first cancellation authority's semantic cause. This is separate
+    /// from the generic signal so an executor can report an honest terminal
+    /// status without becoming the cancellation authority.
+    pub cancellation_reason: CancellationReason,
     /// The canonical workspace boundary every native filesystem tool and
     /// Bash operates against.
     pub workspace: &'a Workspace,
@@ -1077,6 +1082,7 @@ mod tests {
             conversation_id: &ConversationId::new("conv-1"),
             execution_id: None,
             cancellation: crate::runtime::cancellation::CancellationSignal::new(),
+            cancellation_reason: crate::runtime::types::CancellationReason::UserRequested,
             workspace: &workspace,
             progress: &reporter,
             artifacts: &artifacts,

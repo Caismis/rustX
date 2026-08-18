@@ -60,7 +60,7 @@
 //!         |  from this point:
 //!         |    background commit -> BackgroundDispatchError::ConversationInactive
 //!         v
-//! ConversationRuntime::activate()   (the shared lifecycle Inactive -> Active)
+//! ConversationRuntime::activate()   (the shared lifecycle Inactive -> Running)
 //! ```
 //!
 //! Either a standalone background commit wins the section first (the claim
@@ -653,7 +653,7 @@ impl ConversationBackgroundRegistry {
     /// second transfer cannot interleave with the quiescence check. The
     /// `lifecycle` is the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
     /// composed by the `ConversationRuntime` being constructed; activation
-    /// (`Inactive -> Active`) is a later, distinct transition that every
+    /// (`Inactive -> Running`) is a later, distinct transition that every
     /// runtime-owned semantic boundary observes through this same handle.
     ///
     /// # Errors
@@ -741,6 +741,18 @@ impl ConversationBackgroundRegistry {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
         }
+        // Preparation is allowed during inactive composition, but a
+        // draining/quiescent runtime cannot create another parked runner.
+        // The counted guard remains held through insertion so drain can
+        // either observe the prepared record or wait for this operation to
+        // finish before aborting the private runner.
+        let _admission = self
+            .resources
+            .mailbox
+            .begin_preparation_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
         let mut state = self.state();
         let next = state
             .next_execution_sequence
@@ -790,6 +802,19 @@ impl ConversationBackgroundRegistry {
         })
     }
 
+    /// Aborts every prepared-but-uncommitted runner when conversation drain
+    /// closes the ownership boundary. Prepared work has no durable ownership
+    /// fact and its start gate has never been released, so aborting it cannot
+    /// reclaim conversation-owned execution or discard a terminal fact.
+    pub(crate) fn abort_prepared_for_drain(&self) {
+        let mut state = self.state();
+        for (_, prepared) in state.prepared.drain() {
+            prepared.runner.abort();
+        }
+        drop(state);
+        self.notify_state_change();
+    }
+
     /// Stage two: commits the prepared dispatch (the linearization point).
     ///
     /// The registry synchronization boundary is acquired first; the
@@ -827,6 +852,18 @@ impl ConversationBackgroundRegistry {
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        // Hold the shared lifecycle admission guard across the prepared
+        // registry transfer. This keeps a parked ownership attempt inside
+        // the runtime's settlement accounting; the narrower lifecycle
+        // commit boundary below gives drain and the actual durable ownership
+        // fact a deterministic total order.
+        let _admission = self
+            .resources
+            .mailbox
+            .begin_running_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
         let mut state = self.state();
         // The activation gate: observed under this registry critical
         // section, so the commit linearizes cleanly against
@@ -846,61 +883,94 @@ impl ConversationBackgroundRegistry {
         if let Some(hook) = &state.commit_hook {
             hook.enter();
         }
-        if attempt_cancellation.is_cancelled() {
-            // The deciding cancellation observation and the rollback share
-            // this critical section: the prepared record is removed and the
-            // runner aborted here, and the prepared handle's drop semantics
-            // are neutralized so no second rollback path exists.
+        // The hook above parks before the final ownership boundary. The
+        // lifecycle commit boundary below serializes the decisive lifecycle
+        // read, durable ownership fact, record publication, and runner-gate
+        // release against `Running -> Draining`: drain wins first and this
+        // closure is refused; the closure wins first and drain follows it.
+        let commit_result = self.resources.mailbox.with_running_commit(|| {
+            if self.resources.mailbox.is_bound_inactive() {
+                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                    prepared_record.runner.abort();
+                }
+                prepared.committed = true;
+                return Err(BackgroundDispatchError::ConversationInactive {
+                    conversation_id: self.conversation_id.clone(),
+                });
+            }
+            if attempt_cancellation.is_cancelled() {
+                // The deciding cancellation observation and the rollback
+                // share this critical section: the prepared record is
+                // removed and the runner aborted here, and the prepared
+                // handle's drop semantics are neutralized so no second
+                // rollback path exists.
+                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                    prepared_record.runner.abort();
+                }
+                prepared.committed = true;
+                return Ok(BackgroundDispatchOutcome::RolledBack);
+            }
+            let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
+                prepared.committed = true;
+                return Ok(BackgroundDispatchOutcome::RolledBack);
+            };
+            // Issue #12 (M9a): the durable ownership fact commits **before**
+            // the runner's start gate is released, so a detached external
+            // side effect can never begin without durable evidence of its
+            // `ToolExecutionId`, its owning tool call, and the fact that
+            // ownership committed. On a durable failure the dispatch rolls
+            // back completely — the runner is aborted while still parked
+            // behind its gate — so the crash-recovery fold never has to
+            // reason about an execution the store never saw.
+            let ownership = background_ownership_event(
+                &self.conversation_id,
+                &prepared.execution_id,
+                &prepared_record.record,
+                self.resources.clock.now(),
+            );
+            if let Err(error) = self
+                .resources
+                .mailbox
+                .commit_background_ownership(ownership)
+            {
+                prepared_record.runner.abort();
+                prepared.committed = true;
+                return Err(BackgroundDispatchError::Durable {
+                    detail: error.to_string(),
+                });
+            }
+            let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
+            let execution_id = prepared.execution_id.clone();
+            let gate = prepared_record.gate.clone();
+            let next_index = state.records.len();
+            state.index.insert(execution_id.clone(), next_index);
+            state.records.push(prepared_record.record);
+            Self::observe_record(&state, next_index);
+            prepared.committed = true;
+            gate.notify_one();
+            Ok(BackgroundDispatchOutcome::Accepted {
+                execution_id,
+                result,
+            })
+        });
+        if commit_result.is_err() {
+            // A drain that won before the final boundary leaves the prepared
+            // record private. Roll it back before the counted admission is
+            // released, so quiescence cannot become visible with a stale
+            // prepared runner still owned by this dispatch.
             if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
                 prepared_record.runner.abort();
             }
             prepared.committed = true;
-            return Ok(BackgroundDispatchOutcome::RolledBack);
         }
-        let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
-            prepared.committed = true;
-            return Ok(BackgroundDispatchOutcome::RolledBack);
-        };
-        // Issue #12 (M9a): the durable ownership fact commits **before** the
-        // runner's start gate is released, so a detached external side effect
-        // can never begin without durable evidence of its `ToolExecutionId`,
-        // its owning tool call, and the fact that ownership committed. On a
-        // durable failure the dispatch rolls back completely — the runner is
-        // aborted while still parked behind its gate — so the crash-recovery
-        // fold never has to reason about an execution the store never saw.
-        let ownership = background_ownership_event(
-            &self.conversation_id,
-            &prepared.execution_id,
-            &prepared_record.record,
-            self.resources.clock.now(),
-        );
-        if let Err(error) = self
-            .resources
-            .mailbox
-            .commit_background_ownership(ownership)
-        {
-            prepared_record.runner.abort();
-            prepared.committed = true;
-            drop(state);
-            self.notify_state_change();
-            return Err(BackgroundDispatchError::Durable {
-                detail: error.to_string(),
-            });
-        }
-        let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
-        let execution_id = prepared.execution_id.clone();
-        let next_index = state.records.len();
-        state.index.insert(execution_id.clone(), next_index);
-        state.records.push(prepared_record.record);
-        Self::observe_record(&state, next_index);
         drop(state);
         self.notify_state_change();
-        prepared.committed = true;
-        prepared_record.gate.notify_one();
-        Ok(BackgroundDispatchOutcome::Accepted {
-            execution_id,
-            result,
-        })
+        match commit_result {
+            Err(_) => Err(BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            }),
+            Ok(result) => result,
+        }
     }
 
     /// Reseeds the deterministic `exec_N` allocator above every ordinal that
@@ -934,6 +1004,24 @@ impl ConversationBackgroundRegistry {
     /// winner and the stored result can never disagree.
     #[must_use]
     pub fn cancel(&self, execution_id: &ToolExecutionId) -> Option<BackgroundExecutionSnapshot> {
+        self.cancel_with_reason(execution_id, BACKGROUND_CANCEL_REASON)
+    }
+
+    /// Requests cancellation with the cause owned by the caller. The first
+    /// cancellation transition remains the absorbing registry winner; later
+    /// requests are idempotent and cannot rewrite its cause.
+    pub(crate) fn cancel_with_reason(
+        &self,
+        execution_id: &ToolExecutionId,
+        reason: CancellationReason,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        // Cancellation of an already-owned execution is a settlement/control
+        // mutation during drain, but a stale caller must not mutate the
+        // registry or publish an observation after quiescence. Standalone
+        // registries have no lifecycle and retain their existing behavior.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return self.snapshot(execution_id);
+        };
         let mut state = self.state();
         let index = *state.index.get(execution_id)?;
         {
@@ -941,7 +1029,7 @@ impl ConversationBackgroundRegistry {
             match record.lifecycle {
                 BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
                     record.lifecycle = BackgroundLifecycle::Cancelling;
-                    record.cancel_reason = Some(BACKGROUND_CANCEL_REASON);
+                    record.cancel_reason = Some(reason);
                     record.cancellation.cancel();
                 }
                 BackgroundLifecycle::Cancelling
@@ -966,8 +1054,9 @@ impl ConversationBackgroundRegistry {
         Some(snapshot_of(&state.records[index]))
     }
 
-    /// The active (Starting/Running/Cancelling) snapshots in execution
-    /// allocation order. Terminal executions never appear here.
+    /// The non-terminal (Starting/Running/Cancelling/PublishingTerminal)
+    /// snapshots in execution allocation order. Terminal executions never
+    /// appear here.
     #[must_use]
     pub fn active_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
         let state = self.state();
@@ -1014,6 +1103,14 @@ impl ConversationBackgroundRegistry {
     /// continuation; [`ConversationBackgroundRegistry::settle_terminal`]
     /// drives the bounded retry and the explicit failure report.
     pub fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        // A committed runner may finish after the runtime has entered
+        // `Draining`; this narrow guard keeps its durable terminal inbound,
+        // observer callback, and terminal registry transition inside the
+        // runtime's settlement boundary. A stale callback after quiescence is
+        // refused before it can mutate anything.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return;
+        };
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
@@ -1181,6 +1278,9 @@ impl ConversationBackgroundRegistry {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Option<BackgroundExecutionSnapshot> {
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return self.snapshot(execution_id);
+        };
         let mut state = self.state();
         let index = *state.index.get(execution_id)?;
         let Some(candidate) = state.records[index].pending_terminal.clone() else {
@@ -1239,6 +1339,9 @@ impl ConversationBackgroundRegistry {
     /// snapshot is retained; no unbounded progress history exists in the
     /// registry. Progress of a terminal execution is ignored.
     pub fn report_progress(&self, execution_id: &ToolExecutionId, progress: ToolProgress) {
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return;
+        };
         let bounded = bound_tool_progress(progress);
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
@@ -1316,6 +1419,26 @@ impl ConversationBackgroundRegistry {
         }
     }
 
+    /// Waits for one execution to enter cancellation settlement using the
+    /// registry's state-change notification. This narrow seam is used by
+    /// runtime supervision tests to distinguish cancellation intent from the
+    /// later terminal transition without polling.
+    #[cfg(test)]
+    pub(crate) async fn wait_until_cancelling(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        let mut version = self.state_version.subscribe();
+        loop {
+            if let Some(snapshot) = self.snapshot(execution_id)
+                && snapshot.state == BackgroundLifecycle::Cancelling
+            {
+                return Some(snapshot);
+            }
+            version.changed().await.ok()?;
+        }
+    }
+
     /// Rolls a prepared dispatch back: the runner is aborted and the private
     /// record is dropped. No detached execution exists afterwards.
     fn rollback_prepared(&self, execution_id: &ToolExecutionId) {
@@ -1344,10 +1467,19 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             };
             let resources = &registry.resources;
+            let cancellation_reason = {
+                let state = registry.state();
+                state
+                    .index
+                    .get(&execution_id)
+                    .and_then(|index| state.records[*index].cancel_reason)
+                    .unwrap_or(CancellationReason::UserRequested)
+            };
             let context = ToolExecutionContext {
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
                 cancellation: cancellation.clone(),
+                cancellation_reason,
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
@@ -1987,6 +2119,129 @@ mod tests {
             terminal.state,
             BackgroundLifecycle::Succeeded,
             "the conversation-owned execution settles normally after the commit"
+        );
+    }
+
+    /// M9c: the runtime drain wins before the background ownership boundary.
+    /// The deterministic hook parks the real registry commit after its first
+    /// lifecycle observation; drain then closes the shared lifecycle, so the
+    /// second observation rolls the prepared dispatch back and never releases
+    /// the runner's start gate.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_drain_wins_background_ownership_boundary() {
+        let fixture = registry("conv-bg-drain-first");
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        fixture.mailbox.bind_inactive(&lifecycle);
+        assert!(lifecycle.activate(), "the runtime lifecycle is running");
+
+        let (executor, started, _release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry.commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+        });
+        tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || hook.wait_entered()
+        })
+        .await
+        .expect("commit boundary waiter");
+
+        assert!(lifecycle.begin_drain(), "drain wins the boundary race");
+        hook.proceed();
+        let result = commit_task
+            .await
+            .expect("commit task")
+            .expect_err("drain refuses the new ownership commit");
+        assert_eq!(
+            result,
+            super::BackgroundDispatchError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-bg-drain-first"),
+            }
+        );
+        lifecycle.wait_for_no_admissions().await;
+        assert!(fixture.registry.all_snapshots().is_empty());
+        assert!(
+            !*started.borrow(),
+            "the runner never crossed its start gate"
+        );
+        assert_eq!(
+            lifecycle.state(),
+            crate::runtime::types::ConversationLifecycleState::Draining
+        );
+    }
+
+    /// M9c: the background ownership boundary wins before drain. The commit
+    /// returns its durable ownership result first; drain then treats the
+    /// record as conversation-owned, requests runtime cancellation, and
+    /// waits for the existing registry terminal/publication state machine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_ownership_boundary_wins_runtime_drain() {
+        let fixture = registry("conv-bg-ownership-first");
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        fixture.mailbox.bind_inactive(&lifecycle);
+        assert!(lifecycle.activate(), "the runtime lifecycle is running");
+
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .expect("ownership commit")
+        });
+        let boundary = tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || {
+                hook.wait_entered();
+                hook.proceed();
+            }
+        });
+        boundary.await.expect("commit boundary waiter");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            commit_task.await.expect("commit task")
+        else {
+            panic!("ownership commit wins before drain");
+        };
+
+        assert!(
+            lifecycle.begin_drain(),
+            "drain follows the ownership commit"
+        );
+        await_test_started(&mut started, "owned background runner starts").await;
+        let cancelling = fixture
+            .registry
+            .cancel_with_reason(&execution_id, CancellationReason::RuntimeShutdown)
+            .expect("owned execution remains cancellable during drain");
+        assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+        lifecycle.wait_for_no_admissions().await;
+        assert_eq!(
+            fixture
+                .mailbox
+                .select_pending_batch()
+                .expect("select")
+                .expect("terminal inbound")
+                .items()
+                .len(),
+            1,
+            "terminal publication remains durably pending after drain closes adoption"
         );
     }
 
