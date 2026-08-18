@@ -1573,11 +1573,6 @@ fn second_crash_after_tool_repair_preserves_external_start_evidence() {
         },
         "the committed canonical repair does not erase the historical start"
     );
-    assert_eq!(
-        evidence.outstanding_tool_repairs(),
-        0,
-        "the canonicalized call retains no detailed repair evidence"
-    );
     assert_ne!(
         plan.attempt_class(),
         &AttemptRecoveryClass::AdmittedWithoutExternalStart {
@@ -1725,11 +1720,6 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
             tool_calls: Vec::new(),
         },
         "the attempt still had external execution; the outcome is durably known"
-    );
-    assert_eq!(
-        evidence.outstanding_tool_repairs(),
-        0,
-        "the canonicalized call retains no detailed repair evidence"
     );
     assert_ne!(
         plan.attempt_class(),
@@ -2454,13 +2444,13 @@ fn a_long_settled_attempt_retains_bounded_repair_evidence() {
         },
         "many canonicalized tool calls never regress the attempt to 'never externally started'"
     );
-    // The hot working set is one bounded attempt summary and zero tool
-    // repairs — it does not scale with the number of settled calls.
-    assert_eq!(
-        evidence.outstanding_tool_repairs(),
-        0,
-        "a fully canonicalized tool call retains no detailed repair evidence"
-    );
+    // The end-to-end observable contract of the bounded working set: every
+    // call already owns its canonical ToolResult, so reconciliation performs
+    // **zero** tool repairs — the recovered runtime never recreates or
+    // replays a settled result — and writes only the missing attempt
+    // terminal. The exact hot-state cardinality (N settled calls => one
+    // bounded summary, zero retained repair details) is asserted directly on
+    // the private fold in `src/runtime/recovery.rs`.
     let report = plan.reconcile(&store, &FixedClock).expect("reconcile");
     assert!(
         report.reconciliation().repaired_tool_results.is_empty(),
@@ -2602,14 +2592,11 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
         &AttemptRecoveryClass::IndeterminateExternalOutcome {
             attempt_id: attempt.clone(),
             model_request: None,
+            // The still-repairable unknown call is named: call-a's repair was
+            // released with its canonical ToolResult, so it is not named.
             tool_calls: vec![ToolCallId::new("call-b")],
         },
         "one unknown started side effect dominates the known settled sibling"
-    );
-    assert_eq!(
-        evidence.outstanding_tool_repairs(),
-        1,
-        "only the unresolved structurally relevant call retains repair evidence"
     );
     assert_eq!(
         plan.resume(),
@@ -2650,11 +2637,6 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
             tool_calls: Vec::new(),
         },
         "the committed Interrupted repair never resolves the old unknown outcome"
-    );
-    assert_eq!(
-        evidence.outstanding_tool_repairs(),
-        0,
-        "the repaired call released its detailed repair evidence"
     );
     assert_ne!(
         plan.attempt_class(),

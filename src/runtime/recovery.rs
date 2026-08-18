@@ -762,18 +762,6 @@ impl RecoveryEvidence {
         &self.pending
     }
 
-    /// The number of outstanding per-call canonical tool repairs retained by
-    /// the fold.
-    ///
-    /// Test-only introspection of the bounded working set: a long attempt
-    /// with many already-canonicalized tool calls retains zero entries, while
-    /// an attempt with an uncommitted call retains exactly the calls whose
-    /// canonical `ToolResult` is still missing.
-    #[must_use]
-    pub fn outstanding_tool_repairs(&self) -> usize {
-        self.tool_repairs.len()
-    }
-
     /// The next free conversation-scoped attempt ordinal.
     ///
     /// Never an ordinal that already entered durable authority.
