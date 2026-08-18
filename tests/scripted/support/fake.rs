@@ -74,6 +74,24 @@ pub struct FakeModel {
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     emitted: watch::Sender<u64>,
     parked: watch::Sender<bool>,
+    /// The number of invocation streams whose owner has left: the stream ran
+    /// to completion or the loop dropped it. Once this reaches the number of
+    /// invocations, no stream owner exists that could still observe a stale
+    /// release/callback, which is what a post-quiescence regression needs to
+    /// assert instead of merely poking a channel and looking immediately.
+    streams_exited: watch::Sender<u64>,
+}
+
+/// Increments the exited-stream counter when one invocation stream's owner
+/// leaves, whether it completed or was dropped mid-park.
+struct StreamExitGuard {
+    exited: watch::Sender<u64>,
+}
+
+impl Drop for StreamExitGuard {
+    fn drop(&mut self) {
+        self.exited.send_modify(|count| *count += 1);
+    }
 }
 
 impl FakeModel {
@@ -85,7 +103,20 @@ impl FakeModel {
             requests: Arc::new(Mutex::new(Vec::new())),
             emitted: watch::Sender::new(0),
             parked: watch::Sender::new(false),
+            streams_exited: watch::Sender::new(0),
         }
+    }
+
+    /// A receiver observing how many invocation stream owners have left.
+    #[must_use]
+    pub fn streams_exited(&self) -> watch::Receiver<u64> {
+        self.streams_exited.subscribe()
+    }
+
+    /// How many invocation stream owners have left.
+    #[must_use]
+    pub fn streams_exited_count(&self) -> u64 {
+        *self.streams_exited.borrow()
     }
 
     /// The canonical requests the loop has sent so far, in order.
@@ -151,7 +182,14 @@ impl ModelAdapter for FakeModel {
         let script = self.pop_script();
         let emitted = self.emitted.clone();
         let parked = self.parked.clone();
+        let exit_guard = Arc::new(StreamExitGuard {
+            exited: self.streams_exited.clone(),
+        });
+        // The guard lives in the stream's own closure state: it fires when the
+        // stream owner leaves, whether the script completed or the loop
+        // dropped the stream mid-park.
         Box::pin(unfold(script, move |mut script| {
+            let _keep_owner_alive = &exit_guard;
             let emitted = emitted.clone();
             let parked = parked.clone();
             let cancellation = cancellation.clone();

@@ -399,7 +399,7 @@ export function renderStatus(state: PresentationState): string {
     `- background: ${active.length} active of ${state.background.length} known`,
   );
   if (state.runtimeShutdown) {
-    lines.push("- the runtime accepted shutdown and admits no further inbound");
+    lines.push("- runtime is draining; conversation-owned work is settling");
   }
 
   if (state.status === undefined) {

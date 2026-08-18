@@ -442,7 +442,7 @@ describe("RuntimeClientSession", () => {
 
     const shuttingDown = session.shutdown();
     await peer.awaitRequests(3);
-    peer.respond(3, { type: "shutdown_accepted" });
+    peer.respond(3, { type: "shutdown_completed" });
     await shuttingDown;
 
     // Shutdown is not transport closure: the session still serves reads.

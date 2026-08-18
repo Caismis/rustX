@@ -60,7 +60,7 @@
 //!         |  from this point:
 //!         |    background commit -> BackgroundDispatchError::ConversationInactive
 //!         v
-//! ConversationRuntime::activate()   (the shared lifecycle Inactive -> Active)
+//! ConversationRuntime::activate()   (the shared lifecycle Inactive -> Running)
 //! ```
 //!
 //! Either a standalone background commit wins the section first (the claim
@@ -147,7 +147,7 @@ use crate::events::{
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::RuntimeClock;
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
 use crate::runtime::identity::{
     ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
@@ -165,13 +165,22 @@ use crate::tools::types::{
 };
 use crate::tools::workspace::Workspace;
 
-/// The one cancellation reason of conversation-owned background cancellation.
+/// The **default** cancellation reason of conversation-owned background
+/// cancellation.
 ///
-/// Background cancellation is only ever requested through the conversation
-/// control path (`background_task(action = cancel)` or direct registry
-/// cancellation), which is a user-requested control action. The registry
-/// retains this reason when cancellation intent commits so the canonicalized
-/// terminal result always agrees with the registry winner.
+/// Direct control-path cancellation (`background_task(action = cancel)` or
+/// [`ConversationBackgroundRegistry::cancel`]) is a user-requested control
+/// action and therefore defaults to this reason. It is not the only possible
+/// reason: runtime drain (M9c) requests cancellation of every owned execution
+/// through [`ConversationBackgroundRegistry::cancel_with_reason`] with
+/// [`CancellationReason::RuntimeShutdown`].
+///
+/// The authoritative cause store is the record's `cancel_reason`, committed
+/// once at the `Starting|Running -> Cancelling` transition and never
+/// rewritten, so the first winning reason is absorbing. The registry is the
+/// settlement authority and canonicalizes the final terminal result from that
+/// stored winner, so the registry winner and the stored result can never
+/// disagree.
 const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserRequested;
 
 /// The public lifecycle of one background execution.
@@ -191,9 +200,10 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 ///
 /// [`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal
 /// state in which the executor has returned its terminal candidate and the
-/// registry now owns durable terminal publication; it is never `Running`
-/// (the runner has exited) and it retains the settlement candidate until
-/// publication reaches a terminal outcome. An internal unpublished prepared
+/// registry now owns durable terminal publication; it is never `Running`:
+/// the executor has returned and the runner now owns the durable settlement
+/// continuation, retaining the settlement candidate until publication
+/// reaches a terminal outcome. An internal unpublished prepared
 /// state implements dispatch atomicity but never leaks as an accepted
 /// execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +261,14 @@ pub trait BackgroundObserver: Send + Sync {
 /// lock graph already has a coordinator -> registry edge (the bootstrap
 /// handshake), so holding the registry lock across this call could
 /// deadlock.
+///
+/// This call is the runner's **last conversation-facing callback**, and it
+/// is ordered *before* the registry publishes `publication_abandoned` (M9c):
+/// runtime drain consumes the abandoned fact as settlement, so a drain that
+/// observed it while this callback were still runnable could cache a failed
+/// shutdown ahead of a real conversation callback. Implementations may
+/// therefore assume the caller keeps a lifecycle settlement admission alive
+/// across this call.
 pub trait BackgroundDurabilityFailureSink: Send + Sync {
     /// The bounded terminal-publication budget of `execution_id` was
     /// exhausted; the terminal candidate remains retained by the registry
@@ -472,6 +490,14 @@ struct BackgroundRecord {
     /// executor returns, the registry retains the candidate until publication
     /// reaches a terminal outcome.
     pending_terminal: Option<TerminalCandidate>,
+    /// Set when the runner spent its whole bounded terminal-publication
+    /// budget without obtaining durable ownership (Issue #63). The runner
+    /// has returned, so this record can no longer produce any external
+    /// effect: it has reached its strongest available settlement while
+    /// staying explicitly non-terminal, with the candidate retained. Runtime
+    /// drain treats it as settled-with-failure evidence instead of waiting
+    /// for a terminal state that can never arrive.
+    publication_abandoned: bool,
     notification: NotificationState,
 }
 
@@ -653,7 +679,7 @@ impl ConversationBackgroundRegistry {
     /// second transfer cannot interleave with the quiescence check. The
     /// `lifecycle` is the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
     /// composed by the `ConversationRuntime` being constructed; activation
-    /// (`Inactive -> Active`) is a later, distinct transition that every
+    /// (`Inactive -> Running`) is a later, distinct transition that every
     /// runtime-owned semantic boundary observes through this same handle.
     ///
     /// # Errors
@@ -741,6 +767,18 @@ impl ConversationBackgroundRegistry {
         if invocation.mode != ToolInvocationMode::Background {
             return Err(BackgroundDispatchError::NotBackgroundInvocation);
         }
+        // Preparation is allowed during inactive composition, but a
+        // draining/quiescent runtime cannot create another parked runner.
+        // The counted guard remains held through insertion so drain can
+        // either observe the prepared record or wait for this operation to
+        // finish before aborting the private runner.
+        let _admission = self
+            .resources
+            .mailbox
+            .begin_preparation_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
         let mut state = self.state();
         let next = state
             .next_execution_sequence
@@ -772,6 +810,7 @@ impl ConversationBackgroundRegistry {
                 lifecycle: BackgroundLifecycle::Starting,
                 cancellation,
                 cancel_reason: None,
+                publication_abandoned: false,
                 progress: None,
                 result: None,
                 pending_terminal: None,
@@ -788,6 +827,19 @@ impl ConversationBackgroundRegistry {
             execution_id,
             committed: false,
         })
+    }
+
+    /// Aborts every prepared-but-uncommitted runner when conversation drain
+    /// closes the ownership boundary. Prepared work has no durable ownership
+    /// fact and its start gate has never been released, so aborting it cannot
+    /// reclaim conversation-owned execution or discard a terminal fact.
+    pub(crate) fn abort_prepared_for_drain(&self) {
+        let mut state = self.state();
+        for (_, prepared) in state.prepared.drain() {
+            prepared.runner.abort();
+        }
+        drop(state);
+        self.notify_state_change();
     }
 
     /// Stage two: commits the prepared dispatch (the linearization point).
@@ -827,6 +879,18 @@ impl ConversationBackgroundRegistry {
         mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        // Hold the shared lifecycle admission guard across the prepared
+        // registry transfer. This keeps a parked ownership attempt inside
+        // the runtime's settlement accounting; the narrower lifecycle
+        // commit boundary below gives drain and the actual durable ownership
+        // fact a deterministic total order.
+        let _admission = self
+            .resources
+            .mailbox
+            .begin_running_admission()
+            .map_err(|_| BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            })?;
         let mut state = self.state();
         // The activation gate: observed under this registry critical
         // section, so the commit linearizes cleanly against
@@ -846,61 +910,94 @@ impl ConversationBackgroundRegistry {
         if let Some(hook) = &state.commit_hook {
             hook.enter();
         }
-        if attempt_cancellation.is_cancelled() {
-            // The deciding cancellation observation and the rollback share
-            // this critical section: the prepared record is removed and the
-            // runner aborted here, and the prepared handle's drop semantics
-            // are neutralized so no second rollback path exists.
+        // The hook above parks before the final ownership boundary. The
+        // lifecycle commit boundary below serializes the decisive lifecycle
+        // read, durable ownership fact, record publication, and runner-gate
+        // release against `Running -> Draining`: drain wins first and this
+        // closure is refused; the closure wins first and drain follows it.
+        let commit_result = self.resources.mailbox.with_running_commit(|| {
+            if self.resources.mailbox.is_bound_inactive() {
+                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                    prepared_record.runner.abort();
+                }
+                prepared.committed = true;
+                return Err(BackgroundDispatchError::ConversationInactive {
+                    conversation_id: self.conversation_id.clone(),
+                });
+            }
+            if attempt_cancellation.is_cancelled() {
+                // The deciding cancellation observation and the rollback
+                // share this critical section: the prepared record is
+                // removed and the runner aborted here, and the prepared
+                // handle's drop semantics are neutralized so no second
+                // rollback path exists.
+                if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                    prepared_record.runner.abort();
+                }
+                prepared.committed = true;
+                return Ok(BackgroundDispatchOutcome::RolledBack);
+            }
+            let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
+                prepared.committed = true;
+                return Ok(BackgroundDispatchOutcome::RolledBack);
+            };
+            // Issue #12 (M9a): the durable ownership fact commits **before**
+            // the runner's start gate is released, so a detached external
+            // side effect can never begin without durable evidence of its
+            // `ToolExecutionId`, its owning tool call, and the fact that
+            // ownership committed. On a durable failure the dispatch rolls
+            // back completely — the runner is aborted while still parked
+            // behind its gate — so the crash-recovery fold never has to
+            // reason about an execution the store never saw.
+            let ownership = background_ownership_event(
+                &self.conversation_id,
+                &prepared.execution_id,
+                &prepared_record.record,
+                self.resources.clock.now(),
+            );
+            if let Err(error) = self
+                .resources
+                .mailbox
+                .commit_background_ownership(ownership)
+            {
+                prepared_record.runner.abort();
+                prepared.committed = true;
+                return Err(BackgroundDispatchError::Durable {
+                    detail: error.to_string(),
+                });
+            }
+            let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
+            let execution_id = prepared.execution_id.clone();
+            let gate = prepared_record.gate.clone();
+            let next_index = state.records.len();
+            state.index.insert(execution_id.clone(), next_index);
+            state.records.push(prepared_record.record);
+            Self::observe_record(&state, next_index);
+            prepared.committed = true;
+            gate.notify_one();
+            Ok(BackgroundDispatchOutcome::Accepted {
+                execution_id,
+                result,
+            })
+        });
+        if commit_result.is_err() {
+            // A drain that won before the final boundary leaves the prepared
+            // record private. Roll it back before the counted admission is
+            // released, so quiescence cannot become visible with a stale
+            // prepared runner still owned by this dispatch.
             if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
                 prepared_record.runner.abort();
             }
             prepared.committed = true;
-            return Ok(BackgroundDispatchOutcome::RolledBack);
         }
-        let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
-            prepared.committed = true;
-            return Ok(BackgroundDispatchOutcome::RolledBack);
-        };
-        // Issue #12 (M9a): the durable ownership fact commits **before** the
-        // runner's start gate is released, so a detached external side effect
-        // can never begin without durable evidence of its `ToolExecutionId`,
-        // its owning tool call, and the fact that ownership committed. On a
-        // durable failure the dispatch rolls back completely — the runner is
-        // aborted while still parked behind its gate — so the crash-recovery
-        // fold never has to reason about an execution the store never saw.
-        let ownership = background_ownership_event(
-            &self.conversation_id,
-            &prepared.execution_id,
-            &prepared_record.record,
-            self.resources.clock.now(),
-        );
-        if let Err(error) = self
-            .resources
-            .mailbox
-            .commit_background_ownership(ownership)
-        {
-            prepared_record.runner.abort();
-            prepared.committed = true;
-            drop(state);
-            self.notify_state_change();
-            return Err(BackgroundDispatchError::Durable {
-                detail: error.to_string(),
-            });
-        }
-        let result = accepted_result(&prepared.execution_id, &prepared_record.record.tool_name);
-        let execution_id = prepared.execution_id.clone();
-        let next_index = state.records.len();
-        state.index.insert(execution_id.clone(), next_index);
-        state.records.push(prepared_record.record);
-        Self::observe_record(&state, next_index);
         drop(state);
         self.notify_state_change();
-        prepared.committed = true;
-        prepared_record.gate.notify_one();
-        Ok(BackgroundDispatchOutcome::Accepted {
-            execution_id,
-            result,
-        })
+        match commit_result {
+            Err(_) => Err(BackgroundDispatchError::ConversationInactive {
+                conversation_id: self.conversation_id.clone(),
+            }),
+            Ok(result) => result,
+        }
     }
 
     /// Reseeds the deterministic `exec_N` allocator above every ordinal that
@@ -934,6 +1031,24 @@ impl ConversationBackgroundRegistry {
     /// winner and the stored result can never disagree.
     #[must_use]
     pub fn cancel(&self, execution_id: &ToolExecutionId) -> Option<BackgroundExecutionSnapshot> {
+        self.cancel_with_reason(execution_id, BACKGROUND_CANCEL_REASON)
+    }
+
+    /// Requests cancellation with the cause owned by the caller. The first
+    /// cancellation transition remains the absorbing registry winner; later
+    /// requests are idempotent and cannot rewrite its cause.
+    pub(crate) fn cancel_with_reason(
+        &self,
+        execution_id: &ToolExecutionId,
+        reason: CancellationReason,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        // Cancellation of an already-owned execution is a settlement/control
+        // mutation during drain, but a stale caller must not mutate the
+        // registry or publish an observation after quiescence. Standalone
+        // registries have no lifecycle and retain their existing behavior.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return self.snapshot(execution_id);
+        };
         let mut state = self.state();
         let index = *state.index.get(execution_id)?;
         {
@@ -941,7 +1056,7 @@ impl ConversationBackgroundRegistry {
             match record.lifecycle {
                 BackgroundLifecycle::Starting | BackgroundLifecycle::Running => {
                     record.lifecycle = BackgroundLifecycle::Cancelling;
-                    record.cancel_reason = Some(BACKGROUND_CANCEL_REASON);
+                    record.cancel_reason = Some(reason);
                     record.cancellation.cancel();
                 }
                 BackgroundLifecycle::Cancelling
@@ -966,8 +1081,9 @@ impl ConversationBackgroundRegistry {
         Some(snapshot_of(&state.records[index]))
     }
 
-    /// The active (Starting/Running/Cancelling) snapshots in execution
-    /// allocation order. Terminal executions never appear here.
+    /// The non-terminal (Starting/Running/Cancelling/PublishingTerminal)
+    /// snapshots in execution allocation order. Terminal executions never
+    /// appear here.
     #[must_use]
     pub fn active_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
         let state = self.state();
@@ -1014,6 +1130,14 @@ impl ConversationBackgroundRegistry {
     /// continuation; [`ConversationBackgroundRegistry::settle_terminal`]
     /// drives the bounded retry and the explicit failure report.
     pub fn finish(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
+        // A committed runner may finish after the runtime has entered
+        // `Draining`; this narrow guard keeps its durable terminal inbound,
+        // observer callback, and terminal registry transition inside the
+        // runtime's settlement boundary. A stale callback after quiescence is
+        // refused before it can mutate anything.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return;
+        };
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
@@ -1071,7 +1195,8 @@ impl ConversationBackgroundRegistry {
         let (settled, stored) = candidate;
         // The registry retains the terminal candidate before publication, so
         // a durable acceptance failure cannot lose the executor result and
-        // cannot leave a false `Running` state with no runner.
+        // cannot leave a false `Running` state after the executor has
+        // returned.
         state.records[index].pending_terminal = Some(TerminalCandidate {
             settled,
             result: stored.clone(),
@@ -1109,10 +1234,10 @@ impl ConversationBackgroundRegistry {
             Err(_error) => {
                 // The terminal inbound did not obtain durable ownership, so
                 // the record must NOT become terminal and must NOT stay
-                // `Running` (the runner has exited). It enters the explicit
-                // publication-pending state with the candidate retained;
-                // the runner's settlement continuation performs the bounded
-                // retry immediately after this call returns.
+                // `Running` after the executor has returned; the runner now
+                // continues only as the registry-owned settlement
+                // continuation, which performs the bounded retry immediately
+                // after this call returns.
                 let record = &mut state.records[index];
                 record.lifecycle = BackgroundLifecycle::PublishingTerminal;
                 record.notification = NotificationState::Failed;
@@ -1141,6 +1266,12 @@ impl ConversationBackgroundRegistry {
     /// owning conversation runtime through the installed
     /// [`BackgroundDurabilityFailureSink`]. There is no sleep, no hot loop,
     /// and no further attempt after the budget is spent.
+    ///
+    /// The failure report commits **before** the abandoned settlement fact
+    /// (M9c): the sink callback is real semantic runtime work, so
+    /// `publication_abandoned` — the fact runtime drain consumes as this
+    /// owner's settlement — becomes observable only once that callback has
+    /// returned and no conversation callback authority remains.
     fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
         self.finish(execution_id, result);
         let Some(snapshot) = self.retry_terminal_publication(execution_id) else {
@@ -1149,11 +1280,45 @@ impl ConversationBackgroundRegistry {
         if snapshot.state != BackgroundLifecycle::PublishingTerminal {
             return;
         }
-        // The bounded publication budget is exhausted. The sink acquires
-        // the coordinator lock and the lock graph already has a
-        // coordinator -> registry edge (the bootstrap handshake), so the
-        // sink is invoked only after every registry lock acquisition above
-        // has been released — never while the registry lock is held.
+        // The bounded publication budget is exhausted. This record has
+        // reached its strongest available settlement: it will be able to act
+        // no further, but it is explicitly not terminal.
+        //
+        // M9c settlement linearization. Reporting the failure is itself a
+        // real conversation-facing callback of this runner: the sink upgrades
+        // the owning `ConversationRuntime`, takes the coordinator lock,
+        // mutates durability health and may publish a `DurabilityFailed`
+        // observation. `publication_abandoned` is the settlement fact runtime
+        // drain consumes (`unsettled_snapshot` / `wait_until_settled`), so it
+        // must never become observable while that callback can still run —
+        // otherwise drain could stop waiting on this owner, aggregate the
+        // abandoned evidence and cache a failed shutdown *before* the runner
+        // finished calling back into the conversation. The failure report
+        // therefore commits before the abandoned fact:
+        //
+        //   publication retries exhausted
+        //     -> failure sink callback begins
+        //     -> failure sink callback completes
+        //     -> publication_abandoned commit
+        //     -> waiters notified
+        //     -> zero remaining conversation callback authority
+        //
+        // The whole continuation runs under one settlement admission that is
+        // released only after the abandoned fact is published, so neither
+        // `mark_quiescent` (successful shutdown) nor `wait_for_no_admissions`
+        // (failed shutdown, which leaves the lifecycle `Draining` and cannot
+        // rely on admission refusal) can complete while the callback is live.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            // Settlement is refused only after `Quiescent`, which drain
+            // cannot publish while this record is still an unsettled
+            // `PublishingTerminal` owner. Nothing may call back into the
+            // conversation from here.
+            return;
+        };
+        // The sink acquires the coordinator lock and the lock graph already
+        // has a coordinator -> registry edge (the bootstrap handshake), so
+        // the sink is invoked only after every registry lock acquisition
+        // above has been released — never while the registry lock is held.
         let sink = self.state().failure_sink.clone();
         if let Some(sink) = sink {
             sink.terminal_publication_failed(
@@ -1163,6 +1328,11 @@ impl ConversationBackgroundRegistry {
                 ),
             );
         }
+        // The last conversation-facing callback of this runner has returned.
+        // Publishing the abandoned fact is what lets runtime drain stop
+        // waiting on *this* record without abandoning any other owner; from
+        // here the execution owns no remaining callback authority.
+        self.mark_publication_abandoned(execution_id);
     }
 
     /// The bounded retry of the durable terminal publication of one
@@ -1181,6 +1351,9 @@ impl ConversationBackgroundRegistry {
         &self,
         execution_id: &ToolExecutionId,
     ) -> Option<BackgroundExecutionSnapshot> {
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return self.snapshot(execution_id);
+        };
         let mut state = self.state();
         let index = *state.index.get(execution_id)?;
         let Some(candidate) = state.records[index].pending_terminal.clone() else {
@@ -1229,6 +1402,94 @@ impl ConversationBackgroundRegistry {
         Some(snapshot)
     }
 
+    /// Records that one execution spent its whole bounded terminal-publication
+    /// budget and completed its last conversation-facing failure callback;
+    /// only the durable terminal fact is missing.
+    ///
+    /// This is the settlement commit of the runner's continuation: it is
+    /// invoked only after [`BackgroundDurabilityFailureSink::terminal_publication_failed`]
+    /// has returned, so once `publication_abandoned` is observable the
+    /// execution owns no remaining conversation callback authority — no
+    /// failure-sink callback, no observer callback, no Pending Inbound
+    /// attempt, no durability-health mutation, no terminal retry and no
+    /// semantic registry mutation can follow it.
+    fn mark_publication_abandoned(&self, execution_id: &ToolExecutionId) {
+        {
+            let mut state = self.state();
+            let Some(index) = state.index.get(execution_id).copied() else {
+                return;
+            };
+            if state.records[index].lifecycle != BackgroundLifecycle::PublishingTerminal {
+                return;
+            }
+            state.records[index].publication_abandoned = true;
+        }
+        self.notify_state_change();
+    }
+
+    /// The active executions that runtime drain must still supervise.
+    ///
+    /// A record whose durable terminal publication was abandoned is excluded:
+    /// the abandoned fact is published only after the runner exhausted
+    /// durable terminal publication *and* completed every remaining
+    /// conversation-facing failure callback, so it owns no callback authority
+    /// and can produce no further external effect — re-cancelling and
+    /// re-awaiting it would spin forever. It remains explicit non-terminal
+    /// evidence through
+    /// [`ConversationBackgroundRegistry::abandoned_publications`].
+    #[must_use]
+    pub(crate) fn unsettled_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
+        let state = self.state();
+        state
+            .records
+            .iter()
+            .filter(|record| record.lifecycle.is_active() && !record.publication_abandoned)
+            .map(snapshot_of)
+            .collect()
+    }
+
+    /// The executions whose durable terminal publication was abandoned, in
+    /// allocation order. Each one is settlement evidence that prevents the
+    /// owning runtime from claiming successful quiescence.
+    #[must_use]
+    pub(crate) fn abandoned_publications(&self) -> Vec<ToolExecutionId> {
+        let state = self.state();
+        state
+            .records
+            .iter()
+            .filter(|record| record.publication_abandoned)
+            .map(|record| record.execution_id.clone())
+            .collect()
+    }
+
+    /// Waits until one execution reaches its strongest available settlement:
+    /// a terminal lifecycle, or an explicitly abandoned durable terminal
+    /// publication. Either fact implies the execution owns no remaining
+    /// conversation callback authority — the abandoned fact is committed only
+    /// after the runner's last conversation-facing failure callback returned.
+    ///
+    /// Unlike a terminal-only wait this can never strand runtime drain, and
+    /// unlike a global durability-health check it never reports one record's
+    /// failure as another record's settlement.
+    pub(crate) async fn wait_until_settled(&self, execution_id: &ToolExecutionId) {
+        let mut version = self.state_version.subscribe();
+        loop {
+            {
+                let state = self.state();
+                let Some(index) = state.index.get(execution_id).copied() else {
+                    return;
+                };
+                let record = &state.records[index];
+                if record.lifecycle.is_terminal() || record.publication_abandoned {
+                    return;
+                }
+            }
+            if version.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
     /// Updates the latest bounded progress snapshot of one execution and
     /// emits the corresponding canonical execution fact through the narrow
     /// event seam, when one is attached.
@@ -1239,6 +1500,9 @@ impl ConversationBackgroundRegistry {
     /// snapshot is retained; no unbounded progress history exists in the
     /// registry. Progress of a terminal execution is ignored.
     pub fn report_progress(&self, execution_id: &ToolExecutionId, progress: ToolProgress) {
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            return;
+        };
         let bounded = bound_tool_progress(progress);
         let mut state = self.state();
         let Some(index) = state.index.get(execution_id).copied() else {
@@ -1316,6 +1580,26 @@ impl ConversationBackgroundRegistry {
         }
     }
 
+    /// Waits for one execution to enter cancellation settlement using the
+    /// registry's state-change notification. This narrow seam is used by
+    /// runtime supervision tests to distinguish cancellation intent from the
+    /// later terminal transition without polling.
+    #[cfg(test)]
+    pub(crate) async fn wait_until_cancelling(
+        &self,
+        execution_id: &ToolExecutionId,
+    ) -> Option<BackgroundExecutionSnapshot> {
+        let mut version = self.state_version.subscribe();
+        loop {
+            if let Some(snapshot) = self.snapshot(execution_id)
+                && snapshot.state == BackgroundLifecycle::Cancelling
+            {
+                return Some(snapshot);
+            }
+            version.changed().await.ok()?;
+        }
+    }
+
     /// Rolls a prepared dispatch back: the runner is aborted and the private
     /// record is dropped. No detached execution exists afterwards.
     fn rollback_prepared(&self, execution_id: &ToolExecutionId) {
@@ -1344,10 +1628,18 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             };
             let resources = &registry.resources;
+            // The record — not a start-time copy — is the absorbing cause
+            // authority of this execution. The runner starts before any
+            // cancellation exists, so the executor must read the winner
+            // when it observes cancellation.
+            let cause = Arc::new(BackgroundCancellationCause {
+                registry: registry.clone(),
+                execution_id: execution_id.clone(),
+            });
             let context = ToolExecutionContext {
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
-                cancellation: cancellation.clone(),
+                cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
@@ -1356,6 +1648,29 @@ impl ConversationBackgroundRegistry {
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
         })
+    }
+}
+
+/// The conversation background registry record is the absorbing
+/// cancellation-cause authority of one detached execution.
+///
+/// The registry commits the cause at the one `Starting|Running -> Cancelling`
+/// transition and never rewrites it, so this view is a live read of that one
+/// store. It is deliberately not a second cause store: an execution that has
+/// not been cancelled reports the conversation-owned default.
+struct BackgroundCancellationCause {
+    registry: ConversationBackgroundRegistry,
+    execution_id: ToolExecutionId,
+}
+
+impl crate::runtime::cancellation::CancellationCause for BackgroundCancellationCause {
+    fn cause(&self) -> CancellationReason {
+        let state = self.registry.state();
+        state
+            .index
+            .get(&self.execution_id)
+            .and_then(|index| state.records[*index].cancel_reason)
+            .unwrap_or(BACKGROUND_CANCEL_REASON)
     }
 }
 
@@ -1990,6 +2305,129 @@ mod tests {
         );
     }
 
+    /// M9c: the runtime drain wins before the background ownership boundary.
+    /// The deterministic hook parks the real registry commit after its first
+    /// lifecycle observation; drain then closes the shared lifecycle, so the
+    /// second observation rolls the prepared dispatch back and never releases
+    /// the runner's start gate.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_drain_wins_background_ownership_boundary() {
+        let fixture = registry("conv-bg-drain-first");
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        fixture.mailbox.bind_inactive(&lifecycle);
+        assert!(lifecycle.activate(), "the runtime lifecycle is running");
+
+        let (executor, started, _release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry.commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+        });
+        tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || hook.wait_entered()
+        })
+        .await
+        .expect("commit boundary waiter");
+
+        assert!(lifecycle.begin_drain(), "drain wins the boundary race");
+        hook.proceed();
+        let result = commit_task
+            .await
+            .expect("commit task")
+            .expect_err("drain refuses the new ownership commit");
+        assert_eq!(
+            result,
+            super::BackgroundDispatchError::ConversationInactive {
+                conversation_id: ConversationId::new("conv-bg-drain-first"),
+            }
+        );
+        lifecycle.wait_for_no_admissions().await;
+        assert!(fixture.registry.all_snapshots().is_empty());
+        assert!(
+            !*started.borrow(),
+            "the runner never crossed its start gate"
+        );
+        assert_eq!(
+            lifecycle.state(),
+            crate::runtime::types::ConversationLifecycleState::Draining
+        );
+    }
+
+    /// M9c: the background ownership boundary wins before drain. The commit
+    /// returns its durable ownership result first; drain then treats the
+    /// record as conversation-owned, requests runtime cancellation, and
+    /// waits for the existing registry terminal/publication state machine.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn background_ownership_boundary_wins_runtime_drain() {
+        let fixture = registry("conv-bg-ownership-first");
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        fixture.mailbox.bind_inactive(&lifecycle);
+        assert!(lifecycle.activate(), "the runtime lifecycle is running");
+
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let prepared = prepare(&fixture, &executor);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        fixture.registry.install_commit_boundary_hook(hook.clone());
+
+        let registry = fixture.registry.clone();
+        let commit_task = tokio::task::spawn_blocking(move || {
+            registry
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .expect("ownership commit")
+        });
+        let boundary = tokio::task::spawn_blocking({
+            let hook = hook.clone();
+            move || {
+                hook.wait_entered();
+                hook.proceed();
+            }
+        });
+        boundary.await.expect("commit boundary waiter");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            commit_task.await.expect("commit task")
+        else {
+            panic!("ownership commit wins before drain");
+        };
+
+        assert!(
+            lifecycle.begin_drain(),
+            "drain follows the ownership commit"
+        );
+        await_test_started(&mut started, "owned background runner starts").await;
+        let cancelling = fixture
+            .registry
+            .cancel_with_reason(&execution_id, CancellationReason::RuntimeShutdown)
+            .expect("owned execution remains cancellable during drain");
+        assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+        lifecycle.wait_for_no_admissions().await;
+        assert_eq!(
+            fixture
+                .mailbox
+                .select_pending_batch()
+                .expect("select")
+                .expect("terminal inbound")
+                .items()
+                .len(),
+            1,
+            "terminal publication remains durably pending after drain closes adoption"
+        );
+    }
+
     /// Cancellation winner consistency: cancellation commits while the
     /// executor runs; the executor ignores cancellation and returns
     /// `Success`; the registry canonicalizes the stored terminal result to
@@ -2281,7 +2719,7 @@ mod tests {
         assert_ne!(
             snapshot.state,
             BackgroundLifecycle::Running,
-            "the record must not fake Running after the runner has exited"
+            "the record must not fake Running after the executor has returned"
         );
         let result = snapshot
             .result

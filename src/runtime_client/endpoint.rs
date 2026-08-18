@@ -50,10 +50,12 @@
 //! reconnecting client on the same connection re-initializes and receives a
 //! fresh attachment identity. Dropping the endpoint detaches.
 //!
-//! No transport, framing, or I/O lives here: this module is synchronous
-//! semantics over the host.
+//! No transport, framing, or I/O lives here: this module is semantic
+//! dispatch over the host. Ordinary requests are synchronous; `shutdown`
+//! uses the async entry point because its successful response means runtime
+//! quiescence rather than cancellation-request acceptance.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::attachment::RuntimeAttachment;
 use super::host::{EventDelivery, EventSubscription, RuntimeClientHost};
@@ -62,14 +64,14 @@ use super::types::{RequestId, RuntimeClientError, RuntimeClientRequest, RuntimeC
 /// The transport-neutral semantic endpoint of one Runtime Client
 /// connection.
 ///
-/// Requests are handled synchronously and are serialized against each
-/// other, so `initialize`, `detach`, and every other method observe a
-/// consistent attachment state without the caller coordinating anything.
+/// Ordinary requests are handled synchronously and serialized against each
+/// other. `shutdown` is handled through [`Self::handle_request_async`] so its
+/// response can await runtime quiescence without holding the attachment lock.
 pub struct RuntimeClientEndpoint {
     /// The runtime this endpoint speaks for.
     host: RuntimeClientHost,
     /// The admitted attachment, once `initialize` succeeded.
-    attachment: Mutex<Option<RuntimeAttachment>>,
+    attachment: Mutex<Option<Arc<RuntimeAttachment>>>,
 }
 
 impl core::fmt::Debug for RuntimeClientEndpoint {
@@ -124,7 +126,7 @@ impl RuntimeClientEndpoint {
                 // the transport's.
                 match self.host.attach(protocol_version) {
                     Ok((attachment, result)) => {
-                        *slot = Some(attachment);
+                        *slot = Some(Arc::new(attachment));
                         ok(id, result)
                     }
                     Err(error_value) => error(id, error_value),
@@ -149,6 +151,34 @@ impl RuntimeClientEndpoint {
         }
     }
 
+    /// Handles one request through the async semantic path. This is the
+    /// complete transport entry point when a request can await runtime-owned
+    /// settlement, including `shutdown`.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the endpoint attachment lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
+    pub async fn handle_request_async(
+        &self,
+        request: RuntimeClientRequest,
+    ) -> RuntimeClientResponse {
+        if !matches!(&request, RuntimeClientRequest::Shutdown { .. }) {
+            return self.handle_request(request);
+        }
+        let id = request.id();
+        let attachment = self
+            .attachment
+            .lock()
+            .expect("runtime client endpoint lock poisoned")
+            .as_ref()
+            .cloned();
+        let Some(attachment) = attachment else {
+            return error(id, RuntimeClientError::NotAttached);
+        };
+        attachment.handle_request_async(request).await
+    }
+
     /// The delivery handle of the active subscription, when the client
     /// subscribed.
     ///
@@ -161,7 +191,7 @@ impl RuntimeClientEndpoint {
             .lock()
             .expect("runtime client endpoint lock poisoned")
             .as_ref()
-            .and_then(RuntimeAttachment::subscription)
+            .and_then(|attachment| attachment.subscription())
     }
 
     /// Waits for the next notification to frame.

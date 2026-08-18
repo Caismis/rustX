@@ -27,7 +27,6 @@ use crate::runtime::process_runner::{
 use crate::runtime::process_runner::{
     RunnerChannelEofHook as ChannelEofHook, RunnerTerminalHold as TerminalHold,
 };
-use crate::runtime::types::CancellationReason;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
 use crate::tools::limits::{
     BASH_STREAM_PREVIEW_BYTES, BASH_TERMINATION_CONFIRMATION, DEFAULT_FOREGROUND_BASH_TIMEOUT,
@@ -341,7 +340,7 @@ async fn run_bash_unix(
             .environment
             .child_environment(context.workspace.root()),
         timeout,
-        cancellation: context.cancellation.clone(),
+        cancellation: context.cancellation.signal(),
     };
     let (mut runner, stdout_pipe, stderr_pipe) =
         match SupervisedCommandRunner::spawn(&spec, runner_control) {
@@ -494,7 +493,7 @@ async fn run_bash_unix(
         // Cancellation/timeout owns settlement and wins over any partial
         // natural exit data.
         status = ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested,
+            reason: context.cancellation.reason(),
         };
     } else if matches!(termination.intent, ProcessOutcomeIntent::TimedOut) {
         status = ToolExecutionStatus::TimedOut;

@@ -688,7 +688,10 @@ pub async fn run_tool_with_cancellation(
     let context = ToolExecutionContext {
         conversation_id: fixture.runtime.conversation_id(),
         execution_id: None,
-        cancellation,
+        cancellation: rustx::runtime::ExecutionCancellation::detached(
+            cancellation,
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),
@@ -727,7 +730,10 @@ pub async fn run_tool(
     let context = ToolExecutionContext {
         conversation_id: fixture.runtime.conversation_id(),
         execution_id: None,
-        cancellation: rustx::runtime::CancellationSignal::new(),
+        cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::runtime::CancellationSignal::new(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),

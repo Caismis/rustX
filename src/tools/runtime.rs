@@ -438,7 +438,7 @@ impl ConversationToolRuntime {
     /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
     /// composed by the `ConversationRuntime` being constructed; it is
     /// shared with the mailbox, the capability coordinator, and the
-    /// coordinator itself, so activation (`Inactive -> Active`) is one
+    /// coordinator itself, so activation (`Inactive -> Running`) is one
     /// transition every runtime-owned semantic boundary observes.
     ///
     /// # Errors

@@ -99,7 +99,10 @@ async fn production_uv_materializes_a_local_tool_environment() {
         rustx::tools::executor::ToolExecutionContext {
             conversation_id: runtime.conversation_id(),
             execution_id: None,
-            cancellation: rustx::runtime::CancellationSignal::new(),
+            cancellation: rustx::runtime::ExecutionCancellation::detached(
+                rustx::runtime::CancellationSignal::new(),
+                rustx::runtime::types::CancellationReason::UserRequested,
+            ),
             workspace: runtime.workspace(),
             progress: &progress,
             artifacts: runtime.artifacts(),
@@ -284,7 +287,10 @@ async fn conflicting_local_dependencies_isolate_versions_and_materialize_offline
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: runtime.conversation_id(),
                 execution_id: None,
-                cancellation: rustx::runtime::CancellationSignal::new(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    rustx::runtime::CancellationSignal::new(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime.workspace(),
                 progress: &NoProgress,
                 artifacts: runtime.artifacts(),

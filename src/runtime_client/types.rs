@@ -267,9 +267,9 @@ pub enum RuntimeClientRequest {
     },
     /// Request local-runtime shutdown.
     ///
-    /// Shutdown is not detach and not cancellation: the current attempt
-    /// continues to its settlement, semantic runtime work is never mutated,
-    /// and no further inbound admission occurs.
+    /// Shutdown is not detach: it closes new semantic admission, requests
+    /// runtime-owned cancellation, and resolves only after the conversation
+    /// runtime reaches quiescence.
     Shutdown {
         /// Attachment-scoped request id.
         id: RequestId,
@@ -415,8 +415,8 @@ pub enum RuntimeClientResult {
     },
     /// `detach` succeeded.
     Detached,
-    /// `shutdown` succeeded: the request was accepted.
-    ShutdownAccepted,
+    /// `shutdown` succeeded: the conversation runtime reached quiescence.
+    ShutdownCompleted,
 }
 
 /// The typed protocol-visible errors of Runtime Client Protocol v1.

@@ -4,6 +4,7 @@ use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
 use crate::runtime::process_runner::{
     MSG_ALL_CHILDREN_REAPED, SupervisorEvent, read_supervisor_event,
 };
+use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ProgressReporter, ToolExecutionContext, ToolExecutor};
@@ -86,7 +87,10 @@ async fn run_with_control(
     let context = ToolExecutionContext {
         conversation_id: &ConversationId::new("conv-1"),
         execution_id: None,
-        cancellation,
+        cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
+            cancellation,
+            CancellationReason::UserRequested,
+        ),
         workspace: &workspace,
         progress: &reporter,
         artifacts: &artifacts,

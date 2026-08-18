@@ -108,7 +108,10 @@ mod unix_tests {
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
-                cancellation: rustx::runtime::CancellationSignal::new(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    rustx::runtime::CancellationSignal::new(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),
@@ -149,7 +152,10 @@ mod unix_tests {
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
-                cancellation: slow_cancellation.clone(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    slow_cancellation.clone(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime_bundle.workspace(),
                 progress: &slow_progress,
                 artifacts: runtime_bundle.artifacts(),
@@ -273,7 +279,10 @@ mod unix_tests {
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
-                cancellation: rustx::runtime::CancellationSignal::new(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    rustx::runtime::CancellationSignal::new(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),
@@ -324,7 +333,10 @@ mod unix_tests {
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
-                cancellation: slow_cancellation.clone(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    slow_cancellation.clone(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),

@@ -37,6 +37,7 @@ pub mod fixture;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use base64::Engine;
@@ -52,6 +53,7 @@ use rmcp::{ClientHandler, ClientServiceExt};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{McpServerId, ToolId};
 use crate::runtime::interactive_process::{InteractiveProcessSpec, SupervisedInteractiveProcess};
 use crate::tools::artifacts::ArtifactStore;
@@ -312,8 +314,25 @@ pub struct McpServerRuntime {
     service: Arc<tokio::sync::Mutex<Option<RunningService<RoleClient, McpClientHandler>>>>,
     handler: McpClientHandler,
     process: Option<Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
+    /// Closed by the owning capability drain before physical process
+    /// settlement is awaited. Stale executor handles cannot start another
+    /// remote request after the runtime's process boundary closes.
+    closed: Arc<AtomicBool>,
+    /// Serializes the close write boundary against every in-flight MCP
+    /// catalog/request operation. The capability drain waits for this write
+    /// lock, so a remote effect that began before close is settled before the
+    /// runtime can publish quiescence and a stale reader that begins after
+    /// close observes `closed` before it reaches the peer.
+    call_gate: Arc<tokio::sync::RwLock<()>>,
+    /// The owned inline-lifecycle notification task. Capability drain joins
+    /// it after closing the service, so a buffered notification cannot call
+    /// back into capability invalidation after physical/runtime settlement.
+    subscription: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     invalidation: Arc<McpInvalidationState>,
     change_notify: Arc<tokio::sync::Notify>,
+    /// Test-only close synchronization/fault seam, installed at most once.
+    #[cfg(test)]
+    close_probe: std::sync::OnceLock<Arc<test_sync::CloseProbe>>,
 }
 
 impl std::fmt::Debug for McpServerRuntime {
@@ -324,6 +343,209 @@ impl std::fmt::Debug for McpServerRuntime {
             .field("protocol_version", &self.protocol_version)
             .field("change_epoch", &self.change_epoch())
             .finish_non_exhaustive()
+    }
+}
+
+/// One conversation-owned MCP connection request (Issue #12, M9c).
+///
+/// It carries the **ownership** cancellation signal of the connection, which
+/// is deliberately separate from the lifetime of whichever future awaits the
+/// result: waiter lifetime is not ownership lifetime.
+pub(crate) struct OwnedConnect<'a> {
+    server_id: &'a McpServerId,
+    binding: &'a McpServerBinding,
+    workspace: &'a Workspace,
+    invalidation: Arc<McpInvalidationState>,
+    cancellation: CancellationSignal,
+    /// Test-only: parks the connect exactly once physical process ownership
+    /// exists and before the handshake begins.
+    #[cfg(test)]
+    ownership_pause: Option<Arc<test_sync::ConnectOwnershipPause>>,
+}
+
+impl<'a> OwnedConnect<'a> {
+    pub(crate) fn new(
+        server_id: &'a McpServerId,
+        binding: &'a McpServerBinding,
+        workspace: &'a Workspace,
+        invalidation: Arc<McpInvalidationState>,
+        cancellation: CancellationSignal,
+    ) -> Self {
+        Self {
+            server_id,
+            binding,
+            workspace,
+            invalidation,
+            cancellation,
+            #[cfg(test)]
+            ownership_pause: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_ownership_pause(
+        mut self,
+        pause: Option<Arc<test_sync::ConnectOwnershipPause>>,
+    ) -> Self {
+        self.ownership_pause = pause;
+        self
+    }
+}
+
+/// Deterministic MCP ownership synchronization seams used by the M9c
+/// regressions. Test-only: no production path constructs these.
+#[cfg(test)]
+pub(crate) mod test_sync {
+    use std::sync::Mutex;
+
+    /// A deterministic close seam for one retained MCP runtime: it records
+    /// that `close` was entered, optionally parks there, and optionally makes
+    /// the close report an unproven physical settlement.
+    #[derive(Debug, Default)]
+    pub(crate) struct CloseProbe {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        state: Mutex<CloseState>,
+    }
+
+    #[derive(Debug, Default)]
+    struct CloseState {
+        entered: bool,
+        parks: bool,
+        released: bool,
+        failure: Option<String>,
+    }
+
+    impl CloseProbe {
+        /// A probe whose close reports an unproven physical settlement.
+        pub(crate) fn failing(diagnostic: &str) -> Self {
+            Self {
+                state: Mutex::new(CloseState {
+                    failure: Some(diagnostic.to_owned()),
+                    ..CloseState::default()
+                }),
+                ..Self::default()
+            }
+        }
+
+        /// A probe whose close parks until [`CloseProbe::release`].
+        pub(crate) fn parking() -> Self {
+            Self {
+                state: Mutex::new(CloseState {
+                    parks: true,
+                    ..CloseState::default()
+                }),
+                ..Self::default()
+            }
+        }
+
+        /// Whether `close` has been entered on the probed runtime.
+        pub(crate) fn was_entered(&self) -> bool {
+            self.state.lock().expect("close probe lock").entered
+        }
+
+        pub(crate) fn injected_failure(&self) -> Option<String> {
+            self.state.lock().expect("close probe lock").failure.clone()
+        }
+
+        pub(crate) async fn enter(&self) {
+            {
+                let mut state = self.state.lock().expect("close probe lock");
+                state.entered = true;
+                if !state.parks || state.released {
+                    drop(state);
+                    self.entered.notify_waiters();
+                    return;
+                }
+            }
+            self.entered.notify_waiters();
+            loop {
+                let released = self.release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
+                if self.state.lock().expect("close probe lock").released {
+                    return;
+                }
+                released.await;
+            }
+        }
+
+        /// Waits until `close` has been entered on the probed runtime.
+        pub(crate) async fn wait_entered(&self) {
+            loop {
+                let entered = self.entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self.state.lock().expect("close probe lock").entered {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// Releases a parked close.
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("close probe lock").released = true;
+            self.release.notify_waiters();
+        }
+    }
+
+    /// Parks one MCP stdio connect at the exact instant physical process
+    /// ownership exists and the handshake has not started.
+    #[derive(Debug, Default)]
+    pub(crate) struct ConnectOwnershipPause {
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        state: Mutex<PauseState>,
+    }
+
+    #[derive(Debug, Default)]
+    struct PauseState {
+        entered: bool,
+        released: bool,
+    }
+
+    impl ConnectOwnershipPause {
+        /// Called by the connect owner: announces physical ownership and
+        /// waits for the test to release it.
+        pub(crate) async fn park(&self) {
+            {
+                let mut state = self.state.lock().expect("connect pause lock");
+                state.entered = true;
+                if state.released {
+                    return;
+                }
+            }
+            self.entered.notify_waiters();
+            loop {
+                let released = self.release.notified();
+                tokio::pin!(released);
+                released.as_mut().enable();
+                if self.state.lock().expect("connect pause lock").released {
+                    return;
+                }
+                released.await;
+            }
+        }
+
+        /// Waits until physical process ownership provably exists.
+        pub(crate) async fn wait_entered(&self) {
+            loop {
+                let entered = self.entered.notified();
+                tokio::pin!(entered);
+                entered.as_mut().enable();
+                if self.state.lock().expect("connect pause lock").entered {
+                    return;
+                }
+                entered.await;
+            }
+        }
+
+        /// Releases the parked connect owner.
+        pub(crate) fn release(&self) {
+            self.state.lock().expect("connect pause lock").released = true;
+            self.release.notify_waiters();
+        }
     }
 }
 
@@ -344,13 +566,47 @@ impl McpServerRuntime {
     ///
     /// Panics only if the connection's invalidation sink is installed twice,
     /// which the single-install control flow below makes impossible.
-    #[allow(clippy::too_many_lines)]
     pub async fn connect(
         server_id: &McpServerId,
         binding: &McpServerBinding,
         workspace: &Workspace,
         invalidation: Arc<McpInvalidationState>,
     ) -> Result<Arc<Self>, McpError> {
+        Self::connect_owned(OwnedConnect::new(
+            server_id,
+            binding,
+            workspace,
+            invalidation,
+            CancellationSignal::new(),
+        ))
+        .await
+    }
+
+    /// Connects one configured server under an explicit **ownership**
+    /// cancellation signal (Issue #12, M9c).
+    ///
+    /// The signal cancels the connection *owner*, not merely the caller's
+    /// future: once a stdio process has been spawned, cancellation drives
+    /// that process to its physical settlement proof before this returns.
+    /// Dropping the returned future is therefore never how a conversation
+    /// stops an MCP connection — the owning capability coordinator cancels
+    /// it and awaits the owner instead.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`McpServerRuntime::connect`], plus a cancellation diagnostic
+    /// when the owner was cancelled before the handshake completed.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) async fn connect_owned(request: OwnedConnect<'_>) -> Result<Arc<Self>, McpError> {
+        let OwnedConnect {
+            server_id,
+            binding,
+            workspace,
+            invalidation,
+            cancellation,
+            #[cfg(test)]
+            ownership_pause,
+        } = request;
         // Defensive: `McpServerBindings` keys come from validated session
         // configuration, but `connect` is reachable without that parser.
         if server_id.as_str().is_empty() {
@@ -358,6 +614,13 @@ impl McpServerRuntime {
                 "server_id must be non-empty".to_owned(),
             ));
         }
+        if cancellation.is_cancelled() {
+            return Err(McpError::Discovery(
+                "MCP connection cancelled before any process ownership began".to_owned(),
+            ));
+        }
+        let closed = Arc::new(AtomicBool::new(false));
+        let call_gate = Arc::new(tokio::sync::RwLock::new(()));
         let handler = McpClientHandler::new();
         let (service, process) = match &binding.transport {
             McpTransportConfig::Stdio {
@@ -386,29 +649,60 @@ impl McpServerRuntime {
                     environment: explicit_environment,
                 })
                 .map_err(McpError::Discovery)?;
-                let mut process = process;
-                let stdout = process
-                    .stdout
-                    .take()
-                    .ok_or_else(|| McpError::Discovery("stdio stdout unavailable".to_owned()))?;
-                let stdin = process
-                    .stdin
-                    .take()
-                    .ok_or_else(|| McpError::Discovery("stdio stdin unavailable".to_owned()))?;
+                let process = Arc::new(tokio::sync::Mutex::new(process));
+                // Physical process ownership now exists and the handshake has
+                // not started. This is the exact window in which a dropped
+                // caller future used to leave a detached physical owner with
+                // no retained runtime behind it.
+                #[cfg(test)]
+                if let Some(pause) = &ownership_pause {
+                    pause.park().await;
+                }
+                let stdout = {
+                    let mut process_guard = process.lock().await;
+                    process_guard.stdout.take()
+                };
+                let Some(stdout) = stdout else {
+                    return Err(settle_connect_failure(
+                        Some(&process),
+                        McpError::Discovery("stdio stdout unavailable".to_owned()),
+                    )
+                    .await);
+                };
+                let stdin = {
+                    let mut process_guard = process.lock().await;
+                    process_guard.stdin.take()
+                };
+                let Some(stdin) = stdin else {
+                    return Err(settle_connect_failure(
+                        Some(&process),
+                        McpError::Discovery("stdio stdin unavailable".to_owned()),
+                    )
+                    .await);
+                };
                 let transport =
                     rmcp::transport::async_rw::AsyncRwTransport::new_client(stdout, stdin);
-                // A handshake failure drops `process`, which requests
-                // shutdown from the runtime-owned driver — the physical
-                // owner is never abandoned. The bounded stderr preview is
-                // the server's own diagnosis of why the handshake failed.
-                let service = match start_client_service(handler.clone(), transport).await {
+                // A handshake failure explicitly awaits the same physical
+                // settlement proof as normal runtime drain. Dropping the
+                // process handle would only request shutdown and would leave
+                // this preparation operation unable to prove terminality.
+                // The handshake races the ownership cancellation. Cancelling
+                // drops the handshake future but never the process: the owner
+                // still awaits the same physical settlement proof drain uses.
+                let started = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => Err(McpError::Discovery(
+                        "MCP connection cancelled during the handshake".to_owned(),
+                    )),
+                    started = start_client_service(handler.clone(), transport) => started,
+                };
+                let service = match started {
                     Ok(service) => service,
                     Err(error) => {
-                        let preview = process.stderr_preview();
-                        return Err(append_server_stderr(error, &preview));
+                        return Err(settle_connect_failure(Some(&process), error).await);
                     }
                 };
-                (service, Some(Arc::new(tokio::sync::Mutex::new(process))))
+                (service, Some(process))
             }
             McpTransportConfig::StreamableHttp { endpoint, headers } => {
                 if endpoint.trim().is_empty() {
@@ -433,30 +727,48 @@ impl McpServerRuntime {
                 transport_config.allow_stateless = true;
                 let transport =
                     rmcp::transport::StreamableHttpClientTransport::from_config(transport_config);
-                let service = start_client_service(handler.clone(), transport).await?;
+                let service = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => Err(McpError::Discovery(
+                        "MCP connection cancelled during the handshake".to_owned(),
+                    )),
+                    started = start_client_service(handler.clone(), transport) => started,
+                }?;
                 (service, None)
             }
         };
         let peer = service.peer().clone();
-        let info = peer
+        let info = match peer
             .peer_info()
-            .ok_or_else(|| McpError::Discovery("MCP handshake returned no peer info".to_owned()))?;
+            .ok_or_else(|| McpError::Discovery("MCP handshake returned no peer info".to_owned()))
+        {
+            Ok(info) => info,
+            Err(error) => return Err(settle_connect_failure(process.as_ref(), error).await),
+        };
         // rmcp's discover lifecycle already rejects a peer with no shared
         // revision, but the legacy `initialize` handshake lets a server echo
         // whichever revision it likes. This is the one authority on what
         // rustX actually agreed to speak.
         let supported = supported_protocol_versions();
         if !supported.contains(&info.protocol_version) {
-            return Err(McpError::ProtocolCompatibility(format!(
-                "server negotiated MCP revision {}, which rustX does not speak (rustX speaks {})",
-                info.protocol_version,
-                joined_versions(&supported)
-            )));
+            return Err(
+                settle_connect_failure(
+                    process.as_ref(),
+                    McpError::ProtocolCompatibility(format!(
+                        "server negotiated MCP revision {}, which rustX does not speak (rustX speaks {})",
+                        info.protocol_version,
+                        joined_versions(&supported)
+                    )),
+                )
+                .await,
+            );
         }
         if info.capabilities.tools.is_none() {
-            return Err(McpError::Discovery(
-                "MCP server did not advertise the tools capability".to_owned(),
-            ));
+            return Err(settle_connect_failure(
+                process.as_ref(),
+                McpError::Discovery("MCP server did not advertise the tools capability".to_owned()),
+            )
+            .await);
         }
         let runtime = Arc::new(Self {
             server_id: server_id.clone(),
@@ -465,8 +777,13 @@ impl McpServerRuntime {
             service: Arc::new(tokio::sync::Mutex::new(Some(service))),
             handler,
             process,
+            closed,
+            call_gate,
+            subscription: tokio::sync::Mutex::new(None),
             invalidation,
             change_notify: Arc::new(tokio::sync::Notify::new()),
+            #[cfg(test)]
+            close_probe: std::sync::OnceLock::new(),
         });
         if info
             .capabilities
@@ -481,7 +798,14 @@ impl McpServerRuntime {
             // duplicates the other's subscription, discovery, or published
             // tools.
             if uses_inline_lifecycle(&info.protocol_version) {
-                runtime.subscribe_tool_list_changed().await?;
+                if let Err(error) = runtime.subscribe_tool_list_changed().await {
+                    return Err(match runtime.close().await {
+                        Ok(()) => error,
+                        Err(settlement) => McpError::PhysicalSettlement(format!(
+                            "MCP subscription setup failed: {error}; {settlement}"
+                        )),
+                    });
+                }
             } else {
                 runtime
                     .handler
@@ -489,6 +813,8 @@ impl McpServerRuntime {
                         server_id: runtime.server_id.clone(),
                         invalidation: runtime.invalidation.clone(),
                         change_notify: runtime.change_notify.clone(),
+                        closed: runtime.closed.clone(),
+                        call_gate: runtime.call_gate.clone(),
                     });
             }
         }
@@ -506,8 +832,14 @@ impl McpServerRuntime {
         let server_id = self.server_id.clone();
         let invalidation = self.invalidation.clone();
         let change_notify = self.change_notify.clone();
-        tokio::spawn(async move {
+        let closed = self.closed.clone();
+        let call_gate = self.call_gate.clone();
+        let task = tokio::spawn(async move {
             while let Ok(Some(notification)) = subscription.next().await {
+                let _call_gate = call_gate.read().await;
+                if closed.load(Ordering::Acquire) {
+                    break;
+                }
                 if matches!(
                     notification,
                     ServerNotification::ToolListChangedNotification(_)
@@ -522,6 +854,7 @@ impl McpServerRuntime {
                 }
             }
         });
+        *self.subscription.lock().await = Some(task);
         Ok(())
     }
 
@@ -561,6 +894,12 @@ impl McpServerRuntime {
     /// Returns an error when the remote catalog cannot be fetched or a tool
     /// cannot be translated into rustX's canonical schema contract.
     pub async fn list_tools(&self) -> Result<Vec<CanonicalMcpTool>, McpError> {
+        let _call_gate = self.call_gate.read().await;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(McpError::Execution(
+                "the MCP server runtime is closed".to_owned(),
+            ));
+        }
         let tools = self
             .peer
             .list_all_tools()
@@ -583,18 +922,72 @@ impl McpServerRuntime {
     /// terminal state is unproven. The MCP service is retired either way,
     /// but an unproven terminal state is never reported as success.
     pub async fn close(&self) -> Result<(), McpError> {
-        let settlement = match &self.process {
-            Some(process) => {
-                let process = process.lock().await;
-                process.request_shutdown();
-                process.wait_for_settlement().await
-            }
+        #[cfg(test)]
+        let probe = self.close_probe.get().cloned();
+        #[cfg(test)]
+        if let Some(probe) = &probe {
+            probe.enter().await;
+        }
+        self.closed.store(true, Ordering::Release);
+        // Request native shutdown before waiting for an in-flight call. A
+        // remote tools/call may need the process/transport to close before
+        // its response future can settle; waiting for the read gate first
+        // would turn that normal ownership cycle into a deadlock.
+        if let Some(process) = &self.process {
+            let process = process.lock().await;
+            process.request_shutdown();
+        }
+        let service_settlement = if let Some(mut service) = self.service.lock().await.take() {
+            service
+                .close()
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("MCP service shutdown failed: {error}"))
+        } else {
+            Ok(())
+        };
+        // The service close above cancels request futures. Crossing the write
+        // barrier now proves that every call or notification that began
+        // before close has returned. Callbacks that begin after the barrier
+        // observe `closed` and return without mutating invalidation state.
+        {
+            let _call_gate = self.call_gate.write().await;
+        }
+        let process_settlement = match &self.process {
+            Some(process) => process.lock().await.wait_for_settlement().await,
             None => Ok(()),
         };
-        if let Some(service) = self.service.lock().await.as_mut() {
-            let _ = service.close().await;
+        let subscription = self.subscription.lock().await.take();
+        let subscription_settlement = if let Some(subscription) = subscription {
+            subscription
+                .await
+                .map_err(|error| format!("MCP notification task failed: {error}"))
+        } else {
+            Ok(())
+        };
+        #[cfg(test)]
+        if let Some(injected) = probe.and_then(|probe| probe.injected_failure()) {
+            return Err(McpError::PhysicalSettlement(injected));
         }
-        settlement.map_err(McpError::PhysicalSettlement)
+        match (
+            process_settlement,
+            service_settlement,
+            subscription_settlement,
+        ) {
+            (Err(process), _, _) => Err(McpError::PhysicalSettlement(process)),
+            (_, Err(service), _) => Err(McpError::PhysicalSettlement(service)),
+            (_, _, Err(subscription)) => Err(McpError::PhysicalSettlement(subscription)),
+            (Ok(()), Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    /// Installs the test-only close synchronization/fault seam.
+    #[cfg(test)]
+    pub(crate) fn install_close_probe(&self, probe: Arc<test_sync::CloseProbe>) {
+        assert!(
+            self.close_probe.set(probe).is_ok(),
+            "one close probe per MCP runtime"
+        );
     }
 
     async fn call(
@@ -603,7 +996,11 @@ impl McpServerRuntime {
         arguments: serde_json::Value,
         context: &ToolExecutionContext<'_>,
     ) -> ToolExecutionResult {
+        let _call_gate = self.call_gate.read().await;
         let started = Instant::now();
+        if self.closed.load(Ordering::Acquire) {
+            return failed_mcp("MCP server runtime is closed", started);
+        }
         let serde_json::Value::Object(arguments) = arguments else {
             return failed_mcp("MCP tool arguments must be a JSON object", started);
         };
@@ -632,7 +1029,7 @@ impl McpServerRuntime {
                     return match cancelled {
                         Ok(()) => ToolExecutionResult {
                             status: ToolExecutionStatus::Cancelled {
-                                reason: crate::runtime::types::CancellationReason::UserRequested,
+                                reason: context.cancellation.reason(),
                             },
                             content: Vec::new(), duration_ms: duration_ms(started),
                             exit_code: None, artifacts: Vec::new(), truncation: None,
@@ -707,6 +1104,37 @@ where
             ))),
             error => McpError::Discovery(bound_error(&error.to_string())),
         })
+}
+
+/// Settles a stdio process whose MCP connection failed before the capability
+/// coordinator could retain it as a live runtime. A `Drop` request is only a
+/// cancellation signal; preparation must await the existing interactive
+/// process settlement proof before it returns, or conversation quiescence
+/// could miss this detached physical owner.
+async fn settle_connect_failure(
+    process: Option<&Arc<tokio::sync::Mutex<SupervisedInteractiveProcess>>>,
+    error: McpError,
+) -> McpError {
+    let Some(process) = process else {
+        return error;
+    };
+    let settlement = {
+        let process = process.lock().await;
+        process.request_shutdown();
+        process.wait_for_settlement().await
+    };
+    let preview = process.lock().await.stderr_preview();
+    match settlement {
+        Ok(()) => append_server_stderr(error, &preview),
+        Err(reason) => {
+            let mut detail = format!("{error}; physical settlement failed: {reason}");
+            if !preview.is_empty() {
+                detail.push_str("; server stderr: ");
+                detail.push_str(&preview);
+            }
+            McpError::PhysicalSettlement(detail)
+        }
+    }
 }
 
 fn append_server_stderr(error: McpError, preview: &str) -> McpError {
@@ -861,6 +1289,8 @@ struct ToolListChangedSink {
     server_id: McpServerId,
     invalidation: Arc<McpInvalidationState>,
     change_notify: Arc<tokio::sync::Notify>,
+    closed: Arc<AtomicBool>,
+    call_gate: Arc<tokio::sync::RwLock<()>>,
 }
 
 #[derive(Clone)]
@@ -909,6 +1339,10 @@ impl ClientHandler for McpClientHandler {
         let Some(sink) = self.tool_list_changed.get() else {
             return;
         };
+        let _call_gate = sink.call_gate.read().await;
+        if sink.closed.load(Ordering::Acquire) {
+            return;
+        }
         // The one shared invalidation boundary, exactly as the inline
         // subscription path uses it.
         let mut guard = sink.invalidation.lock();

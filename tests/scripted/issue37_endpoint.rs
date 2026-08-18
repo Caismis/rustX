@@ -55,6 +55,17 @@ impl FramingAdapter {
         serde_json::from_str(&encoded).expect("the response frame is JSON")
     }
 
+    async fn exchange_async(&self, line: &str) -> serde_json::Value {
+        let request: RuntimeClientRequest =
+            serde_json::from_str(line).expect("the frame decodes to a v1 request");
+        let response = self.endpoint.handle_request_async(request).await;
+        let encoded = serde_json::to_string(&response).expect("the response encodes");
+        let decoded: RuntimeClientResponse =
+            serde_json::from_str(&encoded).expect("the response decodes");
+        assert_eq!(decoded, response, "the response frame round-trips exactly");
+        serde_json::from_str(&encoded).expect("the response frame is JSON")
+    }
+
     /// One notification frame out, or `None` when the stream is not
     /// deliverable.
     async fn notification(&self) -> Option<serde_json::Value> {
@@ -315,18 +326,20 @@ async fn dropping_the_endpoint_releases_the_attachment() {
     );
 }
 
-/// Shutdown remains distinct from detach and from cancellation across the
-/// framing boundary: it is accepted, it stops further inbound admission,
-/// and it never mutates canonical history.
+/// Shutdown remains distinct from detach across the framing boundary: it
+/// completes only after runtime quiescence, stops further inbound admission,
+/// and never mutates canonical history.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn shutdown_is_neither_detach_nor_cancellation() {
+async fn shutdown_is_not_detach_and_reaches_quiescence() {
     let host = host("conv-37-endpoint-shutdown", Vec::new()).await;
     let adapter = FramingAdapter::new(&host);
     adapter.exchange(r#"{"method":"initialize","id":1,"protocol_version":1}"#);
 
     let before: Vec<MessageBlock> = host.snapshot().expect("snapshot").0.messages;
-    let response = adapter.exchange(r#"{"method":"shutdown","id":2}"#);
-    assert_eq!(response["result"]["type"], "shutdown_accepted");
+    let response = adapter
+        .exchange_async(r#"{"method":"shutdown","id":2}"#)
+        .await;
+    assert_eq!(response["result"]["type"], "shutdown_completed");
 
     let response = adapter.exchange(
         r#"{"method":"submit_inbound","id":3,"content":[{"type":"text","text":"late"}]}"#,
@@ -334,7 +347,7 @@ async fn shutdown_is_neither_detach_nor_cancellation() {
     assert_eq!(response["error"]["type"], "runtime_shutdown");
 
     // Still attached (shutdown is not detach), and canonical history is
-    // untouched (shutdown is not cancellation).
+    // untouched by this idle shutdown.
     let response = adapter.exchange(r#"{"method":"snapshot_get","id":4}"#);
     assert!(response.get("error").is_none());
     assert_eq!(host.snapshot().expect("snapshot").0.messages, before);

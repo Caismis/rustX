@@ -459,14 +459,15 @@ describe("presentation projection", () => {
     assert.equal(state.capabilities.tools?.length, 2);
   });
 
-  it("marks runtime shutdown without settling anything", () => {
+  it("marks runtime drain without inventing a settlement event", () => {
     const state = fold(initial(), [
       { type: "attempt_started", attempt_id: "a1", model: attemptModel("alpha/model-a") },
       { type: "runtime_shutdown" },
     ]);
 
     assert.equal(state.runtimeShutdown, true);
-    // Shutdown is not cancellation: the attempt is still running.
+    // The projection event marks admission closure; the runtime owns the
+    // later cancellation and terminal settlement facts.
     assert.equal(state.attempt?.phase.type, "running");
   });
 

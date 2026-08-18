@@ -13,7 +13,11 @@
 //!
 //! [`AgentCancellation`]: crate::agent::cancellation::AgentCancellation
 
+use std::sync::Arc;
+
 use tokio_util::sync::CancellationToken;
+
+use crate::runtime::types::CancellationReason;
 
 /// Cancellation signal for one operation.
 ///
@@ -64,6 +68,105 @@ impl CancellationSignal {
     }
 }
 
+/// The absorbing first-winner cancellation cause of one owned operation.
+///
+/// The cause is **read from the owner that owns the signal**, at the moment
+/// the executor observes cancellation — never copied into a start-time
+/// snapshot. A foreground execution's authority is its attempt's
+/// `AgentCancellation`; a background execution's authority is the
+/// conversation background registry record. Both are absorbing: the first
+/// cancellation request that wins owns the cause and no later request can
+/// relabel it.
+pub trait CancellationCause: Send + Sync {
+    /// The current winning semantic cause, or the owner's default cause when
+    /// no cancellation has been requested yet.
+    fn cause(&self) -> CancellationReason;
+}
+
+/// A fixed cause with no live authority behind it.
+///
+/// This exists only for executions that have no attempt and no background
+/// record to answer for them (standalone/direct executor invocations and
+/// fixtures). It is not a second store for an owned execution: an owned
+/// execution always carries its owner's authority.
+#[derive(Debug, Clone, Copy)]
+struct DetachedCause(CancellationReason);
+
+impl CancellationCause for DetachedCause {
+    fn cause(&self) -> CancellationReason {
+        self.0
+    }
+}
+
+/// The cancellation view handed to a tool executor.
+///
+/// It pairs the runtime cancellation signal with a **live** read of the
+/// owning authority's absorbing cause, so an executor that starts before
+/// cancellation happens still reports the cause that actually won the race.
+/// There is exactly one cause store per owned execution — this view reads
+/// it, it never copies it.
+#[derive(Clone)]
+pub struct ExecutionCancellation {
+    signal: CancellationSignal,
+    cause: Arc<dyn CancellationCause>,
+}
+
+impl std::fmt::Debug for ExecutionCancellation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ExecutionCancellation")
+            .field("is_cancelled", &self.is_cancelled())
+            .field("reason", &self.reason())
+            .finish()
+    }
+}
+
+impl ExecutionCancellation {
+    /// Binds one runtime cancellation signal to the authority that owns its
+    /// semantic cause.
+    #[must_use]
+    pub fn new(signal: CancellationSignal, cause: Arc<dyn CancellationCause>) -> Self {
+        Self { signal, cause }
+    }
+
+    /// A view over a signal with no owning attempt/background authority.
+    #[must_use]
+    pub fn detached(signal: CancellationSignal, reason: CancellationReason) -> Self {
+        Self {
+            signal,
+            cause: Arc::new(DetachedCause(reason)),
+        }
+    }
+
+    /// Whether cancellation has been requested.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.signal.is_cancelled()
+    }
+
+    /// A future that resolves when cancellation is requested.
+    pub async fn cancelled(&self) {
+        self.signal.cancelled().await;
+    }
+
+    /// The authority's current winning semantic cause.
+    ///
+    /// Read this at settlement time, when cancellation is observable: before
+    /// the cancellation race has happened it necessarily reports the owner's
+    /// default cause, which is a prediction, not an outcome.
+    #[must_use]
+    pub fn reason(&self) -> CancellationReason {
+        self.cause.cause()
+    }
+
+    /// The underlying runtime cancellation signal, for executors that hand
+    /// it to a child operation (a supervised process, a nested runner).
+    #[must_use]
+    pub fn signal(&self) -> CancellationSignal {
+        self.signal.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::CancellationSignal;
@@ -98,6 +201,41 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(1), signal.cancelled())
             .await
             .expect("cancelled must resolve without waiting");
+    }
+
+    /// The execution view reads its authority dynamically: an executor that
+    /// started before the cancellation race still reports the winning cause.
+    #[tokio::test]
+    async fn execution_cancellation_reads_the_authority_dynamically() {
+        use super::{CancellationCause, ExecutionCancellation};
+        use crate::runtime::types::CancellationReason;
+        use std::sync::{Arc, Mutex};
+
+        struct Authority {
+            default: CancellationReason,
+            winner: Mutex<Option<CancellationReason>>,
+        }
+        impl CancellationCause for Authority {
+            fn cause(&self) -> CancellationReason {
+                self.winner
+                    .lock()
+                    .expect("winner lock")
+                    .unwrap_or(self.default)
+            }
+        }
+        let authority = Arc::new(Authority {
+            default: CancellationReason::UserRequested,
+            winner: Mutex::new(None),
+        });
+        let signal = CancellationSignal::new();
+        let view = ExecutionCancellation::new(signal.clone(), authority.clone());
+        // The view is taken before the cancellation race: it must not freeze
+        // the default cause.
+        assert_eq!(view.reason(), CancellationReason::UserRequested);
+        *authority.winner.lock().expect("winner lock") = Some(CancellationReason::RuntimeShutdown);
+        signal.cancel();
+        view.cancelled().await;
+        assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
     }
 
     /// A child signal is cancelled when its parent is cancelled, so one

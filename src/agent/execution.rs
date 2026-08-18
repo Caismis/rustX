@@ -349,6 +349,12 @@ pub struct AgentExecution<'a> {
     /// gate, so a concurrent cancellation provably blocks behind it.
     #[cfg(test)]
     start_boundary_pause: std::sync::Mutex<Option<test_sync::StartBoundaryPause>>,
+    /// Test-only control point after a foreground tool-start fact and before
+    /// the next sibling's start frontier advances. This makes cancellation
+    /// during a parallel batch deterministic without changing production
+    /// scheduling.
+    #[cfg(test)]
+    tool_start_pause: std::sync::Mutex<Option<test_sync::ToolStartPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -622,6 +628,8 @@ impl<'a> AgentExecution<'a> {
             continuation_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
             start_boundary_pause: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            tool_start_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
@@ -647,6 +655,12 @@ impl<'a> AgentExecution<'a> {
             .start_boundary_pause
             .lock()
             .expect("start boundary pause lock") = Some(pause);
+    }
+
+    /// Installs the test-only foreground tool-start pause for one attempt.
+    #[cfg(test)]
+    pub(crate) fn install_tool_start_pause(&mut self, pause: test_sync::ToolStartPause) {
+        *self.tool_start_pause.lock().expect("tool start pause lock") = Some(pause);
     }
 
     /// Runs the attempt to its execution settlement candidate.
@@ -2471,6 +2485,8 @@ impl<'a> AgentExecution<'a> {
                             tool_call_id: slots[index].call.id.clone(),
                             tool_id: slots[index].tool_id.clone(),
                         });
+                        #[cfg(test)]
+                        self.park_after_tool_start();
                         if let Some(error) = self.durable_failure_commit_error() {
                             return Err(error);
                         }
@@ -2493,12 +2509,23 @@ impl<'a> AgentExecution<'a> {
                     // conflict.
                     let end = parallel_group_end(&slots, index);
                     for slot in &mut slots[index..end] {
+                        // Cancellation can be requested by a synchronous
+                        // start-event observer while this group is being
+                        // announced. Stop the logical start frontier at the
+                        // first observed cancellation; the remaining slots
+                        // are filled by the canonical cancellation pass and
+                        // never acquire an execution future.
+                        if self.cancellation.is_cancelled() {
+                            break;
+                        }
                         if slot.result.is_none() {
                             slot.started = true;
                             self.emit(RuntimeEvent::ToolExecutionStarted {
                                 tool_call_id: slot.call.id.clone(),
                                 tool_id: slot.tool_id.clone(),
                             });
+                            #[cfg(test)]
+                            self.park_after_tool_start();
                         }
                     }
                     if let Some(error) = self.durable_failure_commit_error() {
@@ -2836,6 +2863,18 @@ impl<'a> AgentExecution<'a> {
         (call_index, result, progress)
     }
 
+    #[cfg(test)]
+    fn park_after_tool_start(&self) {
+        if let Some(pause) = self
+            .tool_start_pause
+            .lock()
+            .expect("tool start pause lock")
+            .as_ref()
+        {
+            pause.park();
+        }
+    }
+
     /// Runs one foreground invocation against attempt cancellation.
     ///
     /// The execution receives the attempt's cancellation signal in its
@@ -2853,7 +2892,7 @@ impl<'a> AgentExecution<'a> {
         let context = ToolExecutionContext {
             conversation_id: &self.request.conversation_id,
             execution_id: None,
-            cancellation: self.cancellation.signal(),
+            cancellation: self.cancellation.execution_cancellation(),
             workspace: self.tool_runtime.workspace(),
             progress: &buffer,
             artifacts: self.tool_runtime.artifacts(),
@@ -3436,6 +3475,39 @@ pub(crate) mod test_sync {
         /// Signals that the turn boundary was reached, then blocks until
         /// the test releases the execution.
         pub(super) fn park_at_continuation_boundary(&self) {
+            self.reached.send_replace(true);
+            let _ = self.release.recv();
+        }
+    }
+
+    /// A test-only control point after one `ToolExecutionStarted` fact and
+    /// before the next sibling is announced. The test can request attempt or
+    /// runtime cancellation while the exact start frontier is parked.
+    #[derive(Debug)]
+    pub(crate) struct ToolStartPause {
+        reached: watch::Sender<bool>,
+        release: mpsc::Receiver<()>,
+    }
+
+    impl ToolStartPause {
+        /// Creates the pause and its observation/release handles.
+        #[must_use]
+        pub(crate) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
+            let (reached, reached_rx) = watch::channel(false);
+            let (release_tx, release_rx) = mpsc::channel();
+            (
+                Self {
+                    reached,
+                    release: release_rx,
+                },
+                reached_rx,
+                release_tx,
+            )
+        }
+
+        /// Signals the first announced tool start and blocks the loop until
+        /// the test releases the frontier.
+        pub(super) fn park(&self) {
             self.reached.send_replace(true);
             let _ = self.release.recv();
         }

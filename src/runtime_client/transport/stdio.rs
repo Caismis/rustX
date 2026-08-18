@@ -377,10 +377,10 @@ where
                 // Framing and exact deserialization both succeeded before
                 // any semantic dispatch happens.
                 let request = decode_request(&record)?;
-                let response = endpoint.handle_request(request);
-                // A successful `shutdown` is answered like any other
-                // request and the session keeps serving: transport
-                // termination is a separate operation.
+                let response = endpoint.handle_request_async(request).await;
+                // A successful `shutdown` means semantic quiescence. The
+                // session still keeps serving read/control requests because
+                // transport attachment lifetime is a separate concern.
                 if let Some(end) = output.write_record(&response).await? {
                     return Ok(end);
                 }

@@ -50,6 +50,9 @@ mod search;
 mod support;
 mod write;
 
+#[cfg(test)]
+pub(crate) use bash::{BashTestControl, BashTool};
+
 use registration::NativeToolRegistration;
 
 // The per-invocation Bash supervisor process entry points are reachable

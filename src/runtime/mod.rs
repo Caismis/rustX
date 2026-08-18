@@ -10,9 +10,9 @@
 //! producers can depend on without the tool plane depending upward on
 //! `src/agent`. The mailbox is coordination only — it is not canonical
 //! history, not the Event Journal, not a scheduler, supervisor, or
-//! persistent service layer. General runtime supervision, persistent
-//! process management, recovery services, and broader capability
-//! coordination remain future work. M5 implements only the narrow internal
+//! persistent service layer. M9c composes the concrete conversation-owned
+//! drain/quiescence boundaries; it is not a generic scheduler or plugin
+//! lifecycle system. M5 implements only the narrow internal
 //! process-supervision capability required for Bash catastrophic
 //! supervisor-loss recovery (`crate::runtime::process_supervision`): Linux
 //! uses one-time child-subreaper activation; macOS uses its direct
@@ -25,8 +25,8 @@ pub mod continuation;
 /// The conversation runtime coordinator (Issue #61): the semantic owner of
 /// conversation coordination — session model state, attempt admission, the
 /// current-attempt slot, between-attempt current Surface state, durable
-/// request-history reads,
-/// the shutdown gate, and settlement handoff.
+/// request-history reads, the shared lifecycle/drain authority, and
+/// settlement handoff through quiescence.
 pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
@@ -100,7 +100,7 @@ pub mod request_history;
 pub(crate) mod supervised_unit;
 pub mod types;
 
-pub use cancellation::CancellationSignal;
+pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
 pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };
@@ -123,6 +123,6 @@ pub use recovery::{
 };
 pub use request_history::{RequestHistory, RequestHistoryError};
 pub use types::{
-    CancellationReason, ConversationLifecycle, RuntimeClock, RuntimeError, SystemClock,
-    TokenMeasurement, TokenMeasurementSource,
+    CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
+    RuntimeError, SystemClock, TokenMeasurement, TokenMeasurementSource,
 };

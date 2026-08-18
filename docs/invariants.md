@@ -54,7 +54,8 @@ classifies and reconciles it (see [Recovery](#recovery)), and M9b adds the
 model-turn cancellation-vs-start arbitration (see
 [Context assembly, admission, and Agent Status](#context-assembly-admission-and-agent-status)
 and `docs/agent-loop.md`). Replay/resend
-policy, retry orchestration, and M9c supervision/quiescence remain open.
+policy and retry orchestration remain open; M9c supervision/quiescence is
+delivered in the runtime coordinator section below.
 
 `lifecycle_state` makes terminality structural: an attempt, turn, or detached
 background execution can receive at most one terminal fact, and no later fact
@@ -1514,7 +1515,8 @@ The frozen invariants:
   between-attempt bounded `ConversationState`, durable-store handle/
   `RequestHistory`, attempt-id
   allocation, the current-attempt slot, attempt admission, the mailbox
-  wake/admission relationship, the shutdown gate, and settlement handoff.
+  wake/admission relationship, the shared lifecycle/drain authority, and
+  settlement handoff through quiescence.
   A conversation with zero Runtime Client attachments runs the exact same
   `AgentExecution`, Context Assembly, `ConversationToolRuntime`,
   `CapabilityCoordinator`, and provider/model path as an interactive
@@ -1563,15 +1565,16 @@ The frozen invariants:
   `ConversationRuntimeError::NoExecutionRuntime` error, so
   `ConversationRuntime::activate` can always spawn it, and native/headless
   producers never depend on a client call for activation.
-- **The conversation has one authoritative activation lifecycle.**
+- **The conversation has one authoritative lifecycle.**
   `ConversationRuntime::new` constructs the runtime **inactive** and
-  `ConversationRuntime::activate` performs the single `Inactive -> Active`
+  `ConversationRuntime::activate` performs the single `Inactive -> Running`
   transition of the one shared
   `ConversationLifecycle` token, composed by the runtime and shared with
   every runtime-owned semantic boundary. An inactive runtime is inert and
   this is **structural, not conventional**: once a `ConversationRuntime`
   owns its semantic subsystems, the inactive phase admits no
-  conversation-semantic mutation at all:
+  conversation-semantic mutation. Composition-only capability candidate
+  preparation is counted separately and cannot publish a live revision:
 
   - the mailbox refuses `enqueue` with `MailboxError::ConversationInactive`
     and `submit_inbound` fails with `InboundAdmissionError::Inactive`;
@@ -1589,21 +1592,120 @@ The frozen invariants:
     startup commit performed *before* the conversation runtime is
     constructed remains allowed.
 
-  The lifecycle is one `AcqRel/ Acquire` atomic token, read-only from
-  every subsystem critical section: the mailbox stores no activation state
-  (runtime ownership is the lifecycle handle itself), the capability
-  coordinator stores no activation state (the lifecycle handle is attached
-  at its claim), the coordinator keeps no copy, and the background
-  registry reads the same gate through its mailbox. Every gate therefore
-  observes exactly the same decision: an operation that observes
-  `Inactive` linearizes before activation and is refused, one that
-  observes `Active` linearizes after activation and follows normal
-  subsystem rules. No subsystem-specific intermediate activation state
-  exists, so background and capability commits can never disagree about
-  whether the conversation is active. `admit_next_attempt` returns
-  without admitting, no admission worker exists before activation, and an
-  inactive runtime therefore publishes no `ConversationObservation` at
-  all.
+  Capability candidate preparation is the one composition/readiness
+  exception: it may run while inactive, but its counted owner prevents an
+  activation/drain race from escaping quiescence, and it cannot activate a
+  revision until a later live commit observes `Running`.
+
+  The lifecycle has one `AcqRel/Acquire` state authority plus a short
+  shared commit boundary. The mailbox stores no lifecycle state (runtime
+  ownership is the lifecycle handle itself), the capability coordinator
+  stores no independent lifecycle flag (the handle is attached at its
+  claim), the coordinator keeps no copy, and the background registry reads
+  the same gate through its mailbox. Activation, drain, background
+  ownership, and capability revision commits therefore have one total order
+  at their concrete boundaries. Every gate observes exactly the same
+  decision: an operation that observes `Inactive` linearizes before
+  activation and is refused, one that observes `Running` linearizes after
+  activation and follows normal subsystem rules, and `Draining` closes new
+  semantic admission while retaining only required settlement. No
+  subsystem-specific intermediate activation state exists, so background and
+  capability commits can never disagree about whether the conversation
+  admits new work. `admit_next_attempt` returns without admitting, no
+  admission worker exists before activation, and an inactive runtime
+  therefore publishes no `ConversationObservation` at all.
+- **Runtime drain is a stronger contract than cancellation.** The one public
+  `ConversationRuntime::shutdown()` operation linearizes `Running -> Draining`
+  under the coordinator lock shared with inbound acceptance and attempt
+  admission. It is idempotent and completes only at `Quiescent`: the current
+  Agent Execution and its started provider request/foreground tools settle,
+  conversation-owned background executions reach terminal state after their
+  exactly-once terminal Pending Inbound publication, counted capability and
+  environment preparation/commits return, retained MCP stdio runtimes close
+  through their physical settlement contract, the admission worker exits, and
+  owned process terminality is proven by the existing process contract.
+  `Draining` refuses new semantic admission but permits required settlement
+  writes; `Quiescent` refuses stale callbacks. An unproven runtime-owned
+  process settlement is an explicit shutdown failure and does not publish
+  `Quiescent`. A Pending Inbound item accepted before drain keeps its original
+  identity, sequence, and provenance at quiescence; it is not adopted into a
+  new shutdown-time attempt. Client detach and transport loss are projection
+  lifetime changes, never this semantic drain. Cancellation requested,
+  operation settled, and quiescent are never interchangeable.
+- **A settlement failure is evidence, never permission to stop
+  supervising.** A failure in one runtime-owned participant — an exhausted
+  background terminal-publication budget, an MCP runtime whose close cannot
+  prove physical settlement, a degraded durable authority — never releases
+  the supervisor from another participant that can still produce an external
+  effect or call back into the conversation. Drain closes admission, requests
+  cancellation/closure of every concrete owner, and then supervises **each**
+  owner to its own native terminal boundary before it decides anything.
+  Failures are collected in deterministic identity order and reported
+  together as one bounded diagnostic. Every wait has a native boundary that
+  cannot be starved: a background record either settles terminally or
+  explicitly abandons its bounded durable publication (neither fact leaves
+  any callback authority behind), an MCP runtime's close proves or disproves
+  physical settlement, and a counted admission is released only by its
+  owner. No drain
+  wait is conditioned on a global health flag, so one owner's failure can
+  never be mistaken for another owner's settlement. Consequently
+  `shutdown().await == Ok(())` means exactly "the lifecycle reached
+  `Quiescent`", and `Err(RuntimeOwnedSettlement)` means "admission is closed
+  and every settleable owner was supervised to its strongest available
+  boundary, but rustX cannot truthfully prove all required
+  ownership/physical/durable terminal conditions". An unresolved
+  `PublishingTerminal` record stays explicitly non-terminal; it is never
+  reinterpreted as success.
+- **A settlement fact is published only after the owner's last
+  conversation-facing callback.** `publication_abandoned` is the fact runtime
+  drain consumes as one background execution's settlement, so it is committed
+  only after that runner has exhausted its bounded durable terminal
+  publication **and** completed every remaining conversation-facing failure
+  callback: the failure report to the owning runtime commits first, the
+  abandoned fact second, and waiters are notified last. Once the abandoned
+  fact is observable, the execution owns no remaining callback authority —
+  no failure-sink callback, no registry observer callback, no Pending Inbound
+  attempt, no durability-health mutation, no progress callback, no terminal
+  retry, and no semantic registry mutation can follow it. The whole
+  continuation is held inside one counted settlement admission, because a
+  *failed* drain leaves the lifecycle `Draining` — where settlement callbacks
+  are intentionally still legal — and therefore cannot rely on admission
+  refusal the way `mark_quiescent` can. The boundary is logical callback
+  settlement, not the runner task's syntactic return. Consequently a cached
+  `DrainCompletion` result — `Ok` or `Err` — can never precede a later
+  conversation callback from the work it supervised.
+- **Waiter lifetime is not ownership lifetime.** The future that awaits an
+  operation is never treated as that operation's owner. Once a
+  conversation-owned preparation has created a real physical owner — an MCP
+  stdio process spawned before its handshake completes — cancelling or
+  dropping the caller must not remove that owner from the quiescence proof.
+  The MCP connection owner is therefore a task of its own that holds the
+  counted lifecycle admission and an ownership cancellation signal, and it
+  releases the admission only after it has either **transferred** the
+  connection into the coordinator's retained `mcp_runtimes` or **driven** its
+  spawned process to the same physical settlement proof normal drain uses.
+  Runtime drain cancels those owners; it never drops their futures. `Drop`
+  requesting a shutdown is a cancellation signal, never proof of settlement.
+- **The current-attempt slot and the attempt task are distinct ownership
+  facts.** Clearing the current-attempt slot hands the conversation state
+  back to the coordinator; it does not end the attempt task, which still owes
+  the coordinator its final admission callback. The attempt task therefore
+  holds its own counted lifecycle admission from the publication that fills
+  the slot until the task body has fully returned, so quiescence covers the
+  task's callback authority and not merely the slot. A late callback from a
+  settled attempt is refused by the lifecycle gate *and* is inside the
+  quiescence proof.
+- **A cancellation cause is read from an authority, never copied at start
+  time.** A tool execution context carries a cancellation *view*: the runtime
+  cancellation signal plus a live read of the owner's absorbing first-winner
+  cause. Foreground executions view their attempt's `AgentCancellation`;
+  background executions view their conversation background registry record.
+  Both stores are absorbing — the first cancellation request that wins owns
+  the cause and no later request can relabel it — and there is exactly one
+  store per owned execution. An executor that started before the
+  cancellation race therefore reports the cause that actually won it (for
+  example `RuntimeShutdown` when runtime drain won), not the owner's
+  pre-cancellation default.
 - **Binding a Runtime Client host is a pre-activation composition
   decision.** A `RuntimeClientHost` binds while its runtime is inactive;
   a bind after activation is refused with the typed
@@ -1676,7 +1778,7 @@ The frozen invariants:
   background plane is pristine again.
 
   The ownership transfer (`standalone -> runtime-owned/inactive`) and
-  activation (`inactive -> active`) are **two distinct commit points**: the
+  activation (`Inactive -> Running`) are **two distinct commit points**: the
   transfer establishes runtime ownership plus the `Inactive` lifecycle
   relationship under the registry lock, and
   `ConversationRuntime::activate` later performs the one lifecycle
@@ -1725,7 +1827,7 @@ The frozen invariants:
   captures its seed, so no transition is both seeded and queued, and none
   is neither. The bootstrap cut `R` **precedes** the activation
   transition: the handshake completes over the inert runtime and the
-  shared `ConversationLifecycle` `Inactive -> Active` CAS happens
+  shared `ConversationLifecycle` `Inactive -> Running` CAS happens
   afterwards. Because the runtime remains semantically inert from `R`
   until that transition — mailbox, background, capability, and
   coordinator mutations are all inactive-gated — no projected semantic
@@ -1932,12 +2034,13 @@ semantic normalization boundary. The frozen invariants:
   projection. The client path never composes again, not even through a
   cloned composer sharing the same clock and providers, and never parses
   rendered context text to recover structure.
-- **Mutations are acceptances.** A successful `submit_inbound`,
-  `cancel_current_attempt`, `background_cancel`, or `shutdown` response
-  means the runtime accepted/admitted the operation at its semantic
-  commit point, never that unrelated model/tool/background settlement
-  finished. State changes are observed through Runtime Client events and
-  snapshots.
+- **Control responses preserve their settlement contract.** A successful
+  `submit_inbound`, `cancel_current_attempt`, or `background_cancel` response
+  means the runtime accepted the operation at its semantic commit point, not
+  that unrelated model/tool/background settlement finished. A successful
+  `shutdown` response is different: it is returned only after the one runtime
+  drain reaches `Quiescent`. State changes are observed through Runtime
+  Client events and snapshots.
 
 ## Runtime Client transports (Issue #38)
 
@@ -1996,9 +2099,9 @@ Surface revisions, Request Snapshots, Pending Inbound, Event Journal facts, and
 checkpoint metadata. The Runtime Client projection and its cache are never
 recovery input.
 
-M9a (Issue #12) freezes the startup recovery contract, and M9b freezes the
-model-turn cancellation-vs-start arbitration contract. M9c
-(supervision/quiescence) is **not** implemented.
+M9a (Issue #12) freezes the startup recovery contract, M9b freezes the
+model-turn cancellation-vs-start arbitration contract, and M9c freezes the
+runtime supervision/quiescence contract.
 
 - recovery reconstructs what durably happened; it never invents success, never
   silently replays an ambiguous external side effect, and never regenerates
@@ -2390,7 +2493,7 @@ contracts and provider protocols. These invariants are frozen by M2:
 
 - Clean input EOF at a record boundary or a peer broken pipe terminates the
   one-session process successfully; malformed framing or another transport
-  error exits non-zero. Semantic `shutdown` keeps its Issue #38 behaviour and
+  error exits non-zero. Semantic `shutdown` waits for runtime quiescence but
   does not close the transport. Transport EOF remains a detach, never an
   Agent Loop cancellation primitive.
 

@@ -26,7 +26,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
 use crate::runtime::types::CancellationReason;
 
 /// The adjudication of one model-turn start arbitration.
@@ -79,7 +79,11 @@ struct ModelTurnStartGate {
 #[derive(Clone, Debug)]
 pub struct AgentCancellation {
     signal: CancellationSignal,
-    reason: CancellationReason,
+    /// The default cause is used only if cancellation has not yet been
+    /// requested. The first request that wins the start gate stores the
+    /// absorbing semantic cause; later requests cannot rewrite it.
+    default_reason: CancellationReason,
+    reason: Arc<Mutex<Option<CancellationReason>>>,
     start_gate: Arc<ModelTurnStartGate>,
 }
 
@@ -90,15 +94,24 @@ impl AgentCancellation {
     pub fn new(reason: CancellationReason) -> Self {
         Self {
             signal: CancellationSignal::new(),
-            reason,
+            default_reason: reason,
+            reason: Arc::new(Mutex::new(None)),
             start_gate: Arc::new(ModelTurnStartGate::default()),
         }
     }
 
     /// The cancellation reason reported by the terminal cancellation event.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cancellation-reason mutex is poisoned, which would mean
+    /// a previous cancellation critical section panicked.
     #[must_use]
     pub fn reason(&self) -> CancellationReason {
         self.reason
+            .lock()
+            .expect("cancellation reason lock poisoned")
+            .unwrap_or(self.default_reason)
     }
 
     /// Requests cancellation of the attempt.
@@ -116,13 +129,42 @@ impl AgentCancellation {
     /// Panics if the start-gate mutex is poisoned (a panicking critical
     /// section is a defect, not a recoverable state).
     pub fn cancel(&self) {
+        let _ = self.request_cancel(self.default_reason);
+    }
+
+    /// Requests cancellation with an explicit semantic cause.
+    ///
+    /// The first cancellation request that enters the M9b start gate owns
+    /// the attempt's terminal cancellation cause. Later requests still
+    /// deliver the signal, but cannot relabel the already-winning cause.
+    /// This is the runtime-drain seam: it can report `RuntimeShutdown` even
+    /// though ordinary attempts are constructed with `UserRequested` as
+    /// their default cause.
+    ///
+    /// Returns `true` only when this request established the cause.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the start-gate or cancellation-reason mutex is poisoned,
+    /// which would mean a previous cancellation critical section panicked.
+    #[must_use]
+    pub fn request_cancel(&self, reason: CancellationReason) -> bool {
         {
             let _critical = self
                 .start_gate
                 .critical
                 .lock()
                 .expect("model-turn start gate poisoned");
+            let mut cause = self
+                .reason
+                .lock()
+                .expect("cancellation reason lock poisoned");
+            let first = cause.is_none();
+            if first {
+                *cause = Some(reason);
+            }
             self.signal.cancel();
+            first
         }
     }
 
@@ -190,6 +232,25 @@ impl AgentCancellation {
     pub fn model_cancellation(&self) -> CancellationSignal {
         self.signal.child()
     }
+
+    /// The foreground execution cancellation view of this attempt.
+    ///
+    /// The view carries the attempt signal **and this handle as the cause
+    /// authority**, so an executor that started before cancellation happened
+    /// still observes the absorbing first-winner cause (for example
+    /// `RuntimeShutdown` when runtime drain won the race). No cause is copied
+    /// into the execution context.
+    #[must_use]
+    pub fn execution_cancellation(&self) -> ExecutionCancellation {
+        ExecutionCancellation::new(self.signal.clone(), Arc::new(self.clone()))
+    }
+}
+
+/// The attempt is the cancellation-cause authority of its foreground work.
+impl CancellationCause for AgentCancellation {
+    fn cause(&self) -> CancellationReason {
+        self.reason()
+    }
 }
 
 #[cfg(test)]
@@ -229,6 +290,49 @@ mod tests {
         assert!(!tool_signal.is_cancelled());
         signal.cancel();
         assert!(tool_signal.is_cancelled());
+    }
+
+    /// Issue #12 (M9c): a foreground execution context taken **before** the
+    /// cancellation race reads the winning cause from the attempt authority,
+    /// not from a start-time snapshot of the attempt's default cause.
+    #[tokio::test]
+    async fn execution_view_reports_the_winning_cause_not_the_start_snapshot() {
+        let attempt = AgentCancellation::new(CancellationReason::UserRequested);
+        // The executor's context is built at tool start, long before any
+        // cancellation exists.
+        let view = attempt.execution_cancellation();
+        assert!(!view.is_cancelled());
+        // Runtime drain wins the first cancellation.
+        assert!(attempt.request_cancel(CancellationReason::RuntimeShutdown));
+        view.cancelled().await;
+        assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
+        assert_eq!(attempt.reason(), CancellationReason::RuntimeShutdown);
+    }
+
+    /// The first winner is absorbing through the execution view as well: a
+    /// later runtime drain cannot relabel a user cancellation.
+    #[tokio::test]
+    async fn execution_view_keeps_the_first_winning_cause() {
+        let attempt = AgentCancellation::new(CancellationReason::UserRequested);
+        let view = attempt.execution_cancellation();
+        assert!(attempt.request_cancel(CancellationReason::UserRequested));
+        assert!(!attempt.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(view.reason(), CancellationReason::UserRequested);
+    }
+
+    /// The first cancellation authority owns the absorbing semantic cause;
+    /// later requests only repeat the signal transition.
+    #[tokio::test]
+    async fn first_cancellation_cause_wins() {
+        let signal = AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(signal.request_cancel(CancellationReason::RuntimeShutdown));
+        assert!(!signal.request_cancel(CancellationReason::ParentCancelled));
+        assert_eq!(signal.reason(), CancellationReason::RuntimeShutdown);
+
+        let user_first = AgentCancellation::new(CancellationReason::UserRequested);
+        assert!(user_first.request_cancel(CancellationReason::UserRequested));
+        assert!(!user_first.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(user_first.reason(), CancellationReason::UserRequested);
     }
 
     /// Cancellation that linearized before the arbitration wins: the commit

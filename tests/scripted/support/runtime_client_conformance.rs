@@ -126,7 +126,7 @@ impl DirectEndpointDriver {
 
 impl RuntimeClientProtocolDriver for DirectEndpointDriver {
     fn request(&mut self, request: RuntimeClientRequest) -> BoxFuture<'_, RuntimeClientResponse> {
-        Box::pin(async move { self.endpoint.handle_request(request) })
+        Box::pin(async move { self.endpoint.handle_request_async(request).await })
     }
 
     fn next_event(&mut self) -> BoxFuture<'_, RuntimeClientProtocolEvent> {
@@ -762,7 +762,7 @@ pub async fn shutdown_is_not_detach(factory: &dyn DriverFactory) {
             id: RequestId::new(3),
         })
         .await;
-    assert_eq!(result(response), RuntimeClientResult::ShutdownAccepted);
+    assert_eq!(result(response), RuntimeClientResult::ShutdownCompleted);
 
     // The runtime shutdown observation is runtime-originated.
     let events = receive_until(&mut *driver, cursor, |event| {

@@ -328,7 +328,7 @@ async fn the_process_serves_a_real_conversation_runtime() {
         .await;
     assert!(matches!(
         response.result,
-        Some(RuntimeClientResult::ShutdownAccepted)
+        Some(RuntimeClientResult::ShutdownCompleted)
     ));
     let response = process
         .request(|id| RuntimeClientRequest::SnapshotGet {

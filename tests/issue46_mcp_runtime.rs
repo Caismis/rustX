@@ -141,7 +141,10 @@ mod unix_tests {
             rustx::tools::executor::ToolExecutionContext {
                 conversation_id: bundle.conversation_id(),
                 execution_id: None,
-                cancellation: rustx::runtime::CancellationSignal::new(),
+                cancellation: rustx::runtime::ExecutionCancellation::detached(
+                    rustx::runtime::CancellationSignal::new(),
+                    rustx::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: bundle.workspace(),
                 progress: &NoProgress,
                 artifacts: bundle.artifacts(),

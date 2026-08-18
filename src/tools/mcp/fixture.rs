@@ -318,9 +318,9 @@ impl ServerHandler for FixtureServer {
                             )
                         })?;
                 }
-                slow_started.notify_waiters();
+                slow_started.notify_one();
                 context.ct.cancelled().await;
-                cancel_observed.notify_waiters();
+                cancel_observed.notify_one();
                 if let Some(path) = &cancel_observed_file {
                     let _ = std::fs::write(path, "cancel_observed");
                 }
