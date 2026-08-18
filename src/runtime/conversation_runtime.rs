@@ -481,6 +481,10 @@ enum DurableOperation {
     IncompleteToolTurn,
     /// An active attempt hit a durable canonical-write failure.
     CanonicalCommit,
+    /// An active attempt could not commit its fused durable model-turn start
+    /// transition (request-scoped context + Surface advancement +
+    /// `RequestSnapshot` + `ModelRequestStarted` + start sequence binding).
+    RequestStart,
     /// An active attempt could not append a required Event Journal fact.
     EventJournal,
     /// The background settlement owner exhausted its bounded terminal
@@ -503,6 +507,7 @@ impl DurableOperation {
             Self::PrepareAdoption => "prepare_adoption",
             Self::IncompleteToolTurn => "incomplete_tool_turn",
             Self::CanonicalCommit => "canonical_commit",
+            Self::RequestStart => "request_start",
             Self::EventJournal => "event_journal",
             Self::BackgroundTerminalPublication => "background_terminal_publication",
         }
@@ -741,6 +746,10 @@ pub(crate) struct CoordinatorProbe {
     /// coordinator lock. This makes the submit-vs-shutdown ordering provable
     /// by mutex exclusion instead of a timing assumption.
     pub(crate) shutdown_arrival: Option<Arc<tokio::sync::Notify>>,
+    /// Installed into the **next** admitted attempt's execution: the M9b
+    /// model-turn start-boundary pause (Issue #12). `take`n by the next
+    /// `run_attempt`, so it arms exactly one attempt.
+    pub(crate) start_boundary_pause: Option<crate::agent::execution::test_sync::StartBoundaryPause>,
 }
 
 /// One two-phase gate of a coordinator boundary (test-only).
@@ -1225,6 +1234,20 @@ impl RuntimeInner {
         // conversation authority to disagree with it), and construction
         // validated the coordinator against that same runtime.
         .expect("the conversation runtime derives its identity from this tool runtime");
+        // Test-only: hand the armed M9b start-boundary pause to exactly this
+        // attempt's execution.
+        #[cfg(test)]
+        {
+            let pause = self
+                .probe
+                .lock()
+                .expect("coordinator probe lock poisoned")
+                .as_mut()
+                .and_then(|probe| probe.start_boundary_pause.take());
+            if let Some(pause) = pause {
+                execution.install_start_boundary_pause(pause);
+            }
+        }
         execution.observe(&observer);
         execution.run().await
     }
@@ -1261,10 +1284,12 @@ impl RuntimeInner {
                     Some(crate::agent::DurableFailureKind::Compaction) => {
                         DurableOperation::CanonicalCommit
                     }
-                    Some(
-                        crate::agent::DurableFailureKind::RequestStart
-                        | crate::agent::DurableFailureKind::EventJournal,
-                    ) => DurableOperation::EventJournal,
+                    Some(crate::agent::DurableFailureKind::RequestStart) => {
+                        DurableOperation::RequestStart
+                    }
+                    Some(crate::agent::DurableFailureKind::EventJournal) => {
+                        DurableOperation::EventJournal
+                    }
                     _ => DurableOperation::CanonicalCommit,
                 };
                 self.record_durability_failure(&mut state, operation, diagnostic);
@@ -3379,6 +3404,7 @@ mod tests {
             activation_gate: None,
             submit_gate: None,
             shutdown_arrival: None,
+            start_boundary_pause: None,
         }))
         .await;
         gate.arm();
@@ -3713,6 +3739,7 @@ mod tests {
             activation_gate: None,
             submit_gate: Some(gate.clone()),
             shutdown_arrival: Some(shutdown_arrival.clone()),
+            start_boundary_pause: None,
         }))
         .await;
         gate.arm();
@@ -3784,6 +3811,7 @@ mod tests {
             activation_gate: None,
             submit_gate: None,
             shutdown_arrival: None,
+            start_boundary_pause: None,
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -4200,12 +4228,17 @@ mod tests {
         ));
     }
 
-    /// Issue #63 (active-attempt durability audit): when the active attempt
-    /// hits a durable canonical-write failure, the attempt settles failed
-    /// with the typed durable-store failure AND the coordinator records the
-    /// durable-authority failure — the runtime never returns to a false
-    /// `Healthy` state that admits further work as though storage were
-    /// fine.
+    /// Issue #63 (active-attempt durability audit) + Issue #12 (M9b): when
+    /// the active attempt hits a durable canonical-write failure, the
+    /// attempt settles failed with the typed durable-store failure AND the
+    /// coordinator records the durable-authority failure — the runtime
+    /// never returns to a false `Healthy` state that admits further work as
+    /// though storage were fine.
+    ///
+    /// Under M9b the first canonical write of an attempt is the model-turn
+    /// start transaction (request-scoped context + Request Snapshot +
+    /// `ModelRequestStarted`); its failure leaves no start fact and no
+    /// provider invocation.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn active_attempt_durable_failure_degrades_the_runtime() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -4223,9 +4256,10 @@ mod tests {
             .expect("bridge");
         runtime.activate();
 
-        // The first canonical append of the attempt (the committed
-        // canonical fact of the first model turn) fails durably.
-        store.arm_fail_canonical_append_times(1);
+        // The model-turn start transaction of the first turn fails durably.
+        store.arm_request_start_fault_script([
+            crate::durable::sqlite::RequestStartFaultOperation::BeforeContextAppend,
+        ]);
         let admission = runtime
             .submit_inbound(text_content("item"))
             .expect("accepted");
@@ -4235,7 +4269,7 @@ mod tests {
         // the active attempt's durable commit failure.
         let observations = await_observation(pending.as_ref(), |o| {
             matches!(o, ConversationObservation::DurabilityFailed { operation, .. }
-                if operation == "canonical_commit")
+                if operation == "request_start")
         })
         .await;
         assert!(
@@ -4263,19 +4297,19 @@ mod tests {
         ));
         assert!(
             model.requests().is_empty(),
-            "the durable fault struck the pre-request canonical context commit, \
-             so the attempt failed before its first model request and no further \
-             attempt was admitted"
+            "the durable fault struck the model-turn start transaction, so the \
+             attempt failed before its first model request and no provider \
+             invocation escaped the failed start"
         );
 
         // The durable Ledger contains the adopted inbound but never the
-        // failed canonical commit: memory and durability stayed consistent
-        // (a failed durable commit installed nothing).
+        // failed start's request-scoped context: memory and durability
+        // stayed consistent (a failed durable commit installed nothing).
         let canonical = store.load_canonical().expect("load canonical");
         assert_eq!(
             canonical.len(),
             1,
-            "only the adopted inbound is durable; the failed commit appended nothing"
+            "only the adopted inbound is durable; the failed start committed nothing"
         );
         assert!(
             matches!(&canonical[0], MessageBlock::User(user) if user.id == admission.message_id),
@@ -4535,6 +4569,18 @@ mod tests {
         initial_messages: Vec<MessageBlock>,
         scripts: Vec<Vec<FakeStep>>,
     ) -> Result<(ConversationRuntime, Arc<FakeModel>), ConversationRuntimeError> {
+        runtime_with_model_probe_at(dir, conversation_id, initial_messages, scripts, None).await
+    }
+
+    /// The probe-armed variant of [`runtime_with_model_at`] (Issue #12, M9b
+    /// deterministic race tests).
+    async fn runtime_with_model_probe_at(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        initial_messages: Vec<MessageBlock>,
+        scripts: Vec<Vec<FakeStep>>,
+        probe: Option<CoordinatorProbe>,
+    ) -> Result<(ConversationRuntime, Arc<FakeModel>), ConversationRuntimeError> {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -4580,7 +4626,11 @@ mod tests {
             clock: None,
             initial_messages,
         };
-        ConversationRuntime::new(config).map(|runtime| (runtime, model))
+        match probe {
+            Some(probe) => ConversationRuntime::with_probe(config, probe),
+            None => ConversationRuntime::new(config),
+        }
+        .map(|runtime| (runtime, model))
     }
 
     /// The conversation-runtime-only variant of [`runtime_with_model_at`].
@@ -5059,6 +5109,316 @@ mod tests {
         );
     }
 
+    /// Issue #12 (M9b), cancellation wins before start — through the real
+    /// runtime control path. The attempt is parked immediately before the
+    /// model-turn start arbitration; `cancel_current_attempt` fully
+    /// completes while the execution is parked, so cancellation provably
+    /// linearized first: no provider request, no `ModelRequestStarted`, no
+    /// Request Snapshot, and no request-scoped context commit.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancellation_before_model_turn_start_never_starts_the_request() {
+        use crate::agent::execution::test_sync::StartBoundaryPause;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let (runtime, model) = headless_runtime(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            Some(CoordinatorProbe {
+                start_boundary_pause: Some(pause),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("answer me"))
+            .expect("accepted");
+
+        // The attempt is parked immediately before the cancellation-vs-start
+        // arbitration: preparation completed, nothing request-scoped
+        // committed, no provider request exists.
+        pre_start.await_park(1).await;
+        let attempt = AttemptId::for_conversation(&ConversationId::new("conv-headless"), 0);
+        runtime
+            .cancel_current_attempt(&attempt)
+            .expect("the parked attempt is cancellable");
+        pre_start.release();
+
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::Event { event, .. } if is_terminal_event(event))
+        })
+        .await;
+        let terminal_count = observations
+            .iter()
+            .filter(|o| {
+                matches!(o, ConversationObservation::Event { event, .. } if is_terminal_event(event))
+            })
+            .count();
+        assert_eq!(terminal_count, 1, "the attempt settles exactly once");
+        assert!(
+            observations.iter().any(|o| matches!(
+                o,
+                ConversationObservation::Event { event, .. }
+                    if matches!(event, crate::events::types::RuntimeEvent::AttemptCancelled { .. })
+            )),
+            "the attempt settles cancelled"
+        );
+
+        let store = runtime.tool_runtime().durable_store();
+        assert!(
+            model.requests().is_empty(),
+            "the provider request never started"
+        );
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .is_empty(),
+            "no started Request Snapshot exists"
+        );
+        let journal = store.read_events(None, 128).expect("journal").events;
+        assert!(
+            !journal.iter().any(|envelope| matches!(
+                envelope.event,
+                crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+            )),
+            "no request-start fact exists"
+        );
+        assert!(
+            matches!(
+                journal.last().map(|envelope| &envelope.event),
+                Some(crate::events::types::RuntimeEvent::AttemptCancelled { .. })
+            ),
+            "the cancellation terminal is unique and last"
+        );
+        let canonical = store.load_canonical().expect("canonical");
+        assert_eq!(
+            canonical.len(),
+            1,
+            "only the adopted inbound is canonical: no request-scoped context half-commit"
+        );
+        assert!(
+            matches!(&canonical[0], MessageBlock::User(user) if user.kind == InboundKind::Message),
+            "the one canonical message is the user's inbound"
+        );
+    }
+
+    /// Issue #12 (M9b), start wins, then cancellation: the durable start
+    /// commit linearizes first, the provider request is in flight, and the
+    /// later cancellation settles exactly that started request — it can
+    /// never be reclassified as never-started.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn started_request_then_cancellation_settles_the_in_flight_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let script = vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::Emit(crate::model::event::ModelEvent::TextDelta {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                text: "partial".to_owned(),
+            }),
+            FakeStep::ParkUntilCancelled,
+        ];
+        let (runtime, model) = headless_runtime(&dir, vec![script], None, None).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("answer me"))
+            .expect("accepted");
+
+        // The provider request is in flight and parked. The durable start
+        // commit therefore already won — the provider is only invoked after
+        // a successful start commit.
+        let mut parked = model.parked();
+        parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("parked channel stays open");
+        let store = runtime.tool_runtime().durable_store();
+        assert_eq!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .len(),
+            1,
+            "exactly one started Request Snapshot exists before cancellation"
+        );
+        assert_eq!(
+            store
+                .read_events(None, 128)
+                .expect("journal")
+                .events
+                .iter()
+                .filter(|envelope| matches!(
+                    envelope.event,
+                    crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+                ))
+                .count(),
+            1,
+            "exactly one request-start fact exists before cancellation"
+        );
+
+        let attempt = AttemptId::for_conversation(&ConversationId::new("conv-headless"), 0);
+        runtime
+            .cancel_current_attempt(&attempt)
+            .expect("the in-flight attempt is cancellable");
+
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::Event { event, .. } if is_terminal_event(event))
+        })
+        .await;
+        assert!(
+            observations.iter().any(|o| matches!(
+                o,
+                ConversationObservation::Event { event, .. }
+                    if matches!(event, crate::events::types::RuntimeEvent::AttemptCancelled { .. })
+            )),
+            "the in-flight request settles the attempt as cancelled"
+        );
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "no second provider request exists"
+        );
+        // The terminal event is unique and last; the in-flight request it
+        // settles durably started, and the partial streamed content never
+        // became a canonical Assistant message.
+        let journal = store.read_events(None, 128).expect("journal").events;
+        assert!(
+            matches!(
+                journal.last().map(|envelope| &envelope.event),
+                Some(crate::events::types::RuntimeEvent::AttemptCancelled { .. })
+            ),
+            "the cancellation terminal is unique and last"
+        );
+        let canonical = store.load_canonical().expect("canonical");
+        assert!(
+            !canonical
+                .iter()
+                .any(|message| matches!(message, MessageBlock::Assistant(_))),
+            "the cancelled in-flight request commits no assistant message"
+        );
+    }
+
+    /// Issue #12 (M9b), recovery Class B reaching the same gate: the
+    /// recovered pending continuation drives the attempt to the identical
+    /// model-turn start arbitration. Cancelling there is again
+    /// cancellation-before-start — the same gate, the same adjudication, the
+    /// same never-started outcome.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn class_b_recovery_uses_the_same_model_turn_start_gate() {
+        use crate::agent::execution::test_sync::StartBoundaryPause;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation = ConversationId::new("conv-m9b-classb");
+        let dead_attempt = AttemptId::for_conversation(&conversation, 0);
+        let dead = dead_attempt.clone();
+        let store_path =
+            seed_crash_prefix(&dir, "conv-m9b-classb", &[], |store, conversation_id| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        content: text_content("start the turn"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .expect("accept");
+                store.adopt_pending_batch(accepted.sequence).expect("adopt");
+                store
+                    .append_event(attempt_event(
+                        conversation_id,
+                        "attempt-started",
+                        &dead,
+                        crate::events::types::RuntimeEvent::AttemptStarted {
+                            attempt_id: dead.clone(),
+                        },
+                    ))
+                    .expect("attempt started");
+                // CRASH: no request start, no tool start.
+            });
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let (runtime, model) = runtime_with_model_probe_at(
+            &dir,
+            "conv-m9b-classb",
+            vec![],
+            vec![one_turn_script()],
+            Some(CoordinatorProbe {
+                start_boundary_pause: Some(pause),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await
+        .expect("runtime");
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // The recovered continuation attempt is parked immediately before the
+        // start arbitration — the same boundary as a fresh inbound turn.
+        pre_start.await_park(1).await;
+        let attempt = AttemptId::for_conversation(&conversation, 1);
+        runtime
+            .cancel_current_attempt(&attempt)
+            .expect("the recovered attempt is cancellable");
+        pre_start.release();
+
+        let observations = await_observation(pending.as_ref(), |o| {
+            matches!(o, ConversationObservation::Event { event, .. } if is_terminal_event(event))
+        })
+        .await;
+        assert!(
+            observations.iter().any(|o| matches!(
+                o,
+                ConversationObservation::Event { event, .. }
+                    if matches!(event, crate::events::types::RuntimeEvent::AttemptCancelled { .. })
+            )),
+            "the recovered attempt settles cancelled"
+        );
+        assert!(
+            model.requests().is_empty(),
+            "the provider request never started"
+        );
+
+        let store = crate::durable::SqliteConversationStore::open(conversation, &store_path)
+            .expect("reopen");
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .is_empty(),
+            "no started Request Snapshot exists"
+        );
+        let journal = store.read_events(None, 128).expect("journal").events;
+        assert!(
+            !journal.iter().any(|envelope| matches!(
+                envelope.event,
+                crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+            )),
+            "no request-start fact exists"
+        );
+        let canonical = store.load_canonical().expect("canonical");
+        assert_eq!(
+            canonical.len(),
+            1,
+            "only the adopted inbound is canonical: no request-scoped context half-commit"
+        );
+    }
+
     /// Issue #12 (M9a), recovery Class C: a restart after a committed
     /// request start starts **nothing**.
     ///
@@ -5121,9 +5481,10 @@ mod tests {
                     contributors: Vec::new(),
                 },
                 None,
+                Vec::new(),
             );
             store
-                .persist_request_start(&snapshot, fixed_time())
+                .commit_model_turn_start(&[], &snapshot, fixed_time())
                 .expect("request start");
             // CRASH: the provider may or may not have executed this request.
         });
@@ -5224,9 +5585,10 @@ mod tests {
                     contributors: Vec::new(),
                 },
                 None,
+                Vec::new(),
             );
             store
-                .persist_request_start(&snapshot, fixed_time())
+                .commit_model_turn_start(&[], &snapshot, fixed_time())
                 .expect("request start");
             store
                 .append_event(attempt_event(

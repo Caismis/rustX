@@ -381,10 +381,10 @@ tool-call/result pair. It appends one canonical runtime summary and applies
 one complete-message Surface replacement. Historical ledger facts remain
 addressable, while normal reads hydrate only finite active surface IDs.
 
-## 7. Admission and cancellation
+## 7. Model-turn start and cancellation
 
-The Agent Loop owns the model-step admission boundary in
-AgentExecution::prepare_model_request:
+The Agent Loop owns the model-turn start boundary in
+`AgentExecution::start_model_turn` (Issue #12, M9b):
 
 ~~~text
 Agent-Loop-owned deferred proposals (staged after the previous tool batch
@@ -395,51 +395,76 @@ ContextAssembly::assemble (transient proposals; lanes and provenance
     ↓
 PreStepPolicy → Enter | Reject(reason)          (Issue #56)
     ↓ test synchronization seam, when enabled
-generic cancellation check
-    ↓ documented request-start/admission commit point
-admit_context
-    → allocate IDs
-    → ledger append + Surface Append
-    → store AcceptedContext/ContextGeneration
-    → build RequestSnapshot
-    → provider ModelRequest
+stage_context → scratch validation + prepared canonical commits
+    ↓ (no durable effect)
+prepare_model_turn → frozen RequestSnapshot + provider ModelRequest
+    ↓
+┌─ cancellation-vs-start arbitration (start gate held) ──────────┐
+│ cancellation check                                             │
+│     ↓ not cancelled                                            │
+│ ConversationStore::commit_model_turn_start                     │
+│     → ONE transaction: request-scoped context appends          │
+│       + ledger/Surface + RequestSnapshot                       │
+│       + ModelRequestStarted + sequence binding                 │
+└────────────────────────────────────────────────────────────────┘
+    ↓
+invoke adapter
 ~~~
 
-Observable cancellation before the check succeeds produces no accepted
+Cancellation that linearizes before the arbitration produces no accepted
 dynamic-context messages, no associated Surface advancement, no
-RequestSnapshot, and no provider request. The contributors may have
-performed one bounded read, but their transient proposals are discarded.
-The race regression uses a watch reached signal and an explicit mpsc release
-channel, never a sleep.
+RequestSnapshot, no start fact, and no provider request. The contributors
+may have performed one bounded read, but their transient proposals are
+discarded. Once the start commit linearizes first, the request is durably
+started; a later cancellation settles that started request and can never be
+reclassified as never-started. The race regressions park the execution
+immediately before the arbitration (and inside it, before the commit)
+through the `StartBoundaryPause` test seam — ordinal-counted parks and
+explicit releases, never a sleep.
 
-A pre-step rejection or policy failure settles the attempt at the same
-boundary and with the same guarantee: no accepted dynamic context, no Surface
-advancement, no RequestSnapshot, and no provider request. Because deferred
-proposals enter the *same* final batch, an observer cannot commit context
-around the policy either — whatever identity it produces context for.
+A pre-step rejection or policy failure settles the attempt with the same
+guarantee: no accepted dynamic context, no Surface advancement, no
+RequestSnapshot, and no provider request. Because deferred proposals enter
+the *same* final batch, an observer cannot commit context around the policy
+either — whatever identity it produces context for.
 
-After admit_context commits, the accepted context is historical. Provider
-failure, disconnect, timeout, or cancellation does not roll back the ledger,
-surface, context generation, or snapshot. The post-admission failure
-regression verifies this boundary.
+A start-commit durability failure rolls the whole transaction back: no
+half-committed request-scoped context, no snapshot, no start fact, and no
+provider request. After the start commit succeeds, the accepted context is
+historical: provider failure, disconnect, timeout, or cancellation does not
+roll back the ledger, surface, context generation, or snapshot.
 
 ## 8. Overflow compact-and-retry
 
 The bounded ContextWindowExceeded path is:
 
 ~~~text
-one admitted primary step
-    → RequestSnapshot #1 / provider request #1
+one staged primary step
+    → start arbitration → RequestSnapshot #1 / provider request #1
     → overflow
-    → complete-message Surface compaction
-    → RequestSnapshot #2 / provider request #2
+    → complete-message Surface compaction (independent durable commit)
+    → start arbitration → RequestSnapshot #2 / provider request #2
 ~~~
 
 Assembly, Agent Status sampling, Skill snapshot rendering, extension
-invocation, logical ordering, contributor generation, and admission happen
-once. The retry reuses the accepted ContextGeneration and committed
-canonical context facts. It never reinvokes contributors or appends a
-duplicate context batch.
+invocation, logical ordering, contributor generation, and staging happen
+once. The retry reuses the staged ContextGeneration and the canonical
+context facts committed at the first start. It never reinvokes contributors
+or stages a duplicate context batch, but it passes through the same
+cancellation-vs-start arbitration as every model turn: cancellation that
+linearizes before the retry's start commit stops the retry while the
+already-committed compaction remains an independent durable fact.
+
+Between the overflow and the retry's start arbitration, the compaction
+planning filter evaluates every candidate through the same `TokenEstimator`
+over the exact hypothetical post-compaction request — the retained Surface
+plus the staged (not yet committed) request-scoped context overlay
+(`CompactionConstraints::staged_request_context`) plus the Effective System
+Prompt plus tools. The overlay is neither canonical nor retirable, and it is
+never folded into a scalar token delta: the estimator has no additive or
+monotonic contract, so a staged-context token reservation is not a reusable
+quantity across different candidate projections. The staging is planning-only
+state with no durable effect.
 
 `ContextWindowExceeded` is not evidence that a model invocation observed the
 fresh inbound turn: the provider rejected that request. Therefore overflow
@@ -471,9 +496,10 @@ Journal history. `AgentExecutionResult` returns the settlement candidate and
 current conversation state, not a historical archive.
 
 During execution, the current request snapshot is prepared from the exact
-provider-neutral request. `ConversationStore::persist_request_start` commits
-that immutable snapshot and its `ModelRequestStarted` Event Journal fact in
-one transaction before the adapter is invoked. `RequestHistory` is a durable
+provider-neutral request. `ConversationStore::commit_model_turn_start`
+commits the request-scoped context, that immutable snapshot, and its
+`ModelRequestStarted` Event Journal fact in one transaction before the
+adapter is invoked, under the attempt's start gate (M9b). `RequestHistory` is a durable
 read handle, not an append-only `Vec<RequestSnapshot>` and not a second
 transcript. Keyed lookup reconstructs one request on demand; historical
 listing uses a bounded, fallible page with an exclusive durable sequence
@@ -534,9 +560,9 @@ The implementation tests deterministic ordering under registration
 permutation, logical identity stability across attestation changes,
 reserved-slot and provenance rejection, immutable contributor input,
 history-mutation isolation, distinct IDs for equal bytes, historical
-reconstruction after live-state changes, prompt freezing, pre-admission
-cancellation, post-admission failure, overflow reuse, and adapter wire
-translation. cfg(test) barriers/channels make admission races reproducible.
+reconstruction after live-state changes, prompt freezing, pre-start
+cancellation, post-start failure, overflow reuse, and adapter wire
+translation. cfg(test) barriers/channels make the start races reproducible.
 
 These boundaries preserve the core equation:
 

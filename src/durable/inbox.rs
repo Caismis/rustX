@@ -572,10 +572,28 @@ pub trait ConversationStore: Send + Sync + 'static {
         limit: usize,
     ) -> Result<CanonicalMessagePage, ConversationStoreError>;
 
-    /// Persists/finalizes one actual model request: immutable Request
-    /// Snapshot plus exact `ModelRequestStarted` evidence in one transaction.
-    fn persist_request_start(
+    /// Commits one model-turn start atomically (Issue #12, M9b): the
+    /// request-scoped canonical context messages (Ledger append + Surface
+    /// advance), the immutable Request Snapshot, and the exact
+    /// `ModelRequestStarted` evidence in **one** transaction.
+    ///
+    /// This is the one durable request-start transition of every actual
+    /// primary model request — the first turn, every tool→model
+    /// continuation, every recovered continuation, and every overflow retry.
+    /// A successful commit is the durable fact that the model request
+    /// started; a failure commits none of the inputs. The Agent Loop
+    /// arbitrates cancellation against exactly this commit, so a
+    /// `RequestSnapshot` is always evidence of an actually started model
+    /// request and request-scoped context never becomes canonical without
+    /// its request starting.
+    ///
+    /// The store validates structure and durability only; it owns no
+    /// cancellation policy. The retry-safe idempotency rule is unchanged:
+    /// repeating the exact same start (same snapshot, same context) returns
+    /// the original start fact, and a conflicting retry is rejected.
+    fn commit_model_turn_start(
         &self,
+        context: &[MessageBlock],
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;

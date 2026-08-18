@@ -225,8 +225,8 @@ impl CompactionPlan {
 
 /// The structural constraints one compaction plan must satisfy.
 ///
-/// The two constraints serve opposite purposes and are kept separate from
-/// the hard-fit decision:
+/// The two reference constraints serve opposite purposes and are kept
+/// separate from the hard-fit decision:
 ///
 /// ```text
 /// must_cover_through → successful compaction must retire through this
@@ -241,6 +241,24 @@ pub struct CompactionConstraints<'a> {
     /// The fresh-inbound retention constraint: unobserved fresh inbound
     /// material must remain active.
     pub fresh_inbound: Option<&'a FreshInboundTurn>,
+    /// The **staged, not-yet-committed** request-scoped context blocks the
+    /// upcoming request will carry in addition to the post-compaction
+    /// Surface (Issue #12, M9b).
+    ///
+    /// Request-scoped context commits only inside the durable model-turn
+    /// start transaction, so a compaction decided while such context is
+    /// staged plans over a Surface that does not contain it. Every candidate
+    /// is therefore evaluated against the exact hypothetical post-compaction
+    /// request — the retained Surface plus this overlay plus the Effective
+    /// System Prompt plus tools — through the same [`TokenEstimator`], never
+    /// as a scalar token delta: the estimator has no additive or monotonic
+    /// contract, so a staged-context token reservation is not a reusable
+    /// quantity across different candidate projections.
+    ///
+    /// The staged overlay is neither canonical nor retirable: it is not on
+    /// the Surface the plan rewrites, and it exists only for exact planning
+    /// of the upcoming request.
+    pub staged_request_context: &'a [MessageBlock],
 }
 
 /// The deterministic context engine.
@@ -329,6 +347,37 @@ impl ContextEngine {
         max_output_tokens: u32,
     ) -> Result<bool, ContextError> {
         Ok(projection.estimated_input.input_tokens < self.soft_input_limit(max_output_tokens)?)
+    }
+
+    /// The exact estimated input of one hypothetical post-compaction
+    /// request: the given post-compaction projection's messages plus the
+    /// non-retirable staged request-scoped context, measured by the same
+    /// estimator over the exact Effective System Prompt and tool definitions
+    /// (Issue #12, M9b).
+    ///
+    /// The staged overlay is never folded into the projection canonically:
+    /// it is transient planning input evaluated here only to decide whether
+    /// the upcoming request fits after a candidate compaction. The result is
+    /// a full request estimate, never a scalar token delta, so the fit
+    /// decision respects the estimator's exact (possibly non-additive,
+    /// non-monotonic) behavior. The estimator sees only the provider-visible
+    /// messages plus the exact Effective System Prompt and tools; the
+    /// projection's `SurfaceRevision` and measurement provenance are outside
+    /// the estimation boundary.
+    #[must_use]
+    pub fn estimate_with_staged_context(
+        &self,
+        projection: &ContextProjection,
+        staged_request_context: &[MessageBlock],
+        tool_definitions: &[ModelToolDefinition],
+    ) -> u64 {
+        let mut messages = projection.messages.clone();
+        messages.extend_from_slice(staged_request_context);
+        self.estimator.estimate_input(
+            &messages,
+            &projection.effective_system_prompt,
+            tool_definitions,
+        )
     }
 
     /// Builds the current projection of one conversation state.
@@ -429,25 +478,27 @@ impl ContextEngine {
                 continue;
             }
             let span_messages = active[first..=end].to_vec();
-            let summary_input_tokens = self.estimate_summary_input(state.revision(), span_messages);
+            let summary_input_tokens = self.estimate_summary_input(span_messages);
             if summary_input_tokens > budgets.summary_input_limit {
                 // The selected span would not fit the summary model's own
                 // request budget: this candidate is impossible.
                 continue;
             }
-            let retained_recent = self.estimator.estimate_conversation_input(&bare_projection(
-                state.revision(),
-                &active[end + 1..],
-            ));
+            let retained_recent = self
+                .estimator
+                .estimate_conversation_input(&active[end + 1..]);
             let planned_items = retained_items(&active, first, end);
+            // The exact hypothetical post-compaction request: the retained
+            // Surface plus the non-retirable staged request-scoped context,
+            // estimated as one whole projection (never as a scalar token
+            // delta, which the pluggable estimator does not support).
+            let mut hypothetical = planned_items;
+            hypothetical.extend_from_slice(constraints.staged_request_context);
             let planned = self
                 .estimator
                 .estimate_input(
-                    &projection_of(
-                        state.revision(),
-                        &planned_items,
-                        &current_projection.effective_system_prompt,
-                    ),
+                    &hypothetical,
+                    &current_projection.effective_system_prompt,
                     tool_definitions,
                 )
                 .saturating_add(reservation);
@@ -468,6 +519,10 @@ impl ContextEngine {
         }
 
         let target = self.config.keep_recent_tokens;
+        // A candidate fits only when its exact hypothetical post-compaction
+        // request estimate (retained Surface + staged request-scoped context
+        // + summary reservation) fits the soft input limit.
+        let fits = |candidate: &&Candidate| candidate.planned <= soft_limit;
         let chosen = candidates
             .iter()
             .filter(|candidate| candidate.retained_recent >= target)
@@ -476,7 +531,7 @@ impl ContextEngine {
             .or_else(|| {
                 candidates
                     .iter()
-                    .filter(|candidate| candidate.planned <= soft_limit)
+                    .filter(fits)
                     .min_by_key(|candidate| candidate.end)
             })
             .ok_or_else(|| cannot_fit(&self.config))?;
@@ -502,11 +557,8 @@ impl ContextEngine {
             // estimate of the post-compaction context and never mixes a
             // provider-reported measurement with an estimate.
             estimated_before_tokens: self.estimator.estimate_input(
-                &projection_of(
-                    current_projection.surface_revision,
-                    &current_projection.messages,
-                    &current_projection.effective_system_prompt,
-                ),
+                &current_projection.messages,
+                &current_projection.effective_system_prompt,
                 tool_definitions,
             ),
             planned_estimate_after: chosen.planned,
@@ -520,10 +572,9 @@ impl ContextEngine {
     /// request. This is the planner's view of the same
     /// [`SummaryRequest::model_input`] contract the production summarizer
     /// sends.
-    fn estimate_summary_input(&self, revision: SurfaceRevision, retired: Vec<MessageBlock>) -> u64 {
+    fn estimate_summary_input(&self, retired: Vec<MessageBlock>) -> u64 {
         let input = SummaryRequest { retired }.model_input();
-        self.estimator
-            .estimate_conversation_input(&bare_projection(revision, &input.messages))
+        self.estimator.estimate_conversation_input(&input.messages)
     }
 
     /// Prepares the semantic commit of one compaction: the canonical summary
@@ -657,7 +708,11 @@ impl ContextEngine {
                 }
             }
             _ => TokenMeasurement {
-                input_tokens: self.estimator.estimate_input(&projection, tool_definitions),
+                input_tokens: self.estimator.estimate_input(
+                    &projection.messages,
+                    &projection.effective_system_prompt,
+                    tool_definitions,
+                ),
                 source: TokenMeasurementSource::Estimated,
             },
         };
@@ -774,29 +829,6 @@ fn retained_items(active: &[MessageBlock], first: usize, end: usize) -> Vec<Mess
     let mut items = active[..first].to_vec();
     items.extend_from_slice(&active[end + 1..]);
     items
-}
-
-/// Wraps a message list into a projection for the conversation-content
-/// estimate, without a request-time system prompt.
-fn bare_projection(revision: SurfaceRevision, messages: &[MessageBlock]) -> ContextProjection {
-    projection_of(revision, messages, "")
-}
-
-/// Wraps a message list into a projection for estimation.
-fn projection_of(
-    revision: SurfaceRevision,
-    messages: &[MessageBlock],
-    effective_system_prompt: &str,
-) -> ContextProjection {
-    ContextProjection {
-        surface_revision: revision,
-        messages: messages.to_vec(),
-        effective_system_prompt: effective_system_prompt.to_owned(),
-        estimated_input: TokenMeasurement {
-            input_tokens: 0,
-            source: TokenMeasurementSource::Estimated,
-        },
-    }
 }
 
 fn no_progress(message: &str) -> ContextError {

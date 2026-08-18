@@ -31,6 +31,7 @@ mod common;
 use std::sync::Arc;
 
 use common::provider_emulator::ProviderEmulator;
+use rustx::durable::ConversationStore;
 use rustx::local_runtime::composition::{
     HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
     LocalRuntimePaths,
@@ -642,9 +643,15 @@ async fn a_provider_failure_settles_once_without_a_retry() {
 /// a timer: the driver waits for it, cancels, and then waits for the
 /// provider to observe the client disconnect. Nothing sleeps.
 ///
-/// This asserts the current generic invariant — one terminal cancellation
-/// settlement, no extra provider request, and a physically closed provider
-/// connection. The broader M9 redesign (#12) is out of scope here.
+/// This asserts one terminal cancellation settlement, no extra provider
+/// request, and a physically closed provider connection.
+///
+/// Issue #12 (M9b) durable-start facts: the emulator gate is only reachable
+/// **after** the model-turn start commit (the provider is never invoked
+/// before it), so at the gate the request is durably started — exactly one
+/// `ModelRequestStarted` and exactly one started Request Snapshot — and the
+/// later cancellation settles that started request without ever
+/// reclassifying it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     let Some(emulator) = ProviderEmulator::start("gated_stream_cancellation").await else {
@@ -657,6 +664,50 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
     // The provider has flushed "partial" and is suspended. Everything after
     // this point provably happens after that flush.
     emulator.await_gate("before-remaining-text").await;
+
+    // M9b: the provider is only invoked after the durable model-turn start
+    // commit, so with the request in flight the start fact already exists:
+    // exactly one started Request Snapshot, bound to exactly one
+    // `ModelRequestStarted` event.
+    let snapshots = driver
+        .runtime
+        .runtime()
+        .request_history()
+        .page(None, 32)
+        .expect("request snapshot page")
+        .snapshots;
+    assert_eq!(
+        snapshots.len(),
+        1,
+        "exactly one started Request Snapshot exists before cancellation"
+    );
+    let store = rustx::durable::SqliteConversationStore::open(
+        driver.runtime.runtime().conversation_id().clone(),
+        &driver
+            .root
+            .path()
+            .join("private")
+            .join("artifacts")
+            .join("conversation.sqlite"),
+    )
+    .expect("open the durable store for event assertions");
+    let started_facts = store
+        .read_events(None, 128)
+        .expect("event journal")
+        .events
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                envelope.event,
+                rustx::events::types::RuntimeEvent::ModelRequestStarted { .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        started_facts, 1,
+        "exactly one request-start fact exists before cancellation"
+    );
+
     let accepted = driver
         .host()
         .cancel_current_attempt()

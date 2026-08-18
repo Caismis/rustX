@@ -252,6 +252,7 @@ fn snapshot_at(
             contributors: Vec::new(),
         },
         None,
+        Vec::new(),
     )
 }
 
@@ -522,7 +523,7 @@ fn started_request_with_unknown_outcome_is_indeterminate_and_never_resent() {
         request_id = snapshot.request_id.clone();
         // The one request-start transaction: snapshot + ModelRequestStarted.
         store
-            .persist_request_start(&snapshot, fixed_time())
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
             .expect("request start");
         historical = store
             .reconstruct_model_request(&request_id)
@@ -648,7 +649,7 @@ fn completed_model_request_before_assistant_commit_is_not_class_b() {
         request_id = snapshot.request_id.clone();
         // The one request-start transaction: snapshot + ModelRequestStarted.
         store
-            .persist_request_start(&snapshot, fixed_time())
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
             .expect("request start");
         // The provider completed the request; rustX observed and committed
         // the outcome. The canonical Assistant message never committed.
@@ -771,7 +772,7 @@ fn failed_model_request_before_terminal_is_not_retried() {
         let snapshot = snapshot_at(&store, &attempt, "0", "model-before-restart");
         request_id = snapshot.request_id.clone();
         store
-            .persist_request_start(&snapshot, fixed_time())
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
             .expect("request start");
         // The provider failed durably; the crash happened before the attempt
         // could settle.
@@ -1084,7 +1085,7 @@ fn known_request_with_unknown_tool_outcome_stays_indeterminate() {
             .expect("attempt started");
         let snapshot = snapshot_at(&store, &attempt, "0", "model-before-restart");
         store
-            .persist_request_start(&snapshot, fixed_time())
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
             .expect("request start");
         store
             .append_event(envelope(
@@ -2113,7 +2114,7 @@ fn repeated_restarts_settle_once_and_then_change_nothing() {
             .expect("attempt started");
         let snapshot = snapshot_at(&store, &attempt, "0", "model-x");
         store
-            .persist_request_start(&snapshot, fixed_time())
+            .commit_model_turn_start(&[], &snapshot, fixed_time())
             .expect("request start");
         commit_background_ownership(&store, &execution);
     }
@@ -2269,7 +2270,7 @@ fn the_recovery_fold_retains_only_unresolved_work() {
                 .expect("started");
             let snapshot = snapshot_at(&store, &attempt, "0", "model-x");
             store
-                .persist_request_start(&snapshot, fixed_time())
+                .commit_model_turn_start(&[], &snapshot, fixed_time())
                 .expect("request start");
             store
                 .append_event(envelope(

@@ -9,9 +9,12 @@
 //!     ↓ final immutable AcceptedContext
 //! PreStepPolicy                       Enter | Reject(reason)
 //!     ↓
-//! generic cancellation checkpoint
-//!     ↓ admission linearization
-//! admit_context → Ledger + Surface → RequestSnapshot → provider request
+//! staging (scratch validation — no durable effect)
+//!     ↓
+//! cancellation-vs-start arbitration   ← the one linearization point (M9b)
+//!     ↓
+//! commit_model_turn_start (Ledger + Surface
+//! + RequestSnapshot + ModelRequestStarted, one transaction) → provider request
 //!
 //! Assistant(ToolCall A, ToolCall B) committed
 //!     ↓ execute, settle every CallSlot, commit ToolResult A then ToolResult B
@@ -194,8 +197,8 @@ pub struct PreStepBatch<'a> {
     pub conversation_id: &'a ConversationId,
     /// The primary model turn number of the proposed step.
     pub turn: u32,
-    /// The Surface revision the proposals were assembled against. No context
-    /// has been admitted yet, so this is still the pre-admission revision.
+    /// The Surface revision the proposals were assembled against. Nothing
+    /// from this batch is committed yet, so this is the pre-start revision.
     pub surface_revision: SurfaceRevision,
     /// The validated transient context batch, with rustX-assigned lanes,
     /// provenance, and contributor generation.
@@ -209,10 +212,10 @@ pub enum PreStepDecision {
     Enter,
     /// Do not start the model step.
     ///
-    /// A rejection is observed strictly before the admission linearization
-    /// point, so no proposed dynamic context is committed, the Surface does
-    /// not advance because of the proposals, no `RequestSnapshot` is frozen,
-    /// and no provider request begins.
+    /// A rejection is observed strictly before the start arbitration, and
+    /// staging has no durable effect, so no proposed dynamic context is
+    /// committed, the Surface does not advance because of the proposals, no
+    /// `RequestSnapshot` is frozen, and no provider request begins.
     Reject {
         /// The bounded reason reported by the attempt's terminal event.
         reason: String,
@@ -228,9 +231,9 @@ pub enum PreStepDecision {
 ///
 /// Evaluation is awaited, and the policy is given no cancellation handle: if
 /// attempt cancellation becomes observable while a bounded evaluation is
-/// pending, the evaluation settles and the Agent Loop's own generic
-/// pre-admission cancellation checkpoint still decides admission — exactly
-/// like a pending `ContextContributor` future in Issue #55.
+/// pending, the evaluation settles and the Agent Loop's own start
+/// arbitration still decides — exactly like a pending `ContextContributor`
+/// future in Issue #55.
 pub trait PreStepPolicy: Send + Sync {
     /// Evaluates one final proposal batch.
     ///

@@ -13,12 +13,13 @@
 //!  ↓
 //! PreStepPolicy → Enter | Reject(reason)
 //!  ↓
-//! generic cancellation checkpoint → admitted canonical User context +
-//! Surface revision
+//! transient staged context / PreparedModelTurn (nothing commits)
 //!  ↓
-//! Context Engine → ContextProjection + frozen RequestSnapshot
+//! cancellation-vs-start arbitration
+//!    ├─ cancel: discard staged request
+//!    └─ start: fused durable model-turn-start transaction
 //!  ↓
-//! model request (Surface projection + snapshot values)
+//! provider invocation
 //!  ↓
 //! canonical model events
 //!  ↓
@@ -81,7 +82,7 @@ use crate::context::{
     MAX_DEFERRED_CONTEXT_PROPOSALS, MAX_PROPOSALS_PER_CONTRIBUTOR, NativeContextInput,
     render_effective_system_prompt, validate_user_message_proposal,
 };
-use crate::conversation::{ConversationError, ConversationState};
+use crate::conversation::{ConversationError, ConversationState, PreparedCanonicalCommit};
 use crate::durable::{CompactionCommitInput, ConversationStore};
 use crate::events::types::{
     AttemptFailure, AttemptOutcome, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
@@ -111,7 +112,7 @@ use crate::tools::types::{
 };
 
 use super::assembly::ModelEventAssembler;
-use super::cancellation::AgentCancellation;
+use super::cancellation::{AgentCancellation, StartAdjudication};
 use super::lifecycle::{
     AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, ToolResultObservation,
 };
@@ -339,12 +340,15 @@ pub struct AgentExecution<'a> {
     /// spawned across threads in tests.
     #[cfg(test)]
     continuation_pause: std::sync::Mutex<Option<test_sync::ContinuationBoundaryPause>>,
-    /// Test-only control point immediately after Context Assembly has
-    /// produced transient proposals and immediately before the generic
-    /// admission cancellation check. No canonical context, Surface revision,
-    /// Request Snapshot, or provider request exists while this is parked.
+    /// Test-only control point at the one M9b model-turn start boundary:
+    /// immediately before the cancellation-vs-start arbitration, and inside
+    /// the arbitration critical section immediately before the durable
+    /// start commit. No request-scoped context, Request Snapshot, start
+    /// fact, or provider request exists while the first phase is parked;
+    /// while the second phase is parked the arbitration holds the start
+    /// gate, so a concurrent cancellation provably blocks behind it.
     #[cfg(test)]
-    admission_pause: std::sync::Mutex<Option<test_sync::AdmissionPause>>,
+    start_boundary_pause: std::sync::Mutex<Option<test_sync::StartBoundaryPause>>,
     turn: u32,
     terminal_emitted: bool,
 }
@@ -371,6 +375,45 @@ struct ModelInvocation {
     message_id: MessageId,
     assembler: ModelEventAssembler,
     terminal: StreamTerminal,
+}
+
+/// The fully prepared, not-yet-started model turn (Issue #12, M9b).
+///
+/// Every fallible input of one actual model request is resolved: the
+/// request-scoped context is validated against the conversation state, the
+/// Effective System Prompt, the projection, the frozen Request Snapshot,
+/// and the exact provider-neutral request are computed from the staged
+/// view, and any compaction the request requires already committed as its
+/// own independent canonical transition. Nothing in this value is durable
+/// or provider-visible yet: it becomes observable only through the one
+/// cancellation-vs-start arbitration in [`AgentExecution::start_model_turn`],
+/// and is discarded without a trace when cancellation wins there.
+struct PreparedModelTurn {
+    /// The validated, not-yet-committed request-scoped context commits, in
+    /// canonical append order.
+    context: Vec<PreparedCanonicalCommit>,
+    /// The frozen snapshot of this actual request.
+    snapshot: RequestSnapshot,
+    /// The exact provider-neutral request of the staged projection.
+    request: ModelRequest,
+    /// The staged projection's fingerprint, used to match a later
+    /// provider-observed input measurement to exactly this request context.
+    fingerprint: u64,
+}
+
+/// The intermediate staged view of one model turn: scratch conversation,
+/// Effective System Prompt, projection, frozen snapshot, and request — all
+/// transient, nothing committed.
+struct StagedModelTurn {
+    /// The staged projection (over the scratch conversation that includes
+    /// the not-yet-committed request-scoped context).
+    projection: ContextProjection,
+    /// The staged Effective System Prompt.
+    effective_system_prompt: String,
+    /// The frozen snapshot of this actual request.
+    snapshot: RequestSnapshot,
+    /// The exact provider-neutral request of the staged projection.
+    request: ModelRequest,
 }
 
 /// The committed result of one successful compaction: the derived record
@@ -578,7 +621,7 @@ impl<'a> AgentExecution<'a> {
             #[cfg(test)]
             continuation_pause: std::sync::Mutex::new(None),
             #[cfg(test)]
-            admission_pause: std::sync::Mutex::new(None),
+            start_boundary_pause: std::sync::Mutex::new(None),
             turn: 0,
             terminal_emitted: false,
         })
@@ -594,6 +637,16 @@ impl<'a> AgentExecution<'a> {
     /// available for historical reads regardless.
     pub fn observe(&mut self, observer: &'a dyn AgentExecutionObserver) {
         self.observer = Some(observer);
+    }
+
+    /// Installs the test-only start-boundary pause (Issue #12, M9b
+    /// deterministic race tests).
+    #[cfg(test)]
+    pub(crate) fn install_start_boundary_pause(&mut self, pause: test_sync::StartBoundaryPause) {
+        *self
+            .start_boundary_pause
+            .lock()
+            .expect("start boundary pause lock") = Some(pause);
     }
 
     /// Runs the attempt to its execution settlement candidate.
@@ -721,7 +774,13 @@ impl<'a> AgentExecution<'a> {
             });
         }
 
-        let request = match self.prepare_model_request().await {
+        let prepared = match self.prepare_model_turn().await {
+            Ok(prepared) => prepared,
+            Err(terminal) => return Some(terminal),
+        };
+        // The one cancellation-vs-start arbitration of this model turn:
+        // the provider is invoked only after the durable start commit won.
+        let request = match self.start_model_turn(prepared) {
             Ok(request) => request,
             Err(terminal) => return Some(terminal),
         };
@@ -1072,40 +1131,47 @@ impl<'a> AgentExecution<'a> {
         Ok(true)
     }
 
-    /// Builds the canonical request of the next model invocation.
+    /// Prepares the next model turn without committing anything (Issue #12,
+    /// M9b).
     ///
-    /// This is the integration point immediately before every agent
-    /// `ModelRequest`: the current Surface flows through Context Assembly and
-    /// the context engine into a projection, and the projection is compiled
-    /// into the request messages. The pending fresh inbound turn (when one
-    /// exists) is sampled into one native context fact for the admitted
-    /// primary step, together with the deferred post-tool proposals staged by
-    /// the previous structurally settled tool batch. That accepted generation
-    /// is reused throughout proactive compaction and overflow retry.
-    /// Proactive automatic compaction runs when the projected input reaches
-    /// the soft input limit.
+    /// This is the fallible preparation half of every primary model request:
+    /// the current Surface flows through Context Assembly and the context
+    /// engine into a staged projection, and the staged view is compiled into
+    /// the frozen Request Snapshot and the exact provider-neutral request.
+    /// The pending fresh inbound turn (when one exists) is sampled into one
+    /// native context fact for the admitted primary step, together with the
+    /// deferred post-tool proposals staged by the previous structurally
+    /// settled tool batch. That accepted generation is reused throughout
+    /// proactive compaction and overflow retry.
     ///
-    /// The exact linearization is:
+    /// The exact structure is:
     ///
     /// ```text
     /// Context Assembly (native + extension + deferred post-tool)
     ///     ↓ final immutable AcceptedContext
     /// PreStepPolicy → Enter | Reject(reason)
     ///     ↓
-    /// generic cancellation checkpoint      ← the admission linearization point
+    /// stage request-scoped context (validate only — nothing commits)
     ///     ↓
-    /// admit_context → Ledger + Surface
-    ///     ↓
-    /// Effective System Prompt → RequestSnapshot → ModelRequest
+    /// staged Effective System Prompt → staged projection
+    ///     ↓ (reservation-aware compaction when the staged input overflows)
+    /// PreparedModelTurn: validated context commits + RequestSnapshot + request
     /// ```
     ///
-    /// A rejection, a policy failure, or observable cancellation before the
-    /// checkpoint leaves no canonical context, no Surface advancement, no
-    /// frozen snapshot, and no provider request. An overflow retry never
-    /// re-enters this block: it reuses the already-admitted context
+    /// A rejection, a policy failure, or a preparation failure leaves no
+    /// canonical context, no Surface advancement, no frozen snapshot, and no
+    /// provider request. Nothing request-scoped commits here: the one
+    /// cancellation-vs-start arbitration in [`AgentExecution::start_model_turn`]
+    /// decides whether this prepared turn ever starts. An overflow retry
+    /// never re-enters this block: it reuses the already-admitted context
     /// generation, so the policy is evaluated exactly once per primary step.
+    ///
+    /// The generic cancellation check at the top is a cheap fast path that
+    /// avoids wasted preparation work; it is **not** the cancellation
+    /// arbitration (a cancellation that lands after it is decided by the
+    /// start gate, exactly like one landing during assembly).
     #[allow(clippy::too_many_lines)]
-    async fn prepare_model_request(&mut self) -> Result<ModelRequest, Terminal> {
+    async fn prepare_model_turn(&mut self) -> Result<PreparedModelTurn, Terminal> {
         if let Some(message) = self.durable_failure.clone() {
             return Err(Terminal::Failed {
                 failure: AttemptFailure::Runtime {
@@ -1118,160 +1184,168 @@ impl<'a> AgentExecution<'a> {
                 reason: self.cancellation.reason(),
             });
         }
-        if self.accepted_context.is_none() {
-            // Compact already-committed history before admitting this step's
-            // dynamic context. This keeps an unobserved fresh inbound batch
-            // and its newly admitted Runtime/Skill facts from blocking a
-            // complete-message compaction candidate that belongs to older
-            // history. A second fit check below still rejects a request whose
-            // newly admitted context cannot fit on its own.
-            let baseline_prompt = self.effective_system_prompt()?;
-            let baseline_projection = self.current_projection(&baseline_prompt)?;
-            if self
-                .context_runtime
-                .engine
-                .should_compact(
-                    &baseline_projection,
-                    self.compaction_budgets().primary_output_budget,
-                )
-                .map_err(|error| Self::context_failure_terminal(&error))?
-            {
-                let must_cover = self.continuation_owner.clone();
-                let fresh = self.pending_fresh_inbound.clone();
-                self.perform_compaction(
-                    must_cover.as_ref(),
-                    fresh.as_ref(),
-                    &baseline_prompt,
-                    None,
-                )
-                .await?;
-            }
-            let status = match self.compose_status() {
-                Ok(status) => status,
-                Err(error) => return Err(Self::context_failure_terminal(&error)),
-            };
-            let skill_guidance = if self
-                .has_active_context_kind(crate::message::types::ContextKind::SkillGuidance)?
-            {
+        if self.accepted_context.is_some() {
+            return Err(Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                "a primary model turn is prepared exactly once per turn",
+            )));
+        }
+        // Compact already-committed history before staging this step's
+        // dynamic context. This keeps an unobserved fresh inbound batch and
+        // its newly staged Runtime/Skill facts from blocking a
+        // complete-message compaction candidate that belongs to older
+        // history. A second fit check below still rejects a request whose
+        // newly staged context cannot fit on its own. This compaction is
+        // independent conversation-history maintenance with its own
+        // canonical commit; it reserves no staged tokens.
+        let baseline_prompt = self.effective_system_prompt()?;
+        let baseline_projection = self.current_projection(&baseline_prompt)?;
+        if self
+            .context_runtime
+            .engine
+            .should_compact(
+                &baseline_projection,
+                self.compaction_budgets().primary_output_budget,
+            )
+            .map_err(|error| Self::context_failure_terminal(&error))?
+        {
+            let must_cover = self.continuation_owner.clone();
+            let fresh = self.pending_fresh_inbound.clone();
+            self.perform_compaction(
+                must_cover.as_ref(),
+                fresh.as_ref(),
+                &baseline_prompt,
+                None,
+                &[],
+            )
+            .await?;
+        }
+        let status = match self.compose_status() {
+            Ok(status) => status,
+            Err(error) => return Err(Self::context_failure_terminal(&error)),
+        };
+        let skill_guidance =
+            if self.has_active_context_kind(crate::message::types::ContextKind::SkillGuidance)? {
                 None
             } else {
                 self.capability.snapshot().skill_catalog()
             };
-            let input = match self.contributor_input_snapshot() {
-                Ok(input) => input,
-                Err(terminal) => return Err(terminal),
-            };
-            // The deferred proposals of the previous structurally settled tool
-            // batch enter the *same* final transient batch as every other
-            // proposal, and are laned and given provenance by their producer
-            // identity, not by their timing. There is exactly one
-            // model-visible dynamic-context admission path: an observer has no
-            // privileged committer role and cannot bypass the policy below.
-            let deferred = core::mem::take(&mut self.deferred_context);
-            let native = NativeContextInput {
-                skill_guidance,
-                agent_status: status,
-                ..NativeContextInput::default()
-            };
-            let accepted = self
-                .context_runtime
-                .assembly
-                .assemble(&input, &native, &deferred)
-                .await
-                .map_err(|error| {
-                    Self::context_failure_terminal(&ContextError::new(
-                        ContextErrorKind::Internal,
-                        error.to_string(),
-                    ))
-                })?;
-            // The typed pre-step policy boundary (Issue #56). It observes the
-            // complete final proposal batch and returns Enter/Reject only. It
-            // owns no cancellation, allocates no identity, and commits
-            // nothing; a rejection settles the attempt strictly before the
-            // admission linearization point below.
-            let policy = self.lifecycle.pre_step_policy();
-            let decision = {
-                let batch = PreStepBatch {
-                    attempt_id: &self.request.attempt_id,
-                    conversation_id: &self.request.conversation_id,
-                    turn: self.turn,
-                    surface_revision: self.conversation.revision(),
-                    context: &accepted,
-                };
-                policy.evaluate(&batch).await
-            };
-            match decision {
-                Ok(PreStepDecision::Enter) => {}
-                Ok(PreStepDecision::Reject { reason }) => {
-                    return Err(Terminal::Failed {
-                        failure: AttemptFailure::Runtime {
-                            error: RuntimeError::PreStepRejected { reason },
-                        },
-                    });
-                }
-                Err(error) => {
-                    return Err(Terminal::Failed {
-                        failure: AttemptFailure::Runtime {
-                            error: RuntimeError::PreStepPolicyFailed {
-                                message: error.message,
-                            },
-                        },
-                    });
-                }
-            }
-            #[cfg(test)]
-            if let Some(pause) = &self
-                .admission_pause
-                .lock()
-                .expect("admission pause lock")
-                .as_ref()
-            {
-                pause.park_before_admission();
-            }
-            // This is the generic pre-admission cancellation checkpoint. No
-            // canonical context, Surface revision, snapshot, or provider
-            // request exists before this check succeeds.
-            if self.cancellation.is_cancelled() {
-                return Err(Terminal::Cancelled {
-                    reason: self.cancellation.reason(),
-                });
-            }
-            self.admit_context(accepted)?;
-        }
-        let effective_system_prompt = self.effective_system_prompt()?;
-        let projection = match self.current_projection(&effective_system_prompt) {
-            Ok(projection) => projection,
+        let input = match self.contributor_input_snapshot() {
+            Ok(input) => input,
             Err(terminal) => return Err(terminal),
         };
+        // The deferred proposals of the previous structurally settled tool
+        // batch enter the *same* final transient batch as every other
+        // proposal, and are laned and given provenance by their producer
+        // identity, not by their timing. There is exactly one
+        // model-visible dynamic-context admission path: an observer has no
+        // privileged committer role and cannot bypass the policy below.
+        let deferred = core::mem::take(&mut self.deferred_context);
+        let native = NativeContextInput {
+            skill_guidance,
+            agent_status: status,
+            ..NativeContextInput::default()
+        };
+        let accepted = self
+            .context_runtime
+            .assembly
+            .assemble(&input, &native, &deferred)
+            .await
+            .map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    error.to_string(),
+                ))
+            })?;
+        // The typed pre-step policy boundary (Issue #56). It observes the
+        // complete final proposal batch and returns Enter/Reject only. It
+        // owns no cancellation, allocates no identity, and commits nothing;
+        // a rejection settles the attempt strictly before the start
+        // arbitration in `start_model_turn`.
+        let policy = self.lifecycle.pre_step_policy();
+        let decision = {
+            let batch = PreStepBatch {
+                attempt_id: &self.request.attempt_id,
+                conversation_id: &self.request.conversation_id,
+                turn: self.turn,
+                surface_revision: self.conversation.revision(),
+                context: &accepted,
+            };
+            policy.evaluate(&batch).await
+        };
+        match decision {
+            Ok(PreStepDecision::Enter) => {}
+            Ok(PreStepDecision::Reject { reason }) => {
+                return Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::PreStepRejected { reason },
+                    },
+                });
+            }
+            Err(error) => {
+                return Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::PreStepPolicyFailed {
+                            message: error.message,
+                        },
+                    },
+                });
+            }
+        }
+        // Stage the request-scoped context: generation, canonical
+        // identities, and in-memory validation only. Nothing commits until
+        // the start arbitration wins.
+        let staged_context = self.stage_context(accepted)?;
+        let mut staged = self.stage_model_turn(0, &staged_context)?;
         let budgets = self.compaction_budgets();
         let should_compact = match self
             .context_runtime
             .engine
-            .should_compact(&projection, budgets.primary_output_budget)
+            .should_compact(&staged.projection, budgets.primary_output_budget)
         {
             Ok(value) => value,
             Err(error) => return Err(Self::context_failure_terminal(&error)),
         };
         if should_compact {
+            // The staged context is not yet canonical, so this compaction
+            // plans over the committed Surface and evaluates every candidate
+            // against the exact hypothetical post-compaction request: the
+            // rewritten Surface plus the staged request-scoped context plus
+            // the Effective System Prompt plus tools. The rewrite must leave
+            // room for the context that the start transaction will append on
+            // top of it. The compaction itself is an independent canonical
+            // commit of conversation-history maintenance; if cancellation
+            // wins the start arbitration afterwards, the compaction remains
+            // valid and the staged context is discarded without a trace.
             let must_cover = self.continuation_owner.clone();
             let fresh = self.pending_fresh_inbound.clone();
             // `perform_compaction` owns the post-surface-rewrite
             // invalidation of the opaque provider continuation; no caller
             // clears it a second time.
-            match self
-                .perform_compaction(
-                    must_cover.as_ref(),
-                    fresh.as_ref(),
-                    &effective_system_prompt,
-                    None,
-                )
-                .await
+            self.perform_compaction(
+                must_cover.as_ref(),
+                fresh.as_ref(),
+                &staged.effective_system_prompt,
+                None,
+                &staged_context,
+            )
+            .await?;
+            // Restage over the rewritten Surface: the staged context blocks
+            // are unchanged, the Surface revision and projection are not.
+            staged = self.stage_model_turn(0, &staged_context)?;
+            if !self
+                .context_runtime
+                .engine
+                .fits_under_soft_limit(&staged.projection, budgets.primary_output_budget)
+                .map_err(|error| Self::context_failure_terminal(&error))?
             {
-                Ok(()) => {}
-                Err(terminal) => return Err(terminal),
+                return Err(Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::CannotFit,
+                    "the staged model turn still exceeds the soft input limit after compaction",
+                )));
             }
         }
-        self.context_model_request(0)
+        self.finalize_model_turn(&staged_context, staged)
     }
 
     /// Composes the Agent Status value of the pending fresh inbound
@@ -1336,16 +1410,75 @@ impl<'a> AgentExecution<'a> {
         }
     }
 
-    /// Builds and freezes one provider-neutral model request from the current
-    /// Surface and the already accepted context generation.
-    fn context_model_request(&mut self, retry_number: u32) -> Result<ModelRequest, Terminal> {
-        let effective_system_prompt = self.effective_system_prompt()?;
-        let projection = self.current_projection(&effective_system_prompt)?;
+    /// Builds the staged view of one actual model request: a scratch
+    /// conversation (the current durable head plus the not-yet-committed
+    /// request-scoped context), its Effective System Prompt, the staged
+    /// projection, the frozen Request Snapshot, and the exact
+    /// provider-neutral request.
+    ///
+    /// Everything produced here is transient preparation: the scratch
+    /// conversation shares no state with the canonical conversation, and
+    /// nothing commits until the start arbitration wins.
+    fn stage_model_turn(
+        &self,
+        retry_number: u32,
+        staged_context: &[MessageBlock],
+    ) -> Result<StagedModelTurn, Terminal> {
+        let active = self.conversation.active_messages().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let mut scratch = ConversationState::from_durable_head(
+            active,
+            self.conversation.active_ids().to_vec(),
+            self.conversation.revision(),
+            self.conversation.surface().compaction_generation(),
+        )
+        .map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        for block in staged_context {
+            // Infallible in practice: the staged messages were validated
+            // when they were produced; a rejection is an internal contract
+            // violation.
+            scratch.commit(block.clone()).map_err(|error| {
+                Self::context_failure_terminal(&ContextError::new(
+                    ContextErrorKind::Internal,
+                    format!("staged context cannot enter the scratch conversation: {error}"),
+                ))
+            })?;
+        }
+        let messages = scratch.active_messages().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let sections = self
+            .accepted_context
+            .as_ref()
+            .map_or(&[][..], |accepted| accepted.system_sections.as_slice());
+        let effective_system_prompt = render_effective_system_prompt(&messages, sections);
+        let projection = self
+            .context_runtime
+            .engine
+            .build_projection(
+                &scratch,
+                &self.tool_registry().model_definitions(),
+                self.observed.as_ref(),
+                &effective_system_prompt,
+            )
+            .map_err(|error| Self::context_failure_terminal(&error))?;
         let request = self.model_request_from_projection(&projection);
         let accepted = self.accepted_context.as_ref().ok_or_else(|| {
             Self::context_failure_terminal(&ContextError::new(
                 ContextErrorKind::Internal,
-                "model request built before context admission",
+                "model request built before context staging",
             ))
         })?;
         let primary = self.request.model.primary();
@@ -1356,7 +1489,7 @@ impl<'a> AgentExecution<'a> {
                 retry_number,
             },
             projection.surface_revision,
-            effective_system_prompt,
+            effective_system_prompt.clone(),
             request.invocation.clone(),
             primary.context_window(),
             primary.reasoning_profile().cloned(),
@@ -1365,47 +1498,176 @@ impl<'a> AgentExecution<'a> {
             self.capability.snapshot().revision(),
             accepted.generation.clone(),
             request.continuation.clone(),
+            staged_context
+                .iter()
+                .map(crate::conversation::message_id_of)
+                .collect(),
         );
-        let started = self
-            .store
-            .persist_request_start(&snapshot, Utc::now())
-            .map_err(|error| {
+        Ok(StagedModelTurn {
+            projection,
+            effective_system_prompt,
+            snapshot,
+            request,
+        })
+    }
+
+    /// Freezes one staged model turn into its final prepared value: every
+    /// staged context block is validated against the canonical conversation
+    /// state, so the post-commit installation is infallible (Issue #63,
+    /// Finding 2). Nothing commits here.
+    fn finalize_model_turn(
+        &mut self,
+        staged_context: &[MessageBlock],
+        staged: StagedModelTurn,
+    ) -> Result<PreparedModelTurn, Terminal> {
+        let mut context = Vec::with_capacity(staged_context.len());
+        for block in staged_context {
+            context.push(self.conversation.prepare_commit(block).map_err(|error| {
+                Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: format!("staged context cannot be validated: {error}"),
+                        },
+                    },
+                }
+            })?);
+        }
+        Ok(PreparedModelTurn {
+            context,
+            snapshot: staged.snapshot,
+            request: staged.request,
+            fingerprint: staged.projection.fingerprint(),
+        })
+    }
+
+    /// The one cancellation-vs-start linearization point of every model
+    /// turn (Issue #12, M9b): the first turn, every tool→model
+    /// continuation, every recovered continuation, and every overflow retry
+    /// reach exactly this boundary.
+    ///
+    /// The attempt's model-turn start gate serializes the cancellation
+    /// observation against the durable start commit
+    /// (`ConversationStore::commit_model_turn_start`: the request-scoped
+    /// context, the immutable Request Snapshot, and the exact
+    /// `ModelRequestStarted` fact in one transaction). Exactly one side
+    /// wins:
+    ///
+    /// - cancellation linearized first ⇒ the prepared turn is discarded:
+    ///   no provider invocation, no `ModelRequestStarted`, no started
+    ///   Request Snapshot, no request-scoped context commit, and no start
+    ///   claim left behind;
+    /// - the durable start commit succeeded ⇒ the request has durably
+    ///   started; the validated context installs infallibly, the start fact
+    ///   is recorded, and only then may the provider be invoked. A
+    ///   cancellation that raced the commit is post-start cancellation of
+    ///   the now-started request;
+    /// - the durable start commit failed ⇒ a durable-authority failure
+    ///   (Issue #63): no provider invocation, no start fact, no partial
+    ///   request-owned state, and the coordinator learns the durable
+    ///   failure kind.
+    fn start_model_turn(&mut self, prepared: PreparedModelTurn) -> Result<ModelRequest, Terminal> {
+        #[cfg(test)]
+        if let Some(pause) = self
+            .start_boundary_pause
+            .lock()
+            .expect("start boundary pause lock")
+            .as_ref()
+        {
+            pause.park_before_start_arbitration();
+        }
+        let store = std::sync::Arc::clone(&self.store);
+        let arbitration = self.cancellation.arbitrate_model_turn_start(|| {
+            #[cfg(test)]
+            if let Some(pause) = self
+                .start_boundary_pause
+                .lock()
+                .expect("start boundary pause lock")
+                .as_ref()
+            {
+                pause.park_before_start_commit();
+            }
+            let context: Vec<MessageBlock> = prepared
+                .context
+                .iter()
+                .map(|commit| commit.message().clone())
+                .collect();
+            store.commit_model_turn_start(&context, &prepared.snapshot, Utc::now())
+        });
+        let started = match arbitration {
+            Ok(StartAdjudication::CancelledBeforeStart) => {
+                return Err(Terminal::Cancelled {
+                    reason: self.cancellation.reason(),
+                });
+            }
+            Ok(StartAdjudication::Started(started)) => started,
+            Err(error) => {
+                // The durable start transaction failed: no start fact, no
+                // request-scoped context, and no provider invocation
+                // exist. This is a durable-authority failure (Issue #63),
+                // never a context-preparation failure.
                 self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
                 self.durable_failure = Some(format!(
                     "request start could not be committed durably: {error}"
                 ));
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error.to_string(),
-                ))
-            })?;
+                return Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: format!(
+                                "request start could not be committed durably: {error}"
+                            ),
+                        },
+                    },
+                });
+            }
+        };
+        // The durable start commit won: the request-scoped context installs
+        // infallibly (validated at preparation, still exact), the start fact
+        // is recorded, and only after this point may the provider be
+        // invoked.
+        for commit in prepared.context {
+            let block = commit.message().clone();
+            self.conversation.install_prepared(commit);
+            if let Some(observer) = self.observer {
+                observer.observe_committed(&self.request.attempt_id, &block);
+            }
+        }
+        self.record_persisted_event(started);
+        self.last_request_fingerprint = Some(prepared.fingerprint);
         let reconstructed = self
             .store
-            .reconstruct_model_request(&snapshot.request_id)
+            .reconstruct_model_request(&prepared.snapshot.request_id)
             .map_err(|error| {
                 self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
                 self.durable_failure = Some(format!(
                     "durable request reconstruction failed after start: {error}"
                 ));
-                Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    error.to_string(),
-                ))
+                Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore {
+                            message: format!(
+                                "durable request reconstruction failed after start: {error}"
+                            ),
+                        },
+                    },
+                }
             })?;
-        if reconstructed != request {
+        if reconstructed != prepared.request {
             self.durable_failure_kind = Some(DurableFailureKind::RequestStart);
             self.durable_failure = Some(
                 "durable request reconstruction differs from the live provider-neutral request"
                     .to_owned(),
             );
-            return Err(Self::context_failure_terminal(&ContextError::new(
-                ContextErrorKind::Internal,
-                "frozen provider-neutral request differs from historical reconstruction",
-            )));
+            return Err(Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore {
+                        message:
+                            "durable request reconstruction differs from the live provider-neutral request"
+                                .to_owned(),
+                    },
+                },
+            });
         }
-        self.record_persisted_event(started);
-        self.last_request_fingerprint = Some(projection.fingerprint());
-        Ok(request)
+        Ok(prepared.request)
     }
 
     /// The current finite projection of the Conversation Surface, or the
@@ -1473,19 +1735,49 @@ impl<'a> AgentExecution<'a> {
         })
     }
 
-    /// The only dynamic-context admission path. Core assigns the generation,
-    /// provenance, semantic kind, canonical `MessageId`, Ledger append, and
-    /// Surface advancement; contributors have no access to any of those
-    /// authorities.
-    fn admit_context(&mut self, mut accepted: AcceptedContext) -> Result<(), Terminal> {
+    /// The only dynamic-context staging path (Issue #12, M9b). Core assigns
+    /// the generation, provenance, semantic kind, and canonical `MessageId`;
+    /// contributors have no access to any of those authorities.
+    ///
+    /// Staging is transient preparation only: it validates every staged
+    /// message in a scratch conversation (which makes identity allocation
+    /// observe the already-staged messages) and records the accepted
+    /// generation, but commits nothing. The staged blocks become canonical
+    /// exactly when the model-turn start arbitration commits them inside
+    /// the durable start transaction; if cancellation wins there, they are
+    /// discarded without a trace and history never claims the model
+    /// observed them.
+    fn stage_context(
+        &mut self,
+        mut accepted: AcceptedContext,
+    ) -> Result<Vec<MessageBlock>, Terminal> {
         self.context_generation_serial = self
             .context_generation_serial
             .checked_add(1)
             .expect("context generation cannot overflow");
         accepted.generation.id = self.context_generation_serial;
         let namespace = format!("{}-turn-{}", self.request.attempt_id, self.turn);
+        let active = self.conversation.active_messages().map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let mut scratch = ConversationState::from_durable_head(
+            active,
+            self.conversation.active_ids().to_vec(),
+            self.conversation.revision(),
+            self.conversation.surface().compaction_generation(),
+        )
+        .map_err(|error| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::MalformedHistory,
+                error.to_string(),
+            ))
+        })?;
+        let mut staged = Vec::with_capacity(accepted.user_messages.len());
         for context in &accepted.user_messages {
-            let id = self.conversation.allocate_context_message_id(&namespace);
+            let id = scratch.allocate_context_message_id(&namespace);
             let block = MessageBlock::User(crate::message::types::UserMessageBlock {
                 id,
                 content: context.content.clone(),
@@ -1493,11 +1785,19 @@ impl<'a> AgentExecution<'a> {
                 kind: crate::message::types::InboundKind::Context(context.kind),
                 timestamp: None,
             });
-            self.commit_canonical(&block)
-                .map_err(|error| self.commit_failure_terminal("context admission failed", error))?;
+            scratch
+                .commit(block.clone())
+                .map_err(|error| Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::ContractViolation {
+                            message: format!("staged context cannot be committed: {error}"),
+                        },
+                    },
+                })?;
+            staged.push(block);
         }
         self.accepted_context = Some(accepted);
-        Ok(())
+        Ok(staged)
     }
 
     /// Returns whether one semantic context family is still active on the
@@ -1631,6 +1931,16 @@ impl<'a> AgentExecution<'a> {
     /// rewrite, and no retry progress may begin, and the pending summary
     /// future is dropped.
     ///
+    /// `staged_request_context` carries the **staged, not-yet-committed**
+    /// request-scoped context (Issue #12, M9b): when the compaction is
+    /// decided during model-turn preparation, the context it must make room
+    /// for is not yet on the canonical Surface (it commits only inside the
+    /// durable model-turn start transaction). Every compaction candidate is
+    /// evaluated against the exact hypothetical post-compaction request —
+    /// the rewritten Surface plus this overlay plus the Effective System
+    /// Prompt plus tools — through the same token estimator, never as a
+    /// scalar token delta. Independent compactions pass an empty overlay.
+    ///
     /// This is also the **one** ownership path that invalidates the opaque
     /// provider continuation: a successful incompatible Surface rewrite
     /// invalidates it exactly once, immediately after the semantic commit.
@@ -1641,6 +1951,7 @@ impl<'a> AgentExecution<'a> {
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
         overflow: Option<&ModelError>,
+        staged_request_context: &[MessageBlock],
     ) -> Result<(), Terminal> {
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
@@ -1655,7 +1966,12 @@ impl<'a> AgentExecution<'a> {
             ));
         }
         match self
-            .run_compaction(must_cover_through, fresh_inbound, effective_system_prompt)
+            .run_compaction(
+                must_cover_through,
+                fresh_inbound,
+                effective_system_prompt,
+                staged_request_context,
+            )
             .await
         {
             Ok(_completed) => {
@@ -1708,6 +2024,7 @@ impl<'a> AgentExecution<'a> {
         must_cover_through: Option<&MessageId>,
         fresh_inbound: Option<&FreshInboundTurn>,
         effective_system_prompt: &str,
+        staged_request_context: &[MessageBlock],
     ) -> Result<CompletedCompaction, ContextError> {
         if self.cancellation.is_cancelled() {
             return Err(ContextError::new(
@@ -1731,6 +2048,7 @@ impl<'a> AgentExecution<'a> {
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
+                staged_request_context,
             },
         )?;
         let summary_request = plan.summary_request();
@@ -1768,22 +2086,28 @@ impl<'a> AgentExecution<'a> {
             &tools,
         )?;
         let summary_block = prepared.summary_block();
-        // The rebuilt projection must fit under the soft input limit; if
-        // retained context and the actual summary cannot fit, fail
-        // explicitly before anything is committed.
-        match self
-            .context_runtime
-            .engine
-            .fits_under_soft_limit(&projection, budgets.primary_output_budget)
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                return Err(ContextError::new(
-                    ContextErrorKind::CannotFit,
-                    "the compacted surface still exceeds the soft input limit",
-                ));
-            }
-            Err(error) => return Err(error),
+        // The rebuilt projection must fit under the soft input limit
+        // together with any staged request-scoped context the upcoming
+        // request will carry. This is the exact hypothetical request — the
+        // post-compaction Surface plus the staged overlay, measured by the
+        // same estimator — never a stale scalar token delta. If retained
+        // context, the actual summary, and the staged context cannot fit,
+        // fail explicitly before anything is committed.
+        let exact_after = self.context_runtime.engine.estimate_with_staged_context(
+            &projection,
+            staged_request_context,
+            &tools,
+        );
+        let fits = exact_after
+            < self
+                .context_runtime
+                .engine
+                .soft_input_limit(budgets.primary_output_budget)?;
+        if !fits {
+            return Err(ContextError::new(
+                ContextErrorKind::CannotFit,
+                "the compacted surface still exceeds the soft input limit",
+            ));
         }
         let (durable_revision, durable_generation, persisted_event) =
             match self.store.commit_compaction(CompactionCommitInput {
@@ -1950,14 +2274,17 @@ impl<'a> AgentExecution<'a> {
                 fresh.as_ref(),
                 &effective_system_prompt,
                 Some(overflow_error),
+                &[],
             )
             .await
         {
             Ok(()) => {}
             Err(terminal) => return Err(terminal),
         }
-        // Cancel after completed compaction but before the retry: no model
-        // retry is issued once cancellation is observable.
+        // The cancellation check here is a cheap fast path only: it avoids
+        // emitting `ModelRetryScheduled` once cancellation is already
+        // observable. The retry's actual cancellation arbitration is the
+        // same `start_model_turn` gate every other model request uses.
         if self.cancellation.is_cancelled() {
             return Err(Terminal::Cancelled {
                 reason: self.cancellation.reason(),
@@ -1977,7 +2304,20 @@ impl<'a> AgentExecution<'a> {
             "{}-agent-{}-retry-{}",
             self.request.attempt_id, self.turn, retry_number
         ));
-        let request = match self.context_model_request(retry_number) {
+        // The retry is another actual provider request: it stages no new
+        // request-scoped context (the original request's start transaction
+        // already committed it), freezes its own Request Snapshot, and
+        // passes through the one cancellation-vs-start arbitration exactly
+        // like the first request of the turn.
+        let staged = match self.stage_model_turn(retry_number, &[]) {
+            Ok(staged) => staged,
+            Err(terminal) => return Err(terminal),
+        };
+        let prepared = match self.finalize_model_turn(&[], staged) {
+            Ok(prepared) => prepared,
+            Err(terminal) => return Err(terminal),
+        };
+        let request = match self.start_model_turn(prepared) {
             Ok(request) => request,
             Err(terminal) => return Err(terminal),
         };
@@ -3053,7 +3393,7 @@ impl ProgressReporter for ForegroundProgressBuffer {
 /// releases it, so the controlling test must run on a multi-threaded
 /// runtime. This hook exists only under `#[cfg(test)]`.
 #[cfg(test)]
-mod test_sync {
+pub(crate) mod test_sync {
     use std::sync::mpsc;
 
     use tokio::sync::watch;
@@ -3101,35 +3441,128 @@ mod test_sync {
         }
     }
 
-    /// A test-only control point after transient Context Assembly and before
-    /// the request-start admission check. It makes the cancellation race
-    /// explicit without relying on scheduler timing.
+    /// A test-only control point at the one M9b model-turn start boundary.
+    ///
+    /// Two independent phases cover the deterministic race matrix:
+    ///
+    /// - `pre_start`: parks immediately before the cancellation-vs-start
+    ///   arbitration, after every fallible preparation step completed. No
+    ///   request-scoped context, Request Snapshot, start fact, or provider
+    ///   request exists while parked, so a cancellation issued while parked
+    ///   provably linearizes before the arbitration.
+    /// - `pre_commit`: parks **inside** the arbitration critical section
+    ///   (the attempt's start gate is held), immediately before the durable
+    ///   start commit. A cancellation issued while parked provably blocks
+    ///   behind the gate and is therefore post-start once the commit
+    ///   succeeds.
+    ///
+    /// Each phase counts its parks on a watch channel and blocks the
+    /// execution task on a `std` channel until the test releases that exact
+    /// park, so multi-request tests address each park by ordinal. This hook
+    /// exists only under `#[cfg(test)]`.
     #[derive(Debug)]
-    pub(super) struct AdmissionPause {
-        reached: watch::Sender<bool>,
-        release: mpsc::Receiver<()>,
+    pub(crate) struct StartBoundaryPause {
+        pre_start: Option<PhasePause>,
+        pre_commit: Option<PhasePause>,
     }
 
-    impl AdmissionPause {
-        /// Creates the pause and its observation/release handles.
-        #[must_use]
-        pub(super) fn install() -> (Self, watch::Receiver<bool>, mpsc::Sender<()>) {
-            let (reached, reached_rx) = watch::channel(false);
+    /// One parked phase of the start boundary.
+    #[derive(Debug)]
+    struct PhasePause {
+        reached: watch::Sender<u32>,
+        release: mpsc::Receiver<()>,
+        parks: std::sync::atomic::AtomicU32,
+    }
+
+    /// The test-side control of one installed phase.
+    #[derive(Debug)]
+    pub(crate) struct PhasePauseControl {
+        reached: watch::Receiver<u32>,
+        release: mpsc::Sender<()>,
+    }
+
+    impl PhasePauseControl {
+        /// Waits until the phase parked the `ordinal`-th time (1-based).
+        pub(crate) async fn await_park(&mut self, ordinal: u32) {
+            self.reached
+                .wait_for(|parks| *parks >= ordinal)
+                .await
+                .expect("start boundary pause channel stays open");
+        }
+
+        /// Releases the currently parked execution.
+        pub(crate) fn release(&self) {
+            let _ = self.release.send(());
+        }
+    }
+
+    impl PhasePause {
+        fn install() -> (Self, PhasePauseControl) {
+            let (reached, reached_rx) = watch::channel(0_u32);
             let (release_tx, release_rx) = mpsc::channel();
             (
                 Self {
                     reached,
                     release: release_rx,
+                    parks: std::sync::atomic::AtomicU32::new(0),
                 },
-                reached_rx,
-                release_tx,
+                PhasePauseControl {
+                    reached: reached_rx,
+                    release: release_tx,
+                },
             )
         }
 
-        /// Signals that proposals exist and blocks before admission.
-        pub(super) fn park_before_admission(&self) {
-            self.reached.send_replace(true);
+        fn park(&self) {
+            let parks = self.parks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            self.reached.send_replace(parks);
             let _ = self.release.recv();
+        }
+    }
+
+    impl StartBoundaryPause {
+        /// Creates the pause with the selected phases and their test-side
+        /// controls.
+        #[must_use]
+        pub(crate) fn install(
+            pre_start: bool,
+            pre_commit: bool,
+        ) -> (Self, Option<PhasePauseControl>, Option<PhasePauseControl>) {
+            let (pre_start_pause, pre_start_control) = if pre_start {
+                let (pause, control) = PhasePause::install();
+                (Some(pause), Some(control))
+            } else {
+                (None, None)
+            };
+            let (pre_commit_pause, pre_commit_control) = if pre_commit {
+                let (pause, control) = PhasePause::install();
+                (Some(pause), Some(control))
+            } else {
+                (None, None)
+            };
+            (
+                Self {
+                    pre_start: pre_start_pause,
+                    pre_commit: pre_commit_pause,
+                },
+                pre_start_control,
+                pre_commit_control,
+            )
+        }
+
+        /// Parks immediately before the cancellation-vs-start arbitration.
+        pub(super) fn park_before_start_arbitration(&self) {
+            if let Some(phase) = &self.pre_start {
+                phase.park();
+            }
+        }
+
+        /// Parks inside the arbitration critical section, immediately
+        /// before the durable start commit (the start gate is held).
+        pub(super) fn park_before_start_commit(&self) {
+            if let Some(phase) = &self.pre_commit {
+                phase.park();
+            }
         }
     }
 }
@@ -3174,7 +3607,7 @@ mod tests {
 
     use super::{
         AgentExecution, AgentExecutionRequest, ForegroundProgressBuffer,
-        test_sync::{AdmissionPause, ContinuationBoundaryPause},
+        test_sync::{ContinuationBoundaryPause, StartBoundaryPause},
     };
     use crate::agent::cancellation::AgentCancellation;
     use crate::context::ContextRuntime;
@@ -3759,7 +4192,9 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        store.arm_fail_request_start_times(1);
+        store.arm_request_start_fault_script([
+            crate::durable::sqlite::RequestStartFaultOperation::BeforeContextAppend,
+        ]);
         let tool_runtime = tool_runtime_with_store(Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
@@ -4139,37 +4574,218 @@ mod tests {
         assert_eq!(coordinator.active_attempts(), 0);
     }
 
-    /// Context Assembly is allowed to finish while cancellation is observable,
-    /// but the generic request-start admission checkpoint is the linearization
-    /// point: no accepted context, Surface advancement, snapshot, or provider
-    /// request may exist when cancellation wins before it.
+    /// Issue #12 (M9b), cancellation wins before start: Context Assembly is
+    /// allowed to finish while cancellation is observable, but the one
+    /// model-turn start gate is the linearization point. The execution parks
+    /// immediately before the arbitration; the cancellation fully completes
+    /// while parked (provably linearized first); the released arbitration
+    /// observes it and discards the prepared turn: no provider request, no
+    /// `ModelRequestStarted`, no started Request Snapshot, and no
+    /// request-scoped context commit.
+    ///
+    /// `TurnStarted` is present: it records that the loop began preparing
+    /// the logical turn, which genuinely happened; it implies no request,
+    /// no context commit, and no provider side effect. The attempt terminal
+    /// is unique and last.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cancellation_before_context_admission_commits_nothing() {
+    async fn cancellation_before_start_arbitration_commits_nothing() {
         let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
             finish_reason: ModelFinishReason::Stop,
             usage: None,
         }]]));
-        let invocation_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count_for_contributor = Arc::clone(&invocation_count);
+        let (request, runtime, invocation_count) = counting_context_request(&adapter);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let controller_cancellation = cancellation.clone();
+        let controller = tokio::spawn(async move {
+            pre_start.await_park(1).await;
+            controller_cancellation.cancel();
+            // The cancellation fully completed while the execution was
+            // parked before the arbitration: it provably linearized first.
+            assert!(controller_cancellation.is_cancelled());
+            pre_start.release();
+        });
+        let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let mut execution = AgentExecution::new(
+            request,
+            lease,
+            &cancellation,
+            runtime,
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.install_start_boundary_pause(pause);
+        let result = execution.run().await;
+        controller.await.expect("cancellation controller");
+        let store = tool_runtime.durable_store();
+        let snapshots = request_snapshot_history(store.as_ref());
+        let events = event_history(store.as_ref());
+
+        assert_eq!(
+            invocation_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the finite contributor ran once and was never rerun"
+        );
+        assert!(matches!(
+            result.outcome,
+            crate::events::types::AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ));
+        assert!(snapshots.is_empty(), "no started Request Snapshot exists");
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. })),
+            "no request-start fact exists"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, RuntimeEvent::TurnStarted)),
+            "TurnStarted records that turn preparation began"
+        );
+        assert!(
+            matches!(events.last(), Some(RuntimeEvent::AttemptCancelled { .. }))
+                && events
+                    .iter()
+                    .filter(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+                    .count()
+                    == 1,
+            "the cancellation terminal is unique and last: {events:?}"
+        );
+        assert_eq!(
+            result.conversation.revision(),
+            crate::conversation::SurfaceRevision::INITIAL
+        );
+        assert!(
+            result.messages().is_empty(),
+            "no request-scoped context was committed"
+        );
+        assert_eq!(
+            adapter.request_count(),
+            0,
+            "the provider request never started"
+        );
+    }
+
+    /// Issue #12 (M9b): the exact arbitration race, start winner. The
+    /// execution is parked **inside** the arbitration — the start gate is
+    /// held, the cancellation check has passed, and the durable commit is
+    /// pending. A concurrent canceller's `cancel()` provably cannot complete
+    /// while the gate is held; once the commit is released the start fact
+    /// is durable, the provider request starts, and the late cancellation
+    /// settles that started request as post-start cancellation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn start_commit_wins_the_arbitration_race_against_cancellation() {
+        let adapter = Arc::new(ParkedUntilCancelledAdapter::default());
+        let adapter_dyn: Arc<dyn ModelAdapter> = adapter.clone();
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let (pause, _, pre_commit) = StartBoundaryPause::install(false, true);
+        let mut pre_commit = pre_commit.expect("pre-commit phase installed");
+        let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) =
+            capability_lease(ToolRegistry::new(), &tool_runtime).await;
+        let mut execution = AgentExecution::new(
+            request_dyn(&adapter_dyn),
+            lease,
+            &cancellation,
+            runtime_dyn(&adapter_dyn),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.install_start_boundary_pause(pause);
+        let canceller = cancellation.clone();
+        let controller = tokio::spawn(async move {
+            pre_commit.await_park(1).await;
+            // Release the parked commit, then cancel: the cancel can only
+            // complete after the gate is dropped at the end of the durable
+            // start commit, so cancellation provably linearizes after the
+            // start fact. The parked provider stream then makes the attempt
+            // outcome deterministic regardless of the post-commit schedule.
+            pre_commit.release();
+            canceller.cancel();
+        });
+        let result = execution.run().await;
+        controller.await.expect("canceller controller");
+
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "the provider request started exactly once"
+        );
+        let events = event_history(tool_runtime.durable_store().as_ref());
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            1,
+            "exactly one start fact: the durable commit won the race"
+        );
+        assert_eq!(
+            request_snapshot_history(tool_runtime.durable_store().as_ref()).len(),
+            1,
+            "exactly one started Request Snapshot"
+        );
+        assert!(
+            matches!(
+                result.outcome,
+                crate::events::types::AttemptOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested
+                }
+            ),
+            "the post-start cancellation settles the started request"
+        );
+        assert!(
+            matches!(events.last(), Some(RuntimeEvent::AttemptCancelled { .. }))
+                && events
+                    .iter()
+                    .filter(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+                    .count()
+                    == 1,
+            "the cancellation terminal is unique and last: {events:?}"
+        );
+        assert!(
+            !result
+                .messages()
+                .iter()
+                .any(|message| matches!(message, MessageBlock::Assistant(_))),
+            "the cancelled in-flight request commits no assistant message"
+        );
+    }
+
+    /// Issue #12 (M9b): a durable failure **inside** the fused start
+    /// transaction — after the request-scoped context append — rolls the
+    /// whole transaction back: no context, no snapshot, no
+    /// `ModelRequestStarted`, no provider invocation. The attempt settles
+    /// with the honest durable-store failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_start_commit_after_context_append_rolls_back_everything() {
+        let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
+            finish_reason: ModelFinishReason::Stop,
+            usage: None,
+        }]]));
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                .expect("store"),
+        );
+        store.arm_request_start_fault_script([
+            crate::durable::sqlite::RequestStartFaultOperation::AfterContextAppend,
+        ]);
         let mut assembly = crate::context::ContextAssembly::new();
         assembly
             .register_extension(
-                "test.context",
+                "static.test",
                 Some("package-v1".to_owned()),
-                Arc::new(move |_: &crate::context::ContributorInputSnapshot| {
-                    count_for_contributor.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(vec![crate::context::ContextProposal::UserMessage(
-                        crate::context::UserMessageProposal {
-                            content: vec![UserContentBlock::Text(
-                                crate::message::content::TextBlock {
-                                    text: "proposal exists before admission".to_owned(),
-                                },
-                            )],
-                        },
-                    )])
-                }),
+                Arc::new(StaticContributor),
             )
-            .expect("register test contributor");
+            .expect("register static contributor");
         let request = request(&adapter);
         let runtime = ContextRuntime::for_attempt_with_assembly(
             crate::context::SessionContextPolicy {
@@ -4183,21 +4799,11 @@ mod tests {
             &request.model,
         )
         .expect("valid context runtime");
-        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let (pause, mut reached, release) = AdmissionPause::install();
-        let controller_cancellation = cancellation.clone();
-        let controller = tokio::spawn(async move {
-            reached
-                .wait_for(|reached| *reached)
-                .await
-                .expect("admission pause reached");
-            controller_cancellation.cancel();
-            release.send(()).expect("release admission pause");
-        });
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
-        let execution = AgentExecution::new(
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let result = AgentExecution::new(
             request,
             lease,
             &cancellation,
@@ -4205,48 +4811,401 @@ mod tests {
             &tool_runtime,
             crate::agent::AttemptLifecycle::inert(),
         )
-        .expect("conversation identity matches the tool runtime");
-        execution
-            .admission_pause
-            .lock()
-            .expect("admission pause lock")
-            .replace(pause);
-        let result = execution.run().await;
-        controller.await.expect("cancellation controller");
-        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
+        .expect("conversation identity matches the tool runtime")
+        .run()
+        .await;
 
-        assert_eq!(
-            invocation_count.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the finite contributor ran once and was never rerun"
-        );
-        assert!(matches!(
-            result.outcome,
-            crate::events::types::AttemptOutcome::Cancelled {
-                reason: CancellationReason::UserRequested
-            }
-        ));
-        assert!(snapshots.is_empty());
-        assert_eq!(
-            result.conversation.revision(),
-            crate::conversation::SurfaceRevision::INITIAL
-        );
         assert!(
-            result.messages().is_empty(),
-            "no dynamic context was committed"
+            matches!(
+                &result.outcome,
+                crate::events::types::AttemptOutcome::Failed { error }
+                    if format!("{error:?}").contains("request start could not be committed durably")
+            ),
+            "the attempt settles with the honest durable-store failure: {:?}",
+            result.outcome
         );
         assert_eq!(
             adapter.request_count(),
             0,
             "the provider request never started"
         );
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .is_empty(),
+            "no started Request Snapshot exists"
+        );
+        let journal = store.read_events(None, 128).expect("journal").events;
+        assert!(
+            !journal.iter().any(|envelope| matches!(
+                envelope.event,
+                crate::events::types::RuntimeEvent::ModelRequestStarted { .. }
+            )),
+            "no request-start fact exists"
+        );
+        assert!(
+            store.load_canonical().expect("canonical").is_empty(),
+            "the staged context rolled back with the start transaction"
+        );
+        assert!(
+            store
+                .read_request_snapshots(None, 32)
+                .expect("snapshots")
+                .snapshots
+                .is_empty(),
+            "no snapshot exists"
+        );
+        assert!(
+            matches!(
+                journal.last().map(|envelope| &envelope.event),
+                Some(crate::events::types::RuntimeEvent::AttemptFailed { .. })
+            ),
+            "the attempt settles with the durable failure terminal"
+        );
+    }
+
+    /// Issue #12 (M9b): tool continuation reaches the same gate. The first
+    /// request starts and completes a tool call; the second request is
+    /// parked immediately before its start arbitration, and cancelling
+    /// there is again cancellation-before-start: no second provider request,
+    /// no second `ModelRequestStarted`, while the first request's durable
+    /// facts (including the Tool message) remain.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_before_continuation_start_stops_the_tool_turn() {
+        let call = ToolCall {
+            id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+            name: "alpha".to_owned(),
+            arguments: serde_json::json!({}),
+        };
+        let adapter = Arc::new(ScriptedAdapter::new(vec![
+            tool_call_script(&call),
+            vec![ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }],
+        ]));
+        let mut tools = ToolRegistry::new();
+        tools
+            .register(
+                InstantTool::definition("tool-alpha", "alpha"),
+                std::sync::Arc::new(InstantTool),
+            )
+            .expect("register tool");
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+        let mut pre_start = pre_start.expect("pre-start phase installed");
+        let tool_runtime = tool_runtime();
+        let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
+        let mut execution = AgentExecution::new(
+            request(&adapter),
+            lease,
+            &cancellation,
+            runtime(&adapter),
+            &tool_runtime,
+            crate::agent::AttemptLifecycle::inert(),
+        )
+        .expect("conversation identity matches the tool runtime");
+        execution.install_start_boundary_pause(pause);
+        let controller_cancellation = cancellation.clone();
+        let controller = tokio::spawn(async move {
+            // Request #1 reaches its start arbitration: let it start and
+            // complete (including the tool execution).
+            pre_start.await_park(1).await;
+            pre_start.release();
+            // The tool continuation reaches the same gate for request #2:
+            // cancel before that start.
+            pre_start.await_park(2).await;
+            controller_cancellation.cancel();
+            pre_start.release();
+        });
+        let result = execution.run().await;
+        controller.await.expect("controller task");
+        let events = event_history(tool_runtime.durable_store().as_ref());
+
+        assert_eq!(
+            adapter.request_count(),
+            1,
+            "the second provider request never started"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+                .count(),
+            1,
+            "exactly one ModelRequestStarted: the continuation start never committed"
+        );
+        assert!(
+            result
+                .messages()
+                .iter()
+                .any(|message| matches!(message, MessageBlock::Tool(_))),
+            "the first request's Tool message remains a durable fact"
+        );
+        assert!(
+            matches!(
+                result.outcome,
+                crate::events::types::AttemptOutcome::Cancelled {
+                    reason: CancellationReason::UserRequested
+                }
+            ),
+            "the continuation settles cancelled before its start"
+        );
+        assert!(
+            matches!(events.last(), Some(RuntimeEvent::AttemptCancelled { .. }))
+                && events
+                    .iter()
+                    .filter(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+                    .count()
+                    == 1,
+            "the cancellation terminal is unique and last: {events:?}"
+        );
+    }
+
+    /// Issue #12 (M9b): an inert lifecycle and an attached-but-empty
+    /// lifecycle (a counting `AlwaysEnter` policy plus the native
+    /// no-deferred-context observer) reach the same start boundary and
+    /// produce the same never-started outcome.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inert_and_attached_lifecycles_share_the_start_boundary() {
+        for attached in [false, true] {
+            let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }]]));
+            let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+            let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+            let mut pre_start = pre_start.expect("pre-start phase installed");
+            // Each iteration gets its own in-memory durable authority; the
+            // default temp-dir store would be shared across iterations.
+            let tool_runtime = tool_runtime_with_store(Some(Arc::new(
+                crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+                    .expect("store"),
+            )));
+            let (_dir, _coordinator, lease) =
+                capability_lease(ToolRegistry::new(), &tool_runtime).await;
+            let evaluations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let lifecycle = if attached {
+                crate::agent::AttemptLifecycle::inert()
+                    .with_pre_step_policy(Arc::new(CountingEnterPolicy {
+                        evaluations: Arc::clone(&evaluations),
+                    }))
+                    .with_native_tool_result_observer(Arc::new(crate::agent::NoDeferredContext))
+                    .expect("native observer binding")
+            } else {
+                crate::agent::AttemptLifecycle::inert()
+            };
+            let mut execution = AgentExecution::new(
+                request(&adapter),
+                lease,
+                &cancellation,
+                runtime(&adapter),
+                &tool_runtime,
+                lifecycle,
+            )
+            .expect("conversation identity matches the tool runtime");
+            execution.install_start_boundary_pause(pause);
+            let controller_cancellation = cancellation.clone();
+            let controller = tokio::spawn(async move {
+                pre_start.await_park(1).await;
+                controller_cancellation.cancel();
+                pre_start.release();
+            });
+            let result = execution.run().await;
+            controller.await.expect("controller task");
+
+            assert!(
+                matches!(
+                    result.outcome,
+                    crate::events::types::AttemptOutcome::Cancelled {
+                        reason: CancellationReason::UserRequested
+                    }
+                ),
+                "attached={attached}: cancellation before start settles cancelled"
+            );
+            assert_eq!(
+                adapter.request_count(),
+                0,
+                "attached={attached}: the provider request never started"
+            );
+            assert!(
+                request_snapshot_history(tool_runtime.durable_store().as_ref()).is_empty(),
+                "attached={attached}: no started Request Snapshot"
+            );
+            assert!(
+                result.messages().is_empty(),
+                "attached={attached}: no request-scoped context committed"
+            );
+            if attached {
+                assert!(
+                    evaluations.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+                    "the attached policy was genuinely evaluated"
+                );
+            }
+        }
+    }
+
+    /// A request + context runtime with one counting test contributor that
+    /// returns a single User-context proposal.
+    fn counting_context_request(
+        adapter: &Arc<ScriptedAdapter>,
+    ) -> (
+        AgentExecutionRequest,
+        ContextRuntime,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let invocation_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count_for_contributor = Arc::clone(&invocation_count);
+        let mut assembly = crate::context::ContextAssembly::new();
+        assembly
+            .register_extension(
+                "test.context",
+                Some("package-v1".to_owned()),
+                Arc::new(move |_: &crate::context::ContributorInputSnapshot| {
+                    count_for_contributor.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(vec![crate::context::ContextProposal::UserMessage(
+                        crate::context::UserMessageProposal {
+                            content: vec![UserContentBlock::Text(
+                                crate::message::content::TextBlock {
+                                    text: "proposal exists before start".to_owned(),
+                                },
+                            )],
+                        },
+                    )])
+                }),
+            )
+            .expect("register test contributor");
+        let request = request(adapter);
+        let runtime = ContextRuntime::for_attempt_with_assembly(
+            crate::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            Arc::new(crate::context::DefaultTokenEstimator),
+            crate::context::AgentStatusComposer::default(),
+            assembly,
+            &request.model,
+        )
+        .expect("valid context runtime");
+        (request, runtime, invocation_count)
+    }
+
+    /// An adapter whose stream parks until the invocation's cancellation
+    /// signal fires, then fails with `Cancelled` — the execution-level
+    /// analogue of the scripted suites' `FakeStep::ParkUntilCancelled`.
+    #[derive(Default)]
+    struct ParkedUntilCancelledAdapter {
+        requests: Mutex<Vec<ModelRequest>>,
+    }
+
+    impl ParkedUntilCancelledAdapter {
+        fn request_count(&self) -> usize {
+            self.requests.lock().expect("request lock").len()
+        }
+    }
+
+    impl ModelAdapter for ParkedUntilCancelledAdapter {
+        fn protocol(&self) -> ModelProtocol {
+            chat_protocol()
+        }
+
+        fn stream(
+            &self,
+            request: ModelRequest,
+            cancellation: CancellationSignal,
+        ) -> ModelEventStream {
+            self.requests.lock().expect("request lock").push(request);
+            Box::pin(futures_util::stream::once(async move {
+                cancellation.cancelled().await;
+                ModelEvent::Failed {
+                    error: crate::model::error::ModelError {
+                        kind: ModelErrorKind::Cancelled,
+                        message: "cancelled".to_owned(),
+                        retry_after_ms: None,
+                        provider_code: None,
+                    },
+                }
+            }))
+        }
+    }
+
+    /// A contributor returning one static User-context proposal.
+    struct StaticContributor;
+
+    impl crate::context::ContextContributor for StaticContributor {
+        fn contribute<'a>(
+            &'a self,
+            _input: &'a crate::context::ContributorInputSnapshot,
+        ) -> BoxFuture<
+            'a,
+            Result<Vec<crate::context::ContextProposal>, crate::context::ContextAssemblyError>,
+        > {
+            Box::pin(async {
+                Ok(vec![crate::context::ContextProposal::UserMessage(
+                    crate::context::UserMessageProposal {
+                        content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                            text: "staged context".to_owned(),
+                        })],
+                    },
+                )])
+            })
+        }
+    }
+
+    /// A pre-step policy that counts its evaluations, then always enters.
+    struct CountingEnterPolicy {
+        evaluations: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::agent::PreStepPolicy for CountingEnterPolicy {
+        fn evaluate<'a>(
+            &'a self,
+            _batch: &'a crate::agent::PreStepBatch<'a>,
+        ) -> BoxFuture<'a, Result<crate::agent::PreStepDecision, crate::agent::LifecycleError>>
+        {
+            self.evaluations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(crate::agent::PreStepDecision::Enter) })
+        }
+    }
+
+    /// A [`request`] variant over a `dyn` adapter handle.
+    fn request_dyn(adapter: &Arc<dyn ModelAdapter>) -> AgentExecutionRequest {
+        AgentExecutionRequest {
+            agent_id: AgentId::new("agent-a"),
+            conversation_id: ConversationId::new("conv-1"),
+            attempt_id: AttemptId::new("attempt-1"),
+            conversation: ConversationState::new(),
+            initial_turn_trigger: InitialTurnTrigger::Continuation,
+            timezone: None,
+            model: scripted_session_model(adapter.clone()).snapshot(),
+        }
+    }
+
+    /// A [`runtime`] variant over a `dyn` adapter handle.
+    fn runtime_dyn(adapter: &Arc<dyn ModelAdapter>) -> ContextRuntime {
+        ContextRuntime::for_attempt(
+            crate::context::SessionContextPolicy {
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+                summary_output_cap: None,
+            },
+            Arc::new(crate::context::DefaultTokenEstimator),
+            crate::context::AgentStatusComposer::default(),
+            &request_dyn(adapter).model,
+        )
+        .expect("valid context runtime")
     }
 
     /// Cancellation may become observable while a contributor is awaiting
     /// bounded work. The contributor still settles its transient proposal,
-    /// then the one generic pre-admission checkpoint linearizes cancellation
-    /// before any canonical context, Surface revision, snapshot, or provider
-    /// request exists.
+    /// then the one start arbitration linearizes cancellation before any
+    /// canonical context, Surface revision, snapshot, or provider request
+    /// exists (Issue #12, M9b).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancellation_during_awaited_context_assembly_commits_nothing() {
         let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Completed {
@@ -4328,15 +5287,15 @@ mod tests {
         assert_eq!(adapter.request_count(), 0);
     }
 
-    /// Once admission has completed, a provider failure does not roll back
-    /// the canonical context fact, its Surface revision, or the frozen
-    /// provider-neutral request boundary.
+    /// Once the model-turn start has committed, a provider failure does not
+    /// roll back the canonical context fact, its Surface revision, or the
+    /// frozen provider-neutral request boundary.
     #[tokio::test]
-    async fn post_admission_provider_failure_preserves_historical_facts() {
+    async fn post_start_provider_failure_preserves_historical_facts() {
         let adapter = Arc::new(ScriptedAdapter::new(vec![vec![ModelEvent::Failed {
             error: crate::model::error::ModelError {
                 kind: ModelErrorKind::ProviderError,
-                message: "provider failed after admission".to_owned(),
+                message: "provider failed after start".to_owned(),
                 retry_after_ms: None,
                 provider_code: None,
             },
