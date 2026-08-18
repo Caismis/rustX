@@ -856,6 +856,14 @@ pub(crate) struct CoordinatorProbe {
     /// Parks the settled attempt **task** after the current-attempt slot is
     /// cleared and before its final admission callback and task exit.
     pub(crate) attempt_exit_gate: Option<Arc<Gate>>,
+    /// Parks the background settlement continuation **inside** its last
+    /// conversation-facing callback: entered at the top of
+    /// [`BackgroundFailureSink::terminal_publication_failed`], before the
+    /// coordinator lock is taken and before the durability-health mutation,
+    /// and therefore before the registry publishes `publication_abandoned`.
+    /// While the park holds, the failing execution has provably not crossed
+    /// its abandoned settlement boundary.
+    pub(crate) background_failure_gate: Option<Arc<Gate>>,
     /// Installed into the **next** admitted attempt's execution: the M9b
     /// model-turn start-boundary pause (Issue #12). `take`n by the next
     /// `run_attempt`, so it arms exactly one attempt.
@@ -2016,6 +2024,25 @@ impl crate::tools::background::BackgroundDurabilityFailureSink for BackgroundFai
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
+        // The real callback boundary: parked here, the runner has entered its
+        // last conversation-facing callback and has provably not yet
+        // published `publication_abandoned`. The coordinator lock is taken
+        // only after the park, so drain and every other coordinator caller
+        // stay live while the callback is held.
+        #[cfg(test)]
+        let background_failure_gate = inner
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.background_failure_gate.clone());
+        // The probe lock is released before the park: `shutdown` reads the
+        // same probe, so holding it across the gate would block the very
+        // caller this boundary exists to race.
+        #[cfg(test)]
+        if let Some(gate) = background_failure_gate {
+            gate.enter();
+        }
         let mut state = inner.lock_state();
         inner.record_durability_failure(
             &mut state,
@@ -3899,6 +3926,7 @@ mod tests {
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
+            background_failure_gate: None,
         }))
         .await;
         gate.arm();
@@ -4257,6 +4285,7 @@ mod tests {
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
+            background_failure_gate: None,
         }))
         .await;
         gate.arm();
@@ -4337,6 +4366,7 @@ mod tests {
             tool_start_pause: None,
             drain_supervision: None,
             attempt_exit_gate: None,
+            background_failure_gate: None,
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -5662,6 +5692,303 @@ mod tests {
                 .iter()
                 .any(|item| format!("{item:?}").contains(failing_id.as_str())),
             "no false terminal inbound exists for the unresolved record"
+        );
+    }
+
+    /// M9c (settlement linearization): a background terminal-publication
+    /// failure is not logically settled until the runner has completed its
+    /// **last conversation-facing failure callback**. `publication_abandoned`
+    /// is the fact runtime drain consumes as this owner's settlement, so it
+    /// must never become observable while the failure sink can still call
+    /// back into the conversation — otherwise drain could aggregate the
+    /// abandoned evidence and cache a failed shutdown *before* the runner
+    /// published its `DurabilityFailed` observation.
+    ///
+    /// This regression races shutdown against the failure sink itself, which
+    /// the sibling-background regression deliberately does not: there the
+    /// `DurabilityFailed` observation is awaited *before* shutdown starts, so
+    /// the callback is already complete.
+    ///
+    /// Happens-before: `background_failure_gate` parks the runner inside
+    /// `BackgroundFailureSink::terminal_publication_failed`, before the
+    /// coordinator lock and before the durability-health mutation. While it
+    /// is parked, the callback has provably started and provably not
+    /// returned. `drain_linearization` then proves `Running -> Draining`
+    /// committed and `drain_supervision` proves the drain task is committed
+    /// to awaiting this exact owner — yet neither shutdown caller may return.
+    /// Releasing the gate is the only thing that lets the failure become
+    /// observable, then the abandoned fact, then the shutdown failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn abandoned_publication_never_precedes_the_last_failure_callback() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-m9c-abandon-order",
+            ))
+            .expect("in-memory store"),
+        );
+        let background_failure_gate = Arc::new(super::Gate::default());
+        background_failure_gate.arm();
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let drain_supervision = Arc::new(tokio::sync::Notify::new());
+        let (runtime, _model) = headless_runtime_over_store_with(
+            &dir,
+            "conv-m9c-abandon-order",
+            store.clone(),
+            vec![one_turn_script()],
+            Some(CoordinatorProbe {
+                background_failure_gate: Some(background_failure_gate.clone()),
+                drain_linearization: Some(drain_linearization.clone()),
+                drain_supervision: Some(drain_supervision.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        let background = runtime.tool_runtime().background().clone();
+
+        let (executor, mut started, release_executor) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let execution_id = commit_background(&runtime, &executor, "call-abandon-order");
+        started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("start channel stays open");
+
+        // Exactly the bounded publication budget: durable attempt #1 (inside
+        // `finish`) and durable attempt #2 (the one registry-owned retry).
+        store.arm_fail_accept_times(2);
+        release_executor.send_replace(true);
+
+        // (5)+(6) The runner entered its last conversation-facing callback
+        // and is parked *inside* it. The park is the callback boundary
+        // itself, so from here the callback has provably started and
+        // provably not returned.
+        background_failure_gate.wait_entered();
+        let before_release = pending.drain();
+        assert!(
+            !before_release.iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )),
+            "the parked callback has not completed, so it published nothing"
+        );
+        assert!(
+            runtime.inner.durability_failure_diagnostic().is_none(),
+            "the parked callback has not mutated durability health yet"
+        );
+        assert_eq!(
+            runtime
+                .background_status(&execution_id)
+                .expect("record")
+                .state,
+            crate::tools::background::BackgroundLifecycle::PublishingTerminal,
+            "the record retains its unresolved terminal candidate"
+        );
+        assert!(
+            background.abandoned_publications().is_empty(),
+            "the abandoned settlement fact must not precede the failure callback"
+        );
+
+        // (7) Shutdown races the parked failure sink.
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        within_liveness_guard(
+            "the drain transition to linearize",
+            drain_linearization.notified(),
+        )
+        .await;
+        within_liveness_guard(
+            "drain to park on the failing background execution",
+            drain_supervision.notified(),
+        )
+        .await;
+
+        // A second, concurrent caller must join the same pending drain rather
+        // than start a competing one.
+        let (second_tx, mut second_rx) = tokio::sync::oneshot::channel();
+        let second_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = second_tx.send(second_runtime.shutdown().await);
+        });
+
+        // (8) Give both callers every scheduling opportunity to finish
+        // wrongly, then prove neither did.
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        let completion = runtime
+            .inner
+            .drain
+            .get()
+            .expect("the one shared drain completion exists")
+            .clone();
+        assert!(
+            !completion
+                .completed
+                .load(std::sync::atomic::Ordering::Acquire),
+            "the shared drain completion must not be filled while the callback is live"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "shutdown must not return while the runner still owns a callback"
+        );
+        assert!(
+            matches!(
+                second_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the concurrent caller joins the same pending drain"
+        );
+        assert!(
+            background.abandoned_publications().is_empty(),
+            "the record has not crossed its abandoned settlement boundary"
+        );
+        assert!(
+            !pending.drain().iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )),
+            "the parked callback still published nothing"
+        );
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining,
+            "a live owned callback can never publish Quiescent"
+        );
+
+        // (9)+(10) Releasing the callback is the only thing that can order
+        // the failure, then the abandoned fact, then the shutdown failure.
+        background_failure_gate.release();
+        await_observation(pending.as_ref(), |observation| {
+            matches!(observation, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "background_terminal_publication")
+        })
+        .await;
+        let shutdown = within_liveness_guard("the supervised shutdown to return", done_rx)
+            .await
+            .expect("shutdown result channel");
+        assert!(
+            matches!(
+                &shutdown,
+                Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail
+                }) if detail.contains("terminal publication")
+            ),
+            "the abandoned publication is honest settlement evidence: {shutdown:?}"
+        );
+        assert_eq!(
+            background.abandoned_publications(),
+            vec![execution_id.clone()],
+            "the abandoned fact is observable only after the callback returned"
+        );
+        assert!(
+            runtime.inner.durability_failure_diagnostic().is_some(),
+            "the failure callback committed before the abandoned fact"
+        );
+        let second = within_liveness_guard("the joined shutdown to return", second_rx)
+            .await
+            .expect("second shutdown result channel");
+        assert!(
+            matches!(
+                &second,
+                Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail
+                }) if detail.contains("terminal publication")
+            ),
+            "the joined caller observes the same supervised failure: {second:?}"
+        );
+
+        // (11) After the cached failure exists, that runner owns nothing.
+        let events_after = store.read_events(None, 1024).expect("events").events.len();
+        let pending_after = store.load_pending().expect("pending inbound").len();
+        let record_after = runtime.background_status(&execution_id).expect("record");
+        let health_after = runtime.inner.durability_failure_diagnostic();
+        let _ = pending.drain();
+        assert!(
+            runtime
+                .submit_inbound(text_content("after shutdown"))
+                .is_err(),
+            "a stale inbound handle is refused after the drain decided"
+        );
+        // A stale settlement handle of the same execution is a local no-op.
+        background.finish(
+            &execution_id,
+            &crate::tools::types::ToolExecutionResult {
+                status: crate::tools::types::ToolExecutionStatus::Success,
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+            },
+        );
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            pending.drain().is_empty(),
+            "no conversation observation follows the settled runner"
+        );
+        assert_eq!(
+            store.read_events(None, 1024).expect("events").events.len(),
+            events_after,
+            "no event journal effect follows the settled runner"
+        );
+        assert_eq!(
+            store.load_pending().expect("pending inbound").len(),
+            pending_after,
+            "no Pending Inbound acceptance follows the settled runner"
+        );
+        assert_eq!(
+            runtime
+                .background_status(&execution_id)
+                .expect("record")
+                .state,
+            record_after.state,
+            "no background state mutation follows the settled runner"
+        );
+        assert_eq!(
+            runtime.inner.durability_failure_diagnostic(),
+            health_after,
+            "no durability-health mutation follows the settled runner"
+        );
+
+        // (12) The cached failure is honest: the original supervision had
+        // already completed before `DrainCompletion` was filled.
+        let repeated =
+            within_liveness_guard("the cached shutdown failure", runtime.shutdown()).await;
+        assert!(
+            matches!(
+                &repeated,
+                Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail
+                }) if detail.contains("terminal publication")
+            ),
+            "a later caller observes the cached supervised failure: {repeated:?}"
+        );
+        for _ in 0..64 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            pending.drain().is_empty(),
+            "the cached failure needs no fresh supervision and triggers no callback"
+        );
+        assert_eq!(
+            store.read_events(None, 1024).expect("events").events.len(),
+            events_after,
+            "the repeated shutdown produces no durable effect"
         );
     }
 

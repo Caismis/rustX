@@ -3441,6 +3441,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             },
         )
         .await;
@@ -3527,6 +3528,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             },
         )
         .await;
@@ -4047,6 +4049,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             },
         )
         .await;
@@ -4132,6 +4135,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             },
         )
         .await;
@@ -4361,6 +4365,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             },
         )
         .await;
@@ -5723,6 +5728,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             }),
         )
         .await;
@@ -5969,6 +5975,7 @@ mod tests {
                 tool_start_pause: None,
                 drain_supervision: None,
                 attempt_exit_gate: None,
+                background_failure_gate: None,
             }),
         )
         .await;

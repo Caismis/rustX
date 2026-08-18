@@ -946,6 +946,19 @@ its strongest available boundary while some ownership/physical/durable
 terminal condition stayed unproven. An unresolved `PublishingTerminal` record
 stays explicitly non-terminal and is never reinterpreted as success.
 
+A settlement fact never precedes the owner's last conversation-facing
+callback. `publication_abandoned` — the fact drain consumes as one background
+execution's settlement — is committed only after the runner exhausted its
+bounded durable terminal publication *and* its failure report to the owning
+runtime returned: failure callback, then abandoned commit, then waiter
+notification. The continuation is held inside one counted settlement
+admission across both steps, because a failed drain leaves the lifecycle
+`Draining`, where settlement callbacks stay intentionally legal, so the
+supervisor itself must prove no owned callback is still live before
+`DrainCompletion` stores a result. Once the abandoned fact is observable that
+execution owns no remaining callback authority, so a cached shutdown
+completion can never precede a later conversation callback from it.
+
 Waiter lifetime is not ownership lifetime. A conversation-owned MCP
 connection runs in its own owner task holding the counted lifecycle admission
 and an ownership cancellation signal; it releases that admission only after
@@ -1011,8 +1024,10 @@ abandon a live provider turn or a sibling background execution; two owned MCP
 runtimes where the first close fails and the second must still be closed and
 settled; an aborted MCP preparation whose spawned process still owes physical
 settlement; dynamic foreground cancellation-cause observation and its
-first-winner absorption; and the attempt task's exit as part of the
-quiescence proof. No SQLite schema change was
+first-winner absorption; the attempt task's exit as part of the quiescence
+proof; and a shutdown that races the background failure sink itself, parked
+inside the runner's last conversation-facing callback, proving the abandoned
+fact and the cached shutdown failure both linearize after it. No SQLite schema change was
 required, and M9c does not implement interaction (#64), subagents (#60), or
 the DSH sidecar (#57).
 

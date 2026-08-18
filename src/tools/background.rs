@@ -165,13 +165,22 @@ use crate::tools::types::{
 };
 use crate::tools::workspace::Workspace;
 
-/// The one cancellation reason of conversation-owned background cancellation.
+/// The **default** cancellation reason of conversation-owned background
+/// cancellation.
 ///
-/// Background cancellation is only ever requested through the conversation
-/// control path (`background_task(action = cancel)` or direct registry
-/// cancellation), which is a user-requested control action. The registry
-/// retains this reason when cancellation intent commits so the canonicalized
-/// terminal result always agrees with the registry winner.
+/// Direct control-path cancellation (`background_task(action = cancel)` or
+/// [`ConversationBackgroundRegistry::cancel`]) is a user-requested control
+/// action and therefore defaults to this reason. It is not the only possible
+/// reason: runtime drain (M9c) requests cancellation of every owned execution
+/// through [`ConversationBackgroundRegistry::cancel_with_reason`] with
+/// [`CancellationReason::RuntimeShutdown`].
+///
+/// The authoritative cause store is the record's `cancel_reason`, committed
+/// once at the `Starting|Running -> Cancelling` transition and never
+/// rewritten, so the first winning reason is absorbing. The registry is the
+/// settlement authority and canonicalizes the final terminal result from that
+/// stored winner, so the registry winner and the stored result can never
+/// disagree.
 const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserRequested;
 
 /// The public lifecycle of one background execution.
@@ -251,6 +260,14 @@ pub trait BackgroundObserver: Send + Sync {
 /// lock graph already has a coordinator -> registry edge (the bootstrap
 /// handshake), so holding the registry lock across this call could
 /// deadlock.
+///
+/// This call is the runner's **last conversation-facing callback**, and it
+/// is ordered *before* the registry publishes `publication_abandoned` (M9c):
+/// runtime drain consumes the abandoned fact as settlement, so a drain that
+/// observed it while this callback were still runnable could cache a failed
+/// shutdown ahead of a real conversation callback. Implementations may
+/// therefore assume the caller keeps a lifecycle settlement admission alive
+/// across this call.
 pub trait BackgroundDurabilityFailureSink: Send + Sync {
     /// The bounded terminal-publication budget of `execution_id` was
     /// exhausted; the terminal candidate remains retained by the registry
@@ -1247,6 +1264,12 @@ impl ConversationBackgroundRegistry {
     /// owning conversation runtime through the installed
     /// [`BackgroundDurabilityFailureSink`]. There is no sleep, no hot loop,
     /// and no further attempt after the budget is spent.
+    ///
+    /// The failure report commits **before** the abandoned settlement fact
+    /// (M9c): the sink callback is real semantic runtime work, so
+    /// `publication_abandoned` — the fact runtime drain consumes as this
+    /// owner's settlement — becomes observable only once that callback has
+    /// returned and no conversation callback authority remains.
     fn settle_terminal(&self, execution_id: &ToolExecutionId, result: &ToolExecutionResult) {
         self.finish(execution_id, result);
         let Some(snapshot) = self.retry_terminal_publication(execution_id) else {
@@ -1255,12 +1278,41 @@ impl ConversationBackgroundRegistry {
         if snapshot.state != BackgroundLifecycle::PublishingTerminal {
             return;
         }
-        // The bounded publication budget is exhausted. The runner is about
-        // to return, so this record has reached its strongest available
-        // settlement: it can no longer act, but it is explicitly not
-        // terminal. Publishing that fact is what lets runtime drain stop
-        // waiting on *this* record without abandoning any other owner.
-        self.mark_publication_abandoned(execution_id);
+        // The bounded publication budget is exhausted. This record has
+        // reached its strongest available settlement: it will be able to act
+        // no further, but it is explicitly not terminal.
+        //
+        // M9c settlement linearization. Reporting the failure is itself a
+        // real conversation-facing callback of this runner: the sink upgrades
+        // the owning `ConversationRuntime`, takes the coordinator lock,
+        // mutates durability health and may publish a `DurabilityFailed`
+        // observation. `publication_abandoned` is the settlement fact runtime
+        // drain consumes (`unsettled_snapshot` / `wait_until_settled`), so it
+        // must never become observable while that callback can still run —
+        // otherwise drain could stop waiting on this owner, aggregate the
+        // abandoned evidence and cache a failed shutdown *before* the runner
+        // finished calling back into the conversation. The failure report
+        // therefore commits before the abandoned fact:
+        //
+        //   publication retries exhausted
+        //     -> failure sink callback begins
+        //     -> failure sink callback completes
+        //     -> publication_abandoned commit
+        //     -> waiters notified
+        //     -> zero remaining conversation callback authority
+        //
+        // The whole continuation runs under one settlement admission that is
+        // released only after the abandoned fact is published, so neither
+        // `mark_quiescent` (successful shutdown) nor `wait_for_no_admissions`
+        // (failed shutdown, which leaves the lifecycle `Draining` and cannot
+        // rely on admission refusal) can complete while the callback is live.
+        let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
+            // Settlement is refused only after `Quiescent`, which drain
+            // cannot publish while this record is still an unsettled
+            // `PublishingTerminal` owner. Nothing may call back into the
+            // conversation from here.
+            return;
+        };
         // The sink acquires the coordinator lock and the lock graph already
         // has a coordinator -> registry edge (the bootstrap handshake), so
         // the sink is invoked only after every registry lock acquisition
@@ -1274,6 +1326,11 @@ impl ConversationBackgroundRegistry {
                 ),
             );
         }
+        // The last conversation-facing callback of this runner has returned.
+        // Publishing the abandoned fact is what lets runtime drain stop
+        // waiting on *this* record without abandoning any other owner; from
+        // here the execution owns no remaining callback authority.
+        self.mark_publication_abandoned(execution_id);
     }
 
     /// The bounded retry of the durable terminal publication of one
@@ -1344,8 +1401,16 @@ impl ConversationBackgroundRegistry {
     }
 
     /// Records that one execution spent its whole bounded terminal-publication
-    /// budget. The runner has returned; only the durable terminal fact is
-    /// missing.
+    /// budget and completed its last conversation-facing failure callback;
+    /// only the durable terminal fact is missing.
+    ///
+    /// This is the settlement commit of the runner's continuation: it is
+    /// invoked only after [`BackgroundDurabilityFailureSink::terminal_publication_failed`]
+    /// has returned, so once `publication_abandoned` is observable the
+    /// execution owns no remaining conversation callback authority — no
+    /// failure-sink callback, no observer callback, no Pending Inbound
+    /// attempt, no durability-health mutation, no terminal retry and no
+    /// semantic registry mutation can follow it.
     fn mark_publication_abandoned(&self, execution_id: &ToolExecutionId) {
         {
             let mut state = self.state();
@@ -1363,9 +1428,12 @@ impl ConversationBackgroundRegistry {
     /// The active executions that runtime drain must still supervise.
     ///
     /// A record whose durable terminal publication was abandoned is excluded:
-    /// its runner has returned and it can produce no further external effect,
-    /// so re-cancelling and re-awaiting it would spin forever. It remains
-    /// explicit non-terminal evidence through
+    /// the abandoned fact is published only after the runner exhausted
+    /// durable terminal publication *and* completed every remaining
+    /// conversation-facing failure callback, so it owns no callback authority
+    /// and can produce no further external effect — re-cancelling and
+    /// re-awaiting it would spin forever. It remains explicit non-terminal
+    /// evidence through
     /// [`ConversationBackgroundRegistry::abandoned_publications`].
     #[must_use]
     pub(crate) fn unsettled_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
@@ -1394,7 +1462,9 @@ impl ConversationBackgroundRegistry {
 
     /// Waits until one execution reaches its strongest available settlement:
     /// a terminal lifecycle, or an explicitly abandoned durable terminal
-    /// publication whose runner has already returned.
+    /// publication. Either fact implies the execution owns no remaining
+    /// conversation callback authority — the abandoned fact is committed only
+    /// after the runner's last conversation-facing failure callback returned.
     ///
     /// Unlike a terminal-only wait this can never strand runtime drain, and
     /// unlike a global durability-health check it never reports one record's

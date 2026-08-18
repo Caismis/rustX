@@ -1643,9 +1643,10 @@ The frozen invariants:
   Failures are collected in deterministic identity order and reported
   together as one bounded diagnostic. Every wait has a native boundary that
   cannot be starved: a background record either settles terminally or
-  explicitly abandons its bounded durable publication (its runner has
-  returned either way), an MCP runtime's close proves or disproves physical
-  settlement, and a counted admission is released only by its owner. No drain
+  explicitly abandons its bounded durable publication (neither fact leaves
+  any callback authority behind), an MCP runtime's close proves or disproves
+  physical settlement, and a counted admission is released only by its
+  owner. No drain
   wait is conditioned on a global health flag, so one owner's failure can
   never be mistaken for another owner's settlement. Consequently
   `shutdown().await == Ok(())` means exactly "the lifecycle reached
@@ -1655,6 +1656,24 @@ The frozen invariants:
   ownership/physical/durable terminal conditions". An unresolved
   `PublishingTerminal` record stays explicitly non-terminal; it is never
   reinterpreted as success.
+- **A settlement fact is published only after the owner's last
+  conversation-facing callback.** `publication_abandoned` is the fact runtime
+  drain consumes as one background execution's settlement, so it is committed
+  only after that runner has exhausted its bounded durable terminal
+  publication **and** completed every remaining conversation-facing failure
+  callback: the failure report to the owning runtime commits first, the
+  abandoned fact second, and waiters are notified last. Once the abandoned
+  fact is observable, the execution owns no remaining callback authority —
+  no failure-sink callback, no registry observer callback, no Pending Inbound
+  attempt, no durability-health mutation, no progress callback, no terminal
+  retry, and no semantic registry mutation can follow it. The whole
+  continuation is held inside one counted settlement admission, because a
+  *failed* drain leaves the lifecycle `Draining` — where settlement callbacks
+  are intentionally still legal — and therefore cannot rely on admission
+  refusal the way `mark_quiescent` can. The boundary is logical callback
+  settlement, not the runner task's syntactic return. Consequently a cached
+  `DrainCompletion` result — `Ok` or `Err` — can never precede a later
+  conversation callback from the work it supervised.
 - **Waiter lifetime is not ownership lifetime.** The future that awaits an
   operation is never treated as that operation's owner. Once a
   conversation-owned preparation has created a real physical owner — an MCP

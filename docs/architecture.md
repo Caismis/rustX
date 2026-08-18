@@ -178,9 +178,9 @@ A failure in one participant is an error **fact**; it is never permission to
 abandon a sibling that can still produce an external effect. Every wait has a
 native boundary that cannot be starved: a background record either settles
 terminally or explicitly abandons its bounded durable terminal publication
-(its runner has returned either way), an MCP runtime's close proves or
-disproves physical settlement, and a counted lifecycle admission is released
-only by its owner. No drain wait is conditioned on a global health flag, so
+(neither fact leaves any callback authority behind), an MCP runtime's close
+proves or disproves physical settlement, and a counted lifecycle admission is
+released only by its owner. No drain wait is conditioned on a global health flag, so
 one owner's failure can never be read as another owner's settlement. The
 collected failures are rendered as one bounded deterministic diagnostic —
 a diagnostic aggregation, not an error framework. `Ok(())` therefore still
@@ -189,6 +189,38 @@ closed and every settleable owner was supervised to its strongest available
 boundary while some ownership/physical/durable terminal condition stayed
 unproven. An unresolved `PublishingTerminal` record remains explicitly
 non-terminal and is never reinterpreted as success.
+
+### A settlement fact never precedes the owner's last callback
+
+`publication_abandoned` is the fact drain consumes as one background
+execution's settlement, so publishing it is a linearization point, not a
+bookkeeping detail:
+
+```text
+durable terminal publication attempts #1 and #2 exhausted
+  -> failure sink callback begins (coordinator lock, durability health,
+     possible `DurabilityFailed` observation)
+  -> failure sink callback completes
+  -> `publication_abandoned` commit
+  -> waiters notified
+  -> zero remaining conversation callback authority
+  -> drain may treat this owner as settled-with-failure
+```
+
+Reporting the failure is real semantic runtime work, so the abandoned fact
+must not become observable while that callback can still run; otherwise drain
+could aggregate the abandoned evidence and cache a failed shutdown before the
+runner finished calling back into the conversation. The continuation is held
+inside one counted settlement admission across both steps, because a *failed*
+drain leaves the lifecycle `Draining` — where settlement callbacks remain
+intentionally legal — and so cannot rely on the admission refusal that
+protects a successful `Quiescent`. The contract is logical callback
+settlement, not the runner task's syntactic return: once
+`publication_abandoned` is observable, that execution owns no failure-sink
+callback, observer callback, Pending Inbound attempt, durability-health
+mutation, progress callback, terminal retry, or semantic registry mutation.
+`shutdown().await` — `Ok` or `Err` — therefore always returns after every
+runtime-owned operation reached its strongest honest settlement boundary.
 
 ### Waiter lifetime is not ownership lifetime
 
