@@ -798,10 +798,75 @@ prepare→commit→install, bounded admission retries, incomplete-tool-turn
 fail-closed behavior, and registry-owned background terminal settlement.
 The temporary #63 compaction-surface fail-close seam and the inbound-only
 store façade are superseded by atomic Surface revisions and the unified
-ConversationStore. Recovery/replay/resend policy, supervision, and retry
-orchestration remain Issue #12.
+ConversationStore. Startup recovery over that evidence is M9a (Issue #12,
+below); replay/resend policy and retry orchestration remain open.
 
-## Milestone 9 — Cancellation and runtime supervision
+## Milestone 9 — Recovery, cancellation, and runtime supervision
+
+Issue #12 is delivered in three slices, in order:
+
+```text
+M9a — durable startup recovery + recovery classification   (delivered)
+  |
+M9b — unified model-turn cancellation / request-start commit boundary
+  |
+M9c — foreground/background/process supervision + runtime quiescence
+```
+
+### M9a — durable startup recovery (delivered)
+
+M9a reconstructs one coherent `ConversationRuntime` from rustX-owned durable
+authority, deterministically classifies crash-time non-terminal work,
+reconciles only what can be stated honestly, and resumes only work proven safe
+to continue. It builds on the completed #61 (conversation runtime ownership),
+#63 (durable Pending Inbound), #11 (SQLite native durability), and #47
+(external provider emulator).
+
+```text
+durable facts -> reconstruct -> classify -> reconcile -> recovered state -> resume
+```
+
+The full contract — owner, evidence sources, the four phases, the A/B/C/D/E
+classification matrix, reconciliation transaction boundaries, terminal
+uniqueness, identity recovery, the external-lifecycle/canonical-lifecycle
+separation, the recovery-prefix invariant, and the bounded working set — is
+frozen in
+[architecture.md §7](architecture.md#7-recovery-model) and
+[invariants.md](invariants.md#recovery). The tool plane splits external
+history from canonical repair across two owners: the attempt owns a bounded
+foreground-tool external summary (did execution happen; is any outcome
+unknown), while detailed per-call results exist only while that call's
+canonical `ToolResult` is still missing. The three rules that govern all of it:
+
+```text
+exact historical reconstruction  !=  safe replay permission
+started + outcome unknown        !=  safe retry
+started + outcome known          !=  never externally started
+```
+
+Only an attempt with zero durable external-start evidence — no
+`ModelRequestStarted`, no `ToolExecutionStarted`, ever — may receive the
+Class-B continuation, and a committed canonical `ToolResult` never erases
+the historical `ToolExecutionStarted` while its owning attempt is still
+non-terminal.
+
+Exit criteria (met): accepted Pending Inbound survives a crash unchanged and
+is auto-admitted headlessly; a crash after the adoption commit leaves the
+`UserMessage` canonical exactly once; a committed request start with an unknown
+outcome reconstructs exactly, classifies as indeterminate, and resends nothing
+(proven at the real provider boundary against the #47 emulator); an
+interrupted foreground tool becomes a typed `Interrupted` canonical result in
+one atomic sibling batch; non-terminal background work is terminalized as
+`Interrupted` with exactly one model-visible notification; durable terminals
+and repeated restarts are idempotent; and recovered identity allocators never
+collide with durable history.
+
+Explicitly **not** in M9a: model-turn cancellation redesign (M9b), runtime
+supervision/quiescence (M9c), a generic retry engine, automatic replay of
+ambiguous side effects, a scheduler or durable job queue, subagent recovery,
+interaction, or DSH session persistence.
+
+### M9b / M9c — cancellation and supervision
 
 The M5 tool plane PR implements the concrete ownership seams required by
 the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
@@ -826,7 +891,9 @@ machinery that M6 deliberately does not implement:
   background processes, event-writer and drain transitions)
 - General scheduler/runtime busy state and generic process supervision
   beyond the concrete current ownership seam
-- Recovery/lifecycle orchestration
+- Unified model-turn cancellation, the pre-start/post-start cancellation
+  race around the request-start commit boundary, and process TERM/KILL/reap
+  cancellation (M9b)
 
 Exit criteria:
 

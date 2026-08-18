@@ -254,6 +254,34 @@ def gated_stream_cancellation() -> Scenario:
     )
 
 
+def restart_after_request_start() -> Scenario:
+    """One request, suspended at a gate, whose client then dies (Issue #12).
+
+    The scenario declares **exactly one** step. That is the whole point: the
+    driver kills the first runtime while this response is still suspended,
+    reopens the same durable conversation, and recovers a second runtime. If
+    recovery resent the ambiguous request, a second request would arrive here
+    and the scenario would fail as unexpected rather than pass quietly.
+    """
+    return Scenario(
+        "restart_after_request_start",
+        Step(
+            Expect(
+                protocol=OPENAI_CHAT_COMPLETIONS,
+                model=CHAT_MODEL,
+                body_contains=(TURN_ONE,),
+            ),
+            Stream(
+                Text("partial"),
+                Gate("before-remaining-text"),
+                Text(" remainder the crash must prevent"),
+                Finish("stop"),
+            ),
+            allow_disconnect=True,
+        ),
+    )
+
+
 def _compaction(name: str, summary_model: str) -> Scenario:
     """Turn one fills the window, turn two must compact through the provider."""
     return Scenario(
@@ -421,6 +449,7 @@ SCENARIOS = {
     "skill_read_turn": skill_read_turn,
     "provider_http_error": provider_http_error,
     "gated_stream_cancellation": gated_stream_cancellation,
+    "restart_after_request_start": restart_after_request_start,
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,

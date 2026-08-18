@@ -49,8 +49,10 @@ Journal fact have committed. The runtime then reconstructs the request from
 durable facts and compares it structurally with the live provider-neutral
 request. Historical reconstruction never consults current configuration,
 contributors, Skills, extension/DSH logic, status, workspace, or capability
-state. M8 stores evidence; replay/resend, retry, supervision, and recovery
-policy belong to #12.
+state. M8 stores the evidence; M9a (Issue #12) adds the startup recovery that
+classifies and reconciles it (see [Recovery](#recovery)). Replay/resend
+policy, retry orchestration, the M9b cancellation redesign, and M9c
+supervision/quiescence remain open.
 
 `lifecycle_state` makes terminality structural: an attempt, turn, or detached
 background execution can receive at most one terminal fact, and no later fact
@@ -269,15 +271,17 @@ Message Ledger          = adopted canonical conversational facts
   (`CorrelationConflict`) instead of silently returning the original
   acceptance;
 - a durable Ledger append does **not** by itself imply a resumable runtime
-  safe boundary: the conversation domain's `recovery_safety` predicate fails
-  closed on restart for a Ledger head that ends inside an incomplete tool
-  turn. A compaction summary cannot be durably visible without its exact
-  Surface `Replace` and checkpoint because those facts share one SQLite
-  transaction. The runtime returns typed
-  `ConversationRuntimeError::RecoveryRequired`, preserves every durable fact,
-  and never admits pending inbound. Live admission is additionally gated by
-  the same incomplete-tool-turn check, so a failed tool-result batch can
-  never be crossed by a later inbound batch;
+  safe boundary: a Surface that ends inside an incomplete tool turn is not
+  resumable as-is. A compaction summary cannot be durably visible without its
+  exact Surface `Replace` and checkpoint because those facts share one SQLite
+  transaction. Since M9a (Issue #12) the incomplete tool turn is **repaired**
+  from durable evidence at startup rather than refused, and the
+  `recovery_safety` predicate is the checked post-condition of that
+  reconciliation: `ConversationRuntimeError::RecoveryRequired` is returned only
+  when the reconciled state is *still* unsafe, and it still preserves every
+  durable fact and admits nothing. Live admission remains gated by the same
+  incomplete-tool-turn check, so a failed tool-result batch can never be
+  crossed by a later inbound batch;
 - a durable storage failure in idle admission is never silently swallowed:
   one finite admission cycle owns an independent one-retry allowance for
   `select_pending_batch` and `adopt_pending_batch`. The first transient
@@ -302,6 +306,14 @@ Message Ledger          = adopted canonical conversational facts
   `DurabilityFailed`, accepted pending work remains intact, no attempt is
   admitted, and new durable mutations (`submit_inbound`, `model_set`) are
   rejected typed; shutdown and read-only inspection remain available;
+- background ownership commits durably **before** the detached runner may
+  begin: `commit_dispatch` writes `BackgroundExecutionCommitted` (execution
+  identity, owning `ToolCall`, tool identity, frozen tool name) and only then
+  releases the runner's start gate. A durable failure rolls the prepared
+  dispatch back completely and returns `BackgroundDispatchError::Durable`, so
+  no external side effect exists that the durable authority never recorded.
+  The fact opens the `background:{execution_id}` lifecycle that exactly one
+  terminal publication closes;
 - background terminal settlement publishes its durable terminal inbound
   **before** the record becomes observable as terminal: the terminal
   candidate is computed first, the notification is durably accepted, and only
@@ -1960,10 +1972,180 @@ events but are not canonical messages.
 
 Runtime process memory is disposable.
 
+> **Durability says what happened. Recovery classification says what can
+> safely happen next.**
+
 Recovery evidence is based on the native M8 durable Message Ledger, immutable
-Surface revisions, Request Snapshots, Event Journal facts, capability
-revision, and workspace state. Recovery/replay policy remains an Issue #12
-concern; the Runtime Client projection and its cache are never recovery input.
+Surface revisions, Request Snapshots, Pending Inbound, Event Journal facts, and
+checkpoint metadata. The Runtime Client projection and its cache are never
+recovery input.
+
+M9a (Issue #12) freezes the startup recovery contract. M9b (model-turn
+cancellation) and M9c (supervision/quiescence) are **not** implemented.
+
+- recovery reconstructs what durably happened; it never invents success, never
+  silently replays an ambiguous external side effect, and never regenerates
+  historical request/context from current configuration. Therefore
+  `exact historical reconstruction != safe replay permission`,
+  `started + outcome unknown != safe retry`, and
+  `started + outcome known != never externally started`;
+
+- the recovery evidence model keeps the **external execution lifecycle** and
+  the **canonical structure lifecycle** on separate axes, with separate
+  owners. Only an attempt with **zero** durable external-start evidence — no
+  `ModelRequestStarted` and no `ToolExecutionStarted`, ever — may be
+  classified as the safe Class-B continuation case. A `ToolMessageCommitted`
+  releases that call's **detailed per-call repair evidence** (absence from
+  the repair map means "no canonical repair needed"); the owning attempt's
+  **bounded external summary** independently keeps proving the historical
+  `ToolExecutionStarted` until the attempt terminalizes, so a
+  crash/restart/recovery cycle never turns historical external-start
+  evidence into a later claim that no external work started;
+
+- **the recovery-prefix invariant**: every successfully committed prefix of
+  recovery reconciliation is itself a valid, truth-preserving input to a
+  subsequent recovery. Reconciliation commits tool-turn repair, the attempt
+  recovery terminal, and background terminal publication as separate atomic
+  transitions on purpose, so a crash between any two of them must leave a
+  durable state that the next startup classifies exactly as truthfully as the
+  first did;
+
+- recovery policy is owned by `ConversationRuntime` and consumes
+  `ConversationStore` evidence. It is never located in the SQLite backend, the
+  Runtime Client, a provider adapter, the mailbox, DSH/plugin layers, the TUI,
+  or a background producer. A headless recovered runtime works with zero
+  Runtime Client attachments, and client detach/reconnect stays non-semantic;
+
+- the pipeline has four distinct phases —
+  `RecoveryEvidence::reconstruct` (read only, commits nothing, invokes no
+  provider/tool/process), `RecoveryPlan::classify` (pure: identical durable
+  facts always yield an identical classification, independent of wall clock,
+  provider availability, current config, and client attachment),
+  `RecoveryPlan::reconcile` (atomic durable commits), and a typed
+  `ResumeDisposition` permission;
+
+- recovery runs after the tool-runtime ownership transfer and before the
+  runtime object exists, so a rejected construction reconciles nothing and
+  activation/admission cannot race an unfinished reconciliation. No recovery
+  SQLite work runs under the coordinator lock;
+
+- the classification is exhaustive and typed:
+  **A (not started)** — accepted Pending Inbound stays authoritative and is
+  ordinary admissible work;
+  **B (admitted, no external start)** — the interrupted attempt receives an
+  explicit recovery terminal and the already-canonical turn may continue
+  through a *new* attempt without re-adopting or duplicating the
+  `UserMessage`. Class B requires durable proof that **zero** external-start
+  commits ever occurred for this attempt;
+  **C (external start committed, outcome unknown)** — the ambiguity is a
+  first-class state, recovery starts nothing, and no request is resent and no
+  tool re-executed;
+  **D (durable terminal exists)** — absorbing;
+  **E (external start committed, outcome durably known, settlement
+  incomplete)** — the known outcome is preserved (exact durable tool results
+  are repaired into the Surface), the dead attempt is terminalized honestly,
+  and the attempt is **never** described as "no external start": no
+  automatic continuation, no resend, and no replay;
+
+- the model-request lifecycle is monotonic: `NeverStarted` →
+  `StartedOutcomeUnknown` → `StartedOutcomeKnown`. `ModelRequestCompleted`
+  or `ModelRequestFailed` never moves an attempt back to "no request
+  started". A durably completed request whose Assistant message never
+  committed never fabricates the response body and is never resent; a
+  durably **failed** request is never converted into a silent generic retry
+  (M9a has no retry engine), and the historical failure stays durable. A
+  `ModelRequestStarted` with no durable outcome never produces a fabricated
+  `ModelRequestFailed` or `ModelRequestCompleted`. The historical
+  provider-neutral request reconstructs exactly from its frozen Request
+  Snapshot, historical Surface revision, and Ledger bodies — for diagnosis,
+  classification, and audit only. Request ambiguity and attempt settlement
+  are distinct facts;
+
+- an unresolved foreground tool call is never automatically replayed. A
+  durably known outcome is committed verbatim; a started call with an unknown
+  outcome becomes `ToolExecutionStatus::Interrupted`; a call with no durable
+  start evidence becomes `Cancelled { ParentCancelled }`. The missing siblings
+  of one Assistant tool turn commit as **one** atomic batch in canonical
+  model-call order, so no durable prefix of a sibling batch is observable and
+  the conversation is never left structurally unable to form a later model
+  request. Per-call tool repair evidence is keyed by owning attempt **and**
+  call id: the durable authority does not guarantee `ToolCallId` uniqueness
+  across the conversation lifetime (providers mint call ids; only the active
+  Surface rejects duplicates), so historical attempts never alias the current
+  unresolved call;
+
+- **bounded tool-evidence ownership**: detailed per-tool recovery evidence
+  exists only while that tool call may still require canonical repair; durable
+  historical external-start knowledge needed for attempt classification is
+  represented independently in bounded attempt-level state. A committed
+  canonical `ToolResult` releases the detailed entry whatever the owning
+  attempt's terminal state — a recovery `Interrupted` repair commits the
+  canonical representation that the old external outcome remains unknowable,
+  so the attempt summary keeps an unknown outcome until the attempt
+  terminalizes, and a fully settled historical call never regresses the
+  attempt to "never externally started". An attempt terminal alone never
+  destroys a still-needed entry: the terminal-before-repair shape (Class D)
+  keeps its per-call evidence until the canonical result commits. Recovery hot
+  memory is therefore O(nonterminal attempt summaries) + O(canonical tool
+  repairs still outstanding) + O(unpublished background executions) +
+  O(active Surface attribution) — not O(settled tool calls of one long
+  attempt);
+
+- a committed background execution survives its starting *attempt*, not the
+  *process*. Recovery never assumes the old task/process is alive and never
+  relaunches a shell command, MCP call, or Python tool. A durably owned,
+  unpublished execution is terminalized as
+  `BackgroundTerminalState::Interrupted` (never `Failed`), and its
+  model-visible notification is published through the one Pending Inbound
+  authority in the same atomic transition as its `BackgroundTerminalPublished`
+  fact. `BackgroundExecutionCommitted` commits **before** the detached runner's
+  start gate is released, so no external background side effect can begin
+  without durable evidence of its `ToolExecutionId`, owning `ToolCall`, and
+  tool;
+
+- terminal uniqueness is owned by the durable lifecycle table, not by an
+  in-memory flag: `attempt:{id}` and `background:{execution_id}` accept exactly
+  one terminal fact and reject a second with `TerminalViolation`. After the
+  first successful recovery, repeated restarts commit nothing and durable state
+  stops changing;
+
+- an identity that entered durable authority before a crash is never reused as
+  a different logical operation after restart. `AttemptId` is an explicit
+  bijection with a conversation-scoped ordinal and the allocator is reseeded
+  past every durable ordinal; the Event Journal independently refuses a second
+  `AttemptStarted` for one identity. The background `exec_N` ordinal is
+  reseeded the same way, while the runtime is still inactive;
+
+- still-pending inbound stays pending across a restart with its exact
+  `InboundSequence`, `MessageId`, provenance, content, timestamp, and
+  correlation; already-adopted inbound is canonical exactly once and is never
+  re-adopted (identity, not content equality, is the idempotency key). There is
+  no separate recovery queue, and an idle recovered runtime admits recovered
+  pending work at activation with zero Runtime Client attachments;
+
+- recovery reconciliation follows the same prepare → durable commit →
+  infallible install ordering as live execution, and a reconciliation failure
+  publishes no fabricated recovery/terminal event: construction returns typed
+  and no runtime exists that could admit work as though recovery had completed;
+
+- a durable authority that holds **two** concurrently non-terminal attempts
+  contradicts the one-active-attempt admission invariant. Recovery reports it
+  and fails closed rather than settling whichever attempt happens to sort
+  first and silently leaving the other unresolved;
+
+- a successful recovery starts a fresh admission cycle; an unresolved durable
+  inconsistency is never silently converted into a healthy state, and a
+  previous process's crash never permanently poisons a runtime whose
+  reconciliation succeeded;
+
+- the recovery fold is bounded: it pages the Event Journal and retains only
+  non-terminal attempts, their in-flight request, uncommitted tool results, and
+  unpublished background executions. Complete Event Journal, Request Snapshot,
+  and Ledger history are never materialized;
+
+- `ToolReplayPolicy::Idempotent` remains metadata. M9a adds no replay engine,
+  no retry framework, no configurable recovery strategy, and no user-selectable
+  replay mode.
 
 ## Model plane
 

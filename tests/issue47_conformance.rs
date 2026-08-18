@@ -32,12 +32,14 @@ use std::sync::Arc;
 
 use common::provider_emulator::ProviderEmulator;
 use rustx::local_runtime::composition::{
-    LocalConversationRuntime, LocalRuntimeDependencies, LocalRuntimePaths,
+    HeadlessConversationRuntime, LocalConversationRuntime, LocalRuntimeDependencies,
+    LocalRuntimePaths,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
 use rustx::model::catalog::{MapCredentialEnvironment, ModelRef};
 use rustx::model::session::{SessionModelConfig, SummaryModelPolicy};
+use rustx::runtime::recovery::{AttemptRecoveryClass, ResumeDisposition};
 use rustx::runtime_client::attachment::RuntimeAttachment;
 use rustx::runtime_client::host::{EventDelivery, EventSubscription, RuntimeClientHost};
 use rustx::runtime_client::snapshot::RuntimeClientAttemptPhase;
@@ -1118,4 +1120,229 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
     assert_eq!(requests[0]["model"], serde_json::json!(CHAT_MODEL));
     assert_eq!(requests[1]["model"], serde_json::json!(SECOND_MODEL));
     emulator.finish().await;
+}
+
+// ---------------------------------------------------------------------------
+// Scenario H — durable startup recovery against the real provider (Issue #12)
+// ---------------------------------------------------------------------------
+
+/// A crash after the request-start commit resends nothing, proven at the real
+/// provider boundary.
+///
+/// The first runtime is composed inside its **own** Tokio runtime on a
+/// dedicated thread. Dropping that Tokio runtime drops every runtime-owned
+/// task at its current await point and closes the provider connection, which
+/// is the closest honest model of process death available without spawning a
+/// second binary — and, unlike a `kill`, it is exact: the driver knows the
+/// provider had already received request #1 because it waited on the
+/// provider-side gate, and it knows the client really vanished because it
+/// waits on the provider's disconnect observation. Nothing sleeps.
+///
+/// ```text
+/// runtime #1 -> request-start durable commit -> provider observes request #1
+///            -> provider suspends at the gate
+///            -> the Tokio runtime hosting runtime #1 is dropped   (crash)
+/// same SQLite conversation reopened
+///            -> runtime #2 recovers
+/// ```
+///
+/// The scenario declares exactly one step, so a resent request would be an
+/// unexpected provider request and would fail the run rather than pass
+/// quietly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // One crash, one recovery, one composed proof.
+async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
+    let Some(emulator) = ProviderEmulator::start("restart_after_request_start").await else {
+        return;
+    };
+    // The root outlives both runtimes: instance #2 reopens the exact same
+    // durable conversation instance #1 died in.
+    let root = tempfile::tempdir().expect("temp root");
+    let setup = Setup::new(&format!("emulator/{CHAT_MODEL}"));
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::write(
+        root.path().join("models.json"),
+        models_json(&emulator, &setup),
+    )
+    .expect("models.json");
+    std::fs::write(root.path().join("session.json"), session_json(&setup)).expect("session.json");
+    let paths = LocalRuntimePaths {
+        models: root.path().join("models.json"),
+        session: root.path().join("session.json"),
+        workspace,
+        runtime_root: root.path().join("private"),
+    };
+
+    // ---- runtime instance #1, in its own execution runtime ----
+    let (crash_tx, crash_rx) = tokio::sync::oneshot::channel::<()>();
+    let first_paths = paths.clone();
+    let first = std::thread::spawn(move || {
+        let execution = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("the first runtime's execution runtime");
+        execution.block_on(async move {
+            let runtime = HeadlessConversationRuntime::compose(&first_paths, &dependencies())
+                .await
+                .expect("the first runtime composes");
+            runtime
+                .runtime()
+                .submit_inbound(vec![UserContentBlock::Text(TextBlock {
+                    text: TURN_ONE.to_owned(),
+                })])
+                .expect("inbound accepted");
+            // Park until the driver has observed the provider gate. The
+            // attempt is in flight, parked on the provider stream.
+            let _ = crash_rx.await;
+        });
+        // Dropping the execution runtime drops every runtime-owned task —
+        // the attempt, the admission worker, the HTTP stream — at its await
+        // point, and releases the durable store handle.
+        drop(execution);
+    });
+
+    // The provider has received request #1 and flushed its first delta.
+    // Everything after this point provably happens after that.
+    emulator.await_gate("before-remaining-text").await;
+    let requests_before_crash = emulator.requests().await;
+    assert_eq!(requests_before_crash.len(), 1, "exactly one request so far");
+
+    // Crash.
+    crash_tx
+        .send(())
+        .expect("the first runtime is still parked");
+    first.join().expect("the first runtime's thread exits");
+    // The connection really went away; this is observed, not assumed.
+    emulator.await_client_disconnect().await;
+    emulator.release_gate("before-remaining-text").await;
+
+    // ---- runtime instance #2 over the same durable conversation ----
+    let recovered = HeadlessConversationRuntime::compose(&paths, &dependencies())
+        .await
+        .expect("the second runtime recovers the durable conversation");
+    let report = recovered.runtime().recovery();
+
+    // The crash boundary is the drop of the first execution runtime. The
+    // durable journal decides the honest classification, and both landings
+    // preserve the invariant under test: recovery resends nothing.
+    //
+    //   Landing A (the intended crash): the drop aborted the attempt while
+    //   it was parked on the gated stream, so the journal holds
+    //   `ModelRequestStarted` with no outcome and no terminal — the attempt
+    //   classifies as an indeterminate external outcome, the started
+    //   request is named explicitly, and continuation is blocked.
+    //
+    //   Landing B (platform-dependent drop semantics, observed on macOS):
+    //   the runtime drop lets the woken attempt settle its terminal as the
+    //   connection closes, so the journal honestly records the terminal —
+    //   the classification is the absorbing `AlreadyTerminal`. The exact
+    //   indeterminate classification is covered deterministically by the
+    //   store-prefix test (`started_request_with_unknown_outcome_is_indeterminate_and_never_resent`)
+    //   and the runtime test (`class_c_restart_issues_no_provider_request_of_its_own`);
+    //   what this scenario adds is the real-provider no-resend proof, which
+    //   must hold under both landings.
+    match report.attempt_class() {
+        AttemptRecoveryClass::IndeterminateExternalOutcome {
+            attempt_id,
+            model_request,
+            ..
+        } => {
+            let request_id = model_request
+                .clone()
+                .expect("the started request is named explicitly");
+            assert_eq!(
+                report.resume(),
+                ResumeDisposition::BlockedIndeterminate,
+                "an unknown provider outcome never authorizes a continuation"
+            );
+            assert_eq!(
+                report.reconciliation().attempt_terminal.as_ref(),
+                Some(attempt_id),
+                "the interrupted attempt is settled exactly once by recovery"
+            );
+
+            // The historical provider-neutral request reconstructs exactly,
+            // from frozen durable facts alone — and reconstructability is
+            // still not permission to replay. The identity comes from the
+            // retained snapshot itself, never from a guessed turn ordinal.
+            let history = recovered.runtime().request_history();
+            let page = history.page(None, 8).expect("the retained snapshot page");
+            let snapshot = page
+                .snapshots
+                .iter()
+                .find(|snapshot| snapshot.request_id == request_id)
+                .expect("the started request retained its immutable snapshot");
+            assert_eq!(
+                snapshot.identity.attempt_id, *attempt_id,
+                "the snapshot belongs to the interrupted attempt"
+            );
+            let historical = history
+                .reconstruct(&snapshot.identity)
+                .expect("the historical request reconstructs");
+            assert_eq!(
+                historical.invocation.model, CHAT_MODEL,
+                "the historical request keeps its frozen model, not the current one"
+            );
+            assert!(
+                historical
+                    .messages
+                    .iter()
+                    .any(|block| matches!(block, MessageBlock::User(user)
+                    if user.content.iter().any(|content| matches!(
+                        content,
+                        UserContentBlock::Text(text) if text.text == TURN_ONE
+                    )))),
+                "the reconstruction is the exact historical request"
+            );
+        }
+        AttemptRecoveryClass::AlreadyTerminal => {
+            // The dropped runtime settled the attempt before the process
+            // died; the durable journal is honest and absorbing.
+            assert_eq!(
+                report.resume(),
+                ResumeDisposition::PendingInboundOnly,
+                "an already-terminal attempt authorizes no continuation"
+            );
+            assert!(
+                report.reconciliation().is_empty(),
+                "a terminal attempt needs no recovery fact"
+            );
+            let history = recovered.runtime().request_history();
+            let page = history.page(None, 8).expect("the retained snapshot page");
+            assert_eq!(
+                page.snapshots.len(),
+                1,
+                "the started request retained its immutable snapshot"
+            );
+        }
+        other => {
+            panic!(
+                "a committed request start must classify as indeterminate (or, when the \
+                 dropped runtime settled it first, as already terminal): {other:?}"
+            );
+        }
+    }
+
+    // The whole point: the provider saw the request exactly once, under
+    // either crash landing. The scenario declares exactly one step, so any
+    // resend would have been an unexpected provider request and would have
+    // failed the run rather than pass quietly.
+    assert_eq!(
+        emulator.requests().await.len(),
+        1,
+        "recovery performed zero automatic provider resend"
+    );
+    emulator.finish().await;
+}
+
+/// The composition dependencies shared by both runtime instances above.
+fn dependencies() -> LocalRuntimeDependencies {
+    LocalRuntimeDependencies {
+        credentials: Arc::new(MapCredentialEnvironment::new([(
+            CREDENTIAL_VARIABLE.to_owned(),
+            CREDENTIAL_VALUE.to_owned(),
+        )])),
+        ..LocalRuntimeDependencies::default()
+    }
 }

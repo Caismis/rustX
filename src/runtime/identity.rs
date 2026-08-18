@@ -129,6 +129,73 @@ id_type! {
     McpServerId
 }
 
+/// The conversation-scoped attempt identity domain (Issue #12, M9a).
+///
+/// The conversation runtime is the one `AttemptId` allocation owner, and the
+/// identity it allocates is an explicit **bijection** with a conversation-
+/// scoped ordinal rather than an opaque formatted string:
+///
+/// ```text
+/// AttemptId::for_conversation(conversation, n)  ->  "{conversation}-attempt-{n}"
+/// AttemptId::conversation_ordinal(conversation) ->  Some(n)   (exactly for those)
+/// ```
+///
+/// Startup recovery folds durable attempt facts back through
+/// [`AttemptId::conversation_ordinal`] to reseed the allocator, so an ordinal
+/// that already entered durable authority before a crash is never reused as a
+/// different logical attempt after restart.
+impl AttemptId {
+    /// The separator between the conversation identity and the ordinal.
+    const ATTEMPT_INFIX: &'static str = "-attempt-";
+
+    /// Allocates the attempt identity of `ordinal` within `conversation`.
+    #[must_use]
+    pub fn for_conversation(conversation: &ConversationId, ordinal: u64) -> Self {
+        Self::new(format!("{conversation}{}{ordinal}", Self::ATTEMPT_INFIX))
+    }
+
+    /// The conversation-scoped ordinal of this identity, when it belongs to
+    /// `conversation`'s attempt domain.
+    ///
+    /// Returns `None` for an identity minted outside that domain (a test
+    /// fixture id, another conversation's attempt); such identities never
+    /// contribute to the allocator watermark.
+    #[must_use]
+    pub fn conversation_ordinal(&self, conversation: &ConversationId) -> Option<u64> {
+        let prefix = format!("{conversation}{}", Self::ATTEMPT_INFIX);
+        self.as_str().strip_prefix(&prefix)?.parse().ok()
+    }
+}
+
+/// The conversation-scoped detached-execution identity domain (Issue #12,
+/// M9a).
+///
+/// The background registry allocates `exec_1`, `exec_2`, ... from a
+/// process-local counter. That counter is a durable-identity ordinal exactly
+/// like the attempt ordinal: startup recovery reseeds it from the durable
+/// `BackgroundExecutionCommitted` facts so a restart cannot mint `exec_1`
+/// twice for two different detached executions.
+impl ToolExecutionId {
+    /// The prefix of the conversation-scoped background execution domain.
+    const BACKGROUND_PREFIX: &'static str = "exec_";
+
+    /// Allocates the background execution identity of `ordinal`.
+    #[must_use]
+    pub fn background(ordinal: u64) -> Self {
+        Self::new(format!("{}{ordinal}", Self::BACKGROUND_PREFIX))
+    }
+
+    /// The conversation-scoped ordinal of this identity, when it belongs to
+    /// the background execution domain.
+    #[must_use]
+    pub fn background_ordinal(&self) -> Option<u64> {
+        self.as_str()
+            .strip_prefix(Self::BACKGROUND_PREFIX)?
+            .parse()
+            .ok()
+    }
+}
+
 id_type! {
     /// Identifies a skill bound to the runtime.
     ///

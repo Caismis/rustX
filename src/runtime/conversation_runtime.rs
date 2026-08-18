@@ -320,9 +320,14 @@ pub enum ConversationRuntimeError {
     /// would silently never admit anything. Construction therefore fails
     /// explicitly instead of creating a partially active coordinator.
     NoExecutionRuntime,
-    /// The durable canonical prefix is not at a recovery-safe boundary, so
-    /// the runtime refuses to reconstruct a live `ConversationState` from it
-    /// automatically (Issue #63 recovery gate).
+    /// Startup recovery could not establish a coherent conversation from the
+    /// durable authority (Issue #12, M9a).
+    ///
+    /// This supersedes the coarse M8 restart gate: the runtime no longer
+    /// refuses every non-trivial durable tail, it classifies and reconciles
+    /// it. This variant is what remains — the reconciled state is *still*
+    /// incoherent, so no runtime is produced and nothing is admitted as
+    /// though recovery had completed.
     RecoveryRequired {
         /// Why the durable head cannot be resumed safely.
         reason: String,
@@ -611,8 +616,23 @@ struct CoordinatorState {
     /// Whether shutdown was accepted: no further inbound admission, no
     /// further attempt admission; the current attempt continues.
     shutting_down: bool,
-    /// The next attempt identity sequence.
+    /// The next attempt identity ordinal.
+    ///
+    /// Seeded by startup recovery to one past the highest ordinal that
+    /// already entered durable authority (Issue #12, M9a), so a restart can
+    /// never reuse an `AttemptId` that names a different logical attempt in
+    /// durable history. The durable Event Journal rejects a second
+    /// `AttemptStarted` for one identity, so the invariant is enforced on
+    /// both sides.
     next_attempt_seq: u64,
+    /// Whether startup recovery proved that the already-canonical adopted
+    /// turn may continue through one new attempt (recovery Class B).
+    ///
+    /// This is a one-shot permission, consumed by the first admission that
+    /// finds no pending inbound. It is never set for an indeterminate
+    /// external outcome (Class C), where continuing would risk duplicating an
+    /// external side effect rustX cannot observe.
+    recovered_continuation: bool,
     /// The durable-authority health state (Issue #63, Finding 5).
     durability_health: DurabilityHealth,
 }
@@ -804,6 +824,14 @@ pub(crate) struct RuntimeInner {
     /// coordinator. The coordinator keeps no activation state of its own.
     lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
+    /// The immutable result of this runtime's startup recovery (Issue #12,
+    /// M9a): the deterministic classification, exactly which recovery facts
+    /// were committed, and what continuation is permitted.
+    ///
+    /// It is a *report*, never a second authority: the durable store remains
+    /// the authority for what happened, and this value only records what this
+    /// startup concluded from it.
+    recovery: crate::runtime::recovery::RecoveryReport,
     /// The Tokio execution runtime this conversation was constructed in.
     ///
     /// Captured (and validated) at construction so
@@ -1352,6 +1380,11 @@ impl RuntimeInner {
         let batch = match self.mailbox.select_pending_batch() {
             Ok(Some(batch)) => {
                 Self::record_durability_success(&mut state, DurableOperation::SelectPendingBatch);
+                // A fresh inbound batch subsumes the recovered continuation:
+                // the new attempt sees the already-canonical unanswered turn
+                // in its context anyway, so the one-shot permission is
+                // consumed here rather than starting a second attempt later.
+                state.recovered_continuation = false;
                 batch
             }
             Ok(None) => {
@@ -1360,6 +1393,22 @@ impl RuntimeInner {
                 // finite admission cycle. Only here, or after successful
                 // batch adoption below, is the retry budget reset.
                 Self::complete_admission_cycle(&mut state);
+                // Issue #12 (M9a), phase 4 — resume only proven-safe work.
+                // Startup recovery classified the crash as "admitted, no
+                // external side effect ever crossed a start commit", so the
+                // already-canonical user turn may continue through one **new**
+                // attempt. Nothing is re-adopted and no `UserMessage` is
+                // duplicated: the turn is already in the Ledger and on the
+                // Surface, and the attempt runs as an explicit
+                // `InitialTurnTrigger::Continuation`.
+                //
+                // A Class C conversation never reaches this branch: an
+                // indeterminate external outcome leaves the permission unset,
+                // so recovery starts nothing at all.
+                if state.recovered_continuation {
+                    state.recovered_continuation = false;
+                    self.admit_continuation(state);
+                }
                 return;
             }
             Err(error) => {
@@ -1451,10 +1500,41 @@ impl RuntimeInner {
                 block,
             });
         }
-        let attempt_id = AttemptId::new(format!(
-            "{}-attempt-{}",
-            self.conversation_id, state.next_attempt_seq
-        ));
+        self.publish_attempt(state, conversation, Some(fresh));
+    }
+
+    /// Admits one **continuation** attempt over the already-canonical adopted
+    /// turn recovered by startup recovery (Issue #12, M9a, recovery Class B).
+    ///
+    /// This shares the one admission linearization with
+    /// [`RuntimeInner::admit_next_attempt`]: the caller still holds the
+    /// coordinator lock, and every idle/shutdown/health/structure check has
+    /// already run above. The only difference is the trigger — there is no new
+    /// inbound to adopt, so the attempt runs as an explicit
+    /// `InitialTurnTrigger::Continuation` and no `UserMessage` is committed a
+    /// second time.
+    fn admit_continuation(self: &Arc<Self>, mut state: MutexGuard<'_, CoordinatorState>) {
+        let conversation = state
+            .conversation
+            .take()
+            .expect("the coordinator owns the conversation state while idle");
+        self.publish_attempt(state, conversation, None);
+    }
+
+    /// The shared tail of every admission: allocate the attempt identity,
+    /// publish the current-attempt slot, freeze the model snapshot, release
+    /// the lock, and spawn the attempt task.
+    ///
+    /// The attempt ordinal comes from the coordinator's recovered allocator,
+    /// so it is never an ordinal that already entered durable authority before
+    /// a restart.
+    fn publish_attempt(
+        self: &Arc<Self>,
+        mut state: MutexGuard<'_, CoordinatorState>,
+        conversation: ConversationState,
+        fresh: Option<FreshInboundTurn>,
+    ) {
+        let attempt_id = AttemptId::for_conversation(&self.conversation_id, state.next_attempt_seq);
         state.next_attempt_seq = state.next_attempt_seq.saturating_add(1);
         // The coordinator-owned cancellation handle is the exact trigger
         // `cancel_current_attempt` requests on: the attempt task runs
@@ -1473,6 +1553,12 @@ impl RuntimeInner {
         // attempt. A `model_set` that linearizes before this point is
         // observed by the attempt; one that linearizes after it affects only
         // future attempts.
+        //
+        // This is also the historical/future configuration boundary a restart
+        // must respect: a recovered attempt is a **future** attempt and uses
+        // the current session model, while a historical Request Snapshot is
+        // reconstructed only from its own frozen durable facts and is never
+        // rewritten to resemble the new configuration.
         let model = state.model.snapshot();
         self.observe(ConversationObservation::AttemptModelFrozen {
             attempt_id: attempt_id.clone(),
@@ -1485,7 +1571,7 @@ impl RuntimeInner {
                 .run_attempt(
                     attempt_id.clone(),
                     conversation,
-                    Some(fresh),
+                    fresh,
                     &cancellation,
                     model,
                 )
@@ -1624,27 +1710,9 @@ impl ConversationRuntime {
         store
             .initialize(&config.initial_messages)
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        let head = store
-            .load_head()
-            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        let active = store
-            .load_messages(&head.active_message_ids)
-            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
-        let conversation = ConversationState::from_durable_head(
-            active,
-            head.active_message_ids,
-            head.revision,
-            head.compaction_generation,
-        )
-        .map_err(|error| ConversationRuntimeError::InvalidInitialConversation(error.to_string()))?;
-        let active_messages = conversation.active_messages().map_err(|error| {
-            ConversationRuntimeError::InvalidInitialConversation(error.to_string())
-        })?;
-        if let Err(error) = crate::conversation::recovery_safety(&active_messages) {
-            return Err(ConversationRuntimeError::RecoveryRequired {
-                reason: error.to_string(),
-            });
-        }
+        let clock = config
+            .clock
+            .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
         // Activation spawns the admission worker, and a runtime with no
         // worker would silently never admit anything. The execution
         // runtime is required — and captured — here, still in the fallible
@@ -1697,15 +1765,83 @@ impl ConversationRuntime {
             return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
         }
 
+        // ---- Startup recovery (Issue #12, M9a) ----
+        //
+        // Recovery runs **after** the ownership transfer and **before** the
+        // runtime object exists. Both halves of that placement are
+        // load-bearing:
+        //
+        // - *after* the claim, because reconciliation commits new durable
+        //   facts. A construction that loses the ownership race must leave no
+        //   trace, so it must never have reconciled anything; and the claim's
+        //   pristine-background-plane precondition is exactly what proves the
+        //   durably-owned-but-unpublished background executions this phase
+        //   terminalizes have **no** live in-process record — they really are
+        //   remnants of a dead process, never work this process owns.
+        // - *before* the runtime exists, because activation and admission
+        //   must not race an unfinished reconciliation. There is no
+        //   coordinator lock yet, so no `SQLite` work here can ever be
+        //   performed under the admission mutex.
+        //
+        // The conversation runtime is the recovery-policy owner and runs the
+        // complete pipeline:
+        //
+        //     reconstruct -> classify -> reconcile -> recovered state
+        //
+        // The store contributes durable evidence and semantic transactions
+        // only; it never decides whether an ambiguous request is replayable.
+        //
+        // A recovery failure rolls the ownership transfer back to its exact
+        // previous standalone state and returns typed, so no runtime exists
+        // that could admit work as though recovery had completed.
+        let recovery = match crate::runtime::recovery::recover(store.as_ref(), clock.as_ref()) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                config.capability.release_conversation_runtime_claim();
+                config.tool_runtime.release_conversation_runtime_claim();
+                return Err(match error {
+                    crate::runtime::recovery::RecoveryError::Durable(detail) => {
+                        ConversationRuntimeError::Storage(detail)
+                    }
+                    crate::runtime::recovery::RecoveryError::Unrecoverable(reason) => {
+                        ConversationRuntimeError::RecoveryRequired { reason }
+                    }
+                });
+            }
+        };
+        // The recovered hot read model is built from the durable head **after**
+        // reconciliation, so it reflects the repaired canonical structure
+        // rather than the crash-time one.
+        let conversation = match Self::recovered_conversation(store.as_ref()) {
+            Ok(conversation) => conversation,
+            Err(error) => {
+                config.capability.release_conversation_runtime_claim();
+                config.tool_runtime.release_conversation_runtime_claim();
+                return Err(error);
+            }
+        };
+
         // ---- Infallible wiring: from here construction always succeeds. ----
         let mailbox = config.tool_runtime.mailbox();
         // The conversation is inert until `activate`: the ownership
         // transfer already bound its mailbox with the Inactive lifecycle,
         // so nothing can be admitted and nothing can be observed while the
         // optional Runtime Client host binds.
-        let clock = config
-            .clock
-            .unwrap_or_else(|| Arc::new(SystemClock) as Arc<dyn RuntimeClock>);
+        //
+        // Identity recovery (Issue #12, M9a): the detached-execution ordinal
+        // is a durable identity domain exactly like the attempt ordinal, so
+        // the registry's process-local `exec_N` allocator is reseeded above
+        // every ordinal already in durable authority. The background plane is
+        // pristine and the runtime is inactive, so no dispatch can race this.
+        config
+            .tool_runtime
+            .background()
+            .restore_execution_sequence(recovery.highest_background_ordinal());
+        let recovered_continuation = matches!(
+            recovery.resume(),
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+        );
+        let next_attempt_seq = recovery.next_attempt_ordinal();
         let inner = Arc::new(RuntimeInner {
             conversation_id,
             agent_id: config.agent_id,
@@ -1717,13 +1853,23 @@ impl ConversationRuntime {
             capability: config.capability,
             lifecycle,
             clock,
+            recovery,
             executor,
             state: Mutex::new(CoordinatorState {
                 model: config.model,
                 conversation: Some(conversation),
                 current_attempt: None,
                 shutting_down: false,
-                next_attempt_seq: 0,
+                next_attempt_seq,
+                recovered_continuation,
+                // Durability health after a successful recovery is an
+                // explicit transition, not a silent reset (Issue #12, M9a):
+                // recovery either established a coherent durable state — in
+                // which case the runtime starts a fresh admission cycle — or
+                // it failed, in which case construction already returned and
+                // no runtime exists to be healthy. A previous process's crash
+                // never poisons a runtime whose classification and
+                // reconciliation succeeded.
                 durability_health: DurabilityHealth::AdmissionCycle {
                     budget: AdmissionRetryBudget::default(),
                     pending_retry: None,
@@ -1750,6 +1896,30 @@ impl ConversationRuntime {
                 inner: Arc::downgrade(&inner),
             }));
         Ok(Self { inner })
+    }
+
+    /// Hydrates the bounded hot conversation read model from the durable
+    /// Surface head, after startup recovery has reconciled it.
+    ///
+    /// Only the current active working set is materialized: retired Ledger
+    /// facts and historical Surface revisions stay in the durable store and
+    /// are read on demand.
+    fn recovered_conversation(
+        store: &dyn ConversationStore,
+    ) -> Result<ConversationState, ConversationRuntimeError> {
+        let head = store
+            .load_head()
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        let active = store
+            .load_messages(&head.active_message_ids)
+            .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
+        ConversationState::from_durable_head(
+            active,
+            head.active_message_ids,
+            head.revision,
+            head.compaction_generation,
+        )
+        .map_err(|error| ConversationRuntimeError::InvalidInitialConversation(error.to_string()))
     }
 
     /// Creates the runtime with the test-only coordinator synchronization
@@ -1802,6 +1972,18 @@ impl ConversationRuntime {
     #[must_use]
     pub fn capability(&self) -> &CapabilityCoordinator {
         &self.inner.capability
+    }
+
+    /// The immutable result of this runtime's startup recovery (Issue #12,
+    /// M9a).
+    ///
+    /// The report is *observable* downstream — a Runtime Client, a headless
+    /// driver, or a regression may read it — but it is never authoritative:
+    /// a client inspects the recovered state and never decides it. Recovery
+    /// completed before this runtime existed, so the report cannot change.
+    #[must_use]
+    pub fn recovery(&self) -> &crate::runtime::recovery::RecoveryReport {
+        &self.inner.recovery
     }
 
     /// Installs the observation bridge shared with the Runtime Client
@@ -2646,10 +2828,10 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
-    use crate::runtime::identity::{AgentId, ConversationId};
+    use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId};
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
-    use crate::runtime::types::{TokenMeasurement, TokenMeasurementSource};
+    use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
 
@@ -4347,12 +4529,12 @@ mod tests {
     /// Builds a conversation runtime over an existing artifacts directory
     /// (whose `conversation.sqlite` may already be populated), returning the
     /// construction result so recovery-gate tests can assert the typed error.
-    async fn runtime_at(
+    async fn runtime_with_model_at(
         dir: &tempfile::TempDir,
         conversation_id: &str,
         initial_messages: Vec<MessageBlock>,
         scripts: Vec<Vec<FakeStep>>,
-    ) -> Result<ConversationRuntime, ConversationRuntimeError> {
+    ) -> Result<(ConversationRuntime, Arc<FakeModel>), ConversationRuntimeError> {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -4398,7 +4580,19 @@ mod tests {
             clock: None,
             initial_messages,
         };
-        ConversationRuntime::new(config)
+        ConversationRuntime::new(config).map(|runtime| (runtime, model))
+    }
+
+    /// The conversation-runtime-only variant of [`runtime_with_model_at`].
+    async fn runtime_at(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        initial_messages: Vec<MessageBlock>,
+        scripts: Vec<Vec<FakeStep>>,
+    ) -> Result<ConversationRuntime, ConversationRuntimeError> {
+        runtime_with_model_at(dir, conversation_id, initial_messages, scripts)
+            .await
+            .map(|(runtime, _)| runtime)
     }
 
     fn fixed_time() -> chrono::DateTime<chrono::Utc> {
@@ -4447,11 +4641,17 @@ mod tests {
         })
     }
 
-    /// Issue #63 (Blocker 1, test A): an incomplete Assistant tool-call
-    /// durable tail blocks automatic recovery: the pending inbound is not
-    /// admitted and the runtime fails closed with a typed `RecoveryRequired`.
+    /// Issue #12 (M9a): an incomplete Assistant tool-call durable tail is
+    /// **repaired**, not refused.
+    ///
+    /// The M8 gate returned `RecoveryRequired` here, which left the
+    /// conversation permanently unusable. M9a supersedes it: the missing
+    /// canonical sibling is committed from durable evidence — this call has
+    /// no `ToolExecutionStarted` fact at all, so it provably never ran and is
+    /// recorded as parent-cancelled rather than as an unknown outcome — and
+    /// the recovered pending inbound keeps its exact durable identity.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn incomplete_tool_tail_blocks_recovery_and_pending_remains_intact() {
+    async fn incomplete_tool_tail_is_repaired_and_pending_remains_intact() {
         let dir = tempfile::tempdir().expect("temp dir");
         let conversation_id = ConversationId::new("conv-recovery-tool");
         let workspace = dir.path().join("workspace");
@@ -4480,21 +4680,60 @@ mod tests {
                 .expect("accept pending");
         }
 
-        let result = runtime_at(&dir, "conv-recovery-tool", seed, vec![one_turn_script()]).await;
-        assert!(matches!(
-            result,
-            Err(ConversationRuntimeError::RecoveryRequired { .. })
-        ));
+        let runtime = runtime_at(&dir, "conv-recovery-tool", seed, vec![one_turn_script()])
+            .await
+            .expect("M9a repairs the incomplete tool turn instead of refusing it");
+        // The classification is Class D: no attempt ever entered durable
+        // authority in this fixture, so nothing is terminalized — only the
+        // structure is repaired.
+        assert_eq!(
+            runtime.recovery().attempt_class(),
+            &crate::runtime::recovery::AttemptRecoveryClass::NotStarted
+        );
+        assert_eq!(
+            runtime.recovery().reconciliation().repaired_tool_results,
+            vec![ToolCallId::new("call-1")],
+            "the missing canonical sibling was committed"
+        );
+        assert_eq!(runtime.recovery().pending_inbound(), 1);
 
-        // The pending inbound remains durable with its exact identity.
+        // The repaired turn is canonical and structurally complete, and the
+        // recovered pending inbound kept its exact durable identity.
+        let active = runtime
+            .coordinator_active_ids()
+            .expect("the coordinator owns the recovered state while idle");
+        assert!(
+            active
+                .iter()
+                .any(|id| id.as_str() == "assistant-tool-recovered-tool-call-1"),
+            "the recovery-generated ToolResult is active: {active:?}"
+        );
+        let ledger = runtime.coordinator_ledger().expect("ledger");
+        let repaired = ledger
+            .iter()
+            .find_map(|block| match block {
+                MessageBlock::Tool(tool) if tool.tool_call_id == ToolCallId::new("call-1") => {
+                    Some(tool.clone())
+                }
+                _ => None,
+            })
+            .expect("the repaired sibling is a canonical Ledger fact");
+        assert_eq!(
+            repaired.result.status,
+            crate::tools::types::ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::ParentCancelled,
+            },
+            "a call with no durable start evidence never ran; it is not reported as unknown"
+        );
+        assert!(
+            repaired.result.content.is_empty(),
+            "recovery never invents a result body"
+        );
+
         let reopened = crate::durable::SqliteConversationStore::open(conversation_id, &store_path)
             .expect("reopen");
         let pending = reopened.load_pending().expect("load pending");
-        assert_eq!(
-            pending.len(),
-            1,
-            "recovered pending stays intact while blocked"
-        );
+        assert_eq!(pending.len(), 1, "recovered pending stays intact");
         assert_eq!(pending[0].sequence.get(), 1);
         assert_eq!(
             pending[0].message_id.as_str(),
@@ -4614,5 +4853,511 @@ mod tests {
             runtime.coordinator_active_ids().expect("coordinator head"),
             head.active_message_ids
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Issue #12 (M9a) — the runtime half of durable startup recovery
+    //
+    // The durable-evidence and classification regressions live in
+    // `tests/issue12_recovery.rs`; these are the ones that need a real
+    // admission and a driven model turn. The crash boundary is the same
+    // everywhere: an exact committed durable prefix written through a store
+    // handle that is then dropped, followed by a fresh runtime over the same
+    // database.
+    // -----------------------------------------------------------------
+
+    /// Seeds an exact durable crash prefix at the path `runtime_at` uses, and
+    /// returns the durable database path so a test can reopen it afterwards.
+    fn seed_crash_prefix(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        seed: &[MessageBlock],
+        commit: impl FnOnce(&crate::durable::SqliteConversationStore, &ConversationId),
+    ) -> std::path::PathBuf {
+        let conversation_id = ConversationId::new(conversation_id);
+        std::fs::create_dir_all(dir.path().join("workspace")).expect("workspace");
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(&artifacts).expect("artifacts");
+        let store_path = artifacts.join("conversation.sqlite");
+        {
+            let store =
+                crate::durable::SqliteConversationStore::open(conversation_id.clone(), &store_path)
+                    .expect("open");
+            store.initialize(seed).expect("seed");
+            commit(&store, &conversation_id);
+        }
+        store_path
+    }
+
+    fn attempt_event(
+        conversation_id: &ConversationId,
+        event_id: &str,
+        attempt_id: &AttemptId,
+        event: crate::events::types::RuntimeEvent,
+    ) -> crate::events::types::RuntimeEventEnvelope {
+        crate::events::types::RuntimeEventEnvelope {
+            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+            event_id: crate::runtime::identity::EventId::new(event_id),
+            sequence: 0,
+            conversation_id: conversation_id.clone(),
+            attempt_id: Some(attempt_id.clone()),
+            turn_id: None,
+            timestamp: fixed_time(),
+            event,
+        }
+    }
+
+    /// Issue #12 (M9a), Test A (runtime half): an idle runtime recovered with
+    /// pending inbound admits it by itself.
+    ///
+    /// No Runtime Client is constructed, no attachment exists, and no client
+    /// request is made: activation alone is enough, because the durable
+    /// Pending Inbound Inbox *is* the queue of accepted-but-unadopted work.
+    /// There is deliberately no separate "recovery queue".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let mut accepted_id = None;
+        let store_path = seed_crash_prefix(&dir, "conv-m9a-pending", &[], |store, _| {
+            let accepted = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("recovered work"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept");
+            accepted_id = Some(accepted.message_id);
+        });
+        let accepted_id = accepted_id.expect("accepted");
+
+        let (runtime, model) = runtime_with_model_at(
+            &dir,
+            "conv-m9a-pending",
+            Vec::new(),
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("runtime recovers");
+        assert_eq!(runtime.recovery().pending_inbound(), 1);
+        assert_eq!(
+            runtime.recovery().resume(),
+            crate::runtime::recovery::ResumeDisposition::PendingInboundOnly
+        );
+
+        // Activation is the only trigger. Nothing submits, nothing attaches.
+        runtime.activate();
+        runtime.settlement_signal().notified().await;
+
+        let ledger = runtime.coordinator_ledger().expect("settled");
+        assert_eq!(
+            ledger
+                .iter()
+                .filter(|block| crate::conversation::message_id_of(block) == accepted_id)
+                .count(),
+            1,
+            "the recovered pending item is adopted exactly once"
+        );
+        assert_eq!(model.requests().len(), 1, "exactly one model turn ran");
+        let store = crate::durable::SqliteConversationStore::open(
+            ConversationId::new("conv-m9a-pending"),
+            &store_path,
+        )
+        .expect("reopen");
+        assert!(
+            store.load_pending().expect("pending").is_empty(),
+            "the adopted item is no longer pending"
+        );
+    }
+
+    /// Issue #12 (M9a), recovery Class B: an attempt that crashed before any
+    /// external start commit lets the already-canonical turn continue.
+    ///
+    /// The continuation runs as a **new** attempt over the existing canonical
+    /// history: the `UserMessage` is neither re-adopted nor duplicated, and
+    /// the model sees exactly the recovered turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dead_attempt = AttemptId::for_conversation(&ConversationId::new("conv-m9a-classb"), 0);
+        let dead = dead_attempt.clone();
+        let mut adopted_id = None;
+        seed_crash_prefix(&dir, "conv-m9a-classb", &[], |store, conversation_id| {
+            let accepted = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("answer me"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept");
+            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            adopted_id = Some(accepted.message_id);
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "attempt-started",
+                    &dead,
+                    crate::events::types::RuntimeEvent::AttemptStarted {
+                        attempt_id: dead.clone(),
+                    },
+                ))
+                .expect("attempt started");
+            // CRASH: no request start, no tool start.
+        });
+        let adopted_id = adopted_id.expect("adopted");
+
+        let (runtime, model) =
+            runtime_with_model_at(&dir, "conv-m9a-classb", Vec::new(), vec![one_turn_script()])
+                .await
+                .expect("runtime recovers");
+        assert_eq!(
+            runtime.recovery().attempt_class(),
+            &crate::runtime::recovery::AttemptRecoveryClass::AdmittedWithoutExternalStart {
+                attempt_id: dead_attempt.clone(),
+            }
+        );
+        assert_eq!(
+            runtime.recovery().resume(),
+            crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
+        );
+
+        runtime.activate();
+        runtime.settlement_signal().notified().await;
+
+        let ledger = runtime.coordinator_ledger().expect("settled");
+        assert_eq!(
+            ledger
+                .iter()
+                .filter(|block| crate::conversation::message_id_of(block) == adopted_id)
+                .count(),
+            1,
+            "the adopted turn is never duplicated by the continuation"
+        );
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "the continuation runs exactly one model turn"
+        );
+        assert!(
+            model.requests()[0]
+                .messages
+                .iter()
+                .any(|block| crate::conversation::message_id_of(block) == adopted_id),
+            "the continuation carries the recovered canonical turn"
+        );
+        // The continuation is a genuinely new attempt, above every durable
+        // ordinal.
+        assert_eq!(
+            runtime.recovery().next_attempt_ordinal(),
+            1,
+            "the allocator starts past the interrupted attempt"
+        );
+    }
+
+    /// Issue #12 (M9a), recovery Class C: a restart after a committed
+    /// request start starts **nothing**.
+    ///
+    /// The proof is deterministic rather than a timed absence: a new
+    /// user-driven turn is submitted and awaited, and because at most one
+    /// attempt runs per conversation, its settlement happens-after any
+    /// recovery-initiated attempt would have. Exactly one provider request
+    /// exists at that point, so recovery issued none.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn class_c_restart_issues_no_provider_request_of_its_own() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation = ConversationId::new("conv-m9a-classc");
+        let dead_attempt = AttemptId::for_conversation(&conversation, 0);
+        let dead = dead_attempt.clone();
+        seed_crash_prefix(&dir, "conv-m9a-classc", &[], |store, conversation_id| {
+            let accepted = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("ask the model"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept");
+            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "attempt-started",
+                    &dead,
+                    crate::events::types::RuntimeEvent::AttemptStarted {
+                        attempt_id: dead.clone(),
+                    },
+                ))
+                .expect("attempt started");
+            let snapshot = crate::model::RequestSnapshot::new(
+                crate::model::RequestIdentity {
+                    attempt_id: dead.clone(),
+                    turn: crate::runtime::identity::TurnId::new("0"),
+                    retry_number: 0,
+                },
+                store.load_head().expect("head").revision,
+                "frozen prompt".to_owned(),
+                crate::model::ModelInvocationConfig {
+                    model: "model-before-restart".to_owned(),
+                    protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
+                    max_output_tokens: 64,
+                    request_params: crate::model::RequestParams::new(),
+                    capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                    compat: crate::model::catalog::ModelCompat::default(),
+                },
+                64_000,
+                None,
+                false,
+                Vec::new(),
+                crate::runtime::identity::CapabilityRevision::new(1),
+                crate::context::ContextGeneration {
+                    id: 1,
+                    contributors: Vec::new(),
+                },
+                None,
+            );
+            store
+                .persist_request_start(&snapshot, fixed_time())
+                .expect("request start");
+            // CRASH: the provider may or may not have executed this request.
+        });
+
+        let (runtime, model) =
+            runtime_with_model_at(&dir, "conv-m9a-classc", Vec::new(), vec![one_turn_script()])
+                .await
+                .expect("runtime recovers");
+        assert!(matches!(
+            runtime.recovery().attempt_class(),
+            crate::runtime::recovery::AttemptRecoveryClass::IndeterminateExternalOutcome {
+                attempt_id,
+                model_request: Some(_),
+                ..
+            } if attempt_id == &dead_attempt
+        ));
+        assert_eq!(
+            runtime.recovery().resume(),
+            crate::runtime::recovery::ResumeDisposition::BlockedIndeterminate
+        );
+
+        runtime.activate();
+        // New user-driven work is still admissible: the ambiguity belongs to
+        // the old request, not to the conversation.
+        runtime
+            .submit_inbound(text_content("a new turn"))
+            .expect("accepted after recovery");
+        runtime.settlement_signal().notified().await;
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "only the user-driven turn reached the provider; recovery resent nothing"
+        );
+    }
+
+    /// Issue #12 (M9a), recovery Class E: a restart after a **durably
+    /// completed** model request — whose canonical Assistant message never
+    /// committed — starts nothing either.
+    ///
+    /// The provider already executed the request; rustX durably observed the
+    /// outcome. The proof mirrors Class C: a new user-driven turn is
+    /// submitted and awaited, and because at most one attempt runs per
+    /// conversation, its settlement happens-after any recovery-initiated
+    /// attempt would have. Exactly one provider request exists at that
+    /// point, so the recovered runtime itself initiated no replacement
+    /// request — and it fabricated no Assistant body.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn class_e_restart_issues_no_replacement_request() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation = ConversationId::new("conv-m9a-classe");
+        let dead_attempt = AttemptId::for_conversation(&conversation, 0);
+        let dead = dead_attempt.clone();
+        seed_crash_prefix(&dir, "conv-m9a-classe", &[], |store, conversation_id| {
+            let accepted = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Human,
+                    kind: InboundKind::Message,
+                    content: text_content("ask the model"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .expect("accept");
+            store.adopt_pending_batch(accepted.sequence).expect("adopt");
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "attempt-started",
+                    &dead,
+                    crate::events::types::RuntimeEvent::AttemptStarted {
+                        attempt_id: dead.clone(),
+                    },
+                ))
+                .expect("attempt started");
+            let snapshot = crate::model::RequestSnapshot::new(
+                crate::model::RequestIdentity {
+                    attempt_id: dead.clone(),
+                    turn: crate::runtime::identity::TurnId::new("0"),
+                    retry_number: 0,
+                },
+                store.load_head().expect("head").revision,
+                "frozen prompt".to_owned(),
+                crate::model::ModelInvocationConfig {
+                    model: "model-before-restart".to_owned(),
+                    protocol: crate::model::ModelProtocol::OpenAiChatCompletions,
+                    max_output_tokens: 64,
+                    request_params: crate::model::RequestParams::new(),
+                    capabilities: crate::model::catalog::ModelCapabilities::text_only(true, true),
+                    compat: crate::model::catalog::ModelCompat::default(),
+                },
+                64_000,
+                None,
+                false,
+                Vec::new(),
+                crate::runtime::identity::CapabilityRevision::new(1),
+                crate::context::ContextGeneration {
+                    id: 1,
+                    contributors: Vec::new(),
+                },
+                None,
+            );
+            store
+                .persist_request_start(&snapshot, fixed_time())
+                .expect("request start");
+            store
+                .append_event(attempt_event(
+                    conversation_id,
+                    "request-completed",
+                    &dead,
+                    crate::events::types::RuntimeEvent::ModelRequestCompleted {
+                        finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                        usage: None,
+                    },
+                ))
+                .expect("request completed");
+            // CRASH: the provider outcome is durably known, but the
+            // canonical Assistant message never committed.
+        });
+
+        let (runtime, model) =
+            runtime_with_model_at(&dir, "conv-m9a-classe", Vec::new(), vec![one_turn_script()])
+                .await
+                .expect("runtime recovers");
+        assert!(matches!(
+            runtime.recovery().attempt_class(),
+            crate::runtime::recovery::AttemptRecoveryClass::ExternalOutcomeKnown {
+                attempt_id,
+                model_request: Some(_),
+                ..
+            } if attempt_id == &dead_attempt
+        ));
+        assert_eq!(
+            runtime.recovery().resume(),
+            crate::runtime::recovery::ResumeDisposition::PendingInboundOnly,
+            "the answered model turn is never automatically continued"
+        );
+
+        runtime.activate();
+        // A later user-driven turn proceeds according to the intended runtime
+        // semantics — startup itself must not replay the missing Assistant
+        // turn.
+        runtime
+            .submit_inbound(text_content("a new turn"))
+            .expect("accepted after recovery");
+        runtime.settlement_signal().notified().await;
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "exactly the user-driven turn reached the provider; recovery initiated no replacement request"
+        );
+    }
+
+    /// Issue #12 (M9a), Test L (runtime half): a restart never reuses an
+    /// `AttemptId` that already appears in durable history.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_restart_allocates_an_attempt_id_past_durable_history() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let conversation = ConversationId::new("conv-m9a-identity");
+        let mut durable_attempts = Vec::new();
+        for ordinal in 0..3 {
+            durable_attempts.push(AttemptId::for_conversation(&conversation, ordinal));
+        }
+        let seeded = durable_attempts.clone();
+        let store_path = seed_crash_prefix(&dir, "conv-m9a-identity", &[], |store, id| {
+            for (ordinal, attempt) in seeded.iter().enumerate() {
+                store
+                    .append_event(attempt_event(
+                        id,
+                        &format!("started-{ordinal}"),
+                        attempt,
+                        crate::events::types::RuntimeEvent::AttemptStarted {
+                            attempt_id: attempt.clone(),
+                        },
+                    ))
+                    .expect("attempt started");
+                store
+                    .append_event(attempt_event(
+                        id,
+                        &format!("completed-{ordinal}"),
+                        attempt,
+                        crate::events::types::RuntimeEvent::AttemptCompleted {
+                            attempt_id: attempt.clone(),
+                            finish_reason: crate::model::finish::ModelFinishReason::Stop,
+                        },
+                    ))
+                    .expect("attempt completed");
+            }
+        });
+
+        let runtime = runtime_at(
+            &dir,
+            "conv-m9a-identity",
+            Vec::new(),
+            vec![one_turn_script()],
+        )
+        .await
+        .expect("runtime recovers");
+        assert_eq!(runtime.recovery().next_attempt_ordinal(), 3);
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("after restart"))
+            .expect("accepted");
+        runtime.settlement_signal().notified().await;
+
+        // The durable Event Journal is the proof: the new attempt's start
+        // fact carries an identity that never appeared before.
+        let store =
+            crate::durable::SqliteConversationStore::open(conversation.clone(), &store_path)
+                .expect("reopen");
+        let mut started = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = store.read_events(cursor, 64).expect("events");
+            if page.events.is_empty() {
+                break;
+            }
+            for envelope in &page.events {
+                if let crate::events::types::RuntimeEvent::AttemptStarted { attempt_id } =
+                    &envelope.event
+                {
+                    started.push(attempt_id.clone());
+                }
+            }
+            cursor = page.next_sequence;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(started.len(), 4, "one new attempt started: {started:?}");
+        let new_attempt = started.last().expect("the new attempt");
+        assert!(
+            !durable_attempts.contains(new_attempt),
+            "the restarted allocator reused a durable identity: {new_attempt}"
+        );
+        assert_eq!(new_attempt.conversation_ordinal(&conversation), Some(3));
     }
 }
