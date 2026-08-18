@@ -101,21 +101,33 @@ export class ScriptedPeer {
 }
 
 /**
- * Yields to the event loop until a condition holds.
+ * Waits until a condition holds, bounded by an outer liveness deadline.
  *
- * Used only to let already-queued stream callbacks run — never to wait out a
- * duration. The loop is bounded so a genuine hang fails the test instead of
+ * The condition is re-checked as soon as the event loop can run it, so this
+ * returns the moment the awaited fact is observable — it is never a fixed
+ * sleep. The deadline exists only so a genuine hang fails the test instead of
  * stalling it.
+ *
+ * The previous implementation spun a fixed 10 000 `setImmediate` turns. That
+ * was documented as "never waiting out a duration", but because a queued
+ * immediate keeps the poll phase from blocking, the whole budget is worth
+ * roughly 10 ms of wall clock. Conditions that depend on real external I/O
+ * (the spawned runtime binary answering, a provider round trip) therefore had
+ * a ~10 ms budget and flaked on a contended CI runner. Yielding with a timer
+ * lets the poll phase actually wait for that I/O.
  */
 export async function until(
   condition: () => boolean,
   what = "condition",
+  timeoutMs = 30_000,
 ): Promise<void> {
-  for (let turn = 0; turn < 10_000; turn += 1) {
-    if (condition()) {
-      return;
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`${what} never became true within ${timeoutMs}ms`);
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1);
+    });
   }
-  throw new Error(`${what} never became true`);
 }
