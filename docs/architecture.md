@@ -312,11 +312,15 @@ The ownership table is:
 | Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
 | Crash recovery | existing M9 recovery owner |
 
-The pre-tool seam is total and typed: `AttemptLifecycle` always carries one
-`PreToolPolicy` and one `InteractionRendezvous`. `AlwaysAllow` is the identity
-policy because the current product has no native rule saying that a specific
-tool requires approval. This issue does not add a permission language,
-risk-classification engine, allowlist, routing layer, or form framework.
+The pre-tool seam is total and typed: every `AttemptLifecycle` carries one
+`PreToolPolicy`, while a runtime-created attempt receives one concrete native
+binding to its owning `InteractionCoordinator`. The binding is not a
+replaceable production rendezvous strategy; a standalone inert execution has
+no interaction provider and therefore fails an `Ask` closed. `AlwaysAllow` is
+the identity policy because the current product has no native rule saying
+that a specific tool requires approval. This issue does not add a permission
+language, risk-classification engine, allowlist, routing layer, or form
+framework.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, and business-argument validation, and after the Assistant
 `ToolCall` is canonical. It cannot resolve a tool, dispatch it, or alter the
@@ -324,11 +328,21 @@ prepared invocation.
 
 An approval request contains only immutable, decision-relevant facts:
 conversation/attempt/turn identity, `ToolCallId`, resolved `ToolId`, safe tool
-name, origin, mode, validated arguments, and the policy reason. The response
-vocabulary is finite (`Allow` or `Deny { reason }`) and contains no replacement
-arguments. Allow therefore resumes the exact invocation that was already
-prepared; the Agent Loop checks cancellation again at the existing start
-frontier before creating an executor future.
+name, origin, mode, validated arguments, and the policy reason. Conversation
+identity is injected by the coordinator and attempt identity is supplied by
+the owning execution at the narrow request boundary; neither is caller-
+reported through approval facts. The response vocabulary is finite (`Allow`
+or `Deny { reason }`) and contains no replacement arguments. Allow therefore
+resumes the exact invocation that was already prepared; the Agent Loop checks
+cancellation again at the existing start frontier before creating an executor
+future.
+
+The asynchronous policy boundary has one cancellation rule: after
+`PreToolPolicy::evaluate()` settles, the Agent Loop checks cancellation before
+consuming `Allow`, `Deny`, `Ask`, or a policy error. If cancellation is
+observable, the decision is not consumed and the call receives the normal
+cancelled result slot. An `Ask` response is subject to a second checkpoint;
+`Answered(Allow)` is a rendezvous outcome, never tool-start authority.
 
 The coordinator's pending state has one mutex-protected terminal transition:
 
@@ -368,6 +382,14 @@ gets exactly one normal Tool Plane result slot and no `ToolExecutionStarted`
 fact or executor future. Canonical ToolCall/result order is independent of
 response timing. A denied result is typed `ToolExecutionStatus::Denied`, not
 executor `Failed`.
+
+The real `ConversationRuntime::shutdown()` path is covered by a deterministic
+regression: it observes the Runtime Client pending event, linearizes
+`Running -> Draining`, cancels the interaction through runtime-owned
+`AgentCancellation`, and remains incomplete while a test gate holds the
+waiter handoff after pending-map removal. Only after the interaction waiter,
+AgentExecution, attempt task, and projection settlement release their counted
+authority may the lifecycle publish `Quiescent`.
 
 ## 2. Layer model
 

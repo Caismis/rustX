@@ -292,7 +292,8 @@ use crate::runtime::inbound::{
     InboundSequence, InitialTurnTrigger, MailboxError,
 };
 use crate::runtime::interaction::{
-    InteractionCoordinator, InteractionObserver, InteractionOutcome, InteractionRequest,
+    InteractionCoordinator, InteractionError, InteractionObserver, InteractionOutcome,
+    InteractionRequest,
 };
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
@@ -1000,6 +1001,11 @@ pub(crate) struct RuntimeInner {
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
+    /// Test-only one-shot pre-tool policy injection for a runtime-created
+    /// attempt. Production always constructs the required `AlwaysAllow`
+    /// policy; this hook never changes the production configuration surface.
+    #[cfg(test)]
+    test_pre_tool_policy: Mutex<Option<Arc<dyn crate::agent::PreToolPolicy>>>,
 }
 
 /// Releasing the last semantic owner of a conversation runtime closes its
@@ -1594,19 +1600,27 @@ impl RuntimeInner {
             timezone: self.timezone,
             model,
         };
+        let lifecycle = crate::agent::AttemptLifecycle::inert()
+            .with_native_interaction(self.interaction.clone());
+        #[cfg(test)]
+        let lifecycle = {
+            let test_policy = self
+                .test_pre_tool_policy
+                .lock()
+                .expect("test pre-tool policy lock")
+                .take();
+            match test_policy {
+                Some(policy) => lifecycle.with_pre_tool_policy(policy),
+                None => lifecycle,
+            }
+        };
         let mut execution = AgentExecution::new(
             request,
             lease,
             cancellation,
             context_runtime,
             &self.tool_runtime,
-            // The runtime's default pre-tool policy is the required
-            // `AlwaysAllow` identity: no native product rule exists yet.
-            // The concrete interaction coordinator is still wired as the
-            // attempt's rendezvous, so a future native policy can Ask without
-            // adding a competing callback or execution path.
-            crate::agent::AttemptLifecycle::inert()
-                .with_interaction_rendezvous(self.interaction.clone()),
+            lifecycle,
         )
         // Neither rejection is reachable: `conversation_id` *is* the tool
         // runtime's own identity (the runtime has no independent
@@ -2348,6 +2362,8 @@ impl ConversationRuntime {
             settlement: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
+            #[cfg(test)]
+            test_pre_tool_policy: Mutex::new(None),
         });
         // The runtime is the durability-health owner of its background
         // plane (Issue #63): install the narrow failure seam the
@@ -2441,14 +2457,23 @@ impl ConversationRuntime {
         &self.inner.capability
     }
 
-    /// The one conversation-owned native interaction coordinator.
+    /// Answers one live native interaction through the owning coordinator.
     ///
-    /// Native policy consumers use this rendezvous for `Ask` decisions. It
-    /// owns pending identity, publication, response validation, and terminal
-    /// answer/cancellation coordination; it never starts or rewrites a tool.
-    #[must_use]
-    pub fn interaction(&self) -> &InteractionCoordinator {
-        &self.inner.interaction
+    /// This is a narrow control seam: callers can answer an existing
+    /// `InteractionId`, but cannot publish work or obtain the coordinator.
+    pub(crate) fn respond_interaction(
+        &self,
+        interaction_id: &crate::runtime::identity::InteractionId,
+        response: crate::runtime::interaction::InteractionResponse,
+    ) -> Result<(), InteractionError> {
+        self.inner.interaction.respond(interaction_id, response)
+    }
+
+    /// Changes provider admission for future interactions. Runtime Client
+    /// attachment state is the only production caller; existing pending work
+    /// is intentionally unaffected.
+    pub(crate) fn set_interaction_provider_available(&self, available: bool) {
+        self.inner.interaction.set_provider_available(available);
     }
 
     /// The immutable result of this runtime's startup recovery (Issue #12,
@@ -3387,6 +3412,22 @@ impl ConversationRuntime {
     pub(crate) fn install_worker_exit_probe(&self, sender: std::sync::mpsc::Sender<()>) {
         self.inner.wake.install_worker_exit_probe(sender);
     }
+
+    /// Installs one test-only pre-tool policy for the next runtime-created
+    /// attempt. The production runtime always uses `AlwaysAllow`; this hook
+    /// exists solely to exercise the real `ConversationRuntime` ownership and
+    /// drain path without exposing a public policy factory.
+    #[cfg(test)]
+    pub(crate) fn install_test_pre_tool_policy(
+        &self,
+        policy: Arc<dyn crate::agent::PreToolPolicy>,
+    ) {
+        *self
+            .inner
+            .test_pre_tool_policy
+            .lock()
+            .expect("test pre-tool policy lock") = Some(policy);
+    }
 }
 
 #[cfg(test)]
@@ -3398,20 +3439,39 @@ mod tests {
         ConversationRuntimeError, CoordinatorProbe, InboundAdmissionError, PendingObservations,
         RuntimeConversationConfig,
     };
+    use crate::agent::{
+        AgentCancellation, LifecycleError, PreToolDecision, PreToolPolicy, PreToolView,
+    };
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, TokenEstimator};
     use crate::conversation::SurfaceSpan;
     use crate::durable::inbox::{CompactionCommitInput, ConversationStore};
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
-    use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId};
+    use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId, ToolId};
+    use crate::runtime::interaction::{
+        ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
+        InteractionSettleGate,
+    };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::{
         CancellationReason, ConversationLifecycleState, TokenMeasurement, TokenMeasurementSource,
     };
-    use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
+    use crate::runtime_client::event::RuntimeClientEvent;
+    use crate::runtime_client::host::{EventDelivery, RuntimeClientHost, RuntimeClientHostConfig};
+    use crate::runtime_client::types::{
+        RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RequestId, RuntimeClientError,
+        RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResult,
+    };
+    use crate::scripted_suites::support::fake::{FakeModel, FakeStep, FakeTool, success_result};
     use crate::scripted_suites::support::model::scripted_session_model;
+    use crate::tools::executor::ToolRegistry;
+    use crate::tools::types::{
+        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionStatus,
+        ToolOrigin, ToolReplayPolicy,
+    };
+    use futures_util::future::BoxFuture;
 
     fn request_snapshots(history: &RequestHistory) -> Vec<crate::model::RequestSnapshot> {
         let mut snapshots = Vec::new();
@@ -3450,6 +3510,25 @@ mod tests {
         vec![UserContentBlock::Text(TextBlock {
             text: text.to_owned(),
         })]
+    }
+
+    /// Test-only policy used by the real `ConversationRuntime` interaction
+    /// shutdown regression. It is deliberately a concrete one-shot policy:
+    /// production runtime construction still installs `AlwaysAllow` and has
+    /// no policy factory in its public configuration.
+    struct RuntimeAskPolicy;
+
+    impl PreToolPolicy for RuntimeAskPolicy {
+        fn evaluate<'a>(
+            &'a self,
+            _view: &'a PreToolView<'a>,
+        ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
+            Box::pin(async {
+                Ok(PreToolDecision::Ask {
+                    reason: "runtime shutdown regression".to_owned(),
+                })
+            })
+        }
     }
 
     fn one_turn_script() -> Vec<FakeStep> {
@@ -4306,6 +4385,276 @@ mod tests {
             fixture.runtime.submit_inbound(text_content("late")),
             Err(InboundAdmissionError::Shutdown)
         ));
+    }
+
+    /// The complete native interaction shutdown path is owned by the real
+    /// `ConversationRuntime`: the pending map is emptied by runtime-shutdown
+    /// cancellation, but the drain completion remains blocked until the
+    /// interaction waiter is notified, `AgentExecution` settles, and the
+    /// attempt task returns. The settle gate is parked after the terminal map
+    /// transition and before waiter notification, so `pending_count == 0`
+    /// is observed while shutdown is still provably incomplete.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_waits_for_real_runtime_owned_pending_interaction() {
+        use crate::message::types::ContentBlockIndex;
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+        use crate::tools::types::{ToolCall, ToolCallStart};
+
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-approval"),
+            name: "approval".to_owned(),
+            description: "a deterministic approval test tool".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::default(),
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let tool = FakeTool::new(definition.clone(), success_result("must not run"));
+        let tool_calls = tool.calls();
+        let tool_started = tool.started();
+        let mut registry = ToolRegistry::new();
+        tool.register(&mut registry);
+
+        let call_id = ToolCallId::new("call-runtime-approval");
+        let scripts = vec![vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::ToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call_id.clone(),
+                arguments_delta: "{\"text\":\"hi\"}".to_owned(),
+            }),
+            FakeStep::Emit(ModelEvent::ToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCall {
+                    id: call_id,
+                    tool_id: definition.id,
+                    name: definition.name,
+                    arguments: serde_json::json!({"text": "hi"}),
+                },
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ]];
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let probe = CoordinatorProbe {
+            drain_linearization: Some(drain_linearization.clone()),
+            ..CoordinatorProbe::default()
+        };
+        let (runtime, _) = headless_runtime(&dir, scripts, Some(registry), Some(probe)).await;
+        runtime.install_test_pre_tool_policy(Arc::new(RuntimeAskPolicy));
+
+        let settle_gate = Arc::new(InteractionSettleGate::default());
+        settle_gate.arm();
+        runtime
+            .inner
+            .interaction
+            .install_settle_gate(settle_gate.clone());
+
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("Runtime Client host");
+        let (attachment, initialized) = host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("Runtime Client attachment");
+        let cursor = match initialized {
+            RuntimeClientResult::Initialized { cursor, .. } => cursor,
+            other => panic!("unexpected initialization result: {other:?}"),
+        };
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("Runtime Client subscription");
+
+        runtime.activate();
+        let accepted = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(1),
+            content: text_content("request approval"),
+        });
+        assert!(matches!(
+            accepted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ));
+
+        let pending = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
+                        break interaction;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("pending interaction stream ended: {delivery:?}"),
+            }
+        };
+        let (snapshot, _) = host.snapshot().expect("pending snapshot");
+        assert_eq!(snapshot.pending_interactions, vec![pending.clone()]);
+
+        let runtime_for_shutdown = runtime.clone();
+        let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
+        let drain_wait = drain_linearization.notified();
+        tokio::spawn(async move {
+            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
+        });
+        drain_wait.await;
+
+        // Cancellation has already won the runtime lifecycle transition, but
+        // the shutdown future cannot complete while `cancel_pending` is
+        // parked before it notifies the AgentExecution waiter.
+        let gate_for_wait = settle_gate.clone();
+        tokio::task::spawn_blocking(move || gate_for_wait.wait_entered())
+            .await
+            .expect("interaction settle gate task");
+        assert_eq!(
+            runtime.inner.lifecycle.state(),
+            ConversationLifecycleState::Draining
+        );
+        assert_eq!(runtime.inner.interaction.pending_count(), 0);
+        assert_eq!(
+            shutdown_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("after drain")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+        let late_interaction = runtime
+            .inner
+            .interaction
+            .request_approval(
+                AttemptId::new("late-attempt"),
+                ApprovalFacts {
+                    turn: 0,
+                    call_id: ToolCallId::new("late-call"),
+                    tool_id: ToolId::new("late-tool"),
+                    tool_name: "late".to_owned(),
+                    origin: ToolOrigin::Builtin,
+                    mode: crate::tools::types::ToolInvocationMode::Foreground,
+                    arguments: serde_json::json!({}),
+                    reason: "must not publish after drain".to_owned(),
+                },
+                &AgentCancellation::new(CancellationReason::RuntimeShutdown),
+            )
+            .await;
+        assert_eq!(late_interaction, InteractionOutcome::Unavailable);
+
+        settle_gate.release();
+        assert_eq!(
+            shutdown_receiver
+                .await
+                .expect("shutdown completion sender")
+                .expect("runtime reaches quiescence"),
+            ()
+        );
+        assert_eq!(
+            runtime.inner.lifecycle.state(),
+            ConversationLifecycleState::Quiescent
+        );
+        assert!(!runtime.has_current_attempt());
+
+        let _settled = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if let RuntimeClientEvent::InteractionSettled { interaction_id, .. } = event
+                        && interaction_id == pending.id
+                    {
+                        break interaction_id;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("settled interaction stream ended: {delivery:?}"),
+            }
+        };
+        let (after_shutdown, _) = host.snapshot().expect("post-shutdown snapshot");
+        assert!(after_shutdown.pending_interactions.is_empty());
+
+        let stale = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
+            id: RequestId::new(2),
+            interaction_id: pending.id.clone(),
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        });
+        assert_eq!(
+            stale.error,
+            Some(RuntimeClientError::InteractionNotPending {
+                interaction_id: pending.id.clone()
+            })
+        );
+
+        let canonical = runtime
+            .inner
+            .store
+            .load_canonical()
+            .expect("canonical tool settlement");
+        let tool_messages = canonical
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tool_messages.len(), 1, "one structural tool result slot");
+        assert!(matches!(
+            &tool_messages[0].result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        ));
+        assert!(!matches!(
+            &tool_messages[0].result.status,
+            ToolExecutionStatus::Denied { .. }
+        ));
+        assert!(tool_calls.borrow().is_empty(), "executor was never invoked");
+        assert!(!*tool_started.borrow(), "executor never started");
+
+        let journal = runtime
+            .inner
+            .store
+            .read_events(None, 256)
+            .expect("runtime event journal")
+            .events;
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|envelope| matches!(
+                    envelope.event,
+                    crate::events::types::RuntimeEvent::ToolExecutionStarted { .. }
+                ))
+                .count(),
+            0,
+            "cancelled-before-start emits no ToolExecutionStarted"
+        );
+        assert_eq!(
+            journal
+                .iter()
+                .filter(|envelope| matches!(
+                    envelope.event,
+                    crate::events::types::RuntimeEvent::AttemptCancelled { .. }
+                ))
+                .count(),
+            1,
+            "the attempt has one cancellation terminal event"
+        );
     }
 
     /// Repeated concurrent shutdown calls join one drain completion and

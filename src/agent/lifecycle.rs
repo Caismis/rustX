@@ -19,7 +19,7 @@
 //! Assistant(ToolCall A, ToolCall B) committed
 //!     ↓ ToolRegistry preflight is already complete
 //! PreToolPolicy → Allow | Deny(reason) | Ask(reason)
-//!     ↓ on Ask: InteractionCoordinator rendezvous
+//!     ↓ on Ask: ConversationRuntime-owned InteractionCoordinator
 //!     ↓ cancellation/start frontier
 //! exact original PreparedInvocation → executor (or denied result slot)
 //!     ↓ execute, settle every CallSlot, commit ToolResult A then ToolResult B
@@ -124,7 +124,7 @@
 //! `ToolRegistry::preflight` and after the Assistant `ToolCall` is canonical,
 //! but before the corresponding executor starts. Its view is immutable and
 //! contains only the facts the registry already resolved. An `Ask` decision
-//! is handed to the attempt's required interaction rendezvous; it never
+//! is handed to the attempt's concrete native interaction binding; it never
 //! grants a tool-start capability and it never carries replacement arguments.
 //!
 //! # Seams that are intentionally absent
@@ -146,12 +146,15 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
+use crate::agent::cancellation::AgentCancellation;
 use crate::context::{AcceptedContext, DeferredContextProducer, UserMessageProposal};
 use crate::conversation::SurfaceRevision;
 use crate::runtime::identity::{
     AttemptId, CertifiedExtensionIdentity, ConversationId, ToolCallId, ToolId,
 };
-use crate::runtime::interaction::{ApprovalFacts, InteractionRendezvous, UnavailableInteraction};
+#[cfg(test)]
+use crate::runtime::interaction::TestInteractionRendezvous;
+use crate::runtime::interaction::{ApprovalFacts, InteractionCoordinator, InteractionOutcome};
 use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
 
 /// The bounded failure of one lifecycle extension invocation.
@@ -309,10 +312,8 @@ impl PreToolView<'_> {
     /// The copy is made by the semantic owner, not by client input. The
     /// response path has no corresponding arguments field.
     #[must_use]
-    pub fn approval_facts(&self, reason: impl Into<String>) -> ApprovalFacts {
+    pub(crate) fn approval_facts(&self, reason: impl Into<String>) -> ApprovalFacts {
         ApprovalFacts {
-            conversation_id: self.conversation_id.clone(),
-            attempt_id: self.attempt_id.clone(),
             turn: self.turn,
             call_id: self.call_id.clone(),
             tool_id: self.tool_id.clone(),
@@ -321,6 +322,40 @@ impl PreToolView<'_> {
             mode: self.mode,
             arguments: self.arguments.clone(),
             reason: reason.into(),
+        }
+    }
+}
+
+/// The only production interaction binding an attempt may carry.
+///
+/// `Native` is installed by `ConversationRuntime`, which owns the concrete
+/// coordinator.  The test-only variant exists only for deterministic Agent
+/// Loop fixtures; it is not compiled into production and cannot become a
+/// second runtime interaction authority.
+#[derive(Clone)]
+enum InteractionBinding {
+    Unavailable,
+    Native(Arc<InteractionCoordinator>),
+    #[cfg(test)]
+    Test(Arc<dyn TestInteractionRendezvous>),
+}
+
+impl InteractionBinding {
+    async fn request_approval(
+        &self,
+        attempt_id: AttemptId,
+        facts: ApprovalFacts,
+        cancellation: &AgentCancellation,
+    ) -> InteractionOutcome {
+        match self {
+            Self::Unavailable => InteractionOutcome::Unavailable,
+            Self::Native(coordinator) => {
+                coordinator
+                    .request_approval(attempt_id, facts, cancellation)
+                    .await
+            }
+            #[cfg(test)]
+            Self::Test(rendezvous) => rendezvous.request_approval(facts, cancellation).await,
         }
     }
 }
@@ -573,7 +608,7 @@ impl RegisteredToolResultObserver {
 pub struct AttemptLifecycle {
     pre_step: Arc<dyn PreStepPolicy>,
     pre_tool: Arc<dyn PreToolPolicy>,
-    interaction: Arc<dyn InteractionRendezvous>,
+    interaction: InteractionBinding,
     tool_results: Vec<RegisteredToolResultObserver>,
 }
 
@@ -605,7 +640,7 @@ impl AttemptLifecycle {
         Self {
             pre_step: Arc::new(AlwaysEnter),
             pre_tool: Arc::new(AlwaysAllow),
-            interaction: Arc::new(UnavailableInteraction),
+            interaction: InteractionBinding::Unavailable,
             tool_results: Vec::new(),
         }
     }
@@ -624,16 +659,38 @@ impl AttemptLifecycle {
         self
     }
 
-    /// Binds the conversation-owned interaction rendezvous used by an
-    /// `Ask` decision. The rendezvous owns pending state and terminal
-    /// response/cancellation coordination; it never executes the tool.
-    #[must_use]
-    pub fn with_interaction_rendezvous(
+    /// Binds the conversation-owned native interaction coordinator used by an
+    /// `Ask` decision. Only the runtime owner can install this production
+    /// binding; callers cannot replace it with another rendezvous.
+    pub(crate) fn with_native_interaction(
         mut self,
-        rendezvous: Arc<dyn InteractionRendezvous>,
+        coordinator: Arc<InteractionCoordinator>,
     ) -> Self {
-        self.interaction = rendezvous;
+        self.interaction = InteractionBinding::Native(coordinator);
         self
+    }
+
+    /// Installs a test-only waiter seam for deterministic Agent Loop tests.
+    /// This is deliberately absent from production builds.
+    #[cfg(test)]
+    pub(crate) fn with_test_interaction_rendezvous(
+        mut self,
+        rendezvous: Arc<dyn TestInteractionRendezvous>,
+    ) -> Self {
+        self.interaction = InteractionBinding::Test(rendezvous);
+        self
+    }
+
+    /// Requests approval through the attempt's runtime-owned binding.
+    pub(crate) async fn request_approval(
+        &self,
+        attempt_id: AttemptId,
+        facts: ApprovalFacts,
+        cancellation: &AgentCancellation,
+    ) -> InteractionOutcome {
+        self.interaction
+            .request_approval(attempt_id, facts, cancellation)
+            .await
     }
 
     /// Binds the observer that speaks for the **native** runtime observation
@@ -726,12 +783,6 @@ impl AttemptLifecycle {
     #[must_use]
     pub fn pre_tool_policy(&self) -> Arc<dyn PreToolPolicy> {
         Arc::clone(&self.pre_tool)
-    }
-
-    /// The attempt's required interaction rendezvous.
-    #[must_use]
-    pub fn interaction_rendezvous(&self) -> Arc<dyn InteractionRendezvous> {
-        Arc::clone(&self.interaction)
     }
 
     /// The attempt's bound deferred-context observers, in logical producer

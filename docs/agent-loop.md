@@ -665,15 +665,20 @@ model ToolCall
   -> exact PreparedInvocation, or one result slot without an executor
 ```
 
-The attempt always carries one required policy and one required interaction
-rendezvous. `AlwaysAllow` is the identity policy for the current product,
-which has no native rule requiring approval. The policy sees only the
+The attempt always carries one required policy. A runtime-created attempt is
+bound to its one concrete, conversation-owned `InteractionCoordinator`; that
+native owner is not a replaceable production rendezvous strategy. Standalone
+inert execution has no interaction provider and fails `Ask` closed.
+`AlwaysAllow` is the identity policy for the current product, which has no
+native rule requiring approval. The policy sees only the
 conversation/attempt/turn, call and resolved tool identities, safe name,
 origin, mode, and validated business arguments. It cannot resolve registry
 facts, mutate canonical state, dispatch a tool, receive cancellation
 authority, or return replacement arguments.
 
-`Ask` passes those facts to the conversation-owned `InteractionCoordinator`.
+`Ask` passes those facts to the conversation-owned `InteractionCoordinator`;
+the coordinator injects conversation identity and the owning execution
+supplies attempt identity at that narrow boundary.
 The coordinator owns the pending map, non-reused identity, answer/cancel
 terminal transition, and waiter; the Agent Loop remains the only owner that
 can resume the original invocation. `Allow` is not a start capability: the
@@ -687,6 +692,14 @@ strong batch boundary: response timing can neither reorder result slots nor
 let one approved sibling start while another sibling is still awaiting its
 policy decision. Preflight rejection remains the earlier registry-owned
 validation path and never reaches `PreToolPolicy`.
+
+There is one post-evaluation cancellation checkpoint: when
+`PreToolPolicy::evaluate()` settles, the Agent Loop checks cancellation before
+consuming any `Allow`, `Deny`, `Ask`, or error value. Observable cancellation
+therefore produces a normal cancelled slot and publishes no interaction or
+denial from that decision. The `Ask` wait has a second post-wait checkpoint;
+even `Answered(Allow)` is rechecked before the existing start frontier and
+cannot grant execution authority.
 
 The coordinator's response and owner-cancellation paths use one synchronized
 pending-state transition. The first terminal winner wakes the waiter exactly

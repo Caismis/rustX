@@ -1041,15 +1041,24 @@ owner-cancellation terminal transition. It owns rendezvous only; the Agent
 Loop still owns cancellation checks, tool scheduling, tool start, and result
 settlement.
 
-The required `AttemptLifecycle` seam is one `PreToolPolicy` plus one
-`InteractionRendezvous`. The policy sees the immutable facts already resolved
-by `ToolRegistry::preflight`, after the Assistant `ToolCall` canonical commit,
-and returns `Allow`, `Deny { reason }`, or `Ask { reason }`. An Allow continues
+The required `AttemptLifecycle` seam is one `PreToolPolicy` plus one concrete
+native binding to the owning `InteractionCoordinator`; production callers
+cannot replace that rendezvous owner. The policy sees the immutable facts
+already resolved by `ToolRegistry::preflight`, after the Assistant `ToolCall`
+canonical commit, and returns `Allow`, `Deny { reason }`, or `Ask { reason }`.
+An Allow continues
 the exact original `PreparedInvocation`; no response can replace identity or
 arguments. A Deny produces one typed `ToolExecutionStatus::Denied` result
 slot, no executor future, and no `ToolExecutionStarted` event. Parallel
 batches resolve all policy/interaction decisions in canonical call order
 before any executor starts.
+
+After the asynchronous policy future settles, the Agent Loop checks
+cancellation before consuming any Allow, Deny, Ask, or policy error. An Ask
+response is checked again before the start frontier; Answered(Allow) is not a
+tool-start capability. The real ConversationRuntime shutdown path proves that
+pending-map removal is not waiter or attempt settlement: Quiescent waits for
+the waiter handoff, projection callback, AgentExecution, and attempt task.
 
 Runtime Client v1 carries `interaction_respond`, typed acceptance/errors,
 pending/settled events, and `snapshot.pending_interactions`. The TUI remains a

@@ -26,6 +26,10 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 use tokio::sync::{oneshot, watch};
 
+use crate::runtime::interaction::{
+    ApprovalDecision, ApprovalFacts, InteractionCoordinator, InteractionError, InteractionObserver,
+    InteractionOutcome, InteractionRequest, InteractionResponse, TestInteractionRendezvous,
+};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
     AttemptLifecycle, LifecycleError, ObservedToolInvocation, PreStepBatch, PreStepDecision,
@@ -49,10 +53,7 @@ use rustx::runtime::identity::{
     AgentId, AttemptId, CertifiedExtensionIdentity, ContextContributorIdentity, ConversationId,
     MessageId, NativeContextContributor, ToolCallId, ToolId,
 };
-use rustx::runtime::interaction::{
-    ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionRendezvous, InteractionResponse,
-};
-use rustx::runtime::types::{CancellationReason, RuntimeError};
+use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -150,15 +151,29 @@ impl PreStepPolicy for ScriptedPolicy {
 /// immutable preflight facts it received, then returns one scripted decision;
 /// it has no registry, executor, or canonical mutation authority.
 struct ScriptedPreToolPolicy {
-    decisions: Mutex<std::collections::VecDeque<PreToolDecision>>,
+    decisions: Mutex<std::collections::VecDeque<Result<PreToolDecision, LifecycleError>>>,
     observed: Arc<Mutex<Vec<ApprovalFacts>>>,
+    gate: Option<(watch::Sender<bool>, watch::Receiver<bool>)>,
 }
 
 impl ScriptedPreToolPolicy {
     fn new(decisions: Vec<PreToolDecision>) -> Self {
         Self {
+            decisions: Mutex::new(decisions.into_iter().map(Ok).collect()),
+            observed: Arc::new(Mutex::new(Vec::new())),
+            gate: None,
+        }
+    }
+
+    fn gated(
+        decisions: Vec<Result<PreToolDecision, LifecycleError>>,
+        entered: watch::Sender<bool>,
+        release: watch::Receiver<bool>,
+    ) -> Self {
+        Self {
             decisions: Mutex::new(decisions.into()),
             observed: Arc::new(Mutex::new(Vec::new())),
+            gate: Some((entered, release)),
         }
     }
 
@@ -181,8 +196,21 @@ impl PreToolPolicy for ScriptedPreToolPolicy {
             .lock()
             .expect("pre-tool decision lock")
             .pop_front()
-            .unwrap_or(PreToolDecision::Allow);
-        Box::pin(async move { Ok(decision) })
+            .unwrap_or(Ok(PreToolDecision::Allow));
+        let gate = self
+            .gate
+            .as_ref()
+            .map(|(entered, release)| (entered.clone(), release.clone()));
+        Box::pin(async move {
+            if let Some((entered, mut release)) = gate {
+                entered.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("pre-tool policy release channel stays open");
+            }
+            decision
+        })
     }
 }
 
@@ -193,6 +221,7 @@ struct ScriptedInteractionRendezvous {
     requests: Arc<Mutex<Vec<ApprovalFacts>>>,
     request_count: watch::Sender<usize>,
     responses: Mutex<std::collections::VecDeque<oneshot::Receiver<InteractionOutcome>>>,
+    response_gate: Mutex<Option<(watch::Sender<bool>, watch::Receiver<bool>)>>,
 }
 
 impl ScriptedInteractionRendezvous {
@@ -202,7 +231,12 @@ impl ScriptedInteractionRendezvous {
             requests: Arc::new(Mutex::new(Vec::new())),
             request_count,
             responses: Mutex::new(responses.into()),
+            response_gate: Mutex::new(None),
         })
+    }
+
+    fn gate_after_response(&self, entered: watch::Sender<bool>, release: watch::Receiver<bool>) {
+        *self.response_gate.lock().expect("response gate lock") = Some((entered, release));
     }
 
     fn requests(&self) -> Arc<Mutex<Vec<ApprovalFacts>>> {
@@ -214,7 +248,7 @@ impl ScriptedInteractionRendezvous {
     }
 }
 
-impl InteractionRendezvous for ScriptedInteractionRendezvous {
+impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
     fn request_approval<'a>(
         &'a self,
         facts: ApprovalFacts,
@@ -232,15 +266,67 @@ impl InteractionRendezvous for ScriptedInteractionRendezvous {
             .expect("interaction response lock")
             .pop_front()
             .expect("one scripted response channel per Ask decision");
+        let response_gate = self
+            .response_gate
+            .lock()
+            .expect("response gate lock")
+            .take();
         Box::pin(async move {
-            tokio::select! {
+            let outcome = tokio::select! {
                 biased;
                 response = receiver => response.unwrap_or(InteractionOutcome::Unavailable),
                 () = cancellation.cancelled() => InteractionOutcome::Cancelled {
                     reason: cancellation.reason(),
                 },
+            };
+            if let Some((entered, mut release)) = response_gate {
+                entered.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("response release channel stays open");
             }
+            outcome
         })
+    }
+}
+
+/// A native coordinator observer used by the cancellation regression. It
+/// signals publication through a watch channel, so the test can cancel only
+/// after the real interaction owner has admitted the request.
+struct NativePendingSignal {
+    published: watch::Sender<usize>,
+    requests: Arc<Mutex<Vec<InteractionRequest>>>,
+}
+
+impl NativePendingSignal {
+    fn new() -> (Arc<Self>, watch::Receiver<usize>) {
+        let (published, receiver) = watch::channel(0);
+        (
+            Arc::new(Self {
+                published,
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }),
+            receiver,
+        )
+    }
+}
+
+impl InteractionObserver for NativePendingSignal {
+    fn on_pending(&self, request: &InteractionRequest) {
+        let count = {
+            let mut requests = self.requests.lock().expect("native pending requests lock");
+            requests.push(request.clone());
+            requests.len()
+        };
+        self.published.send_replace(count);
+    }
+
+    fn on_settled(
+        &self,
+        _interaction_id: &rustx::runtime::InteractionId,
+        _outcome: &InteractionOutcome,
+    ) {
     }
 }
 
@@ -870,6 +956,328 @@ fn tool_messages(result: &AgentExecutionResult) -> Vec<&rustx::message::types::T
         .collect()
 }
 
+/// Runs one real `AgentExecution` while its pre-tool policy is parked. The
+/// controller cancels only after the policy reports entry, then releases the
+/// policy with the scripted result. The returned interaction count proves
+/// whether an Ask was consumed after the post-await cancellation checkpoint.
+async fn run_cancelled_after_pending_pre_tool_policy(
+    decision: Result<PreToolDecision, LifecycleError>,
+) -> (common::DurableExecutionAudit, usize, GatedToolHandle) {
+    let (policy_entered, mut policy_entered_rx) = watch::channel(false);
+    let (policy_release, policy_release_rx) = watch::channel(false);
+    let policy = Arc::new(ScriptedPreToolPolicy::gated(
+        vec![decision],
+        policy_entered,
+        policy_release_rx,
+    ));
+    let rendezvous = ScriptedInteractionRendezvous::new(Vec::new());
+    let mut interaction_count = rendezvous.subscribe_count();
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-a",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        policy_entered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("pre-tool policy entered");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        policy_release.send_replace(true);
+    });
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_test_interaction_rendezvous(rendezvous),
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("policy cancellation controller");
+    (result, *interaction_count.borrow_and_update(), tool_handle)
+}
+
+fn assert_cancelled_tool_slot_without_start(
+    result: &common::DurableExecutionAudit,
+    _interaction_count: usize,
+    tool_handle: &GatedToolHandle,
+) {
+    assert!(
+        tool_handle.invocations().is_empty(),
+        "executor was not invoked"
+    );
+    assert!(!*tool_handle.started.borrow(), "executor did not start");
+    let messages = tool_messages(result);
+    assert_eq!(messages.len(), 1, "one structural tool result slot");
+    assert!(matches!(
+        &messages[0].result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        0,
+        "cancellation before start emits no ToolExecutionStarted"
+    );
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_ask_is_cancelled_without_publishing_interaction() {
+    let (result, interaction_count, tool_handle) =
+        run_cancelled_after_pending_pre_tool_policy(Ok(PreToolDecision::Ask {
+            reason: "approval required".to_owned(),
+        }))
+        .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_deny_does_not_consume_deny() {
+    let (result, interaction_count, tool_handle) =
+        run_cancelled_after_pending_pre_tool_policy(Ok(PreToolDecision::Deny {
+            reason: "policy denial".to_owned(),
+        }))
+        .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+    assert!(!result.messages().iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::Tool(tool)
+                if matches!(tool.result.status, ToolExecutionStatus::Denied { .. })
+        )
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_error_does_not_fail_closed_as_denied() {
+    let (result, interaction_count, tool_handle) = run_cancelled_after_pending_pre_tool_policy(
+        Err(LifecycleError::new("scripted policy error")),
+    )
+    .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+    assert!(!result.messages().iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::Tool(tool)
+                if matches!(tool.result.status, ToolExecutionStatus::Denied { .. })
+        )
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_ask_cancellation_settles_through_the_real_coordinator() {
+    let lifecycle = ConversationLifecycle::new();
+    assert!(lifecycle.activate());
+    let coordinator = Arc::new(InteractionCoordinator::new(
+        ConversationId::new("conv-issue56"),
+        lifecycle,
+    ));
+    coordinator.set_provider_available(true);
+    let (observer, mut published) = NativePendingSignal::new();
+    coordinator.install_observer(observer.clone());
+
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-native-ask",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Ask {
+        reason: "native approval".to_owned(),
+    }]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let observer_for_controller = observer.clone();
+    let (id_sender, id_receiver) = oneshot::channel();
+    let controller = tokio::spawn(async move {
+        published
+            .wait_for(|count| *count == 1)
+            .await
+            .expect("native interaction publication");
+        let id = observer_for_controller
+            .requests
+            .lock()
+            .expect("native pending requests lock")
+            .first()
+            .expect("one native pending request")
+            .id
+            .clone();
+        id_sender.send(id).expect("send native interaction id");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+    });
+
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_native_interaction(coordinator.clone()),
+        &cancellation,
+    )
+    .await;
+    let interaction_id = id_receiver.await.expect("native interaction id");
+    controller.await.expect("native cancellation controller");
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        observer
+            .requests
+            .lock()
+            .expect("native pending requests lock")
+            .len(),
+        1,
+        "the real coordinator published Ask"
+    );
+    assert_eq!(coordinator.pending_count(), 0);
+    assert_eq!(
+        coordinator.respond(
+            &interaction_id,
+            InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        ),
+        Err(InteractionError::NotPending {
+            interaction_id: interaction_id.clone()
+        })
+    );
+    assert_cancelled_tool_slot_without_start(&result, 1, &tool_handle);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
+    let (response_sender, response_receiver) = oneshot::channel();
+    let rendezvous = ScriptedInteractionRendezvous::new(vec![response_receiver]);
+    let (answered, mut answered_rx) = watch::channel(false);
+    let (release, release_rx) = watch::channel(false);
+    rendezvous.gate_after_response(answered, release_rx);
+
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-allow-race",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        answered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("Answered(Allow) terminal outcome");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        release.send_replace(true);
+    });
+    let mut interaction_count = rendezvous.subscribe_count();
+    let run_task = tokio::spawn(async move {
+        run(
+            &model,
+            tools,
+            ContextAssembly::new(),
+            AttemptLifecycle::inert()
+                .with_pre_tool_policy(Arc::new(ScriptedPreToolPolicy::new(vec![
+                    PreToolDecision::Ask {
+                        reason: "allow race".to_owned(),
+                    },
+                ])))
+                .with_test_interaction_rendezvous(rendezvous),
+            &cancellation,
+        )
+        .await
+    });
+
+    interaction_count
+        .wait_for(|count| *count == 1)
+        .await
+        .expect("Ask interaction publication");
+    response_sender
+        .send(InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        })
+        .expect("Answer(Allow) response");
+    let result = run_task.await.expect("Agent Execution task");
+    controller.await.expect("allow cancellation controller");
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        *interaction_count.borrow_and_update(),
+        1,
+        "Answered(Allow) came from one published Ask"
+    );
+    assert_cancelled_tool_slot_without_start(
+        &result,
+        *interaction_count.borrow_and_update(),
+        &tool_handle,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // PreStepPolicy
 // ---------------------------------------------------------------------------
@@ -1334,7 +1742,7 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
         let cancellation = cancellation.clone();
         let lifecycle = AttemptLifecycle::inert()
             .with_pre_tool_policy(policy)
-            .with_interaction_rendezvous(rendezvous);
+            .with_test_interaction_rendezvous(rendezvous);
         tokio::spawn(async move {
             run(
                 &model,
@@ -1513,7 +1921,7 @@ async fn parallel_batch_resolves_approvals_before_any_tool_start() {
         let cancellation = cancellation.clone();
         let lifecycle = AttemptLifecycle::inert()
             .with_pre_tool_policy(policy)
-            .with_interaction_rendezvous(rendezvous);
+            .with_test_interaction_rendezvous(rendezvous);
         tokio::spawn(async move {
             run(
                 &model,

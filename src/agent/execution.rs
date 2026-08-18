@@ -2677,14 +2677,15 @@ impl<'a> AgentExecution<'a> {
     /// Resolves the typed pre-tool decision of every preflight-ready call.
     ///
     /// The policy sees only an immutable view of the exact registry-resolved
-    /// facts. `Ask` delegates the wait to the attempt's required interaction
-    /// rendezvous, while the Agent Loop remains the owner of execution and
-    /// cancellation. A provider-unavailable interaction and a policy error
-    /// fail closed as `Denied`; an owner cancellation produces the existing
-    /// cancelled result slot and closes the later tool-start frontier.
+    /// facts. `Ask` delegates the wait to the attempt's concrete native
+    /// interaction binding, while the Agent Loop remains the owner of
+    /// execution and cancellation. A provider-unavailable interaction and a
+    /// policy error fail closed as `Denied` only when no post-await
+    /// cancellation is observable; an owner cancellation produces the
+    /// existing cancelled result slot and closes the later tool-start
+    /// frontier.
     async fn resolve_pre_tool_decisions(&self, slots: &mut [CallSlot]) {
         let policy = self.lifecycle.pre_tool_policy();
-        let rendezvous = self.lifecycle.interaction_rendezvous();
         for slot in slots {
             if slot.result.is_some() {
                 continue;
@@ -2709,41 +2710,54 @@ impl<'a> AgentExecution<'a> {
                 mode: invocation.mode,
                 arguments: &invocation.arguments,
             };
-            let decision = match policy.evaluate(&view).await {
+            // A policy future is allowed to settle, but its result is not
+            // consumed after cancellation becomes observable at this
+            // extension boundary. This single checkpoint applies uniformly
+            // to Allow, Deny, Ask, and policy errors.
+            let raw_decision = policy.evaluate(&view).await;
+            if self.cancellation.is_cancelled() {
+                slot.result = Some(cancelled_result(self.cancellation.reason()));
+                continue;
+            }
+            let decision = match raw_decision {
                 Ok(decision) => decision,
                 Err(error) => PreToolDecision::Deny {
                     reason: format!("pre-tool policy failed closed: {}", error.message),
                 },
             };
             let resolution = match decision {
-                PreToolDecision::Allow if self.cancellation.is_cancelled() => {
-                    PreToolResolution::Cancelled(self.cancellation.reason())
-                }
                 PreToolDecision::Allow => PreToolResolution::Allow,
                 PreToolDecision::Deny { reason } => PreToolResolution::Denied(reason),
                 PreToolDecision::Ask { reason } => {
                     let facts = view.approval_facts(reason);
-                    match rendezvous.request_approval(facts, self.cancellation).await {
-                        InteractionOutcome::Answered { response } => match response {
-                            InteractionResponse::Approval { decision } => match decision {
-                                ApprovalDecision::Allow if self.cancellation.is_cancelled() => {
-                                    PreToolResolution::Cancelled(self.cancellation.reason())
-                                }
-                                ApprovalDecision::Allow => PreToolResolution::Allow,
-                                ApprovalDecision::Deny { reason } => {
-                                    PreToolResolution::Denied(reason)
-                                }
+                    let outcome = self
+                        .lifecycle
+                        .request_approval(self.request.attempt_id.clone(), facts, self.cancellation)
+                        .await;
+                    // The interaction terminal winner owns the rendezvous,
+                    // but it never grants execution authority. Apply the
+                    // same post-await cancellation precedence before the
+                    // Answered/Deny/Unavailable value is consumed.
+                    if self.cancellation.is_cancelled() {
+                        PreToolResolution::Cancelled(self.cancellation.reason())
+                    } else {
+                        match outcome {
+                            InteractionOutcome::Answered { response } => match response {
+                                InteractionResponse::Approval { decision } => match decision {
+                                    ApprovalDecision::Allow => PreToolResolution::Allow,
+                                    ApprovalDecision::Deny { reason } => {
+                                        PreToolResolution::Denied(reason)
+                                    }
+                                },
                             },
-                        },
-                        InteractionOutcome::Cancelled { reason } => {
-                            PreToolResolution::Cancelled(reason)
+                            InteractionOutcome::Cancelled { reason } => {
+                                PreToolResolution::Cancelled(reason)
+                            }
+                            InteractionOutcome::Unavailable => PreToolResolution::Denied(
+                                "interaction provider unavailable; approval failed closed"
+                                    .to_owned(),
+                            ),
                         }
-                        InteractionOutcome::Unavailable if self.cancellation.is_cancelled() => {
-                            PreToolResolution::Cancelled(self.cancellation.reason())
-                        }
-                        InteractionOutcome::Unavailable => PreToolResolution::Denied(
-                            "interaction provider unavailable; approval failed closed".to_owned(),
-                        ),
                     }
                 }
             };

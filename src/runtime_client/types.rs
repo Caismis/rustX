@@ -637,6 +637,12 @@ mod tests {
     fn unknown_methods_and_fields_are_rejected() {
         let unknown_method = r#"{"method": "future_method", "id": 1}"#;
         assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_method).is_err());
+        let interaction_publish =
+            r#"{"method": "interaction_publish", "id": 1, "conversation_id": "forged"}"#;
+        assert!(
+            serde_json::from_str::<RuntimeClientRequest>(interaction_publish).is_err(),
+            "Runtime Client exposes response control only; publication is runtime-owned"
+        );
         let unknown_field = r#"{"method": "snapshot_get", "id": 1, "extra": true}"#;
         assert!(serde_json::from_str::<RuntimeClientRequest>(unknown_field).is_err());
     }

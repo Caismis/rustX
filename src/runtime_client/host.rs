@@ -354,7 +354,7 @@ impl ClientInner {
         // attachment identity. A concurrent detach therefore cannot remove
         // the attachment and then be overwritten by this attach's provider
         // update after the lock is released.
-        self.runtime.interaction().set_provider_available(true);
+        self.runtime.set_interaction_provider_available(true);
         drop(state);
         let attachment =
             super::attachment::RuntimeAttachment::new(attachment_id.clone(), self.clone());
@@ -395,7 +395,7 @@ impl ClientInner {
             // Detach is non-semantic: it only closes the provider admission
             // gate for future interactions. It does not settle any request
             // already published by the coordinator.
-            self.runtime.interaction().set_provider_available(false);
+            self.runtime.set_interaction_provider_available(false);
         }
     }
 
@@ -493,8 +493,7 @@ impl ClientInner {
         response: InteractionResponse,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.runtime
-            .interaction()
-            .respond(interaction_id, response)
+            .respond_interaction(interaction_id, response)
             .map(|()| RuntimeClientResult::InteractionResponseAccepted {
                 interaction_id: interaction_id.clone(),
             })

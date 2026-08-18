@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -122,39 +123,43 @@ pub enum InteractionOutcome {
 
 /// The immutable facts used to construct one approval request.
 ///
-/// This type is intentionally owned by the coordinator boundary rather than
-/// by the Runtime Client.  It contains no executor, cancellation handle,
+/// This is an internal handoff from the owning Agent Execution to the
+/// conversation-owned coordinator.  Conversation and attempt identity are
+/// deliberately absent: the coordinator injects the conversation identity,
+/// and the owning execution supplies the attempt identity at the narrow
+/// request boundary.  It contains no executor, cancellation handle,
 /// canonical mutation handle, or replacement argument channel.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ApprovalFacts {
-    /// The conversation identity.
-    pub conversation_id: ConversationId,
-    /// The attempt identity.
-    pub attempt_id: AttemptId,
+pub(crate) struct ApprovalFacts {
     /// The model turn.
-    pub turn: u32,
+    pub(crate) turn: u32,
     /// The model-issued call identity.
-    pub call_id: ToolCallId,
+    pub(crate) call_id: ToolCallId,
     /// The registry-resolved tool identity.
-    pub tool_id: ToolId,
+    pub(crate) tool_id: ToolId,
     /// The registry-resolved model-facing name.
-    pub tool_name: String,
+    pub(crate) tool_name: String,
     /// The registry-resolved origin.
-    pub origin: ToolOrigin,
+    pub(crate) origin: ToolOrigin,
     /// The registry-resolved execution mode.
-    pub mode: ToolInvocationMode,
+    pub(crate) mode: ToolInvocationMode,
     /// The schema-validated business arguments.
-    pub arguments: serde_json::Value,
+    pub(crate) arguments: serde_json::Value,
     /// The bounded policy explanation.
-    pub reason: String,
+    pub(crate) reason: String,
 }
 
 impl ApprovalFacts {
-    fn into_request(self, id: InteractionId) -> InteractionRequest {
+    fn into_request(
+        self,
+        conversation_id: ConversationId,
+        attempt_id: AttemptId,
+        id: InteractionId,
+    ) -> InteractionRequest {
         InteractionRequest {
             id,
-            conversation_id: self.conversation_id,
-            attempt_id: self.attempt_id,
+            conversation_id,
+            attempt_id,
             turn: self.turn,
             kind: InteractionKind::Approval {
                 call_id: self.call_id,
@@ -171,10 +176,12 @@ impl ApprovalFacts {
 
 /// A Runtime Client-facing observation sink for the coordinator.
 ///
-/// Implementations must be leaf publications.  The coordinator calls them
-/// while its pending-state lock is held, so they must not call back into the
-/// coordinator or acquire the Runtime Client projection lock.
-pub trait InteractionObserver: Send + Sync {
+/// Implementations must be leaf publications. `on_pending` runs while the
+/// coordinator's pending-state lock is held, so it must not call back into the
+/// coordinator or acquire the Runtime Client projection lock. `on_settled`
+/// runs after the terminal map transition, under a separate counted
+/// settlement admission.
+pub(crate) trait InteractionObserver: Send + Sync {
     /// Publishes one newly pending request.
     fn on_pending(&self, request: &InteractionRequest);
     /// Publishes the one terminal transition for a request after the owning
@@ -182,13 +189,14 @@ pub trait InteractionObserver: Send + Sync {
     fn on_settled(&self, interaction_id: &InteractionId, outcome: &InteractionOutcome);
 }
 
-/// The rendezvous seam carried by an [`AttemptLifecycle`](crate::agent::AttemptLifecycle).
+/// A test-only replacement for the concrete native binding.
 ///
-/// This is a required typed owner.  It is not a callback into the TUI and it
-/// does not receive permission to execute or rewrite a tool.
-pub trait InteractionRendezvous: Send + Sync {
-    /// Publishes an approval request and waits using the owning attempt's
-    /// cancellation authority.
+/// Production attempts can bind only the conversation-owned
+/// [`InteractionCoordinator`].  The seam exists solely inside the crate's
+/// deterministic test build so Agent Execution tests can control the waiter
+/// without making an alternate production owner configurable.
+#[cfg(test)]
+pub(crate) trait TestInteractionRendezvous: Send + Sync {
     fn request_approval<'a>(
         &'a self,
         facts: ApprovalFacts,
@@ -196,27 +204,11 @@ pub trait InteractionRendezvous: Send + Sync {
     ) -> BoxFuture<'a, InteractionOutcome>;
 }
 
-/// The identity rendezvous used by an attempt that has no native approval
-/// consumer.  It fails closed if an `Ask` decision is supplied by a custom
-/// policy, never silently allowing execution.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct UnavailableInteraction;
-
-impl InteractionRendezvous for UnavailableInteraction {
-    fn request_approval<'a>(
-        &'a self,
-        _facts: ApprovalFacts,
-        _cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome> {
-        Box::pin(async { InteractionOutcome::Unavailable })
-    }
-}
-
 /// A published interaction ticket owned by the semantic operation that is
 /// blocked on the interaction.
-pub struct InteractionTicket {
+pub(crate) struct InteractionTicket {
     /// The interaction identity exposed to the client.
-    pub id: InteractionId,
+    pub(crate) id: InteractionId,
     receiver: oneshot::Receiver<WaiterPayload>,
 }
 
@@ -284,7 +276,7 @@ struct PendingInteraction {
 /// production state machine.
 #[cfg(test)]
 #[derive(Debug, Default)]
-struct InteractionSettleGate {
+pub(crate) struct InteractionSettleGate {
     state: Mutex<InteractionSettleGateState>,
     condvar: std::sync::Condvar,
 }
@@ -299,7 +291,7 @@ struct InteractionSettleGateState {
 
 #[cfg(test)]
 impl InteractionSettleGate {
-    fn arm(&self) {
+    pub(crate) fn arm(&self) {
         let mut state = self.state.lock().expect("interaction gate lock");
         state.armed = true;
         state.entered = false;
@@ -319,14 +311,14 @@ impl InteractionSettleGate {
         state.armed = false;
     }
 
-    fn wait_entered(&self) {
+    pub(crate) fn wait_entered(&self) {
         let mut state = self.state.lock().expect("interaction gate lock");
         while !state.entered {
             state = self.condvar.wait(state).expect("interaction gate wait");
         }
     }
 
-    fn release(&self) {
+    pub(crate) fn release(&self) {
         let mut state = self.state.lock().expect("interaction gate lock");
         state.released = true;
         self.condvar.notify_all();
@@ -341,7 +333,7 @@ struct CoordinatorState {
 }
 
 /// The one conversation-owned native interaction coordinator.
-pub struct InteractionCoordinator {
+pub(crate) struct InteractionCoordinator {
     conversation_id: ConversationId,
     lifecycle: ConversationLifecycle,
     state: Mutex<CoordinatorState>,
@@ -363,7 +355,7 @@ impl core::fmt::Debug for InteractionCoordinator {
 impl InteractionCoordinator {
     /// Creates the coordinator for one conversation and shared lifecycle.
     #[must_use]
-    pub fn new(conversation_id: ConversationId, lifecycle: ConversationLifecycle) -> Self {
+    pub(crate) fn new(conversation_id: ConversationId, lifecycle: ConversationLifecycle) -> Self {
         Self {
             conversation_id,
             lifecycle,
@@ -375,7 +367,7 @@ impl InteractionCoordinator {
     }
 
     #[cfg(test)]
-    fn install_settle_gate(&self, gate: Arc<InteractionSettleGate>) {
+    pub(crate) fn install_settle_gate(&self, gate: Arc<InteractionSettleGate>) {
         *self.settle_gate.lock().expect("interaction gate lock") = Some(gate);
     }
 
@@ -392,8 +384,9 @@ impl InteractionCoordinator {
     }
 
     /// The conversation identity owned by this coordinator.
+    #[cfg(test)]
     #[must_use]
-    pub fn conversation_id(&self) -> &ConversationId {
+    pub(crate) fn conversation_id(&self) -> &ConversationId {
         &self.conversation_id
     }
 
@@ -419,7 +412,7 @@ impl InteractionCoordinator {
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
     #[must_use]
-    pub fn provider_available(&self) -> bool {
+    pub(crate) fn provider_available(&self) -> bool {
         self.state
             .lock()
             .expect("interaction state poisoned")
@@ -441,12 +434,13 @@ impl InteractionCoordinator {
     /// # Panics
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
-    pub fn publish_approval(
+    fn publish_approval(
         &self,
+        attempt_id: AttemptId,
         facts: ApprovalFacts,
     ) -> Result<InteractionTicket, InteractionOutcome> {
-        let id = self.allocate_id(&facts.attempt_id)?;
-        let request = facts.into_request(id.clone());
+        let id = self.allocate_id(&attempt_id)?;
+        let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
         let (sender, receiver) = oneshot::channel();
         self.lifecycle
             .admit_running_commit(|admission| {
@@ -471,12 +465,13 @@ impl InteractionCoordinator {
     }
 
     /// Requests approval through the coordinator and waits for the owner.
-    pub async fn request_approval(
+    pub(crate) async fn request_approval(
         &self,
+        attempt_id: AttemptId,
         facts: ApprovalFacts,
         cancellation: &AgentCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_approval(facts) {
+        let ticket = match self.publish_approval(attempt_id, facts) {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
         };
@@ -485,7 +480,7 @@ impl InteractionCoordinator {
 
     /// Waits for one published interaction using the existing attempt
     /// cancellation authority.
-    pub async fn wait(
+    async fn wait(
         &self,
         ticket: InteractionTicket,
         cancellation: &AgentCancellation,
@@ -517,7 +512,7 @@ impl InteractionCoordinator {
     /// Returns [`InteractionError::NotPending`] for a stale, duplicate, or
     /// already-cancelled identity, and [`InteractionError::InvalidResponse`]
     /// when the typed response violates the bounded Approval contract.
-    pub fn respond(
+    pub(crate) fn respond(
         &self,
         interaction_id: &InteractionId,
         response: InteractionResponse,
@@ -560,7 +555,7 @@ impl InteractionCoordinator {
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
     #[must_use]
-    pub fn pending_snapshot(&self) -> Vec<InteractionRequest> {
+    pub(crate) fn pending_snapshot(&self) -> Vec<InteractionRequest> {
         let state = self.state.lock().expect("interaction state poisoned");
         state
             .pending
@@ -575,7 +570,7 @@ impl InteractionCoordinator {
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
     #[must_use]
-    pub fn pending_count(&self) -> usize {
+    pub(crate) fn pending_count(&self) -> usize {
         self.state
             .lock()
             .expect("interaction state poisoned")
@@ -648,9 +643,9 @@ impl InteractionCoordinator {
                 outcome,
             }),
         };
+        drop(state);
         #[cfg(test)]
         self.park_after_terminal_transition();
-        drop(state);
         let _ = pending.sender.send(payload);
         Ok(())
     }
@@ -667,19 +662,9 @@ impl InteractionCoordinator {
     }
 }
 
-impl InteractionRendezvous for InteractionCoordinator {
-    fn request_approval<'a>(
-        &'a self,
-        facts: ApprovalFacts,
-        cancellation: &'a AgentCancellation,
-    ) -> BoxFuture<'a, InteractionOutcome> {
-        Box::pin(self.request_approval(facts, cancellation))
-    }
-}
-
 /// A typed protocol-facing coordinator error.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InteractionError {
+pub(crate) enum InteractionError {
     /// The interaction is no longer pending. This includes duplicate,
     /// post-cancel, post-quiescent, and pre-crash stale responses.
     NotPending { interaction_id: InteractionId },
@@ -728,10 +713,8 @@ mod tests {
     use crate::runtime::identity::ConversationId;
     use crate::runtime::types::ConversationLifecycleState;
 
-    fn facts(attempt: &str, call: &str) -> ApprovalFacts {
+    fn facts(call: &str) -> ApprovalFacts {
         ApprovalFacts {
-            conversation_id: ConversationId::new("conversation"),
-            attempt_id: AttemptId::new(attempt),
             turn: 3,
             call_id: ToolCallId::new(call),
             tool_id: ToolId::new("tool.read"),
@@ -741,6 +724,14 @@ mod tests {
             arguments: serde_json::json!({"path":"a"}),
             reason: "native test policy".to_owned(),
         }
+    }
+
+    fn publish(
+        coordinator: &InteractionCoordinator,
+        attempt: &str,
+        call: &str,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        coordinator.publish_approval(AttemptId::new(attempt), facts(call))
     }
 
     #[derive(Default)]
@@ -777,11 +768,11 @@ mod tests {
         coordinator.set_provider_available(true);
         let observer = Arc::new(RecordingObserver::default());
         coordinator.install_observer(observer.clone());
-        let first = coordinator.publish_approval(facts("conversation-attempt-1", "c1"));
+        let first = publish(&coordinator, "conversation-attempt-1", "c1");
         let first = first.expect("provider is available");
-        let second = coordinator.publish_approval(facts("conversation-attempt-1", "c2"));
+        let second = publish(&coordinator, "conversation-attempt-1", "c2");
         let second = second.expect("provider is available");
-        let restarted = coordinator.publish_approval(facts("conversation-attempt-2", "c3"));
+        let restarted = publish(&coordinator, "conversation-attempt-2", "c3");
         let restarted = restarted.expect("provider is available");
         assert_eq!(first.id.as_str(), "conversation-attempt-1-interaction-1");
         assert_eq!(second.id.as_str(), "conversation-attempt-1-interaction-2");
@@ -791,6 +782,25 @@ mod tests {
         );
         assert_eq!(coordinator.pending_snapshot().len(), 3);
         assert_eq!(observer.pending.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn request_identity_is_injected_by_the_conversation_owner() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+
+        let ticket = coordinator
+            .publish_approval(AttemptId::new("attempt-owned"), facts("c1"))
+            .expect("provider is available");
+        let request = coordinator
+            .pending_snapshot()
+            .into_iter()
+            .next()
+            .expect("published request");
+
+        assert_eq!(request.id, ticket.id);
+        assert_eq!(request.conversation_id, *coordinator.conversation_id());
+        assert_eq!(request.attempt_id, AttemptId::new("attempt-owned"));
     }
 
     #[test]
@@ -806,11 +816,11 @@ mod tests {
             .insert(attempt_id.clone(), u64::MAX);
 
         let first = coordinator
-            .publish_approval(facts(attempt_id.as_str(), "c1"))
+            .publish_approval(attempt_id.clone(), facts("c1"))
             .expect("the maximum ordinal is issued once");
         assert_eq!(first.id, InteractionId::for_attempt(&attempt_id, u64::MAX));
         assert!(matches!(
-            coordinator.publish_approval(facts(attempt_id.as_str(), "c2")),
+            coordinator.publish_approval(attempt_id.clone(), facts("c2")),
             Err(InteractionOutcome::Unavailable)
         ));
         assert_eq!(coordinator.pending_count(), 1);
@@ -821,7 +831,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -845,16 +855,17 @@ mod tests {
     }
 
     /// The response winner is established while `settle` holds the pending
-    /// state mutex. The gate parks after removal and before waiter notification;
-    /// cancellation is then made to contend for that same mutex. Releasing the
-    /// gate proves the response transition happened first, rather than merely
-    /// observing whichever future happened to wake first.
+    /// state mutex. The gate parks after the mutex-protected removal and before
+    /// waiter notification; cancellation then observes the already-removed
+    /// entry and must lose. Releasing the gate proves the response transition
+    /// happened first, rather than merely observing whichever future happened
+    /// to wake first.
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
     async fn parked_response_transition_beats_cancellation() {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
         let gate = Arc::new(InteractionSettleGate::default());
@@ -882,8 +893,10 @@ mod tests {
             .await
             .expect("cancellation contender started");
 
-        // The response task still owns the pending-state mutex here. The
-        // cancellation task cannot linearize until the terminal gate releases.
+        // The response task has already released the pending-state mutex, but
+        // its terminal transition is parked before waiter notification. The
+        // cancellation task therefore sees the removed entry and cannot
+        // manufacture a second terminal transition.
         gate.release();
         response_task
             .await
@@ -908,7 +921,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
@@ -939,7 +952,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
         let gate = Arc::new(InteractionSettleGate::default());
@@ -999,7 +1012,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let lifecycle = coordinator.lifecycle.clone();
         assert!(lifecycle.begin_drain());
@@ -1069,7 +1082,7 @@ mod tests {
             settled: settled.clone(),
         }));
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
 
@@ -1106,7 +1119,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let first = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("admission wins first");
         assert_eq!(coordinator.pending_count(), 1);
         assert!(coordinator.lifecycle.begin_drain());
@@ -1114,7 +1127,8 @@ mod tests {
         assert_eq!(coordinator.pending_count(), 0);
         drop(first);
 
-        let after_drain = coordinator.publish_approval(facts("conversation-attempt-1", "c2"));
+        let after_drain =
+            coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c2"));
         assert!(matches!(after_drain, Err(InteractionOutcome::Unavailable)));
         assert_eq!(coordinator.pending_count(), 0);
     }
@@ -1127,7 +1141,7 @@ mod tests {
         let old = coordinator();
         old.set_provider_available(true);
         let old_ticket = old
-            .publish_approval(facts("conversation-attempt-1", "old"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("old"))
             .expect("old request");
         let old_id = old_ticket.id.clone();
         drop(old_ticket);
@@ -1135,7 +1149,7 @@ mod tests {
         let restarted = coordinator();
         restarted.set_provider_available(true);
         let new_ticket = restarted
-            .publish_approval(facts("conversation-attempt-2", "new"))
+            .publish_approval(AttemptId::new("conversation-attempt-2"), facts("new"))
             .expect("new request");
         assert_ne!(old_id, new_ticket.id);
         assert_eq!(
@@ -1155,7 +1169,8 @@ mod tests {
     #[test]
     fn no_provider_fails_closed_without_creating_pending_work() {
         let coordinator = coordinator();
-        let outcome = coordinator.publish_approval(facts("conversation-attempt-1", "c1"));
+        let outcome =
+            coordinator.publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"));
         assert!(matches!(outcome, Err(InteractionOutcome::Unavailable)));
         assert_eq!(coordinator.pending_count(), 0);
         assert_eq!(
@@ -1172,7 +1187,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let id = ticket.id.clone();
         coordinator.set_provider_available(false);
@@ -1206,7 +1221,7 @@ mod tests {
         let coordinator = coordinator();
         coordinator.set_provider_available(true);
         let ticket = coordinator
-            .publish_approval(facts("conversation-attempt-1", "c1"))
+            .publish_approval(AttemptId::new("conversation-attempt-1"), facts("c1"))
             .expect("provider is available");
         let request = coordinator.pending_snapshot().pop().expect("pending");
         assert_eq!(request.id, ticket.id);

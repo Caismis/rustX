@@ -209,11 +209,14 @@ The ownership contract is:
 
 ### Pre-tool boundary and immutable invocation
 
-- `AttemptLifecycle` always contains exactly one typed `PreToolPolicy` and
-  one `InteractionRendezvous`. `AlwaysAllow` is the identity policy because
-  the current product has no native rule requiring approval. There are no
-  optional approval hooks, policy chains, priorities, wrappers, or callbacks
-  hidden in `ToolExecutor`.
+- `AttemptLifecycle` always contains exactly one typed `PreToolPolicy`. A
+  runtime-created attempt receives one concrete native binding to its
+  conversation-owned `InteractionCoordinator`; production callers cannot
+  replace that owner with an arbitrary rendezvous. A standalone inert
+  execution has no interaction provider and fails `Ask` closed. `AlwaysAllow`
+  is the identity policy because the current product has no native rule
+  requiring approval. There are no optional approval hooks, policy chains,
+  priorities, wrappers, or callbacks hidden in `ToolExecutor`.
 - `PreToolPolicy` runs only after `ToolRegistry::preflight` has resolved the
   tool identity, invocation metadata, execution mode, and validated business
   arguments, and after the Assistant `ToolCall` has committed canonically.
@@ -225,6 +228,12 @@ The ownership contract is:
   `ToolId`, model-facing name, mode, origin, and validated arguments are
   unchanged before and after approval; an Allow continues the existing
   `PreparedInvocation`, never reconstructs one from client data.
+- A policy future may settle after cancellation, but its result is consumed
+  only after one post-evaluation cancellation checkpoint. Observable
+  cancellation therefore consumes neither `Allow`, `Deny`, `Ask`, nor a
+  policy error; the call settles through the normal cancellation path. After
+  an `Ask` waiter returns, the Agent Loop performs the same precedence check
+  before interpreting the response and before the tool-start frontier.
 - The Agent Loop checks its existing cancellation/start frontier after an
   Allow. Allow is a rendezvous result, not unconditional tool-start
   authority. Cancellation observed there prevents the executor future and
@@ -259,6 +268,13 @@ the shared lifecycle commit boundary. Interactions admitted first are
 cancelled through the owner's existing `AgentCancellation` hierarchy and
 settled normally. Drain-first publication is refused. Runtime shutdown
 remains the only semantic shutdown authority.
+
+The final proof is on the real `ConversationRuntime` path, not only in
+coordinator unit tests: a Runtime Client pending event is followed through
+runtime shutdown, pending-map removal, waiter handoff, AgentExecution
+settlement, attempt-task exit, and `Quiescent`. A parked waiter keeps shutdown
+incomplete even when the pending map is empty, and no stale response can call
+back after quiescence.
 
 ### Identity, provider availability, and recovery
 
