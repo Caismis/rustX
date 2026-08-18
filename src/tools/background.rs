@@ -200,9 +200,10 @@ const BACKGROUND_CANCEL_REASON: CancellationReason = CancellationReason::UserReq
 ///
 /// [`BackgroundLifecycle::PublishingTerminal`] is the honest non-terminal
 /// state in which the executor has returned its terminal candidate and the
-/// registry now owns durable terminal publication; it is never `Running`
-/// (the runner has exited) and it retains the settlement candidate until
-/// publication reaches a terminal outcome. An internal unpublished prepared
+/// registry now owns durable terminal publication; it is never `Running`:
+/// the executor has returned and the runner now owns the durable settlement
+/// continuation, retaining the settlement candidate until publication
+/// reaches a terminal outcome. An internal unpublished prepared
 /// state implements dispatch atomicity but never leaks as an accepted
 /// execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1194,7 +1195,8 @@ impl ConversationBackgroundRegistry {
         let (settled, stored) = candidate;
         // The registry retains the terminal candidate before publication, so
         // a durable acceptance failure cannot lose the executor result and
-        // cannot leave a false `Running` state with no runner.
+        // cannot leave a false `Running` state after the executor has
+        // returned.
         state.records[index].pending_terminal = Some(TerminalCandidate {
             settled,
             result: stored.clone(),
@@ -1232,10 +1234,10 @@ impl ConversationBackgroundRegistry {
             Err(_error) => {
                 // The terminal inbound did not obtain durable ownership, so
                 // the record must NOT become terminal and must NOT stay
-                // `Running` (the runner has exited). It enters the explicit
-                // publication-pending state with the candidate retained;
-                // the runner's settlement continuation performs the bounded
-                // retry immediately after this call returns.
+                // `Running` after the executor has returned; the runner now
+                // continues only as the registry-owned settlement
+                // continuation, which performs the bounded retry immediately
+                // after this call returns.
                 let record = &mut state.records[index];
                 record.lifecycle = BackgroundLifecycle::PublishingTerminal;
                 record.notification = NotificationState::Failed;
@@ -2717,7 +2719,7 @@ mod tests {
         assert_ne!(
             snapshot.state,
             BackgroundLifecycle::Running,
-            "the record must not fake Running after the runner has exited"
+            "the record must not fake Running after the executor has returned"
         );
         let result = snapshot
             .result
