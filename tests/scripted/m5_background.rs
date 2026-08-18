@@ -1480,14 +1480,12 @@ async fn foreground_tool_continuation_has_no_agent_status() {
 #[test]
 fn background_status_accounting() {
     use rustx::context::engine::ContextConfig;
-    use rustx::context::projection::ContextProjection;
     use rustx::context::status::{
         AgentStatus, AgentStatusSection, AgentStatusSectionData, AgentStatusSectionId,
         render_agent_status,
     };
     use rustx::context::tokens::DefaultTokenEstimator;
     use rustx::context::{ContextEngine, TokenEstimator as _};
-    use rustx::runtime::types::{TokenMeasurement, TokenMeasurementSource};
     let estimator: Arc<dyn rustx::context::TokenEstimator> = Arc::new(DefaultTokenEstimator);
     let engine = ContextEngine::new(
         ContextConfig {
@@ -1538,27 +1536,28 @@ fn background_status_accounting() {
     let tools: Vec<rustx::tools::types::ModelToolDefinition> = Vec::new();
     let estimator = DefaultTokenEstimator;
     assert!(
-        estimator.estimate_input(&with_status, &tools)
-            > estimator.estimate_input(&without_status, &tools),
+        estimator.estimate_input(
+            &with_status.messages,
+            &with_status.effective_system_prompt,
+            &tools
+        ) > estimator.estimate_input(
+            &without_status.messages,
+            &without_status.effective_system_prompt,
+            &tools
+        ),
         "the background section participates in the full request estimate"
     );
     assert_eq!(
-        estimator.estimate_conversation_input(&with_status),
-        estimator.estimate_conversation_input(&without_status),
+        estimator.estimate_conversation_input(&with_status.messages),
+        estimator.estimate_conversation_input(&without_status.messages),
         "keep_recent_tokens is unaffected by the status size"
     );
-    // keep_recent_tokens is measured over conversation content only.
-    let projection = ContextProjection {
-        surface_revision: rustx::conversation::SurfaceRevision::INITIAL,
-        messages: Vec::new(),
-        effective_system_prompt: rendered,
-        estimated_input: TokenMeasurement {
-            input_tokens: 0,
-            source: TokenMeasurementSource::Estimated,
-        },
-    };
+    // keep_recent_tokens is measured over conversation content only, and
+    // the Effective System Prompt is outside the conversation-estimation
+    // boundary entirely: the same ordered messages estimate identically
+    // regardless of the request-time prompt.
     assert_eq!(
-        estimator.estimate_conversation_input(&projection),
-        estimator.estimate_conversation_input(&without_status),
+        estimator.estimate_conversation_input(&[]),
+        estimator.estimate_conversation_input(&without_status.messages),
     );
 }

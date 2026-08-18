@@ -40,7 +40,7 @@ revision, and keyed Ledger bodies.
 Every semantic write follows prepare → one SQLite transaction → COMMIT →
 infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=FULL`, foreign keys, and a busy timeout. Development
-schema version 1 is the only accepted schema; incompatible files fail
+schema version 2 is the only accepted schema; incompatible files fail
 explicitly and are not migrated.
 
 The durable request-start invariant is strict: the provider adapter cannot be
@@ -50,9 +50,11 @@ durable facts and compares it structurally with the live provider-neutral
 request. Historical reconstruction never consults current configuration,
 contributors, Skills, extension/DSH logic, status, workspace, or capability
 state. M8 stores the evidence; M9a (Issue #12) adds the startup recovery that
-classifies and reconciles it (see [Recovery](#recovery)). Replay/resend
-policy, retry orchestration, the M9b cancellation redesign, and M9c
-supervision/quiescence remain open.
+classifies and reconciles it (see [Recovery](#recovery)), and M9b adds the
+model-turn cancellation-vs-start arbitration (see
+[Context assembly, admission, and Agent Status](#context-assembly-admission-and-agent-status)
+and `docs/agent-loop.md`). Replay/resend
+policy, retry orchestration, and M9c supervision/quiescence remain open.
 
 `lifecycle_state` makes terminality structural: an attempt, turn, or detached
 background execution can receive at most one terminal fact, and no later fact
@@ -1220,12 +1222,18 @@ message role, history shape, or timestamps:
   slots reject a second owner. Multi-extension entries sort by stable
   canonical CertifiedExtensionIdentity, independent of registration,
   discovery, address, or package generation.
-- The Agent Loop's generic pre-admission cancellation check, immediately
-  after transient assembly and immediately before admit_context, is the
-  request-start linearization point. Cancellation before it commits no
-  dynamic context, Surface advancement, RequestSnapshot, or provider
-  request. Once admit_context commits, later failure/cancellation cannot
-  roll back those historical facts.
+- The one cancellation-vs-start linearization point of every model turn is
+  `AgentCancellation::arbitrate_model_turn_start`: the attempt's start gate
+  is held across the cancellation check and the fused
+  `ConversationStore::commit_model_turn_start` transaction (request-scoped
+  context appends + `RequestSnapshot` + `ModelRequestStarted` + sequence
+  binding). Cancellation that linearizes first commits nothing: no dynamic
+  context, no Surface advancement, no RequestSnapshot, no start fact, and
+  no provider request. Once the start commit linearizes first, the request
+  is durably started; a later cancellation is post-start, settles the
+  started request, and can never be reclassified as never-started. A
+  start-commit failure rolls the whole transaction back, so request-scoped
+  context can never become canonical without its request starting.
 - Effective System Prompt is rustX-rendered from canonical System content
   and ordered native/extension sections. The rendered string is frozen by
   value in RequestSnapshot; native sections cannot be shadowed and an
@@ -1242,7 +1250,7 @@ message role, history shape, or timestamps:
   adapter translation. Current configuration, Skills, contributors,
   filesystem state, and runtime status are never consulted.
 - During `AgentExecution`, the current request snapshot is transient hot
-  state, while `ConversationStore::persist_request_start` is the durable
+  state, while `ConversationStore::commit_model_turn_start` is the durable
   authority. `RequestHistory` is a read handle over durable snapshots, not a
   long-lived `Vec<RequestSnapshot>`. Lookup by RequestId reconstructs from
   the retained snapshot and exact SurfaceRevision on demand; page reads are
@@ -1297,29 +1305,37 @@ Core invariant:
   batch that would otherwise be admitted, including native Agent Status,
   native Skill guidance, certified-extension proposals, and deferred context
   from every producer — plus attempt/conversation identity, the
-  turn, and the pre-admission `SurfaceRevision`. It returns `Enter` or
+  turn, and the pre-start `SurfaceRevision`. It returns `Enter` or
   `Reject { reason }` and nothing else; it cannot rewrite, extend, or replace
   the batch.
 - There is exactly one model-visible dynamic-context admission path. No
   contributor and no observer may commit context around this evaluation.
 - The evaluation happens after `ContextAssembly::assemble` and before the
-  generic pre-admission cancellation checkpoint, which remains the model-step
-  admission linearization point. Therefore a rejection proves: no proposed
-  dynamic context committed, no Surface revision caused by those proposals,
-  no `RequestSnapshot`, and no provider request.
+  cancellation-vs-start arbitration, which remains the one model-turn
+  linearization point; staging in between has no durable effect. Therefore
+  a rejection proves: no proposed dynamic context committed, no Surface
+  revision caused by those proposals, no `RequestSnapshot`, and no provider
+  request.
 - `Reject` settles as `AttemptFailed(Runtime(PreStepRejected { reason }))`; a
   policy failure settles as
   `AttemptFailed(Runtime(PreStepPolicyFailed { message }))`. Neither admits
   partial context.
 - The policy owns no cancellation signal. Cancellation observed while a
-  bounded evaluation is pending lets the evaluation settle; the generic
-  checkpoint then owns admission — the same settlement rule Issue #55 defines
-  for a pending contributor future. A policy can never convert cancellation
-  into success, restart a turn, trigger a provider retry, or force
-  continuation.
+  bounded evaluation is pending lets the evaluation settle; the start
+  arbitration then owns the decision — the same settlement rule Issue #55
+  defines for a pending contributor future. A policy can never convert
+  cancellation into success, restart a turn, trigger a provider retry, or
+  force continuation.
 - An overflow compact-and-retry is not a new model-step admission: it reuses
-  the admitted `ContextGeneration` and never re-enters assembly, so the
-  policy is evaluated exactly once per primary step.
+  the staged `ContextGeneration` and never re-enters assembly, so the
+  policy is evaluated exactly once per primary step. The retry passes
+  through the same start arbitration with an empty staged context; the
+  compaction between overflow and retry is an independent durable commit
+  whose candidates are evaluated through the same `TokenEstimator` over the
+  exact hypothetical post-compaction request — retained Surface plus the
+  staged request-scoped context overlay
+  (`CompactionConstraints::staged_request_context`) — never as a scalar
+  token delta.
 
 ### ToolResultObserver
 
@@ -1980,8 +1996,9 @@ Surface revisions, Request Snapshots, Pending Inbound, Event Journal facts, and
 checkpoint metadata. The Runtime Client projection and its cache are never
 recovery input.
 
-M9a (Issue #12) freezes the startup recovery contract. M9b (model-turn
-cancellation) and M9c (supervision/quiescence) are **not** implemented.
+M9a (Issue #12) freezes the startup recovery contract, and M9b freezes the
+model-turn cancellation-vs-start arbitration contract. M9c
+(supervision/quiescence) is **not** implemented.
 
 - recovery reconstructs what durably happened; it never invents success, never
   silently replays an ambiguous external side effect, and never regenerates

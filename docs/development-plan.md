@@ -467,9 +467,9 @@ Implemented in the current architecture:
   current `ConversationState`. It retains neither a complete Request Snapshot
   collection nor a duplicate Event Journal trace; durable request and event
   history is read from the store by key or bounded page.
-- Generic pre-admission cancellation linearization, no rollback after
-  admission, and bounded overflow compact-and-retry that reuses the accepted
-  context generation without reinvoking contributors.
+- Generic pre-start cancellation linearization, no rollback after the
+  start commit, and bounded overflow compact-and-retry that reuses the
+  staged context generation without reinvoking contributors.
 - `ContextWindowExceeded` does not prove fresh inbound was observed; overflow
   compaction keeps the pending `FreshInboundTurn` constraint while reusing
   the accepted context generation.
@@ -483,8 +483,8 @@ Exit criteria:
 - An old provider-neutral request remains byte/structurally exact after live
   model configuration, Skills, contributors, package generation, and runtime
   state change.
-- Cancellation before admission commits no dynamic context; failure after
-  admission preserves historical context and snapshots.
+- Cancellation before the start commit has no durable effect; failure after
+  the start commit preserves historical context and snapshots.
 - Overflow retry produces no duplicate dynamic context and reconstructs
   both the original and compacted request independently.
 
@@ -497,7 +497,7 @@ Implemented in the current architecture:
   configuration, so no execution path branches on whether a seam is attached.
 - `PreStepPolicy`: an awaited `Enter`/`Reject(reason)` boundary over the
   final immutable `AcceptedContext`, evaluated after Context Assembly and
-  before the generic pre-admission cancellation checkpoint. It is the single
+  before the model-turn start arbitration. It is the single
   downstream authority every proposal — native, certified-extension, and
   deferred post-tool — converges on.
 - `ToolResultObserver`: an immutable observation of each finalized tool
@@ -809,6 +809,7 @@ Issue #12 is delivered in three slices, in order:
 M9a — durable startup recovery + recovery classification   (delivered)
   |
 M9b — unified model-turn cancellation / request-start commit boundary
+      (delivered)
   |
 M9c — foreground/background/process supervision + runtime quiescence
 ```
@@ -861,12 +862,56 @@ one atomic sibling batch; non-terminal background work is terminalized as
 and repeated restarts are idempotent; and recovered identity allocators never
 collide with durable history.
 
-Explicitly **not** in M9a: model-turn cancellation redesign (M9b), runtime
+Explicitly **not** in M9a: model-turn cancellation redesign (M9b, delivered
+below), runtime
 supervision/quiescence (M9c), a generic retry engine, automatic replay of
 ambiguous side effects, a scheduler or durable job queue, subagent recovery,
 interaction, or DSH session persistence.
 
-### M9b / M9c — cancellation and supervision
+### M9b — model-turn cancellation linearized against the durable start commit (delivered)
+
+M9b replaces the old split "pre-admission cancellation check → separate
+request-start persist" with one arbitration point per model turn:
+`AgentCancellation::arbitrate_model_turn_start` holds the attempt's start
+gate across the cancellation check and the fused durable
+`ConversationStore::commit_model_turn_start` transaction (request-scoped
+context appends + `RequestSnapshot` + `ModelRequestStarted` + sequence
+binding). Exactly one of cancellation and the start commit can linearize
+first:
+
+- cancellation before the arbitration ⇒ no request-scoped context, no
+  Surface advancement, no snapshot, no start fact, no provider request;
+- the start commit first ⇒ the request is durably started: rustX has
+  crossed the no-resend / external-start boundary, so a later cancellation
+  is post-start and settles that started request — it can never be
+  reclassified as never-started. Provider execution may or may not have
+  actually occurred (the loop still reconstructs and verifies before adapter
+  invocation, and a process may crash in between);
+- a start-commit failure ⇒ the whole transaction rolls back (no
+  half-committed request-scoped context) and the attempt settles with the
+  honest durable-store failure.
+
+The boundary is shared by every model turn: first turn, tool→model
+continuation, recovered Class-B continuation, and overflow retry. Context
+assembly output is staged in a scratch conversation state without durable
+effect; the compaction between an overflow and its retry is an independent
+durable commit whose candidates are evaluated through the same
+`TokenEstimator` over the exact hypothetical post-compaction request —
+retained Surface plus the staged request-scoped context overlay
+(`CompactionConstraints::staged_request_context`) — never as a scalar token
+delta. `TurnStarted`
+means "turn preparation began", not request start. Race tests park the
+execution immediately before the arbitration and inside it (before the
+commit) through ordinal-counted, explicitly released test seams — never a
+sleep.
+
+The contract is frozen in [agent-loop.md §4.2](agent-loop.md) and
+[invariants.md](invariants.md#context-assembly-admission-and-agent-status).
+
+Explicitly **not** in M9b: runtime supervision/quiescence (M9c), a generic
+retry engine, and any replay/resend policy for ambiguous side effects.
+
+### M9c — supervision and quiescence
 
 The M5 tool plane PR implements the concrete ownership seams required by
 the native tool plane: the shared runtime `CancellationSignal`, attempt-owned
@@ -891,9 +936,8 @@ machinery that M6 deliberately does not implement:
   background processes, event-writer and drain transitions)
 - General scheduler/runtime busy state and generic process supervision
   beyond the concrete current ownership seam
-- Unified model-turn cancellation, the pre-start/post-start cancellation
-  race around the request-start commit boundary, and process TERM/KILL/reap
-  cancellation (M9b)
+- Process TERM/KILL/reap cancellation orchestration (M9c; the model-turn
+  cancellation-vs-start boundary itself is delivered in M9b)
 
 Exit criteria:
 

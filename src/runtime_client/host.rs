@@ -3432,6 +3432,7 @@ mod tests {
                 activation_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             },
         )
         .await;
@@ -3513,6 +3514,7 @@ mod tests {
                 activation_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             },
         )
         .await;
@@ -4025,6 +4027,7 @@ mod tests {
                 activation_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             },
         )
         .await;
@@ -4105,6 +4108,7 @@ mod tests {
                 activation_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             },
         )
         .await;
@@ -4329,6 +4333,7 @@ mod tests {
                 activation_gate: None,
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             },
         )
         .await;
@@ -5686,6 +5691,7 @@ mod tests {
                 activation_gate: Some(gate.clone()),
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             }),
         )
         .await;
@@ -5927,6 +5933,7 @@ mod tests {
                 activation_gate: Some(gate.clone()),
                 submit_gate: None,
                 shutdown_arrival: None,
+                start_boundary_pause: None,
             }),
         )
         .await;

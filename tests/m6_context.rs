@@ -191,6 +191,7 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
             contributors: Vec::new(),
         },
         None,
+        Vec::new(),
     );
     let expected = snapshot
         .reconstruct(&conversation)

@@ -11,8 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use rustx::context::{
-    ContextError, ContextErrorKind, ContextProjection, ContextSummarizer, SummaryRequest,
-    TokenEstimator,
+    ContextError, ContextErrorKind, ContextSummarizer, SummaryRequest, TokenEstimator,
 };
 use rustx::message::types::{InboundKind, MessageBlock};
 use rustx::tools::types::ModelToolDefinition;
@@ -154,26 +153,26 @@ impl ScriptedEstimator {
 impl TokenEstimator for ScriptedEstimator {
     fn estimate_input(
         &self,
-        projection: &ContextProjection,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
         let mut total = tool_definitions.len() as u64 * self.per_tool;
-        total += self.items_estimate(projection);
-        total += (projection.effective_system_prompt.len() as u64).div_ceil(4);
+        total += self.items_estimate(messages);
+        total += (effective_system_prompt.len() as u64).div_ceil(4);
         total
     }
 
-    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
-        self.items_estimate(projection)
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
+        self.items_estimate(messages)
     }
 }
 
 impl ScriptedEstimator {
     /// The conversation-content estimate: message/block/summary weights only,
     /// never the fixed per-tool overhead.
-    fn items_estimate(&self, projection: &ContextProjection) -> u64 {
-        projection
-            .messages
+    fn items_estimate(&self, messages: &[MessageBlock]) -> u64 {
+        messages
             .iter()
             .map(|message| self.message_estimate(message))
             .sum()

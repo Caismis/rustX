@@ -39,7 +39,13 @@ use super::inbox::{
 
 /// The only schema accepted by this pre-production store. Incompatible
 /// databases fail explicitly; there is no migration or legacy reader.
-pub const SQLITE_SCHEMA_VERSION: i64 = 1;
+///
+/// Version 2 freezes the M9b durable format change: `RequestSnapshot` JSON
+/// gained a required `request_context_ids` field, so a v1 database whose
+/// snapshots predate that field must fail at store open with an explicit
+/// [`ConversationStoreError::SchemaVersionMismatch`] rather than a later
+/// accidental JSON decode failure.
+pub const SQLITE_SCHEMA_VERSION: i64 = 2;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -69,6 +75,21 @@ pub(crate) enum CompactionFaultOperation {
     AfterEventInsert,
 }
 
+/// One scripted model-turn-start-stage fault used by atomicity regressions
+/// (Issue #12, M9b).
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestStartFaultOperation {
+    /// Fail before the request-scoped context Ledger/Surface appends.
+    BeforeContextAppend,
+    /// Fail after the request-scoped context appends have staged.
+    AfterContextAppend,
+    /// Fail after the immutable Request Snapshot insert has staged.
+    AfterSnapshotInsert,
+    /// Fail after the `ModelRequestStarted` Event Journal fact has staged.
+    AfterEventInsert,
+}
+
 /// The native durable conversation authority for one conversation.
 pub struct SqliteConversationStore {
     conversation_id: ConversationId,
@@ -78,13 +99,11 @@ pub struct SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fail_adopt_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    pub(crate) fail_canonical_append_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_select_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_compaction_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
-    pub(crate) fail_request_start_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_event_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
@@ -97,6 +116,8 @@ pub struct SqliteConversationStore {
     pub(crate) admission_fault_script: Arc<Mutex<VecDeque<AdmissionFaultOperation>>>,
     #[cfg(test)]
     pub(crate) compaction_fault_script: Arc<Mutex<VecDeque<CompactionFaultOperation>>>,
+    #[cfg(test)]
+    pub(crate) request_start_fault_script: Arc<Mutex<VecDeque<RequestStartFaultOperation>>>,
 }
 
 impl std::fmt::Debug for SqliteConversationStore {
@@ -158,13 +179,11 @@ impl SqliteConversationStore {
             #[cfg(test)]
             fail_adopt_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            fail_canonical_append_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_select_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_compaction_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
-            fail_request_start_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_event_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
@@ -177,6 +196,8 @@ impl SqliteConversationStore {
             admission_fault_script: Arc::new(Mutex::new(VecDeque::new())),
             #[cfg(test)]
             compaction_fault_script: Arc::new(Mutex::new(VecDeque::new())),
+            #[cfg(test)]
+            request_start_fault_script: Arc::new(Mutex::new(VecDeque::new())),
         })
     }
 
@@ -208,12 +229,6 @@ impl SqliteConversationStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn arm_fail_canonical_append_times(&self, count: usize) {
-        self.fail_canonical_append_remaining
-            .fetch_add(count, Ordering::SeqCst);
-    }
-
-    #[cfg(test)]
     pub(crate) fn arm_fail_select_times(&self, count: usize) {
         self.fail_select_remaining
             .fetch_add(count, Ordering::SeqCst);
@@ -222,12 +237,6 @@ impl SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_compaction_times(&self, count: usize) {
         self.fail_compaction_remaining
-            .fetch_add(count, Ordering::SeqCst);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn arm_fail_request_start_times(&self, count: usize) {
-        self.fail_request_start_remaining
             .fetch_add(count, Ordering::SeqCst);
     }
 
@@ -294,6 +303,118 @@ impl SqliteConversationStore {
             .compaction_fault_script
             .lock()
             .expect("compaction fault script lock");
+        if script.front().copied() == Some(operation) {
+            script.pop_front();
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_request_start_fault_script(
+        &self,
+        operations: impl IntoIterator<Item = RequestStartFaultOperation>,
+    ) {
+        self.request_start_fault_script
+            .lock()
+            .expect("request-start fault script lock")
+            .extend(operations);
+    }
+
+    /// Inserts the fresh model-turn start facts into `transaction`: the
+    /// request-scoped canonical context, the frozen snapshot, the
+    /// `ModelRequestStarted` event, and the sequence binding (Issue #12,
+    /// M9b).
+    fn insert_fresh_start_tx(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        context: &[MessageBlock],
+        snapshot: &RequestSnapshot,
+        timestamp: DateTime<Utc>,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        #[cfg(test)]
+        if self.consume_request_start_fault(RequestStartFaultOperation::BeforeContextAppend) {
+            return Err(storage(
+                "fault injected: before request-start context append",
+            ));
+        }
+        if !context.is_empty() {
+            ensure_surface_head(transaction)?;
+        }
+        for message in context {
+            append_message_and_surface(transaction, message)?;
+        }
+        #[cfg(test)]
+        if self.consume_request_start_fault(RequestStartFaultOperation::AfterContextAppend) {
+            return Err(storage(
+                "fault injected: after request-start context append",
+            ));
+        }
+        validate_surface_revision(transaction, snapshot.surface_revision)?;
+        let ids = reconstruct_surface_tx(transaction, snapshot.surface_revision)?;
+        for id in ids {
+            let _: MessageBlock = load_message_tx(transaction, &id)?;
+        }
+        let json = encode(snapshot, "request snapshot")?;
+        transaction
+            .execute(
+                "INSERT INTO request_snapshots(request_id,surface_revision,snapshot_json,started_sequence) VALUES(?1,?2,?3,NULL)",
+                params![
+                    snapshot.request_id.as_str(),
+                    seq_to_i64(snapshot.surface_revision.get())?,
+                    json
+                ],
+            )
+            .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
+        #[cfg(test)]
+        if self.consume_request_start_fault(RequestStartFaultOperation::AfterSnapshotInsert) {
+            return Err(storage(
+                "fault injected: after request-start snapshot insert",
+            ));
+        }
+        let event = RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(""),
+            sequence: 0,
+            conversation_id: self.conversation_id.clone(),
+            attempt_id: Some(snapshot.identity.attempt_id.clone()),
+            turn_id: Some(snapshot.identity.turn.clone()),
+            timestamp,
+            event: RuntimeEvent::ModelRequestStarted {
+                request_id: snapshot.request_id.clone(),
+                model: snapshot.invocation.model.clone(),
+            },
+        };
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage(
+                "fault injected: request-start event journal commit",
+            ));
+        }
+        let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+        #[cfg(test)]
+        if self.consume_request_start_fault(RequestStartFaultOperation::AfterEventInsert) {
+            return Err(storage("fault injected: after request-start event insert"));
+        }
+        transaction
+            .execute(
+                "UPDATE request_snapshots SET started_sequence=?1 WHERE request_id=?2",
+                params![
+                    seq_to_i64(persisted.sequence)?,
+                    snapshot.request_id.as_str()
+                ],
+            )
+            .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        Ok(persisted)
+    }
+
+    #[cfg(test)]
+    fn consume_request_start_fault(&self, operation: RequestStartFaultOperation) -> bool {
+        let mut script = self
+            .request_start_fault_script
+            .lock()
+            .expect("request-start fault script lock");
         if script.front().copied() == Some(operation) {
             script.pop_front();
             true
@@ -566,10 +687,6 @@ impl ConversationStore for SqliteConversationStore {
         ensure_surface_head(&transaction)?;
         append_message_and_surface(&transaction, message)?;
         #[cfg(test)]
-        if Self::consume(&self.fail_canonical_append_remaining) {
-            return Err(storage("fault injected: canonical event commit"));
-        }
-        #[cfg(test)]
         if Self::consume(&self.fail_event_remaining) {
             return Err(storage("fault injected: canonical event journal commit"));
         }
@@ -598,10 +715,6 @@ impl ConversationStore for SqliteConversationStore {
         ensure_surface_head(&transaction)?;
         for message in messages {
             append_message_and_surface(&transaction, message)?;
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_canonical_append_remaining) {
-            return Err(storage("fault injected: canonical event batch commit"));
         }
         let mut persisted = Vec::with_capacity(events.len());
         for event in events {
@@ -774,12 +887,21 @@ impl ConversationStore for SqliteConversationStore {
         })
     }
 
-    fn persist_request_start(
+    fn commit_model_turn_start(
         &self,
+        context: &[MessageBlock],
         snapshot: &RequestSnapshot,
         timestamp: DateTime<Utc>,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         validate_snapshot_identity(snapshot)?;
+        // The one input validation rule shared by the fresh commit and the
+        // idempotent retry (Issue #12, M9b): the exact ordered
+        // request-scoped context the caller supplies must equal the frozen
+        // `snapshot.request_context_ids` before the store chooses a path or
+        // touches durable state. A fresh commit must never be able to append
+        // context while persisting a snapshot whose `request_context_ids`
+        // disagrees with what it just appended.
+        validate_request_context(snapshot, context)?;
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -793,87 +915,23 @@ impl ConversationStore for SqliteConversationStore {
             .optional()
             .map_err(|error| storage(format!("request snapshot probe: {error}")))?;
         if let Some((json, started_sequence)) = existing {
-            let Some(started_sequence) = started_sequence else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request snapshot {} exists without a durable start sequence",
-                    snapshot.request_id
-                )));
-            };
-            let stored: RequestSnapshot = decode(&json, "request snapshot")?;
-            if stored != *snapshot {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request {} was started with different frozen inputs",
-                    snapshot.request_id
-                )));
-            }
-            let Some(started) = find_request_start_event(&transaction, &snapshot.request_id)?
-            else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request snapshot {} exists without its request-start fact",
-                    snapshot.request_id
-                )));
-            };
-            if seq_to_i64(started.sequence)? != started_sequence {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "request snapshot {} start sequence disagrees with its event",
-                    snapshot.request_id
-                )));
-            }
-            validate_request_start_metadata(&stored, &started)?;
+            let started = verify_committed_start_tx(
+                &transaction,
+                &json,
+                started_sequence,
+                context,
+                snapshot,
+            )?;
             transaction
                 .commit()
                 .map_err(|error| storage(format!("request start retry commit: {error}")))?;
             return Ok(started);
         }
-        validate_surface_revision(&transaction, snapshot.surface_revision)?;
-        let ids = reconstruct_surface_tx(&transaction, snapshot.surface_revision)?;
-        for id in ids {
-            let _: MessageBlock = load_message_tx(&transaction, &id)?;
-        }
-        let json = encode(snapshot, "request snapshot")?;
-        transaction
-            .execute(
-                "INSERT INTO request_snapshots(request_id,surface_revision,snapshot_json,started_sequence) VALUES(?1,?2,?3,NULL)",
-                params![
-                    snapshot.request_id.as_str(),
-                    seq_to_i64(snapshot.surface_revision.get())?,
-                    json
-                ],
-            )
-            .map_err(|error| storage(format!("insert request snapshot: {error}")))?;
-        let event = RuntimeEventEnvelope {
-            schema_version: EVENT_SCHEMA_VERSION,
-            event_id: EventId::new(""),
-            sequence: 0,
-            conversation_id: self.conversation_id.clone(),
-            attempt_id: Some(snapshot.identity.attempt_id.clone()),
-            turn_id: Some(snapshot.identity.turn.clone()),
-            timestamp,
-            event: RuntimeEvent::ModelRequestStarted {
-                request_id: snapshot.request_id.clone(),
-                model: snapshot.invocation.model.clone(),
-            },
-        };
-        #[cfg(test)]
-        if Self::consume(&self.fail_request_start_remaining) {
-            return Err(storage("fault injected: request start commit"));
-        }
-        #[cfg(test)]
-        if Self::consume(&self.fail_event_remaining) {
-            return Err(storage(
-                "fault injected: request-start event journal commit",
-            ));
-        }
-        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
-        transaction
-            .execute(
-                "UPDATE request_snapshots SET started_sequence=?1 WHERE request_id=?2",
-                params![
-                    seq_to_i64(persisted.sequence)?,
-                    snapshot.request_id.as_str()
-                ],
-            )
-            .map_err(|error| storage(format!("bind request start sequence: {error}")))?;
+        // The request-scoped canonical context commits first, inside the
+        // same transaction as the snapshot and the start fact: a failure
+        // anywhere below rolls all of it back, so request-scoped context
+        // can never become canonical without its request starting.
+        let persisted = self.insert_fresh_start_tx(&transaction, context, snapshot, timestamp)?;
         transaction
             .commit()
             .map_err(|error| storage(format!("request start commit: {error}")))?;
@@ -1228,13 +1286,75 @@ fn append_canonical_messages(
     for message in messages {
         append_message_and_surface(&transaction, message)?;
     }
-    #[cfg(test)]
-    if SqliteConversationStore::consume(&store.fail_canonical_append_remaining) {
-        return Err(storage("fault injected: canonical append commit"));
-    }
     transaction
         .commit()
         .map_err(|error| storage(format!("canonical commit: {error}")))
+}
+
+/// Verifies a retried model-turn start against the already-committed durable
+/// facts (Issue #12, M9b): the frozen snapshot, the exact ordered
+/// request-scoped context committed atomically with it, the request-start
+/// event, and the sequence binding must all match exactly.
+fn verify_committed_start_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    json: &str,
+    started_sequence: Option<i64>,
+    context: &[MessageBlock],
+    snapshot: &RequestSnapshot,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    let Some(started_sequence) = started_sequence else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {} exists without a durable start sequence",
+            snapshot.request_id
+        )));
+    };
+    let stored: RequestSnapshot = decode(json, "request snapshot")?;
+    if stored != *snapshot {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {} was started with different frozen inputs",
+            snapshot.request_id
+        )));
+    }
+    // The durable request-start authority binds the exact ordered
+    // request-scoped context of that request: the retried start must carry
+    // the complete ordered context the original start committed atomically
+    // with it. The frozen `MessageId`s prove exact equality — an empty
+    // retry, a prefix, a reorder, or an extra message all fail here — and
+    // the per-message body check below rejects same-ids/different-body.
+    let supplied_ids: Vec<MessageId> = context
+        .iter()
+        .map(crate::conversation::message_id_of)
+        .collect();
+    if supplied_ids != stored.request_context_ids {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {} was retried with a different request-scoped context",
+            snapshot.request_id
+        )));
+    }
+    for message in context {
+        let id = crate::conversation::message_id_of(message);
+        let stored_message = load_message_tx(transaction, &id)?;
+        if stored_message != *message {
+            return Err(ConversationStoreError::InvalidReference(format!(
+                "request {} context message {id} differs from the committed fact",
+                snapshot.request_id
+            )));
+        }
+    }
+    let Some(started) = find_request_start_event(transaction, &snapshot.request_id)? else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {} exists without its request-start fact",
+            snapshot.request_id
+        )));
+    };
+    if seq_to_i64(started.sequence)? != started_sequence {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request snapshot {} start sequence disagrees with its event",
+            snapshot.request_id
+        )));
+    }
+    validate_request_start_metadata(&stored, &started)?;
+    Ok(started)
 }
 
 fn configure_connection(
@@ -1386,11 +1506,15 @@ fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> 
             CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
             CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
             CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
-            CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);
-            INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence)
-                VALUES(1,1,'',0,0);",
+            CREATE INDEX IF NOT EXISTS request_snapshots_surface_idx ON request_snapshots(surface_revision);",
         )
         .map_err(|error| storage(format!("create schema: {error}")))?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence) VALUES(1,?1,'',0,0)",
+            params![SQLITE_SCHEMA_VERSION],
+        )
+        .map_err(|error| storage(format!("create schema root: {error}")))?;
     let version: i64 = connection
         .query_row(
             "SELECT schema_version FROM rustx_store WHERE id=1",
@@ -2687,6 +2811,35 @@ fn validate_snapshot_identity(snapshot: &RequestSnapshot) -> Result<(), Conversa
     Ok(())
 }
 
+/// Validates that the exact ordered request-scoped context supplied for a
+/// model-turn start equals the frozen `request_context_ids` of its snapshot
+/// (Issue #12, M9b).
+///
+/// This is the one input validation rule shared by the fresh commit and the
+/// idempotent retry: the complete ordered `MessageId` set must match before
+/// the store chooses a path or touches durable state, so a fresh commit can
+/// never persist a snapshot that disagrees with the request-scoped context it
+/// appends atomically. The frozen ids prove exact ordered equality — an empty
+/// set, a prefix, a reorder, or an extra message all fail here — and the
+/// retry path additionally proves per-message body equality against the
+/// already-committed fact.
+fn validate_request_context(
+    snapshot: &RequestSnapshot,
+    context: &[MessageBlock],
+) -> Result<(), ConversationStoreError> {
+    let supplied_ids: Vec<MessageId> = context
+        .iter()
+        .map(crate::conversation::message_id_of)
+        .collect();
+    if supplied_ids != snapshot.request_context_ids {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "request {} supplied a request-scoped context different from its frozen snapshot",
+            snapshot.request_id
+        )));
+    }
+    Ok(())
+}
+
 fn ledger_message_exists(
     connection: &Connection,
     message_id: &MessageId,
@@ -3272,6 +3425,62 @@ mod tests {
         ));
     }
 
+    /// The frozen request snapshot used by the request-start tests.
+    fn test_request_snapshot(
+        revision: crate::conversation::SurfaceRevision,
+        invocation: ModelInvocationConfig,
+    ) -> RequestSnapshot {
+        RequestSnapshot::new(
+            RequestIdentity {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: TurnId::new("1"),
+                retry_number: 0,
+            },
+            revision,
+            "system frozen before restart".to_owned(),
+            invocation,
+            4096,
+            None,
+            false,
+            Vec::new(),
+            crate::runtime::identity::CapabilityRevision::new(7),
+            ContextGeneration {
+                id: 9,
+                contributors: Vec::new(),
+            },
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// A request-start snapshot with a caller-chosen ordered context id set.
+    fn context_start_snapshot(
+        revision: crate::conversation::SurfaceRevision,
+        request_context_ids: Vec<MessageId>,
+    ) -> RequestSnapshot {
+        RequestSnapshot::new(
+            RequestIdentity {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: TurnId::new("1"),
+                retry_number: 0,
+            },
+            revision,
+            "frozen".to_owned(),
+            invocation(),
+            1024,
+            None,
+            false,
+            Vec::new(),
+            crate::runtime::identity::CapabilityRevision::new(1),
+            ContextGeneration {
+                id: 1,
+                contributors: Vec::new(),
+            },
+            None,
+            request_context_ids,
+        )
+    }
+
     #[test]
     fn request_start_is_atomic_and_reconstructs_from_durable_history() {
         let directory = tempfile::tempdir().unwrap();
@@ -3283,28 +3492,13 @@ mod tests {
         store.initialize(&[a.clone(), b.clone()]).unwrap();
         let revision = store.load_head().unwrap().revision;
         let invocation = invocation();
-        let snapshot = RequestSnapshot::new(
-            RequestIdentity {
-                attempt_id: AttemptId::new("attempt-1"),
-                turn: TurnId::new("1"),
-                retry_number: 0,
-            },
-            revision,
-            "system frozen before restart".to_owned(),
-            invocation.clone(),
-            4096,
-            None,
-            false,
-            Vec::new(),
-            crate::runtime::identity::CapabilityRevision::new(7),
-            ContextGeneration {
-                id: 9,
-                contributors: Vec::new(),
-            },
-            None,
+        let snapshot = test_request_snapshot(revision, invocation.clone());
+        store.arm_request_start_fault_script([RequestStartFaultOperation::BeforeContextAppend]);
+        assert!(
+            store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .is_err()
         );
-        store.arm_fail_request_start_times(1);
-        assert!(store.persist_request_start(&snapshot, Utc::now()).is_err());
         assert!(
             store
                 .read_request_snapshots(None, 32)
@@ -3314,7 +3508,11 @@ mod tests {
         );
         assert!(store.read_events(None, 20).unwrap().events.is_empty());
         store.arm_fail_event_times(1);
-        assert!(store.persist_request_start(&snapshot, Utc::now()).is_err());
+        assert!(
+            store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .is_err()
+        );
         assert!(
             store
                 .read_request_snapshots(None, 32)
@@ -3323,7 +3521,9 @@ mod tests {
                 .is_empty()
         );
 
-        let started = store.persist_request_start(&snapshot, Utc::now()).unwrap();
+        let started = store
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .unwrap();
         assert_eq!(started.sequence, 1);
         assert!(matches!(
             started.event,
@@ -3370,11 +3570,323 @@ mod tests {
         );
         assert_eq!(
             reopened
-                .persist_request_start(&snapshot, Utc::now())
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
                 .unwrap()
                 .sequence,
             1
         );
+    }
+
+    /// Issue #12 (M9b): the request-scoped context, the Request Snapshot,
+    /// and the `ModelRequestStarted` fact commit in one transaction; the
+    /// snapshot's Surface revision is the head the context appends created.
+    #[test]
+    fn model_turn_start_commits_context_snapshot_and_event_atomically() {
+        let store = store();
+        let a = user_message("a", "A");
+        store.initialize(std::slice::from_ref(&a)).unwrap();
+        let base_revision = store.load_head().unwrap().revision;
+        let context = user_message("ctx-1", "request-scoped context");
+        let snapshot = RequestSnapshot::new(
+            RequestIdentity {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: TurnId::new("1"),
+                retry_number: 0,
+            },
+            base_revision.next(),
+            "frozen".to_owned(),
+            invocation(),
+            1024,
+            None,
+            false,
+            Vec::new(),
+            crate::runtime::identity::CapabilityRevision::new(1),
+            ContextGeneration {
+                id: 1,
+                contributors: Vec::new(),
+            },
+            None,
+            vec![MessageId::new("ctx-1")],
+        );
+        let started = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .expect("start commits");
+        assert!(matches!(
+            started.event,
+            RuntimeEvent::ModelRequestStarted { ref request_id, .. } if request_id == &snapshot.request_id
+        ));
+        let head = store.load_head().unwrap();
+        assert_eq!(head.revision, base_revision.next());
+        assert_eq!(head.active_message_ids.len(), 2);
+        assert_eq!(store.load_canonical().unwrap().len(), 2);
+        // The snapshot's revision resolves to the post-context surface.
+        let reconstructed = store
+            .reconstruct_model_request(&snapshot.request_id)
+            .expect("reconstruct");
+        assert_eq!(reconstructed.messages, vec![a, context.clone()]);
+        // An exact retry is idempotent and returns the original start fact.
+        let retried = store
+            .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+            .expect("exact retry");
+        assert_eq!(retried.sequence, started.sequence);
+        // A retry whose context differs from the committed facts fails.
+        let different = user_message("ctx-1", "different content");
+        assert!(matches!(
+            store.commit_model_turn_start(std::slice::from_ref(&different), &snapshot, Utc::now()),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        // A retry missing a committed context message fails.
+        let missing = user_message("ctx-2", "never committed");
+        assert!(
+            store
+                .commit_model_turn_start(std::slice::from_ref(&missing), &snapshot, Utc::now())
+                .is_err()
+        );
+    }
+
+    /// Issue #12 (M9b): the durable request-start authority binds the exact
+    /// ordered request-scoped context of a request. An idempotent retry must
+    /// prove exact ordered equality — an empty retry, a prefix, a reorder, an
+    /// extra message, and a same-ids/different-body retry all fail — so the
+    /// retried start can never substitute a different context set.
+    #[test]
+    fn model_turn_start_retry_enforces_exact_ordered_context_equality() {
+        let store = store();
+        let a = user_message("a", "A");
+        store.initialize(std::slice::from_ref(&a)).unwrap();
+        let base_revision = store.load_head().unwrap().revision;
+        let ctx1 = user_message("ctx-1", "first context");
+        let ctx2 = user_message("ctx-2", "second context");
+        let snapshot = RequestSnapshot::new(
+            RequestIdentity {
+                attempt_id: AttemptId::new("attempt-1"),
+                turn: TurnId::new("1"),
+                retry_number: 0,
+            },
+            base_revision.next().next(),
+            "frozen".to_owned(),
+            invocation(),
+            1024,
+            None,
+            false,
+            Vec::new(),
+            crate::runtime::identity::CapabilityRevision::new(1),
+            ContextGeneration {
+                id: 1,
+                contributors: Vec::new(),
+            },
+            None,
+            vec![MessageId::new("ctx-1"), MessageId::new("ctx-2")],
+        );
+        let started = store
+            .commit_model_turn_start(&[ctx1.clone(), ctx2.clone()], &snapshot, Utc::now())
+            .expect("start commits");
+
+        // The exact ordered retry is idempotent and returns the original fact.
+        let retried = store
+            .commit_model_turn_start(&[ctx1.clone(), ctx2.clone()], &snapshot, Utc::now())
+            .expect("exact ordered retry");
+        assert_eq!(retried.sequence, started.sequence);
+
+        // Empty retry fails: the complete ordered set is required.
+        assert!(
+            store
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
+                .is_err()
+        );
+        // Prefix retry fails.
+        assert!(
+            store
+                .commit_model_turn_start(std::slice::from_ref(&ctx1), &snapshot, Utc::now())
+                .is_err()
+        );
+        // Reordered retry fails.
+        assert!(
+            store
+                .commit_model_turn_start(&[ctx2.clone(), ctx1.clone()], &snapshot, Utc::now())
+                .is_err()
+        );
+        // Extra message fails.
+        let extra = user_message("ctx-3", "extra");
+        assert!(
+            store
+                .commit_model_turn_start(
+                    &[ctx1.clone(), ctx2.clone(), extra],
+                    &snapshot,
+                    Utc::now()
+                )
+                .is_err()
+        );
+        // Same ids with a different body fails.
+        let different = user_message("ctx-1", "changed body");
+        assert!(
+            store
+                .commit_model_turn_start(&[different, ctx2], &snapshot, Utc::now())
+                .is_err()
+        );
+    }
+
+    /// Issue #12 (M9b): the fresh model-turn start validates the exact
+    /// ordered request-scoped context against the snapshot's frozen
+    /// `request_context_ids` BEFORE any durable mutation. The one input
+    /// validation rule is shared with the retry path, so an invalid first
+    /// commit can never append context while persisting a snapshot whose
+    /// `request_context_ids` disagrees with what it just appended.
+    ///
+    /// The frozen authority is the ordered `MessageId` set: the snapshot
+    /// does not duplicate request-scoped message bodies, so on the fresh
+    /// path the supplied bodies are the truth being committed (there is no
+    /// prior fact to disagree with). Same-ids/different-body is therefore a
+    /// retry-path invariant, proved by
+    /// `model_turn_start_retry_enforces_exact_ordered_context_equality`.
+    #[test]
+    fn model_turn_start_fresh_commit_rejects_context_snapshot_mismatch() {
+        let a = user_message("a", "A");
+        let ctx1 = user_message("ctx-1", "first context");
+        let ctx2 = user_message("ctx-2", "second context");
+
+        // A fresh start carrying the exact ordered context commits.
+        let committed = store();
+        committed.initialize(std::slice::from_ref(&a)).unwrap();
+        let base_revision = committed.load_head().unwrap().revision;
+        let exact = context_start_snapshot(
+            base_revision.next().next(),
+            vec![MessageId::new("ctx-1"), MessageId::new("ctx-2")],
+        );
+        committed
+            .commit_model_turn_start(&[ctx1.clone(), ctx2.clone()], &exact, Utc::now())
+            .expect("the exact ordered fresh start commits");
+
+        // Every mismatched ordered id set is rejected up front: the Surface
+        // never advances, the canonical Ledger never gains the context, and
+        // no RequestSnapshot or ModelRequestStarted fact is committed.
+        let mismatches: Vec<(Vec<MessageBlock>, Vec<MessageId>)> = vec![
+            (vec![ctx1.clone(), ctx2.clone()], vec![]),
+            (
+                vec![ctx1.clone(), ctx2.clone()],
+                vec![MessageId::new("ctx-1")],
+            ),
+            (
+                vec![ctx1.clone(), ctx2.clone()],
+                vec![MessageId::new("ctx-2"), MessageId::new("ctx-1")],
+            ),
+            (
+                vec![ctx1.clone(), ctx2.clone()],
+                vec![
+                    MessageId::new("ctx-1"),
+                    MessageId::new("ctx-2"),
+                    MessageId::new("ctx-3"),
+                ],
+            ),
+        ];
+        for (supplied, frozen_ids) in mismatches {
+            let store = store();
+            store.initialize(std::slice::from_ref(&a)).unwrap();
+            let revision = store.load_head().unwrap().revision;
+            let snapshot = context_start_snapshot(revision.next(), frozen_ids);
+            assert!(
+                matches!(
+                    store.commit_model_turn_start(&supplied, &snapshot, Utc::now()),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "a fresh start whose supplied context differs from its frozen snapshot must be rejected"
+            );
+            assert_eq!(
+                store.load_head().unwrap().revision,
+                revision,
+                "the Surface never advanced"
+            );
+            assert_eq!(
+                store.load_canonical().unwrap().len(),
+                1,
+                "the canonical Ledger never gained the context"
+            );
+            assert!(
+                store
+                    .read_request_snapshots(None, 32)
+                    .unwrap()
+                    .snapshots
+                    .is_empty(),
+                "no RequestSnapshot was committed"
+            );
+            assert!(
+                store.read_events(None, 32).unwrap().events.is_empty(),
+                "no ModelRequestStarted fact was committed"
+            );
+        }
+    }
+
+    /// Issue #12 (M9b): a failure at any internal stage of the start
+    /// transaction rolls back the request-scoped context, the snapshot, and
+    /// the start fact together.
+    #[test]
+    fn model_turn_start_fault_at_each_stage_rolls_back_everything() {
+        for fault in [
+            RequestStartFaultOperation::BeforeContextAppend,
+            RequestStartFaultOperation::AfterContextAppend,
+            RequestStartFaultOperation::AfterSnapshotInsert,
+            RequestStartFaultOperation::AfterEventInsert,
+        ] {
+            let store = store();
+            let a = user_message("a", "A");
+            store.initialize(std::slice::from_ref(&a)).unwrap();
+            let base_revision = store.load_head().unwrap().revision;
+            let context = user_message("ctx-1", "request-scoped context");
+            let snapshot = RequestSnapshot::new(
+                RequestIdentity {
+                    attempt_id: AttemptId::new("attempt-1"),
+                    turn: TurnId::new("1"),
+                    retry_number: 0,
+                },
+                base_revision.next(),
+                "frozen".to_owned(),
+                invocation(),
+                1024,
+                None,
+                false,
+                Vec::new(),
+                crate::runtime::identity::CapabilityRevision::new(1),
+                ContextGeneration {
+                    id: 1,
+                    contributors: Vec::new(),
+                },
+                None,
+                vec![MessageId::new("ctx-1")],
+            );
+            store.arm_request_start_fault_script([fault]);
+            assert!(
+                store
+                    .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+                    .is_err(),
+                "{fault:?} fails the commit"
+            );
+            let head = store.load_head().unwrap();
+            assert_eq!(
+                head.revision, base_revision,
+                "{fault:?}: the Surface never advanced"
+            );
+            assert_eq!(
+                store.load_canonical().unwrap().len(),
+                1,
+                "{fault:?}: the request-scoped context never became canonical"
+            );
+            assert!(
+                store
+                    .read_request_snapshots(None, 32)
+                    .unwrap()
+                    .snapshots
+                    .is_empty(),
+                "{fault:?}: no snapshot exists"
+            );
+            assert!(
+                store.read_events(None, 32).unwrap().events.is_empty(),
+                "{fault:?}: no start fact exists"
+            );
+            // The store recovers: the identical start commits cleanly.
+            store
+                .commit_model_turn_start(std::slice::from_ref(&context), &snapshot, Utc::now())
+                .expect("the identical start commits after the injected failure");
+        }
     }
 
     #[test]
@@ -3404,9 +3916,10 @@ mod tests {
                     contributors: Vec::new(),
                 },
                 None,
+                Vec::new(),
             );
             store
-                .persist_request_start(&snapshot, Utc::now())
+                .commit_model_turn_start(&[], &snapshot, Utc::now())
                 .expect("persist request snapshot");
         }
 
@@ -3791,9 +4304,10 @@ mod tests {
                 contributors: Vec::new(),
             },
             None,
+            Vec::new(),
         );
         request_store
-            .persist_request_start(&snapshot, Utc::now())
+            .commit_model_turn_start(&[], &snapshot, Utc::now())
             .unwrap();
         {
             let connection = request_store.conn.lock().unwrap();
@@ -3843,9 +4357,10 @@ mod tests {
                 contributors: Vec::new(),
             },
             None,
+            Vec::new(),
         );
         missing_message_store
-            .persist_request_start(&missing_snapshot, Utc::now())
+            .commit_model_turn_start(&[], &missing_snapshot, Utc::now())
             .unwrap();
         {
             let connection = missing_message_store.conn.lock().unwrap();
@@ -3879,6 +4394,39 @@ mod tests {
             SqliteConversationStore::open(ConversationId::new("conv-1"), &path),
             Err(ConversationStoreError::SchemaVersionMismatch {
                 stored: 99,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+    }
+
+    /// Issue #12 (M9b): a database written by the pre-M9b development schema
+    /// (version 1, whose `RequestSnapshot` JSON lacks the required
+    /// `request_context_ids` field) is rejected explicitly at store open with
+    /// a typed `SchemaVersionMismatch` — never a later accidental JSON decode
+    /// failure — and there is no migration, legacy reader, or compatibility
+    /// mode.
+    #[test]
+    fn pre_m9b_schema_version_is_rejected_explicitly() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pre-m9b.sqlite");
+        let conversation_id = ConversationId::new("conv-pre-m9b");
+        {
+            // Build a fully-shaped store at the current schema, then downgrade
+            // only the schema version to the pre-M9b value: the table shape is
+            // unchanged, but the serialized `RequestSnapshot` format gained a
+            // required field, which is exactly why the version must gate open.
+            let store = SqliteConversationStore::open(conversation_id.clone(), &path).unwrap();
+            store
+                .conn
+                .lock()
+                .unwrap()
+                .execute("UPDATE rustx_store SET schema_version = 1 WHERE id = 1", [])
+                .unwrap();
+        }
+        assert!(matches!(
+            SqliteConversationStore::open(conversation_id, &path),
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 1,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));

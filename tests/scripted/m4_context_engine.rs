@@ -21,10 +21,10 @@ use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
 };
 use rustx::context::{
-    CompactionBudgets, ContextAssembly, ContextConfig, ContextEngine, ContextError,
-    ContextErrorKind, ContextProposal, ContextRuntime, ContextSummarizer, DefaultTokenEstimator,
-    ModelBackedSummarizer, ProviderObservedInput, SummaryRequest, TokenEstimator,
-    UserMessageProposal,
+    ClosureTokenEstimator, CompactionBudgets, ContextAssembly, ContextConfig, ContextEngine,
+    ContextError, ContextErrorKind, ContextProposal, ContextRuntime, ContextSummarizer,
+    DefaultTokenEstimator, ModelBackedSummarizer, ProviderObservedInput, SummaryRequest,
+    TokenEstimator, UserMessageProposal,
 };
 use rustx::conversation::{
     ConversationState, SurfaceOp, SurfaceRevision, SurfaceSpan, summary_message_id,
@@ -990,6 +990,98 @@ fn compaction_uses_larger_explicit_summary_reservation_for_hard_fit() {
     assert!(plan.planned_estimate_after <= 30);
 }
 
+/// Issue #12 (M9b), Finding 1: the planner evaluates every compaction
+/// candidate against the exact hypothetical post-compaction request —
+/// retained Surface + staged request-scoped context + Effective System
+/// Prompt + tools — through the same estimator, never as a scalar token
+/// delta.
+///
+/// The estimator is deliberately non-additive: the staged `ctx` message
+/// costs 10 tokens while the `marker` message is still active, but 100 once
+/// compaction retires `marker`. A scalar-delta implementation would compute
+/// the staged reservation against the full pre-compaction surface (10) and
+/// therefore believe "retire only `marker`" fits; the exact hypothetical
+/// evaluation charges 100 for the staged context against that candidate and
+/// selects "retire `marker` + `recent1`" instead.
+#[test]
+fn staged_context_is_evaluated_exactly_per_compaction_candidate() {
+    let estimator: Arc<dyn TokenEstimator> = Arc::new(ClosureTokenEstimator::new(
+        |messages: &[MessageBlock],
+         _effective_system_prompt: &str,
+         _tools: &[rustx::tools::types::ModelToolDefinition]| {
+            let marker_active = messages
+                .iter()
+                .any(|message| message_id_of(message) == "marker");
+            messages
+                .iter()
+                .map(|message| match message_id_of(message).as_str() {
+                    "marker" => 100,
+                    "ctx" => {
+                        if marker_active {
+                            10
+                        } else {
+                            100
+                        }
+                    }
+                    _ => {
+                        if matches!(
+                            message,
+                            MessageBlock::User(user)
+                                if user.kind == InboundKind::CompactionSummary
+                        ) {
+                            1
+                        } else {
+                            50
+                        }
+                    }
+                })
+                .sum()
+        },
+    ));
+    let engine = engine(180, 0, 500, estimator);
+    let history = state(vec![
+        user("marker", ""),
+        user("recent1", ""),
+        user("recent2", ""),
+    ]);
+    let staged = vec![user("ctx", "staged request context")];
+    let projection = engine
+        .build_projection(&history, &[], None, "")
+        .expect("projection");
+    let plan = engine
+        .plan_compaction(
+            &history,
+            &projection,
+            &[],
+            CompactionBudgets::new(0, 1, 1_000_000),
+            &rustx::context::CompactionConstraints {
+                must_cover_through: None,
+                fresh_inbound: None,
+                staged_request_context: &staged,
+            },
+        )
+        .expect("the exact hypothetical evaluation selects a fitting candidate");
+
+    // The correct candidate retires `marker` + `recent1`: retiring only
+    // `marker` leaves the staged context costing 100, so its exact
+    // hypothetical request (1 + 50 + 50 + 100 = 201) exceeds the soft limit
+    // of 180 even though the buggy scalar reservation (10) would have
+    // declared it fitting.
+    assert_eq!(plan.span.end, MessageId::new("recent1"));
+    assert_eq!(plan.planned_estimate_after, 151);
+
+    // The committed compaction leaves the exact staged request fitting — no
+    // avoidable CannotFit after an insufficient compaction was committed.
+    let (_, after) = engine
+        .prepare_compaction(&history, &conversation(), &plan, "S", &[])
+        .expect("the chosen plan prepares");
+    let exact_after = engine.estimate_with_staged_context(&after, &staged, &[]);
+    assert!(
+        exact_after < engine.soft_input_limit(0).expect("soft limit"),
+        "the committed compaction leaves the exact staged request fitting: {exact_after}"
+    );
+}
+
 /// Impossible context configurations are rejected explicitly; no fallback
 /// constant is hidden.
 #[test]
@@ -1558,6 +1650,7 @@ fn a_single_oversized_message_cannot_fit_instead_of_splitting() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
+                ..Default::default()
             },
         )
         .expect_err("no complete-message span fits");
@@ -1610,22 +1703,9 @@ fn summary_input_bound_accounts_for_instruction_json_and_wrapper_overhead() {
     let request = SummaryRequest {
         retired: vec![user("u1", "raw retired content")],
     };
-    let raw_projection = rustx::context::ContextProjection {
-        surface_revision: history.revision(),
-        messages: request.retired.clone(),
-        effective_system_prompt: String::new(),
-        estimated_input: TokenMeasurement {
-            input_tokens: 0,
-            source: TokenMeasurementSource::Estimated,
-        },
-    };
-    let raw_tokens = estimator.estimate_conversation_input(&raw_projection);
+    let raw_tokens = estimator.estimate_conversation_input(&request.retired);
     let assembled = request.model_input();
-    let assembled_projection = rustx::context::ContextProjection {
-        messages: assembled.messages.clone(),
-        ..raw_projection.clone()
-    };
-    let actual_tokens = estimator.estimate_conversation_input(&assembled_projection);
+    let actual_tokens = estimator.estimate_conversation_input(&assembled.messages);
     assert!(
         actual_tokens > raw_tokens,
         "the canonical wrapper must cost tokens"
@@ -1761,6 +1841,7 @@ fn repeated_compaction_never_resurrects_retired_history() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: None,
+                ..Default::default()
             },
         )
         .expect("first plan");
@@ -2345,6 +2426,7 @@ fn continuation_constraint_covers_the_owning_turn_completely() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
+                ..Default::default()
             },
         )
         .expect("plan");
@@ -2389,6 +2471,7 @@ fn continuation_owner_is_never_split() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
+                ..Default::default()
             },
         )
         .expect("plan");
@@ -2420,6 +2503,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
+                ..Default::default()
             },
         )
         .expect_err("a continuation owner outside the compactable run cannot be retired");
@@ -2449,6 +2533,7 @@ fn continuation_owner_outside_the_compactable_run_is_unsatisfiable() {
             &rustx::context::CompactionConstraints {
                 must_cover_through: Some(&MessageId::new("a1")),
                 fresh_inbound: None,
+                ..Default::default()
             },
         )
         .expect("the continuation owner is retired");
@@ -2895,6 +2980,244 @@ async fn overflow_compact_and_retry_succeeds() {
 /// An overflow retry reuses one admitted Context Assembly generation. The
 /// contributor, native context sampling, and ordering are never rerun; only
 /// the historical Surface revision changes because compaction committed.
+/// Issue #12 (M9b): the overflow retry reaches the same start gate. The
+/// compaction commits as its own independent durable fact; cancelling
+/// immediately before the retry's start arbitration is again
+/// cancellation-before-start — the retry never starts, no second
+/// `ModelRequestStarted`, no second provider request — while the committed
+/// compaction remains.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_before_overflow_retry_start_stops_the_retry() {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    let model = fake_model(vec![
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "provisional")),
+            FakeStep::Emit(overflow_event()),
+        ],
+        vec![
+            FakeStep::Emit(started()),
+            FakeStep::Emit(text_delta(0, "retry ok")),
+            FakeStep::Emit(done_with_usage(ModelFinishReason::Stop, 4)),
+        ],
+    ]);
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let summarizer =
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
+    let runtime = runtime_with(500, 0, 5, weighted(100, 10, 0), summarizer);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+    let mut pre_start = pre_start.expect("pre-start phase installed");
+    let mut execution = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.install_start_boundary_pause(pause);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        // Request #1 reaches its start arbitration: let it start; it ends
+        // with the overflow. Compaction then commits independently.
+        pre_start.await_park(1).await;
+        pre_start.release();
+        // The retry reaches the same gate: cancel before its start.
+        pre_start.await_park(2).await;
+        controller_cancellation.cancel();
+        pre_start.release();
+    });
+    let result =
+        common::durable_agent_result(execution.run().await, tool_runtime.durable_store().as_ref());
+    controller.await.expect("controller task");
+
+    assert_eq!(model.requests().len(), 1, "the retry request never started");
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        1,
+        "exactly one ModelRequestStarted: the retry start never committed"
+    );
+    assert!(
+        result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
+        "the compaction committed as its own independent durable fact"
+    );
+    let summary = committed_summary(&result);
+    assert!(
+        matches!(
+            summary.content.first(),
+            Some(rustx::message::types::UserContentBlock::Text(text)) if text.text == "summary-1"
+        ),
+        "the summary remains canonical even though the retry never started"
+    );
+    assert!(
+        matches!(
+            result.outcome,
+            AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ),
+        "the attempt settles cancelled before the retry start: {:?}",
+        result.outcome
+    );
+    assert!(
+        matches!(
+            result.event_history.last(),
+            Some(RuntimeEvent::AttemptCancelled { .. })
+        ) && result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+            .count()
+            == 1,
+        "the cancellation terminal is unique and last"
+    );
+}
+
+/// Issue #12 (M9b), Finding 1: when the staged request-scoped context
+/// overflows the soft limit during model-turn preparation, the compaction
+/// that makes room for it commits as its own independent durable fact. A
+/// cancellation that then wins the start arbitration keeps the committed
+/// compaction and discards the staged context without a trace: no provider
+/// request, no `ModelRequestStarted`, no canonical request-scoped context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_context() {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    let model = fake_model(vec![]);
+    let mut assembly = ContextAssembly::new();
+    assembly
+        .register_extension(
+            "certified.test",
+            Some("package-v1".to_owned()),
+            Arc::new(|_: &rustx::context::ContributorInputSnapshot| {
+                Ok(vec![
+                    ContextProposal::UserMessage(UserMessageProposal {
+                        content: vec![UserContentBlock::Text(TextBlock {
+                            text: "staged context a".to_owned(),
+                        })],
+                    }),
+                    ContextProposal::UserMessage(UserMessageProposal {
+                        content: vec![UserContentBlock::Text(TextBlock {
+                            text: "staged context b".to_owned(),
+                        })],
+                    }),
+                ])
+            }),
+        )
+        .expect("register extension contributor");
+    let tools = ToolRegistry::new();
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let summarizer =
+        FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
+    let runtime = runtime_with_assembly(250, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    let tool_runtime = common::tool_runtime("conv-1");
+    let capability = common::capability_lease(tools, &tool_runtime).await;
+    let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+    let mut pre_start = pre_start.expect("pre-start phase installed");
+    let mut execution = AgentExecution::new(
+        request("attempt-1", vec![user("msg-user-1", "hi")], 0, &model),
+        capability.into_lease(),
+        &cancellation,
+        runtime,
+        &tool_runtime,
+        rustx::agent::AttemptLifecycle::inert(),
+    )
+    .expect("conversation identity matches the tool runtime");
+    execution.install_start_boundary_pause(pause);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        // The staged context overflows the soft limit, so the preparation
+        // compaction commits before the start arbitration; the execution
+        // then parks at the gate. Cancel there: the compaction stays, the
+        // staged context is discarded.
+        pre_start.await_park(1).await;
+        controller_cancellation.cancel();
+        pre_start.release();
+    });
+    let result =
+        common::durable_agent_result(execution.run().await, tool_runtime.durable_store().as_ref());
+    controller.await.expect("controller task");
+
+    assert_eq!(
+        model.requests().len(),
+        0,
+        "the provider request never started"
+    );
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ModelRequestStarted { .. }))
+            .count(),
+        0,
+        "no request-start fact exists"
+    );
+    assert!(
+        result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::CompactionCompleted { .. })),
+        "the preparation compaction committed as its own independent durable fact"
+    );
+    assert!(
+        matches!(
+            committed_summary(&result).content.first(),
+            Some(rustx::message::types::UserContentBlock::Text(text)) if text.text == "summary-1"
+        ),
+        "the committed compaction summary remains canonical"
+    );
+    // Only the original inbound and the compaction summary are canonical:
+    // the staged request-scoped context never became canonical.
+    assert_eq!(
+        result
+            .messages()
+            .iter()
+            .map(message_id_of)
+            .collect::<Vec<_>>(),
+        vec!["msg-user-1".to_owned(), summary_id(1).as_str().to_owned()],
+        "only the original inbound and the compaction summary are canonical; the staged context was discarded"
+    );
+    assert!(
+        result.messages().iter().all(|message| !matches!(
+            message,
+            MessageBlock::User(user) if matches!(user.kind, InboundKind::Context(_))
+        )),
+        "no request-scoped context became canonical"
+    );
+    assert!(
+        matches!(
+            result.outcome,
+            AttemptOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ),
+        "the attempt settles cancelled before start: {:?}",
+        result.outcome
+    );
+    assert!(
+        matches!(
+            result.event_history.last(),
+            Some(RuntimeEvent::AttemptCancelled { .. })
+        ) && result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::AttemptCancelled { .. }))
+            .count()
+            == 1,
+        "the cancellation terminal is unique and last"
+    );
+}
+
 #[tokio::test]
 async fn overflow_retry_reuses_the_admitted_context_generation() {
     let model = fake_model(vec![
@@ -3056,6 +3379,7 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
             &rustx::context::CompactionConstraints {
                 must_cover_through: None,
                 fresh_inbound: Some(&fresh),
+                ..Default::default()
             },
         )
         .expect("fresh inbound leaves an earlier candidate");
@@ -4847,6 +5171,10 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     // The Message Ledger still contains the original inbound
     // `UserMessageBlock`s even though the active Surface was rewritten; the
     // canonical runtime summary joins them as one more committed fact.
+    // Issue #12 (M9b): the request-scoped Agent Status context commits
+    // inside the durable model-turn start transaction, which is strictly
+    // after the independent compaction commit, so the summary precedes the
+    // status fact in commit order.
     let ids: Vec<String> = result.messages().iter().map(block_id).collect();
     assert_eq!(
         ids,
@@ -4855,8 +5183,8 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             assistant_message_id(1).to_string(),
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
-            "rustx-context-attempt-1-turn-2-4".to_owned(),
             summary_id(1).to_string(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
             assistant_message_id(2).to_string(),
         ],
         "the ledger preserves the drained inbound messages and gains the summary"

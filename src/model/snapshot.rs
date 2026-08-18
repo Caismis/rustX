@@ -13,7 +13,7 @@ use crate::conversation::{ConversationError, ConversationState, SurfaceRevision}
 use crate::model::invocation::ModelInvocationConfig;
 use crate::model::types::ModelRequest;
 use crate::runtime::continuation::ProviderContinuationState;
-use crate::runtime::identity::{AttemptId, CapabilityRevision, RequestId, TurnId};
+use crate::runtime::identity::{AttemptId, CapabilityRevision, MessageId, RequestId, TurnId};
 use crate::tools::types::ModelToolDefinition;
 
 /// The identity of one actual primary request attempt.
@@ -74,6 +74,12 @@ pub struct RequestSnapshot {
     /// Provider continuation state, if this request used one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<ProviderContinuationState>,
+    /// The exact ordered request-scoped context `MessageId`s this request
+    /// commits atomically with its start (Issue #12, M9b). Frozen so an
+    /// idempotent retry of `commit_model_turn_start` proves exact ordered
+    /// context equality — the complete ordered set, never just "every
+    /// supplied message exists and matches".
+    pub request_context_ids: Vec<MessageId>,
 }
 
 /// A historical reconstruction failure.
@@ -121,6 +127,7 @@ impl RequestSnapshot {
         capability_revision: CapabilityRevision,
         context_generation: ContextGeneration,
         continuation: Option<ProviderContinuationState>,
+        request_context_ids: Vec<MessageId>,
     ) -> Self {
         Self {
             request_id: identity.request_id(),
@@ -135,6 +142,7 @@ impl RequestSnapshot {
             capability_revision,
             context_generation,
             continuation,
+            request_context_ids,
         }
     }
 

@@ -30,13 +30,13 @@ are stored once in the Ledger. A Surface revision stores identity/order
 transitions, and a historical request combines that revision with its frozen
 snapshot on demand.
 
-The SQLite schema is development schema version 1. An incompatible database
+The SQLite schema is development schema version 2. An incompatible database
 fails explicitly; there is no migration chain, legacy reader, compatibility
 fallback, dual write, or old storage mode. File-backed stores use WAL,
 `synchronous=FULL`, foreign-key enforcement, and a busy timeout. A successful
 SQLite commit is the local durability linearization point documented here.
 
-The version-1 physical tables are deliberately semantic rather than generic:
+The version-2 physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
@@ -149,7 +149,9 @@ runtime/inbound.rs         ConversationInboundMailbox (per-conversation
 durable/inbox.rs           ConversationStore trait + domain types (InboundDraft,
                            AcceptedInbound, PendingInboundItem, PendingBatch):
                            the backend-independent acceptance/selection/adoption
-                           operations
+                           operations, plus the fused `commit_model_turn_start`
+                           contract (request-scoped context + RequestSnapshot +
+                           ModelRequestStarted in one transaction)
 durable/sqlite.rs          SqliteConversationStore: the M8 SQLite backend
                            (one semantic authority over Pending Inbound,
                            Message Ledger, Surface revisions, Request
@@ -653,11 +655,12 @@ claimed inbound
     ↓ finite ContributorInputSnapshot
 ContextAssembly (native + certified extension proposals)
     ↓ validated AcceptedContext
-Agent Loop admission (MessageId/Ledger/Surface ownership)
-    ↓ canonical User context + Effective System Prompt
-ConversationSurface @ SurfaceRevision
+Agent Loop staging (scratch validation, prepared canonical commits;
+                    no durable effect)
     ↓
-ContextEngine → RequestSnapshot → ModelRequest
+cancellation-vs-start arbitration (attempt start gate held; M9b)
+    ↓ commit_model_turn_start: one transaction
+canonical User context + Surface + RequestSnapshot + ModelRequestStarted
     ↓
 ModelAdapter → provider
 ```
@@ -809,19 +812,21 @@ The Agent Loop is the single coordination owner for Context Assembly and
 request admission. `ContextContributor` receives only a finite
 `ContributorInputSnapshot` and returns an awaited boxed future of transient
 `ContextProposal` values; `ContextAssembly::assemble` is the one async typed
-assembly boundary. Bounded contributor work settles before the generic final
-admission check.
+assembly boundary. Bounded contributor work settles before the start
+arbitration.
 RustX owns contributor identity, trusted provenance, semantic lanes,
 canonical `MessageId` allocation, Ledger/Surface mutation, cancellation,
 and provider dispatch. Native context and certified extensions therefore
 share one validation path.
 
-The generic request-start commit point is the cancellation check immediately
-after `ContextAssembly::assemble` and immediately before `admit_context` in
-`src/agent/execution.rs`. Before it, no dynamic context, Surface advancement,
-RequestSnapshot, or provider request exists. After it, accepted context and
-its Surface revision are historical and are not rolled back by provider
-failure or cancellation.
+The generic model-turn start commit point is the cancellation-vs-start
+arbitration in `src/agent/execution.rs` (Issue #12, M9b): the attempt's
+start gate is held across the cancellation check and the fused
+`ConversationStore::commit_model_turn_start` transaction. Cancellation
+that linearizes first leaves no dynamic context, Surface advancement,
+RequestSnapshot, start fact, or provider request. Once the commit
+linearizes first, accepted context and its Surface revision are historical
+and are not rolled back by provider failure or cancellation.
 
 `RequestSnapshot` freezes every non-history input needed by one
 provider-neutral request: `RequestIdentity`, exact `SurfaceRevision`, the
@@ -851,7 +856,7 @@ loop. `AgentExecutionResult` transfers the settlement candidate, durability
 status, and current conversation only; historical events are inspected from
 `ConversationStore::read_events` through bounded pages.
 
-An overflow retry reuses the admitted ContextGeneration and canonical
+An overflow retry reuses the staged ContextGeneration and canonical
 context facts. `ContextWindowExceeded` does not prove that fresh inbound was
 observed, so compaction still protects the pending `FreshInboundTurn`. Only
 compaction-dependent Surface/request fields may change; contributors are not
@@ -869,9 +874,12 @@ Context Assembly (deferred + native + extension proposals)
         |
 PreStepPolicy               Enter | Reject(reason)
         |
-generic cancellation checkpoint          <- admission linearization point
+staging (scratch validation, no durable effect)
         |
-admit_context -> Ledger + Surface -> RequestSnapshot -> ModelRequest
+cancellation-vs-start arbitration   <- the one linearization point
+        |                             (start gate held across check + commit)
+commit_model_turn_start -> context + Ledger/Surface + RequestSnapshot
+                           + ModelRequestStarted, in one transaction
 
 Assistant(ToolCall A, ToolCall B) committed
         |

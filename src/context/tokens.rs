@@ -11,7 +11,7 @@
 //! [`ModelUsage`]: crate::model::types::ModelUsage
 //! [`TokenMeasurementSource`]: crate::runtime::types::TokenMeasurementSource
 
-use crate::context::projection::ContextProjection;
+use crate::message::types::MessageBlock;
 use crate::tools::types::ModelToolDefinition;
 
 /// An observed provider-reported input measurement, tied to the exact
@@ -35,33 +35,43 @@ pub struct ProviderObservedInput {
 /// pluggable, deterministic runtime-owned concern so tests can supply exact
 /// scripted token weights and production can use the default provider-neutral
 /// fallback ([`DefaultTokenEstimator`]).
+///
+/// Estimation sees only the exact provider-visible request input: the ordered
+/// canonical messages, the exact Effective System Prompt, and the tool
+/// definitions. `SurfaceRevision`, token-measurement provenance, and any other
+/// runtime or durable store state are deliberately outside this boundary, so
+/// a custom estimator can never make token cost depend on them — a
+/// hypothetical compaction candidate and the actual post-compaction request
+/// therefore estimate identically whenever their provider-visible inputs are
+/// identical.
 pub trait TokenEstimator: Send + Sync {
-    /// The deterministic estimated input tokens of one request context,
-    /// including
-    /// non-compacted contributors such as tool definitions and the exact
-    /// Effective System Prompt. This is the full request estimate: it feeds
-    /// the soft-limit threshold and the hard fit.
+    /// The deterministic estimated input tokens of one request's
+    /// provider-visible input, including non-compacted contributors such as
+    /// tool definitions and the exact Effective System Prompt. This is the
+    /// full request estimate: it feeds the soft-limit threshold and the hard
+    /// fit.
     fn estimate_input(
         &self,
-        projection: &ContextProjection,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64;
 
-    /// The deterministic estimated input tokens of one projection's
-    /// conversation content only, excluding non-conversation contributors
-    /// such as tool definitions and the Effective System Prompt.
+    /// The deterministic estimated input tokens of the conversation content
+    /// only, excluding non-conversation contributors such as tool definitions
+    /// and the Effective System Prompt.
     ///
     /// This is the recent-conversation estimate: it measures how much
     /// literal conversation history a retained suffix contributes. Tool
     /// definitions and admitted Runtime context affect the full request estimate, the
     /// threshold, and the hard fit, but they must never count toward
     /// satisfying the `keep_recent_tokens` retention target.
-    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64;
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64;
 }
 
 /// The deterministic function behind a [`ClosureTokenEstimator`].
 pub type EstimatorFunction =
-    dyn Fn(&ContextProjection, &[ModelToolDefinition]) -> u64 + Send + Sync;
+    dyn Fn(&[MessageBlock], &str, &[ModelToolDefinition]) -> u64 + Send + Sync;
 
 /// The default provider-neutral fallback estimator.
 ///
@@ -71,9 +81,9 @@ pub type EstimatorFunction =
 /// ceil(deterministic UTF-8 serialized bytes / 4)
 /// ```
 ///
-/// applied over the runtime-owned canonical serialization of the projected
-/// canonical messages, the tool definitions, and the exact Effective System
-/// Prompt. `ceil(x / 4)` is `(bytes + 3) / 4` over `u64`, so every byte counted
+/// applied over the runtime-owned canonical serialization of the canonical
+/// messages, the tool definitions, and the exact Effective System Prompt.
+/// `ceil(x / 4)` is `(bytes + 3) / 4` over `u64`, so every byte counted
 /// contributes at most 4 bytes to one token. The formula is intentionally an
 /// estimate, never provider usage. The Effective System Prompt participates
 /// in the full request estimate; the recent-conversation estimate
@@ -82,21 +92,22 @@ pub type EstimatorFunction =
 pub struct DefaultTokenEstimator;
 
 impl DefaultTokenEstimator {
-    /// The deterministic serialized bytes of the projected canonical
-    /// messages, the tool definitions, and the exact Effective System Prompt.
+    /// The deterministic serialized bytes of the canonical messages, the
+    /// tool definitions, and the exact Effective System Prompt.
     ///
     /// # Panics
     ///
-    /// Panics only if the canonical projection, tool definitions, or system
+    /// Panics only if the canonical messages, tool definitions, or system
     /// prompt fail to serialize, which is unreachable for the canonical
     /// runtime-owned types.
     #[must_use]
     pub fn serialized_bytes(
-        projection: &ContextProjection,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        let items = serde_json::to_vec(&projection.messages)
-            .expect("canonical projection messages serialize")
+        let items = serde_json::to_vec(messages)
+            .expect("canonical messages serialize")
             .len();
         let tools = serde_json::to_vec(tool_definitions)
             .expect("canonical tool definitions serialize")
@@ -105,28 +116,27 @@ impl DefaultTokenEstimator {
         // do not charge the JSON representation's two quote bytes as model
         // input. Non-empty prompts remain part of the frozen deterministic
         // request estimate.
-        let system_prompt = if projection.effective_system_prompt.is_empty() {
+        let system_prompt = if effective_system_prompt.is_empty() {
             0
         } else {
-            serde_json::to_vec(&projection.effective_system_prompt)
+            serde_json::to_vec(effective_system_prompt)
                 .expect("effective system prompt serializes")
                 .len()
         };
         (items + tools + system_prompt) as u64
     }
 
-    /// The deterministic serialized bytes of the projected canonical
-    /// messages only, excluding tool definitions and the Effective System
-    /// Prompt.
+    /// The deterministic serialized bytes of the canonical messages only,
+    /// excluding tool definitions and the Effective System Prompt.
     ///
     /// # Panics
     ///
-    /// Panics only if the canonical projection fails to serialize, which is
+    /// Panics only if the canonical messages fail to serialize, which is
     /// unreachable for the canonical runtime-owned types.
     #[must_use]
-    pub fn conversation_bytes(projection: &ContextProjection) -> u64 {
-        serde_json::to_vec(&projection.messages)
-            .expect("canonical projection messages serialize")
+    pub fn conversation_bytes(messages: &[MessageBlock]) -> u64 {
+        serde_json::to_vec(messages)
+            .expect("canonical messages serialize")
             .len() as u64
     }
 }
@@ -134,14 +144,19 @@ impl DefaultTokenEstimator {
 impl TokenEstimator for DefaultTokenEstimator {
     fn estimate_input(
         &self,
-        projection: &ContextProjection,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        bytes_to_tokens(Self::serialized_bytes(projection, tool_definitions))
+        bytes_to_tokens(Self::serialized_bytes(
+            messages,
+            effective_system_prompt,
+            tool_definitions,
+        ))
     }
 
-    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
-        bytes_to_tokens(Self::conversation_bytes(projection))
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
+        bytes_to_tokens(Self::conversation_bytes(messages))
     }
 }
 
@@ -149,16 +164,20 @@ impl TokenEstimator for DefaultTokenEstimator {
 ///
 /// Tests use this to supply exact token weights and to prove that the
 /// engine's decisions (threshold triggers, cut selection, retention) follow
-/// the weights rather than raw message counts.
+/// the weights rather than raw message counts. The function receives only the
+/// provider-visible request input — messages, Effective System Prompt, and
+/// tools — so scripted estimation can never depend on `SurfaceRevision` or
+/// token-measurement provenance.
 pub struct ClosureTokenEstimator {
     function: Box<EstimatorFunction>,
 }
 
 impl ClosureTokenEstimator {
-    /// Creates a scripted estimator from a deterministic function.
+    /// Creates a scripted estimator from a deterministic function over the
+    /// exact provider-visible request input.
     #[must_use]
     pub fn new(
-        function: impl Fn(&ContextProjection, &[ModelToolDefinition]) -> u64 + Send + Sync + 'static,
+        function: impl Fn(&[MessageBlock], &str, &[ModelToolDefinition]) -> u64 + Send + Sync + 'static,
     ) -> Self {
         Self {
             function: Box::new(function),
@@ -169,14 +188,15 @@ impl ClosureTokenEstimator {
 impl TokenEstimator for ClosureTokenEstimator {
     fn estimate_input(
         &self,
-        projection: &ContextProjection,
+        messages: &[MessageBlock],
+        effective_system_prompt: &str,
         tool_definitions: &[ModelToolDefinition],
     ) -> u64 {
-        (self.function)(projection, tool_definitions)
+        (self.function)(messages, effective_system_prompt, tool_definitions)
     }
 
-    fn estimate_conversation_input(&self, projection: &ContextProjection) -> u64 {
-        (self.function)(projection, &[])
+    fn estimate_conversation_input(&self, messages: &[MessageBlock]) -> u64 {
+        (self.function)(messages, "", &[])
     }
 }
 
@@ -190,6 +210,33 @@ pub const fn bytes_to_tokens(bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{DefaultTokenEstimator, TokenEstimator, bytes_to_tokens};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{
+        InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+    };
+    use crate::runtime::identity::{MessageId, ToolId};
+    use crate::tools::types::ModelToolDefinition;
+
+    fn user_message(id: &str, text: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: text.to_owned(),
+            })],
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    fn tool_definition() -> ModelToolDefinition {
+        ModelToolDefinition {
+            id: ToolId::new("tool-bash"),
+            name: "bash".to_owned(),
+            description: "Run a shell command".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
 
     /// The frozen estimator formula: `ceil(bytes / 4)`.
     #[test]
@@ -204,47 +251,46 @@ mod tests {
     }
 
     /// The default estimator maps the same input to the same estimate and
-    /// counts tool definitions as part of the input.
+    /// counts messages, tool definitions, and the Effective System Prompt as
+    /// full-request input while never counting the Effective System Prompt
+    /// toward the conversation-only estimate.
     #[test]
-    fn default_estimator_is_deterministic_and_includes_tools() {
-        let projection = crate::context::projection::ContextProjection {
-            surface_revision: crate::conversation::SurfaceRevision::INITIAL,
-            messages: Vec::new(),
-            effective_system_prompt: String::new(),
-            estimated_input: crate::runtime::types::TokenMeasurement {
-                input_tokens: 0,
-                source: crate::runtime::types::TokenMeasurementSource::Estimated,
-            },
-        };
+    fn default_estimator_sees_only_provider_visible_input() {
         let estimator = DefaultTokenEstimator;
-        let without_tools = estimator.estimate_input(&projection, &[]);
-        assert_eq!(estimator.estimate_input(&projection, &[]), without_tools);
-        let with_tools = estimator.estimate_input(
-            &projection,
-            &[crate::tools::types::ModelToolDefinition {
-                id: crate::runtime::identity::ToolId::new("tool-bash"),
-                name: "bash".to_owned(),
-                description: "Run a shell command".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
-            }],
+        let messages = vec![user_message("msg-1", "hello")];
+
+        // Messages affect the estimate.
+        assert!(estimator.estimate_input(&messages, "", &[]) > 0);
+        assert!(
+            estimator.estimate_input(&[], "", &[]) < estimator.estimate_input(&messages, "", &[]),
+            "messages must contribute to the request estimate"
         );
+
+        // Tool definitions affect the full input estimate.
+        let without_tools = estimator.estimate_input(&messages, "", &[]);
+        let with_tools = estimator.estimate_input(&messages, "", &[tool_definition()]);
         assert!(
             with_tools > without_tools,
             "tool definitions must contribute to the planned request estimate"
         );
-        let with_prompt = crate::context::projection::ContextProjection {
-            effective_system_prompt: "runtime status\n\nskill guidance".to_owned(),
-            ..projection.clone()
-        };
+
+        // The Effective System Prompt affects the full input estimate...
+        let without_prompt = estimator.estimate_input(&messages, "", &[]);
+        let with_prompt =
+            estimator.estimate_input(&messages, "runtime status\n\nskill guidance", &[]);
         assert!(
-            estimator.estimate_input(&with_prompt, &[])
-                > estimator.estimate_input(&projection, &[]),
+            with_prompt > without_prompt,
             "the Effective System Prompt must contribute to the full request estimate"
         );
+
+        // ...but it is not an input to conversation-only estimation at all:
+        // the conversation estimate is a pure function of the ordered
+        // messages, so the Effective System Prompt can never satisfy
+        // `keep_recent_tokens`.
         assert_eq!(
-            estimator.estimate_conversation_input(&with_prompt),
-            estimator.estimate_conversation_input(&projection),
-            "the Effective System Prompt must never satisfy keep_recent_tokens"
+            estimator.estimate_conversation_input(&messages),
+            bytes_to_tokens(DefaultTokenEstimator::conversation_bytes(&messages)),
+            "conversation-only estimation depends only on the ordered messages"
         );
     }
 }
