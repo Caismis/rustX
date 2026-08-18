@@ -78,13 +78,28 @@
 //!
 //! The evidence fold pages the Event Journal
 //! ([`ConversationStore::read_events`]) and retains only the *unresolved*
-//! state: non-terminal attempts (at most one by the admission invariant), the
-//! in-flight model request of such an attempt, tool executions whose canonical
-//! `ToolResult` is not committed (one finite foreground batch), and background
-//! executions whose terminal publication is not committed (bounded by runtime
-//! background policy). A resolved entry is dropped from the fold the moment
-//! its resolving fact is read, so complete history is never materialized as
-//! `Vec<RuntimeEvent>` or `Vec<RequestSnapshot>`.
+//! state. Reads are O(history); hot memory is O(unresolved work):
+//!
+//! ```text
+//! recovery hot memory =
+//!     O(nonterminal attempt summaries)      (<= 1 by the admission invariant)
+//!   + O(canonical tool repairs outstanding) (only while a ToolResult is missing)
+//!   + O(unpublished background executions)  (bounded by background policy)
+//!   + O(active Surface attribution)         (bounded by the active working set)
+//! ```
+//!
+//! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
+//! owns a **bounded summary** of the attempt's foreground-tool external
+//! history (did execution happen; is any outcome unknown) that survives the
+//! release of every detailed entry — a fully canonicalized tool call never
+//! regresses the attempt to "never externally started". The per-call
+//! **repair map** owns the exact `ToolExecutionResult` needed to rebuild a
+//! missing canonical `ToolResult`, and only while that repair is outstanding:
+//! a committed `ToolMessageCommitted` releases the entry, so a long attempt
+//! with 10,000 previously settled tool calls retains zero detailed results.
+//! A resolved entry is dropped from the fold the moment its resolving fact is
+//! read, so complete history is never materialized as `Vec<RuntimeEvent>` or
+//! `Vec<RequestSnapshot>`.
 
 use std::collections::BTreeMap;
 
@@ -188,17 +203,32 @@ pub enum RequestOutcome {
 /// What durable evidence says about one non-terminal attempt.
 ///
 /// The entry exists only while the attempt is unresolved; the attempt's
-/// terminal fact removes it from the fold.
+/// terminal fact removes it from the fold. It owns the classification-relevant
+/// external-history summary of the attempt — the model-request lifecycle and
+/// the bounded foreground-tool summary — and nothing else: detailed per-call
+/// tool results live in the repair map
+/// ([`RecoveryEvidence::tool_repairs`]) and are released as soon as the
+/// canonical `ToolResult` commits, while this summary survives until the
+/// attempt terminalizes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AttemptEvidence {
     /// The durable model-request lifecycle of this attempt.
     request: ExternalRequestLifecycle,
+    /// The bounded summary of the attempt's foreground-tool external history.
+    ///
+    /// Independent of the per-call repair evidence: it keeps proving that
+    /// external tool execution happened — and whether any external outcome
+    /// remains unknown — after every detailed entry has been released.
+    tools: ToolExternalSummary,
 }
 
-/// The external execution lifecycle of one tool call.
+/// The external execution lifecycle of one tool call, as retained by the
+/// per-call repair map.
 ///
-/// Separate from the canonical structure lifecycle: a committed canonical
-/// `ToolResult` never erases the fact that the external execution started.
+/// This axis is deliberately separate from the canonical structure lifecycle:
+/// a committed canonical `ToolResult` releases the entry entirely, while the
+/// owning attempt's [`ToolExternalSummary`] independently remembers that the
+/// external execution started.
 #[derive(Debug, Clone, PartialEq)]
 enum ToolExternalLifecycle {
     /// `ToolExecutionStarted` committed; no outcome fact followed. The
@@ -210,25 +240,57 @@ enum ToolExternalLifecycle {
     OutcomeKnown(Box<ToolExecutionResult>),
 }
 
-/// What durable evidence says about one tool execution of one attempt.
+/// The bounded summary of one attempt's foreground-tool external execution
+/// history.
+///
+/// The summary answers the classification questions — did external tool work
+/// start, is any external outcome still unknown — **without** retaining every
+/// historical `ToolExecutionResult`. It is monotonic during the fold:
+/// `NeverStarted` can move into a started state, but a started state can
+/// never move back to "never externally started".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ToolExternalSummary {
+    /// No `ToolExecutionStarted` and no durable tool outcome ever committed
+    /// for this attempt. Only this state is consistent with Class B's "no
+    /// `ToolExecutionStarted` ever" requirement.
+    #[default]
+    NeverStarted,
+    /// External tool execution happened and every started call's outcome is
+    /// durably known (`ToolExecutionCompleted`/`ToolExecutionFailed`).
+    AllOutcomesKnown,
+    /// External tool execution happened; at least one started call currently
+    /// has no durable outcome (an outstanding repair-map entry).
+    UnknownOutstanding,
+    /// External tool execution happened; a started call whose outcome was
+    /// unknown had its canonical `ToolResult` committed. The external outcome
+    /// of that call can never become durably known — the recovery `Interrupted`
+    /// shape is a canonical representation that the old outcome remains
+    /// unknowable, never evidence that it became known — so the attempt keeps
+    /// an unknown outcome until it terminalizes, even when a durable outcome
+    /// of a *different* call would otherwise resolve every outstanding
+    /// repair entry.
+    UnknownIrreversible,
+}
+
+/// What durable evidence says about one tool execution of one attempt, kept
+/// **only while that call may still need canonical repair**.
 ///
 /// The evidence is keyed by its owning attempt **and** call id: the durable
 /// authority does not guarantee `ToolCallId` uniqueness across the whole
 /// conversation lifetime (providers mint call ids; only the active Surface
 /// is uniqueness-checked), so events of historical attempts must never
 /// alias the current unresolved call.
+///
+/// Absence from the repair map means "this call needs no further canonical
+/// repair"; the owning attempt's [`ToolExternalSummary`] separately remembers
+/// the historical external execution.
 #[derive(Debug, Clone, PartialEq)]
-struct ToolEvidence {
+struct ToolRepairEvidence {
     /// The executed tool.
     tool_id: ToolId,
-    /// The external execution lifecycle.
+    /// The external execution lifecycle, whose exact result (or honest
+    /// unknown) is required to produce the missing canonical `ToolResult`.
     lifecycle: ToolExternalLifecycle,
-    /// Whether the canonical `ToolResult` message committed (repair state).
-    ///
-    /// This is deliberately **not** the removal condition of the external
-    /// evidence: while the owning attempt is still non-terminal, a committed
-    /// canonical result must not make the historical start disappear.
-    canonical_result_committed: bool,
 }
 
 /// What durable evidence says about one detached background execution whose
@@ -264,14 +326,20 @@ pub struct RecoveryEvidence {
     /// settling whichever attempt happens to sort first.
     unsettled_attempts: BTreeMap<AttemptId, AttemptEvidence>,
     /// Tool executions with durable external-start evidence, keyed by
-    /// owning attempt and call id.
+    /// owning attempt and call id, retained **only while their canonical
+    /// `ToolResult` may still need repair**.
     ///
     /// The composite key is the identity fix of the evidence model: the
     /// durable authority does not guarantee `ToolCallId` uniqueness across
     /// the whole conversation lifetime (only the active Surface rejects
     /// duplicates), so evidence of historical attempts can never alias the
     /// current unresolved call.
-    unsettled_tools: BTreeMap<(AttemptId, ToolCallId), ToolEvidence>,
+    ///
+    /// A committed `ToolMessageCommitted` removes the entry; the owning
+    /// attempt's [`AttemptEvidence`] tool summary independently remembers the
+    /// historical external execution, so releasing this detail never regresses
+    /// the attempt to "never externally started".
+    tool_repairs: BTreeMap<(AttemptId, ToolCallId), ToolRepairEvidence>,
     /// The owning attempt of every **active** Assistant message, resolved
     /// from the `AssistantMessageCommitted` envelope.
     ///
@@ -316,7 +384,7 @@ impl RecoveryEvidence {
             active,
             pending,
             unsettled_attempts: BTreeMap::new(),
-            unsettled_tools: BTreeMap::new(),
+            tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
@@ -365,6 +433,7 @@ impl RecoveryEvidence {
                     .entry(attempt_id.clone())
                     .or_insert(AttemptEvidence {
                         request: ExternalRequestLifecycle::NeverStarted,
+                        tools: ToolExternalSummary::default(),
                     });
             }
             RuntimeEvent::AttemptCompleted { attempt_id, .. }
@@ -374,16 +443,12 @@ impl RecoveryEvidence {
             | RuntimeEvent::AttemptFailed { attempt_id, .. } => {
                 self.note_attempt(attempt_id);
                 // A durable terminal is absorbing: the attempt leaves the
-                // unresolved working set and never returns to it.
+                // unresolved working set and never returns to it. Its tool
+                // repair evidence survives independently: an incomplete
+                // canonical turn that outlived its owning attempt (Class D)
+                // must stay repairable from its durable outcome, and entries
+                // are released only by their own `ToolMessageCommitted`.
                 self.unsettled_attempts.remove(attempt_id);
-                // Its tool evidence is resolved once the canonical result is
-                // committed; an entry with no committed canonical result is
-                // a structurally incomplete turn that outlived its owning
-                // attempt (Class D) and must stay repairable from its
-                // durable outcome.
-                self.unsettled_tools.retain(|(owning, _), evidence| {
-                    owning != attempt_id || !evidence.canonical_result_committed
-                });
             }
             RuntimeEvent::ModelRequestStarted { request_id, .. } => {
                 if let Some(attempt) = self.current_attempt_mut(envelope) {
@@ -450,12 +515,29 @@ impl RecoveryEvidence {
                 tool_id,
             } => {
                 if let Some(attempt) = envelope.attempt_id.clone() {
-                    self.unsettled_tools.insert(
+                    // Attempt summary: external tool execution happened, and
+                    // this call's external outcome is unknown until a durable
+                    // outcome fact follows.
+                    if let Some(evidence) = self.unsettled_attempts.get_mut(&attempt) {
+                        evidence.tools = match evidence.tools {
+                            // A new unknown call makes the summary unknown.
+                            ToolExternalSummary::NeverStarted
+                            | ToolExternalSummary::AllOutcomesKnown => {
+                                ToolExternalSummary::UnknownOutstanding
+                            }
+                            // Already unknown (outstanding or irreversible):
+                            // one more started call changes nothing.
+                            other => other,
+                        };
+                    }
+                    // Per-call repair evidence: the call needs its missing
+                    // canonical `ToolResult`, which only the exact durable
+                    // outcome (or the honest unknown) can produce.
+                    self.tool_repairs.insert(
                         (attempt.clone(), tool_call_id.clone()),
-                        ToolEvidence {
+                        ToolRepairEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
-                            canonical_result_committed: false,
                         },
                     );
                 }
@@ -466,16 +548,16 @@ impl RecoveryEvidence {
                 result,
             } => {
                 if let Some(attempt) = envelope.attempt_id.clone() {
-                    self.unsettled_tools.insert(
+                    self.tool_repairs.insert(
                         (attempt.clone(), tool_call_id.clone()),
-                        ToolEvidence {
+                        ToolRepairEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
                                 result.clone(),
                             )),
-                            canonical_result_committed: false,
                         },
                     );
+                    self.note_known_tool_outcome(&attempt);
                 }
             }
             RuntimeEvent::ToolExecutionFailed {
@@ -484,9 +566,9 @@ impl RecoveryEvidence {
                 error,
             } => {
                 if let Some(attempt) = envelope.attempt_id.clone() {
-                    self.unsettled_tools.insert(
+                    self.tool_repairs.insert(
                         (attempt.clone(), tool_call_id.clone()),
-                        ToolEvidence {
+                        ToolRepairEvidence {
                             tool_id: tool_id.clone(),
                             lifecycle: ToolExternalLifecycle::OutcomeKnown(Box::new(
                                 ToolExecutionResult {
@@ -500,36 +582,25 @@ impl RecoveryEvidence {
                                     truncation: None,
                                 },
                             )),
-                            canonical_result_committed: false,
                         },
                     );
+                    self.note_known_tool_outcome(&attempt);
                 }
             }
             RuntimeEvent::ToolMessageCommitted {
                 message_id,
                 tool_call_id,
             } => {
-                // Canonical repair state and external execution evidence are
-                // separate axes. A committed `ToolResult` means the Surface
-                // no longer needs this repair; it never means the historical
-                // external start is forgotten while the owning attempt is
-                // still non-terminal.
-                if let Some(attempt) = &envelope.attempt_id {
+                // Canonical repair state and attempt external-history summary
+                // are separate axes, owned separately. A committed `ToolResult`
+                // means the Surface no longer needs this repair: the per-call
+                // repair entry is released here and now, whatever the owning
+                // attempt's terminal state. The attempt summary independently
+                // keeps proving the historical external execution; releasing
+                // the detailed entry must never erase it.
+                let owning = if let Some(attempt) = &envelope.attempt_id {
                     // A live commit names its owning attempt exactly.
-                    let key = (attempt.clone(), tool_call_id.clone());
-                    let was_marked = self
-                        .unsettled_tools
-                        .get_mut(&key)
-                        .map(|evidence| evidence.canonical_result_committed = true)
-                        .is_some();
-                    // The entry is resolved as soon as its owning attempt is
-                    // terminal: the canonical repair is done and the
-                    // external start of a settled attempt is no longer
-                    // needed. A non-terminal owner (the crash between repair
-                    // and attempt terminal) keeps its external evidence.
-                    if was_marked && !self.unsettled_attempts.contains_key(attempt) {
-                        self.unsettled_tools.remove(&key);
-                    }
+                    Some(attempt.clone())
                 } else {
                     // A recovery-generated repair commit carries no attempt
                     // identity. The recovery message identity is
@@ -545,16 +616,30 @@ impl RecoveryEvidence {
                             break;
                         }
                     }
-                    if let Some(attempt) = owned_by {
-                        let key = (attempt.clone(), tool_call_id.clone());
-                        let was_marked = self
-                            .unsettled_tools
-                            .get_mut(&key)
-                            .map(|evidence| evidence.canonical_result_committed = true)
-                            .is_some();
-                        if was_marked && !self.unsettled_attempts.contains_key(&attempt) {
-                            self.unsettled_tools.remove(&key);
-                        }
+                    owned_by
+                };
+                if let Some(attempt) = owning {
+                    let key = (attempt.clone(), tool_call_id.clone());
+                    // A call whose external outcome was still unknown when its
+                    // canonical result committed has an outcome that can never
+                    // become durably known: the recovery `Interrupted` shape
+                    // is the canonical representation of "still unknowable",
+                    // not evidence of a known outcome. The owning non-terminal
+                    // attempt therefore keeps an unknown external outcome
+                    // until it terminalizes.
+                    let was_unknown = matches!(
+                        self.tool_repairs.get(&key).map(|repair| &repair.lifecycle),
+                        Some(ToolExternalLifecycle::StartedOutcomeUnknown)
+                    );
+                    // The canonical repair is settled: detailed per-call
+                    // evidence is released whether the owner is terminal or
+                    // not.
+                    self.tool_repairs.remove(&key);
+                    if was_unknown && let Some(evidence) = self.unsettled_attempts.get_mut(&attempt)
+                    {
+                        // The released call's external outcome can never
+                        // become durably known.
+                        evidence.tools = ToolExternalSummary::UnknownIrreversible;
                     }
                 }
             }
@@ -612,8 +697,39 @@ impl RecoveryEvidence {
         self.unsettled_attempts.get_mut(&attempt_id)
     }
 
-    /// The durable tool evidence answering `call_id`, attributed to the
-    /// exact owning attempt of the active Assistant message that issued it.
+    /// Records a durably known tool outcome in the owning attempt's external
+    /// summary and recomputes the unknown state against the outstanding
+    /// repair evidence.
+    ///
+    /// A durable outcome makes exactly one call known; whether the attempt
+    /// still has an unknown outcome is recomputed from the repair map (any
+    /// other started call without a durable outcome), with the irreversible
+    /// state preserved — a call whose unknown outcome was already canonically
+    /// committed can never become known.
+    fn note_known_tool_outcome(&mut self, attempt_id: &AttemptId) {
+        let Some(evidence) = self.unsettled_attempts.get_mut(attempt_id) else {
+            return;
+        };
+        if evidence.tools == ToolExternalSummary::UnknownIrreversible {
+            return;
+        }
+        let outstanding_unknown = self.tool_repairs.iter().any(|((owning, _), repair)| {
+            owning == attempt_id
+                && matches!(
+                    repair.lifecycle,
+                    ToolExternalLifecycle::StartedOutcomeUnknown
+                )
+        });
+        evidence.tools = if outstanding_unknown {
+            ToolExternalSummary::UnknownOutstanding
+        } else {
+            ToolExternalSummary::AllOutcomesKnown
+        };
+    }
+
+    /// The durable per-call repair evidence answering `call_id`, attributed
+    /// to the exact owning attempt of the active Assistant message that
+    /// issued it.
     ///
     /// The durable authority does not guarantee `ToolCallId` uniqueness
     /// across the conversation lifetime, so a bare call-id lookup could let
@@ -622,14 +738,16 @@ impl RecoveryEvidence {
     /// (see [`RecoveryEvidence::assistant_attempts`]); a message without an
     /// attributed attempt (a bootstrapped turn) has no start evidence by
     /// construction and answers `None` — the honest "never started" case.
-    fn tool_evidence_for(
+    ///
+    /// An entry exists only while the call may still need canonical repair;
+    /// a committed `ToolMessageCommitted` has released it.
+    fn tool_repair_for(
         &self,
         call_id: &ToolCallId,
         owning_attempt: Option<&AttemptId>,
-    ) -> Option<&ToolEvidence> {
+    ) -> Option<&ToolRepairEvidence> {
         let attempt = owning_attempt?;
-        self.unsettled_tools
-            .get(&(attempt.clone(), call_id.clone()))
+        self.tool_repairs.get(&(attempt.clone(), call_id.clone()))
     }
 
     /// The active model-visible messages of the current durable Surface head.
@@ -642,6 +760,18 @@ impl RecoveryEvidence {
     #[must_use]
     pub fn pending_inbound(&self) -> &[PendingInboundItem] {
         &self.pending
+    }
+
+    /// The number of outstanding per-call canonical tool repairs retained by
+    /// the fold.
+    ///
+    /// Test-only introspection of the bounded working set: a long attempt
+    /// with many already-canonicalized tool calls retains zero entries, while
+    /// an attempt with an uncommitted call retains exactly the calls whose
+    /// canonical `ToolResult` is still missing.
+    #[must_use]
+    pub fn outstanding_tool_repairs(&self) -> usize {
+        self.tool_repairs.len()
     }
 
     /// The next free conversation-scoped attempt ordinal.
@@ -693,13 +823,22 @@ pub enum AttemptRecoveryClass {
     /// This is the critical class: the provider may have received and executed
     /// the request; the tool may have completed its external effect. The
     /// ambiguity is preserved as a first-class fact. There is **no** automatic
-    /// resend and **no** automatic re-execution.
+    /// resend and **no** automatic re-execution. Unknown dominates mixed
+    /// states: a known result elsewhere never hides one started side effect
+    /// whose outcome is unknown.
+    ///
+    /// `tool_calls` names the calls whose unknown outcome is still repairable;
+    /// a call whose canonical result already committed (the recovery
+    /// `Interrupted` shape) is no longer named — its external outcome remains
+    /// unknowable and still blocks continuation, but the call identity is
+    /// released with the repair evidence.
     IndeterminateExternalOutcome {
         /// The interrupted attempt.
         attempt_id: AttemptId,
         /// The started request whose provider outcome is unknown, if any.
         model_request: Option<RequestId>,
-        /// The started tool calls whose external outcome is unknown.
+        /// The started tool calls whose external outcome is unknown and
+        /// whose canonical `ToolResult` is still outstanding.
         tool_calls: Vec<ToolCallId>,
     },
     /// **Class D.** Every durable attempt already carries its one terminal
@@ -717,6 +856,9 @@ pub enum AttemptRecoveryClass {
     /// automatic resend and no automatic re-execution. A known request
     /// completion also never fabricates the Assistant response body, which
     /// never became canonical.
+    ///
+    /// `tool_calls` names the calls whose known outcome is still repairable;
+    /// a call whose canonical result already committed is no longer named.
     ExternalOutcomeKnown {
         /// The interrupted attempt.
         attempt_id: AttemptId,
@@ -724,7 +866,8 @@ pub enum AttemptRecoveryClass {
         /// any. Carries the outcome so the recovery terminal can state the
         /// strongest honest fact.
         model_request: Option<KnownModelOutcome>,
-        /// The started tool calls whose outcome is durably known.
+        /// The started tool calls whose outcome is durably known and whose
+        /// canonical `ToolResult` is still outstanding.
         tool_calls: Vec<ToolCallId>,
     },
 }
@@ -784,6 +927,13 @@ pub struct RecoveryPlan {
     /// durable authority which disagrees with that invariant is *reported*
     /// rather than silently truncated to whichever attempt sorted first.
     unsettled_attempts: Vec<AttemptId>,
+    /// The foreground-tool external summary of the classified attempt, kept
+    /// only so the recovery-terminal diagnostic stays truthful about tool
+    /// calls whose detailed repair evidence has already been released.
+    ///
+    /// The classification itself is fully determined by the enum; this field
+    /// is diagnostic context, never class evidence.
+    tool_summary: Option<ToolExternalSummary>,
 }
 
 /// One structurally incomplete canonical tool turn and its repair batch.
@@ -838,6 +988,7 @@ impl RecoveryPlan {
             highest_background_ordinal: evidence.highest_background_ordinal,
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
+            tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
         }
     }
 
@@ -849,18 +1000,27 @@ impl RecoveryPlan {
                 AttemptRecoveryClass::NotStarted
             };
         };
-        // External-start evidence owned by **this** attempt only. A
-        // historical attempt's unresolved tool (a Class-D leftover) must
-        // never make the crash-time attempt indeterminate: the ambiguity of
-        // a settled attempt belongs to that attempt's own terminal, not to
-        // the current one.
+        // The class decision comes from the attempt's own external-history
+        // summary — the bounded request lifecycle plus the bounded
+        // foreground-tool summary. It never needs detailed historical
+        // settled `ToolExecutionResult`s: a fully canonicalized call whose
+        // repair evidence was released still contributes to the bounded
+        // external summary here.
+        let summary = &attempt.tools;
+        // The still-namable calls of **this** attempt from the outstanding
+        // per-call repair evidence. A historical attempt's unresolved tool
+        // (a Class-D leftover) must never make the crash-time attempt
+        // indeterminate: the ambiguity of a settled attempt belongs to that
+        // attempt's own terminal, not to the current one. And a released
+        // entry (canonical repair already committed) can no longer be named
+        // — the lists are best-effort diagnostics, never the class evidence.
         let mut indeterminate_tools = Vec::new();
         let mut known_tools = Vec::new();
-        for ((owning, call), tool) in &evidence.unsettled_tools {
+        for ((owning, call), repair) in &evidence.tool_repairs {
             if owning != attempt_id {
                 continue;
             }
-            match &tool.lifecycle {
+            match &repair.lifecycle {
                 ToolExternalLifecycle::StartedOutcomeUnknown => {
                     indeterminate_tools.push(call.clone());
                 }
@@ -883,11 +1043,17 @@ impl RecoveryPlan {
             // whatever the request plane says: no request start ever, or a
             // durably known request outcome — the started tool may have
             // completed its external effect, so no resend and no
-            // re-execution. The `model_request` field names only a request
-            // whose outcome is unknown, which neither case is.
+            // re-execution. Unknown dominates mixed states: a known result
+            // elsewhere never hides one started side effect whose outcome is
+            // unknown. The `model_request` field names only a request whose
+            // outcome is unknown, which neither case is.
             ExternalRequestLifecycle::NeverStarted
             | ExternalRequestLifecycle::StartedOutcomeKnown { .. }
-                if !indeterminate_tools.is_empty() =>
+                if matches!(
+                    summary,
+                    ToolExternalSummary::UnknownOutstanding
+                        | ToolExternalSummary::UnknownIrreversible
+                ) =>
             {
                 AttemptRecoveryClass::IndeterminateExternalOutcome {
                     attempt_id: attempt_id.clone(),
@@ -896,8 +1062,18 @@ impl RecoveryPlan {
                 }
             }
             // **Zero** durable external-start evidence: only this state is
-            // eligible for the Class-B continuation.
-            ExternalRequestLifecycle::NeverStarted if known_tools.is_empty() => {
+            // eligible for the Class-B continuation. The repair-map guard
+            // is defensive — a summary and its repair entries are written in
+            // the same fold transition, so for an orderly journal it is
+            // implied by the summary bits; it makes "never externally
+            // started" airtight against event-order anomalies.
+            ExternalRequestLifecycle::NeverStarted
+                if *summary == ToolExternalSummary::NeverStarted
+                    && !evidence
+                        .tool_repairs
+                        .keys()
+                        .any(|(owning, _)| owning == attempt_id) =>
+            {
                 AttemptRecoveryClass::AdmittedWithoutExternalStart {
                     attempt_id: attempt_id.clone(),
                 }
@@ -961,14 +1137,13 @@ impl RecoveryPlan {
                 let owning = evidence
                     .assistant_attempts
                     .get(&crate::conversation::message_id_of(message));
-                let tool_evidence = evidence.tool_evidence_for(&call.id, owning);
-                missing.push(match tool_evidence {
+                let repair = evidence.tool_repair_for(&call.id, owning);
+                missing.push(match repair {
                     // The external effect started and no outcome is durably
                     // known: the strongest honest native status.
-                    Some(ToolEvidence {
+                    Some(ToolRepairEvidence {
                         lifecycle: ToolExternalLifecycle::StartedOutcomeUnknown,
                         tool_id,
-                        ..
                     }) => MissingToolResult {
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
@@ -977,10 +1152,9 @@ impl RecoveryPlan {
                     // The outcome *is* durably known; the canonical message
                     // simply never committed. The durable result is used
                     // verbatim — no invented body, no completion race.
-                    Some(ToolEvidence {
+                    Some(ToolRepairEvidence {
                         lifecycle: ToolExternalLifecycle::OutcomeKnown(result),
                         tool_id,
-                        ..
                     }) => MissingToolResult {
                         call_id: call.id.clone(),
                         tool_id: tool_id.clone(),
@@ -1144,6 +1318,7 @@ impl RecoveryPlan {
     ///
     /// The diagnostic states exactly what rustX knows and what stays unknown;
     /// it never claims the external work failed.
+    #[allow(clippy::too_many_lines)] // One per-class diagnostic match, one place.
     fn settle_interrupted_attempt(
         &self,
         store: &dyn ConversationStore,
@@ -1173,7 +1348,23 @@ impl RecoveryPlan {
                     },
                 );
                 let tools = if tool_calls.is_empty() {
-                    "no tool execution outcome is indeterminate".to_owned()
+                    // No still-repairable call can be named. Distinguish the
+                    // honest readings: an unknown that is purely the model
+                    // request (no tool was ever indeterminate), versus a
+                    // started tool whose unknown outcome was already
+                    // canonically committed as `Interrupted` — which keeps
+                    // the external outcome unknowable.
+                    if self.tool_summary.is_some_and(|summary| {
+                        matches!(
+                            summary,
+                            ToolExternalSummary::UnknownOutstanding
+                                | ToolExternalSummary::UnknownIrreversible
+                        )
+                    }) {
+                        "a started tool execution's external outcome remains unknown".to_owned()
+                    } else {
+                        "no tool execution outcome is indeterminate".to_owned()
+                    }
                 } else {
                     format!(
                         "the external outcome of tool call(s) {} is unknown",
@@ -1220,7 +1411,19 @@ impl RecoveryPlan {
                     },
                 );
                 let tools = if tool_calls.is_empty() {
-                    "no tool execution outcome was pending".to_owned()
+                    // No still-repairable call can be named. If the attempt's
+                    // summary proves tool execution happened, its outcomes
+                    // were durably known and the repairs already committed;
+                    // otherwise no tool outcome was pending at all.
+                    if self
+                        .tool_summary
+                        .is_some_and(|summary| summary != ToolExternalSummary::NeverStarted)
+                    {
+                        "the durably known outcome of a started tool execution is preserved"
+                            .to_owned()
+                    } else {
+                        "no tool execution outcome was pending".to_owned()
+                    }
                 } else {
                     format!(
                         "the durably known outcome of tool call(s) {} is preserved",
@@ -1535,7 +1738,7 @@ mod tests {
             active: Vec::new(),
             pending: Vec::new(),
             unsettled_attempts: BTreeMap::new(),
-            unsettled_tools: BTreeMap::new(),
+            tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
@@ -1613,14 +1816,15 @@ mod tests {
             "no unsettled attempt"
         );
         assert!(
-            evidence.unsettled_tools.is_empty(),
-            "no retained tool evidence"
+            evidence.tool_repairs.is_empty(),
+            "no retained tool repair evidence"
         );
     }
 
     /// The Finding-B prefix at the fold level: a recovery-generated
-    /// `ToolMessageCommitted` marks the canonical repair done but keeps the
-    /// external-start evidence while the owning attempt is non-terminal.
+    /// `ToolMessageCommitted` settles the canonical repair — releasing the
+    /// per-call repair evidence — while the owning attempt's **summary**
+    /// keeps the external-start evidence for the non-terminal attempt.
     #[test]
     fn recovery_repair_keeps_external_evidence_for_nonterminal_attempt() {
         let a = attempt(0);
@@ -1661,19 +1865,16 @@ mod tests {
             "attempt still non-terminal"
         );
         let entry = evidence
-            .unsettled_tools
-            .get(&(a, ToolCallId::new("call-1")))
-            .expect("the external-start evidence survives the canonical repair");
+            .unsettled_attempts
+            .get(&a)
+            .expect("the attempt summary survives the canonical repair");
         assert!(
-            entry.canonical_result_committed,
-            "the repair state is recorded"
+            entry.tools == ToolExternalSummary::UnknownIrreversible,
+            "the summary still proves external execution started with an unknown outcome"
         );
         assert!(
-            matches!(
-                entry.lifecycle,
-                ToolExternalLifecycle::StartedOutcomeUnknown
-            ),
-            "the external outcome stays unknown; the start is never erased"
+            evidence.tool_repairs.is_empty(),
+            "the canonical repair released the per-call repair evidence"
         );
     }
 
@@ -1724,6 +1925,62 @@ mod tests {
         );
     }
 
+    /// The bounded-working-set correction at the fold level: one non-terminal
+    /// attempt that fully canonicalized **1000** tool calls across as many
+    /// turns retains exactly one bounded attempt summary and **zero**
+    /// detailed per-call repair evidence — the recovery hot detail does not
+    /// scale with the number of settled calls.
+    #[test]
+    fn a_long_settled_fold_retains_bounded_repair_evidence() {
+        const CALLS: usize = 1000;
+        let a = attempt(0);
+        let mut evidence = base_evidence();
+        let mut events = vec![started(a.clone())];
+        for call in 0..CALLS {
+            events.push(envelope(
+                RuntimeEvent::ToolExecutionStarted {
+                    tool_call_id: ToolCallId::new(format!("call-{call}")),
+                    tool_id: ToolId::new("tool-a"),
+                },
+                Some(a.clone()),
+            ));
+            events.push(envelope(
+                RuntimeEvent::ToolExecutionCompleted {
+                    tool_call_id: ToolCallId::new(format!("call-{call}")),
+                    tool_id: ToolId::new("tool-a"),
+                    result: interrupted_result(),
+                },
+                Some(a.clone()),
+            ));
+            events.push(envelope(
+                RuntimeEvent::ToolMessageCommitted {
+                    message_id: MessageId::new(format!("assistant-{call}-tool-{call}")),
+                    tool_call_id: ToolCallId::new(format!("call-{call}")),
+                },
+                Some(a.clone()),
+            ));
+        }
+        fold_all(&mut evidence, &events);
+        assert_eq!(
+            evidence.unsettled_attempts.len(),
+            1,
+            "1000 settled calls still leave exactly one bounded attempt summary"
+        );
+        assert!(
+            evidence.tool_repairs.is_empty(),
+            "1000 fully canonicalized calls retain zero detailed repair evidence"
+        );
+        let summary = &evidence
+            .unsettled_attempts
+            .get(&a)
+            .expect("the attempt summary")
+            .tools;
+        assert!(
+            summary == &ToolExternalSummary::AllOutcomesKnown,
+            "the summary proves external tool work happened with all outcomes known"
+        );
+    }
+
     /// A terminal attempt keeps its non-canonical tool evidence (Class D) for
     /// repair, and drops it the moment its canonical result commits.
     #[test]
@@ -1750,7 +2007,7 @@ mod tests {
         );
         assert!(
             evidence
-                .unsettled_tools
+                .tool_repairs
                 .contains_key(&(a.clone(), ToolCallId::new("call-1"))),
             "a started call of a terminal attempt stays repairable (Class D)"
         );
@@ -1767,7 +2024,7 @@ mod tests {
             )],
         );
         assert!(
-            evidence.unsettled_tools.is_empty(),
+            evidence.tool_repairs.is_empty(),
             "resolved tool evidence of a settled attempt is dropped"
         );
     }

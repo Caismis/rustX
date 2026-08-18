@@ -1991,13 +1991,15 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
   `started + outcome known != never externally started`;
 
 - the recovery evidence model keeps the **external execution lifecycle** and
-  the **canonical structure lifecycle** on separate axes. Only an attempt
-  with **zero** durable external-start evidence — no `ModelRequestStarted`
-  and no `ToolExecutionStarted`, ever — may be classified as the safe
-  Class-B continuation case. A `ToolMessageCommitted` means the Surface no
-  longer needs that repair; it never erases the historical
-  `ToolExecutionStarted` while the owning attempt is still non-terminal, and
-  a crash/restart/recovery cycle never turns historical external-start
+  the **canonical structure lifecycle** on separate axes, with separate
+  owners. Only an attempt with **zero** durable external-start evidence — no
+  `ModelRequestStarted` and no `ToolExecutionStarted`, ever — may be
+  classified as the safe Class-B continuation case. A `ToolMessageCommitted`
+  releases that call's **detailed per-call repair evidence** (absence from
+  the repair map means "no canonical repair needed"); the owning attempt's
+  **bounded external summary** independently keeps proving the historical
+  `ToolExecutionStarted` until the attempt terminalizes, so a
+  crash/restart/recovery cycle never turns historical external-start
   evidence into a later claim that no external work started;
 
 - **the recovery-prefix invariant**: every successfully committed prefix of
@@ -2066,13 +2068,28 @@ cancellation) and M9c (supervision/quiescence) are **not** implemented.
   of one Assistant tool turn commit as **one** atomic batch in canonical
   model-call order, so no durable prefix of a sibling batch is observable and
   the conversation is never left structurally unable to form a later model
-  request. A committed canonical `ToolResult` is **not** the erasure of the
-  historical `ToolExecutionStarted` while the owning attempt is still
-  non-terminal. Tool evidence is keyed by owning attempt **and** call id: the
-  durable authority does not guarantee `ToolCallId` uniqueness across the
-  conversation lifetime (providers mint call ids; only the active Surface
-  rejects duplicates), so historical attempts never alias the current
+  request. Per-call tool repair evidence is keyed by owning attempt **and**
+  call id: the durable authority does not guarantee `ToolCallId` uniqueness
+  across the conversation lifetime (providers mint call ids; only the active
+  Surface rejects duplicates), so historical attempts never alias the current
   unresolved call;
+
+- **bounded tool-evidence ownership**: detailed per-tool recovery evidence
+  exists only while that tool call may still require canonical repair; durable
+  historical external-start knowledge needed for attempt classification is
+  represented independently in bounded attempt-level state. A committed
+  canonical `ToolResult` releases the detailed entry whatever the owning
+  attempt's terminal state — a recovery `Interrupted` repair commits the
+  canonical representation that the old external outcome remains unknowable,
+  so the attempt summary keeps an unknown outcome until the attempt
+  terminalizes, and a fully settled historical call never regresses the
+  attempt to "never externally started". An attempt terminal alone never
+  destroys a still-needed entry: the terminal-before-repair shape (Class D)
+  keeps its per-call evidence until the canonical result commits. Recovery hot
+  memory is therefore O(nonterminal attempt summaries) + O(canonical tool
+  repairs still outstanding) + O(unpublished background executions) +
+  O(active Surface attribution) — not O(settled tool calls of one long
+  attempt);
 
 - a committed background execution survives its starting *attempt*, not the
   *process*. Recovery never assumes the old task/process is alive and never

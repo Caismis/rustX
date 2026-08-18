@@ -3268,23 +3268,24 @@ Per plane:
   engine, and the historical failure stays durable. Request ambiguity and
   attempt settlement are different facts: the request outcome stays unknown
   while the attempt settles.
-- **Foreground tools.** External execution evidence and canonical repair
-  state are separate axes. Each unanswered call on the current Surface is
-  answered from durable evidence only: a durably known outcome is used
-  verbatim; a started call with no outcome becomes
+- **Foreground tools.** External execution history and canonical repair
+  evidence are separate axes with separate owners. Each unanswered call on
+  the current Surface is answered from durable evidence only: a durably
+  known outcome is used verbatim; a started call with no outcome becomes
   `ToolExecutionStatus::Interrupted`; a call with no start evidence at all
   becomes `Cancelled { ParentCancelled }` because nothing external happened.
-  A committed canonical `ToolResult` means the Surface no longer needs the
-  repair — it never erases the historical `ToolExecutionStarted` while the
-  owning attempt is still non-terminal, so a crash between the repair commit
-  and the attempt terminal can never reclassify an indeterminate attempt as
-  Class B. Tool evidence is keyed by owning attempt **and** call id: the
-  durable authority does not guarantee `ToolCallId` uniqueness across the
-  conversation lifetime (providers mint call ids; only the active Surface
-  rejects duplicates), so historical attempts can never alias the current
-  unresolved call. No tool is re-executed. The missing siblings of one
-  Assistant turn commit as one atomic batch in canonical model-call order, so
-  no durable prefix of a sibling batch is ever observable.
+  A committed canonical `ToolResult` releases the call's detailed per-call
+  repair evidence; the owning attempt's **bounded external summary**
+  independently keeps proving the historical `ToolExecutionStarted`, so a
+  crash between the repair commit and the attempt terminal can never
+  reclassify an indeterminate attempt as Class B. Tool repair evidence is
+  keyed by owning attempt **and** call id: the durable authority does not
+  guarantee `ToolCallId` uniqueness across the conversation lifetime
+  (providers mint call ids; only the active Surface rejects duplicates), so
+  historical attempts can never alias the current unresolved call. No tool
+  is re-executed. The missing siblings of one Assistant turn commit as one
+  atomic batch in canonical model-call order, so no durable prefix of a
+  sibling batch is ever observable.
 - **Background.** A committed async background execution survives the starting
   *attempt*, not the *process*. A durably owned, never-published execution is
   terminalized as `BackgroundTerminalState::Interrupted` — never `Failed`,
@@ -3359,22 +3360,42 @@ the other.
 ### 7.10 Bounded working set
 
 The evidence fold pages the Event Journal and retains only the *unresolved*
-state: non-terminal attempts (at most one by the admission invariant), that
-attempt's model-request lifecycle, tool executions whose owning attempt is
-still unresolved or whose canonical `ToolResult` is not committed, and
-background executions whose terminal publication is not committed. A
-resolved entry is dropped the moment its resolving fact is read, so complete
-Event Journal, Request Snapshot, and Ledger history are never materialized
-as recovery state.
+state. Reads are O(history); hot memory is O(unresolved work):
 
-The retention rule for tool evidence is: keep the entry while the owning
-attempt is non-terminal (classification needs to know whether external work
-started and whether its outcome is known), and keep it after the terminal
-only while the canonical `ToolResult` is missing (the Class-D repair case).
-Once the owning attempt is terminal **and** the canonical result is
-committed, the entry is dropped. A recovery repair commit resolves the entry
-immediately when its owner is already terminal, so no resolved history
-lingers.
+```text
+recovery hot memory =
+    O(nonterminal attempt summaries)      (at most one by the admission invariant)
+  + O(canonical tool repairs outstanding) (only while a ToolResult is missing)
+  + O(unpublished background executions)  (bounded by background policy)
+  + O(active Surface attribution)         (bounded by the active working set)
+```
+
+A resolved entry is dropped the moment its resolving fact is read, so
+complete Event Journal, Request Snapshot, and Ledger history are never
+materialized as recovery state.
+
+The tool plane is split across two owners on purpose:
+
+- **Attempt-level external summary.** `AttemptEvidence` owns a bounded
+  summary of the attempt's foreground-tool external history — did external
+  execution happen, is any external outcome unknown, is any known. It
+  survives the release of every detailed entry and is removed only by the
+  attempt's own terminal.
+- **Per-call repair evidence.** The repair map holds the exact
+  `ToolExecutionResult` (or the honest unknown) needed to rebuild a missing
+  canonical `ToolResult`, and only while that repair is outstanding. A
+  committed `ToolMessageCommitted` releases the entry **whatever the owning
+  attempt's terminal state**; absence from the map means "this call needs no
+  further canonical repair". An attempt terminal alone never destroys a
+  still-needed entry: the terminal-before-repair shape (Class D) keeps its
+  per-call evidence until the canonical result commits.
+
+So the retention rule is: detailed per-tool recovery evidence exists only
+while that tool call may still require canonical repair; durable historical
+external-start knowledge needed for attempt classification is represented
+independently in bounded attempt-level state. A long attempt with 10,000
+previously settled/canonicalized foreground tools retains zero detailed tool
+results while its one bounded summary keeps classifying honestly.
 
 ### 7.11 Recovery-prefix invariant
 

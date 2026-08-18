@@ -832,7 +832,11 @@ uniqueness, identity recovery, the external-lifecycle/canonical-lifecycle
 separation, the recovery-prefix invariant, and the bounded working set — is
 frozen in
 [architecture.md §7](architecture.md#7-recovery-model) and
-[invariants.md](invariants.md#recovery). The three rules that govern all of it:
+[invariants.md](invariants.md#recovery). The tool plane splits external
+history from canonical repair across two owners: the attempt owns a bounded
+foreground-tool external summary (did execution happen; is any outcome
+unknown), while detailed per-call results exist only while that call's
+canonical `ToolResult` is still missing. The three rules that govern all of it:
 
 ```text
 exact historical reconstruction  !=  safe replay permission
