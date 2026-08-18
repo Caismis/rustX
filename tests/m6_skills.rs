@@ -342,8 +342,10 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
         let context = rustx::tools::executor::ToolExecutionContext {
             conversation_id: &conversation_id,
             execution_id: None,
-            cancellation: rustx::runtime::CancellationSignal::new(),
-            cancellation_reason: rustx::runtime::types::CancellationReason::UserRequested,
+            cancellation: rustx::runtime::ExecutionCancellation::detached(
+                rustx::runtime::CancellationSignal::new(),
+                rustx::runtime::types::CancellationReason::UserRequested,
+            ),
             workspace: &workspace,
             progress: &common::NoopProgress,
             artifacts: &rustx::tools::artifacts::ArtifactStore::new(

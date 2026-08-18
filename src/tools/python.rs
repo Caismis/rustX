@@ -1199,14 +1199,16 @@ impl ToolExecutor for PythonToolExecutor {
                         environment: runtime_environment
                             .child_environment(context.workspace.root()),
                         timeout: None,
-                        cancellation: context.cancellation.clone(),
+                        cancellation: context.cancellation.signal(),
                     },
                     None,
                 )
                 .await;
             let _ = std::fs::remove_file(&input_path);
             match result {
-                Ok(result) => translate_python_result(result, started, context.cancellation_reason),
+                Ok(result) => {
+                    translate_python_result(result, started, context.cancellation.reason())
+                }
                 Err(error) => failed_python(&error, started),
             }
         })

@@ -26,9 +26,8 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::identity::{ConversationId, ToolExecutionId, ToolId};
-use crate::runtime::types::CancellationReason;
 use crate::tools::artifacts::ArtifactStore;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::schema::{
@@ -69,14 +68,15 @@ pub struct ToolExecutionContext<'a> {
     /// The detached runtime execution identity, `None` for foreground work.
     /// No fake `ToolExecutionId` is invented for foreground calls.
     pub execution_id: Option<&'a ToolExecutionId>,
-    /// The runtime cancellation signal of the execution. Foreground
-    /// executions receive the attempt signal; background executions receive
-    /// their conversation-owned background signal.
-    pub cancellation: CancellationSignal,
-    /// The first cancellation authority's semantic cause. This is separate
-    /// from the generic signal so an executor can report an honest terminal
-    /// status without becoming the cancellation authority.
-    pub cancellation_reason: CancellationReason,
+    /// The cancellation view of the execution: the runtime cancellation
+    /// signal plus a **live** read of the owning authority's absorbing
+    /// cause. Foreground executions view their attempt's `AgentCancellation`;
+    /// background executions view their conversation-owned background record.
+    ///
+    /// The cause is read through this view at settlement time, never copied
+    /// at start time: an execution that started before the cancellation race
+    /// happened still reports the cause that actually won it.
+    pub cancellation: ExecutionCancellation,
     /// The canonical workspace boundary every native filesystem tool and
     /// Bash operates against.
     pub workspace: &'a Workspace,
@@ -95,7 +95,7 @@ pub struct ToolExecutionContext<'a> {
 /// a normalized [`ToolExecutionStatus::Failed`] result, never a fabricated
 /// success. The runtime records the returned result verbatim.
 ///
-/// An executor must settle after cancellation: when the [`CancellationSignal`]
+/// An executor must settle after cancellation: when the [`ExecutionCancellation`]
 /// in its context fires, a cancellable executor physically settles its
 /// external work (for example by terminating an owned process group) and
 /// returns a normalized cancelled result instead of abandoning work.
@@ -1081,8 +1081,10 @@ mod tests {
         let context = ToolExecutionContext {
             conversation_id: &ConversationId::new("conv-1"),
             execution_id: None,
-            cancellation: crate::runtime::cancellation::CancellationSignal::new(),
-            cancellation_reason: crate::runtime::types::CancellationReason::UserRequested,
+            cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
+                crate::runtime::cancellation::CancellationSignal::new(),
+                crate::runtime::types::CancellationReason::UserRequested,
+            ),
             workspace: &workspace,
             progress: &reporter,
             artifacts: &artifacts,

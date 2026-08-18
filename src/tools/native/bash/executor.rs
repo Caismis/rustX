@@ -340,7 +340,7 @@ async fn run_bash_unix(
             .environment
             .child_environment(context.workspace.root()),
         timeout,
-        cancellation: context.cancellation.clone(),
+        cancellation: context.cancellation.signal(),
     };
     let (mut runner, stdout_pipe, stderr_pipe) =
         match SupervisedCommandRunner::spawn(&spec, runner_control) {
@@ -493,7 +493,7 @@ async fn run_bash_unix(
         // Cancellation/timeout owns settlement and wins over any partial
         // natural exit data.
         status = ToolExecutionStatus::Cancelled {
-            reason: context.cancellation_reason,
+            reason: context.cancellation.reason(),
         };
     } else if matches!(termination.intent, ProcessOutcomeIntent::TimedOut) {
         status = ToolExecutionStatus::TimedOut;

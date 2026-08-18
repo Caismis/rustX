@@ -157,10 +157,70 @@ ConversationRuntime
 Cancellation requested, operation settled, and runtime quiescent are
 distinct. A started model request is awaited after cancellation; started
 foreground tools are awaited by the Agent Loop; committed background work is
-cancelled and awaited through `wait_until_terminal`; and a background record
+cancelled and awaited through `wait_until_settled`; and a background record
 does not become terminal until its exactly-once terminal Pending Inbound fact
 has durably committed. An accepted Pending Inbound item is never adopted into
 a new attempt after drain and remains durable at quiescence.
+
+### Supervision does not stop at the first failure
+
+Drain is a supervisor, not a short-circuiting pipeline:
+
+```text
+close admission
+  -> request cancellation/closure of every concrete owner
+  -> supervise EACH owner to its own native terminal boundary
+  -> collect settlement/durability failures
+  -> decide: Quiescent, or one aggregated settlement failure
+```
+
+A failure in one participant is an error **fact**; it is never permission to
+abandon a sibling that can still produce an external effect. Every wait has a
+native boundary that cannot be starved: a background record either settles
+terminally or explicitly abandons its bounded durable terminal publication
+(its runner has returned either way), an MCP runtime's close proves or
+disproves physical settlement, and a counted lifecycle admission is released
+only by its owner. No drain wait is conditioned on a global health flag, so
+one owner's failure can never be read as another owner's settlement. The
+collected failures are rendered as one bounded deterministic diagnostic —
+a diagnostic aggregation, not an error framework. `Ok(())` therefore still
+means exactly `Quiescent`; `Err(RuntimeOwnedSettlement)` means admission is
+closed and every settleable owner was supervised to its strongest available
+boundary while some ownership/physical/durable terminal condition stayed
+unproven. An unresolved `PublishingTerminal` record remains explicitly
+non-terminal and is never reinterpreted as success.
+
+### Waiter lifetime is not ownership lifetime
+
+A caller's future is never the owner of a physical resource. MCP connection
+establishment makes this explicit, because a stdio process exists before the
+handshake completes:
+
+```text
+no physical owner
+  -> conversation-counted preparation owner (own task, own counted lifecycle
+     admission, own ownership cancellation signal)
+  -> physical MCP process ownership established
+  -> either  A. transferred into the coordinator's retained `mcp_runtimes`
+     or      B. cancelled/failed and driven to physical settlement
+```
+
+The counted admission is released only after A or B, so aborting or dropping
+the `prepare_candidate` caller cannot remove the physical owner from the
+quiescence proof. Runtime drain **cancels** those owners; it never drops
+their futures, because `Drop` merely requesting a shutdown is a cancellation
+signal, not proof of settlement.
+
+### Attempt slot settlement and attempt task lifetime
+
+Clearing the current-attempt slot hands the conversation state back to the
+coordinator. It does not end the attempt task, which still owes the
+coordinator its final admission callback. The attempt task therefore holds
+its own counted lifecycle admission from the publication that fills the slot
+until the task body has fully returned, so quiescence covers the task's
+callback authority and not only the slot. `AgentExecution` remains the
+execution and terminal semantic authority; `ConversationRuntime` remains the
+task/runtime lifetime composition authority.
 
 Foreground tool results retain one slot per model call and canonical model
 call order. A committed background execution survives attempt cancellation

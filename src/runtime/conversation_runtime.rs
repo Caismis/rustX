@@ -94,10 +94,18 @@
 //! Cancellation requested, operation settled, and runtime quiescent are
 //! different facts. A cancellation signal, a dropped waiter, an OS signal,
 //! or an empty registry is not settlement. Quiescence is published only
-//! after the current Agent Execution, foreground tools, conversation-owned
-//! background terminal publication, counted capability/environment
-//! preparation, retained MCP process closure, owned process terminality, and
+//! after the current Agent Execution **and its attempt task**, foreground
+//! tools, conversation-owned background terminal publication, counted
+//! capability/environment preparation (including in-flight MCP connection
+//! owners), retained MCP process closure, owned process terminality, and
 //! the admission worker's exit boundary have all settled.
+//!
+//! Drain is a supervisor, not a short-circuiting pipeline: it closes
+//! admission, requests cancellation/closure of every concrete owner,
+//! supervises each owner to its own native terminal boundary, and only then
+//! decides between `Quiescent` and one aggregated settlement failure. A
+//! failure in one participant is evidence, never permission to abandon a
+//! sibling that can still act.
 //!
 //! Construction performs one **tool-runtime ownership transfer** over the
 //! `ConversationToolRuntime` it claims (Issue #61): under the background
@@ -839,6 +847,15 @@ pub(crate) struct CoordinatorProbe {
     pub(crate) shutdown_arrival: Option<Arc<tokio::sync::Notify>>,
     /// Signals immediately after `Running -> Draining` linearizes.
     pub(crate) drain_linearization: Option<Arc<tokio::sync::Notify>>,
+    /// Signals immediately before the drain task **parks on one concrete
+    /// runtime-owned owner** (the current attempt, or one background
+    /// execution's settlement). Observing it proves supervision is committed
+    /// to awaiting that owner: a drain that short-circuited on an
+    /// already-known failure could never reach the park.
+    pub(crate) drain_supervision: Option<Arc<tokio::sync::Notify>>,
+    /// Parks the settled attempt **task** after the current-attempt slot is
+    /// cleared and before its final admission callback and task exit.
+    pub(crate) attempt_exit_gate: Option<Arc<Gate>>,
     /// Installed into the **next** admitted attempt's execution: the M9b
     /// model-turn start-boundary pause (Issue #12). `take`n by the next
     /// `run_attempt`, so it arms exactly one attempt.
@@ -965,10 +982,6 @@ pub(crate) struct RuntimeInner {
     /// headless drivers await the authoritative state transfer
     /// deterministically instead of by polling.
     settlement: tokio::sync::Notify,
-    /// Wakes the drain waiter when a runtime-owned durable settlement enters
-    /// the explicit `DurabilityFailed` state instead of reaching terminal
-    /// publication.
-    durability_failure: tokio::sync::Notify,
     /// Test-only coordinator synchronization hooks.
     #[cfg(test)]
     probe: Mutex<Option<CoordinatorProbe>>,
@@ -1059,6 +1072,11 @@ impl RuntimeInner {
                 );
             }
             self.tool_runtime.background().abort_prepared_for_drain();
+            // In-flight capability preparation owns real MCP processes. The
+            // *owner* is cancelled here (never the caller's future), so each
+            // one drives its physical process to settlement before releasing
+            // the counted admission the drain below waits on.
+            self.capability.cancel_conversation_preparation();
             if self
                 .drain_started
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -1089,25 +1107,49 @@ impl RuntimeInner {
             if self.lock_state().current_attempt.is_none() {
                 return;
             }
+            // The waiter is registered and the slot is still occupied: the
+            // caller is now committed to awaiting this attempt's settlement.
+            #[cfg(test)]
+            self.signal_drain_supervision();
             notified.await;
         }
     }
 
-    /// Waits for all conversation-owned background executions and their
-    /// durable terminal publication, then publishes `Quiescent` only after
-    /// the admission worker and all counted subsystem admissions have also
-    /// settled.
+    /// Supervises every runtime-owned operation to its strongest honest
+    /// settlement, then publishes `Quiescent` only if nothing prevents it.
+    ///
+    /// # Failure is evidence, not a stop signal
+    ///
+    /// A settlement or durability failure is **collected**, never returned
+    /// early. Returning at the first failure would release the supervisor
+    /// from siblings — an active provider turn, another background
+    /// execution, a retained MCP process — that are still externally capable
+    /// of acting. The drain therefore runs the full supervision sequence
+    /// (current attempt → background executions → counted subsystem
+    /// admissions → admission worker → capability/MCP processes) and only
+    /// afterwards decides between `Quiescent` and an aggregated settlement
+    /// failure.
+    ///
+    /// Every waited-for owner has a *native terminal boundary*: a background
+    /// record settles terminally or explicitly abandons its bounded durable
+    /// publication (its runner has returned either way), an MCP runtime
+    /// closes and proves or disproves physical settlement, and a counted
+    /// admission is released by its owner. No wait here depends on a global
+    /// health flag, so one owner's failure can never be mistaken for
+    /// another's settlement.
     async fn drain_to_quiescence(
         self: &Arc<Self>,
         _completion: Arc<DrainCompletion>,
     ) -> Result<(), ShutdownError> {
+        let mut failures: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         loop {
-            if let Some(detail) = self.durability_failure_diagnostic() {
-                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
-            }
             self.wait_for_current_attempt().await;
 
-            let active = self.tool_runtime.background().active_snapshot();
+            // Records whose durable terminal publication was abandoned are
+            // excluded: their runners have returned, so cancelling and
+            // awaiting them again would spin. They remain explicit evidence
+            // below.
+            let active = self.tool_runtime.background().unsettled_snapshot();
             if !active.is_empty() {
                 for execution in &active {
                     self.tool_runtime.background().cancel_with_reason(
@@ -1116,27 +1158,49 @@ impl RuntimeInner {
                     );
                 }
                 for execution in active {
-                    self.wait_for_background_settlement(&execution.execution_id)
-                        .await?;
+                    #[cfg(test)]
+                    self.signal_drain_supervision();
+                    self.tool_runtime
+                        .background()
+                        .wait_until_settled(&execution.execution_id)
+                        .await;
                 }
                 continue;
             }
 
             self.lifecycle.wait_for_no_admissions().await;
             self.tool_runtime.background().abort_prepared_for_drain();
-            if !self.tool_runtime.background().active_snapshot().is_empty() {
+            if !self
+                .tool_runtime
+                .background()
+                .unsettled_snapshot()
+                .is_empty()
+            {
                 continue;
             }
             if self.worker_started.load(Ordering::Acquire) {
                 self.wake.wait_until_exited().await;
             }
             self.lifecycle.wait_for_no_admissions().await;
-            if let Err(detail) = self.capability.drain_conversation_owned().await {
-                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+            if let Err(details) = self.capability.drain_conversation_owned().await {
+                failures.extend(details);
             }
             self.lifecycle.wait_for_no_admissions().await;
+
+            // Supervision has reached every owner's native terminal
+            // boundary. Only now is the runtime allowed to decide.
+            for execution_id in self.tool_runtime.background().abandoned_publications() {
+                failures.insert(format!(
+                    "background execution {execution_id}: the durable terminal publication is unresolved"
+                ));
+            }
             if let Some(detail) = self.durability_failure_diagnostic() {
-                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
+                failures.insert(format!("durable authority: {detail}"));
+            }
+            if !failures.is_empty() {
+                return Err(ShutdownError::RuntimeOwnedSettlement {
+                    detail: aggregate_settlement_failures(&failures),
+                });
             }
             if self.lifecycle.mark_quiescent() {
                 return Ok(());
@@ -1144,35 +1208,18 @@ impl RuntimeInner {
         }
     }
 
-    /// Waits for one conversation-owned background record to become
-    /// terminal, or returns as soon as its owner enters the explicit
-    /// durability-failure state. `PublishingTerminal` is therefore never
-    /// mistaken for quiescence and cannot strand the public shutdown waiter
-    /// indefinitely after the owner's bounded publication budget is spent.
-    async fn wait_for_background_settlement(
-        &self,
-        execution_id: &ToolExecutionId,
-    ) -> Result<(), ShutdownError> {
-        loop {
-            if let Some(detail) = self.durability_failure_diagnostic() {
-                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
-            }
-            let terminal = self
-                .tool_runtime
-                .background()
-                .wait_until_terminal(execution_id);
-            let failed = self.durability_failure.notified();
-            tokio::pin!(terminal);
-            tokio::pin!(failed);
-            failed.as_mut().enable();
-            if let Some(detail) = self.durability_failure_diagnostic() {
-                return Err(ShutdownError::RuntimeOwnedSettlement { detail });
-            }
-            tokio::select! {
-                biased;
-                _ = terminal => return Ok(()),
-                () = failed => {}
-            }
+    /// Test-only: announces that the drain task has begun supervising
+    /// runtime-owned owners.
+    #[cfg(test)]
+    fn signal_drain_supervision(&self) {
+        if let Some(signal) = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.drain_supervision.clone())
+        {
+            signal.notify_one();
         }
     }
 
@@ -1259,7 +1306,6 @@ impl RuntimeInner {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
             });
-            self.durability_failure.notify_waiters();
             return;
         }
         let retry_armed = match &mut state.durability_health {
@@ -1296,7 +1342,6 @@ impl RuntimeInner {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
             });
-            self.durability_failure.notify_waiters();
         }
     }
 
@@ -1634,6 +1679,22 @@ impl RuntimeInner {
                 gate.enter();
             }
         }
+        // Test-only gate: the coordinator lock is released and the
+        // current-attempt slot is already clear, but this task has not run
+        // its final admission callback and has not returned, so it still
+        // holds the attempt-task admission. A drain that observed the empty
+        // slot must not be able to publish quiescence here.
+        #[cfg(test)]
+        let attempt_exit_gate = self
+            .probe
+            .lock()
+            .expect("coordinator probe lock poisoned")
+            .as_ref()
+            .and_then(|probe| probe.attempt_exit_gate.clone());
+        #[cfg(test)]
+        if let Some(gate) = attempt_exit_gate {
+            gate.enter();
+        }
         self.admit_next_attempt();
     }
 
@@ -1902,6 +1963,18 @@ impl RuntimeInner {
             attempt_id: attempt_id.clone(),
             model: Box::new(model.view()),
         });
+        // The attempt **task** is a runtime-owned operation in its own
+        // right, distinct from the current-attempt slot it settles into
+        // (Issue #12, M9c). `finish_attempt` clears the slot and then still
+        // calls back into the coordinator, so quiescence must cover the task
+        // body, not just the slot. The admission is taken under the same
+        // coordinator lock that publishes the slot — drain cannot linearize
+        // in between because it needs that lock — and it is released only
+        // after the task's final callback has returned.
+        let attempt_admission = self
+            .lifecycle
+            .try_enter_running()
+            .expect("the coordinator lock owns the attempt admission boundary");
         drop(state);
         let inner = Arc::clone(self);
         self.executor.spawn(async move {
@@ -1915,6 +1988,7 @@ impl RuntimeInner {
                 )
                 .await;
             inner.finish_attempt(attempt_id, result);
+            drop(attempt_admission);
         });
     }
 }
@@ -2218,7 +2292,6 @@ impl ConversationRuntime {
             drain_started: AtomicBool::new(false),
             pending: std::sync::OnceLock::new(),
             settlement: tokio::sync::Notify::new(),
-            durability_failure: tokio::sync::Notify::new(),
             #[cfg(test)]
             probe: Mutex::new(None),
         });
@@ -2700,8 +2773,20 @@ impl ConversationRuntime {
     /// # Errors
     ///
     /// Returns [`ShutdownError::Inactive`] before activation. After
-    /// activation, repeated shutdown calls are idempotent and complete only
-    /// once the lifecycle is `Quiescent`.
+    /// activation, repeated shutdown calls are idempotent.
+    ///
+    /// `Ok(())` means exactly one thing: the lifecycle reached `Quiescent`,
+    /// so no runtime-owned model, tool, background, capability, MCP,
+    /// process, preparation, attempt task, or stale callback source can still
+    /// produce an external effect or call back into the conversation.
+    ///
+    /// [`ShutdownError::RuntimeOwnedSettlement`] means admission is closed
+    /// and supervision ran **every** settleable owner to its strongest
+    /// available boundary, but rustX could not truthfully prove all required
+    /// ownership/physical/durable terminal conditions. It never means
+    /// supervision stopped early: a failure in one participant is collected
+    /// as evidence and never releases the supervisor from a sibling that can
+    /// still act.
     ///
     /// # Panics
     ///
@@ -2966,6 +3051,28 @@ pub enum ModelUpdateError {
     },
 }
 
+/// Renders the collected settlement failures as one bounded deterministic
+/// diagnostic.
+///
+/// The set is already in deterministic identity order, so the same
+/// interleaving always yields the same diagnostic. This is a diagnostic
+/// aggregation, not an error framework: shutdown has exactly one failure
+/// variant and it carries exactly one bounded string.
+fn aggregate_settlement_failures(failures: &std::collections::BTreeSet<String>) -> String {
+    if failures.len() == 1 {
+        return failures
+            .iter()
+            .next()
+            .expect("a single-element set has one element")
+            .clone();
+    }
+    format!(
+        "{} runtime-owned settlement failures: {}",
+        failures.len(),
+        failures.iter().cloned().collect::<Vec<_>>().join("; ")
+    )
+}
+
 /// A runtime shutdown failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShutdownError {
@@ -2973,9 +3080,14 @@ pub enum ShutdownError {
     /// runtime lifecycle to end, so the request is refused and nothing is
     /// published.
     Inactive,
-    /// A runtime-owned process/capability settlement reported an explicit
-    /// physical failure, so the lifecycle remains `Draining` and successful
-    /// quiescence is not claimed.
+    /// Supervision reached every settleable owner's native terminal boundary,
+    /// but at least one required ownership/physical/durable terminal
+    /// condition stayed unproven, so the lifecycle remains `Draining` and
+    /// successful quiescence is not claimed.
+    ///
+    /// The detail is a bounded deterministic aggregation of every collected
+    /// failure, in identity order. It is never returned while a known
+    /// runtime-owned operation is merely in flight and has not been awaited.
     RuntimeOwnedSettlement {
         /// The owner-provided settlement diagnostic.
         detail: String,
@@ -3237,6 +3349,15 @@ mod tests {
         pending: Option<Arc<PendingObservations>>,
     }
 
+    /// The outer liveness guard of a deterministic ordering proof: the
+    /// synchronization below is exact, so this only turns a defect that
+    /// breaks the ordering into a failure instead of a hang.
+    async fn within_liveness_guard<F: std::future::Future>(label: &str, future: F) -> F::Output {
+        tokio::time::timeout(std::time::Duration::from_secs(60), future)
+            .await
+            .unwrap_or_else(|_| panic!("liveness guard exceeded while waiting for {label}"))
+    }
+
     fn text_content(text: &str) -> Vec<UserContentBlock> {
         vec![UserContentBlock::Text(TextBlock {
             text: text.to_owned(),
@@ -3325,6 +3446,19 @@ mod tests {
         conversation_id: &str,
         store: Arc<dyn ConversationStore>,
     ) -> (ConversationRuntime, Arc<FakeModel>) {
+        headless_runtime_over_store_with(dir, conversation_id, store, vec![one_turn_script()], None)
+            .await
+    }
+
+    /// The same durable-authority fixture with explicit model scripts and an
+    /// optional coordinator probe, for the M9c supervision regressions.
+    async fn headless_runtime_over_store_with(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        store: Arc<dyn ConversationStore>,
+        scripts: Vec<Vec<FakeStep>>,
+        probe: Option<CoordinatorProbe>,
+    ) -> (ConversationRuntime, Arc<FakeModel>) {
         let conversation_id = ConversationId::new(conversation_id);
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
@@ -3352,7 +3486,7 @@ mod tests {
         .expect("coordinator");
         let candidate = coordinator.prepare_candidate().await.expect("prepare");
         coordinator.commit(candidate).expect("commit");
-        let model = Arc::new(FakeModel::new(vec![one_turn_script()]));
+        let model = Arc::new(FakeModel::new(scripts));
         let adapter: Arc<dyn ModelAdapter> = model.clone();
         let estimator: Arc<dyn TokenEstimator> = Arc::new(DefaultTokenEstimator);
         let config = RuntimeConversationConfig {
@@ -3373,7 +3507,10 @@ mod tests {
             clock: None,
             initial_messages: Vec::new(),
         };
-        let runtime = ConversationRuntime::new(config).expect("runtime");
+        let runtime = match probe {
+            Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
+            None => ConversationRuntime::new(config).expect("runtime"),
+        };
         (runtime, model)
     }
 
@@ -3760,6 +3897,8 @@ mod tests {
             drain_linearization: None,
             start_boundary_pause: None,
             tool_start_pause: None,
+            drain_supervision: None,
+            attempt_exit_gate: None,
         }))
         .await;
         gate.arm();
@@ -4116,6 +4255,8 @@ mod tests {
             drain_linearization: None,
             start_boundary_pause: None,
             tool_start_pause: None,
+            drain_supervision: None,
+            attempt_exit_gate: None,
         }))
         .await;
         gate.arm();
@@ -4194,6 +4335,8 @@ mod tests {
             drain_linearization: None,
             start_boundary_pause: None,
             tool_start_pause: None,
+            drain_supervision: None,
+            attempt_exit_gate: None,
         }))
         .await;
         // Freeze admission so the worker cannot adopt the pre-shutdown item.
@@ -4834,6 +4977,44 @@ mod tests {
         }
     }
 
+    /// Commits one conversation-owned background execution through the
+    /// authoritative registry of the runtime's tool runtime.
+    fn commit_background(
+        runtime: &ConversationRuntime,
+        executor: &Arc<dyn crate::tools::executor::ToolExecutor>,
+        call_id: &str,
+    ) -> crate::runtime::identity::ToolExecutionId {
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: ToolCallId::new(call_id),
+            tool_id: crate::runtime::identity::ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            runtime
+                .tool_runtime()
+                .background()
+                .commit_dispatch(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .expect("commit")
+        else {
+            panic!("accepted");
+        };
+        execution_id
+    }
+
     /// Issue #63 (Blocker 2, owning-runtime level): when the background
     /// settlement owner's bounded terminal-publication budget is exhausted,
     /// the owning runtime is placed into the explicit `DurabilityFailed`
@@ -4955,6 +5136,710 @@ mod tests {
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Draining
+        );
+    }
+
+    /// A foreground tool that starts, parks until cancellation is observable,
+    /// and then reads the cancellation **cause from its execution context's
+    /// authority** — exactly what a real cancellable executor does when it
+    /// normalizes its own terminal status.
+    struct CauseProbeTool {
+        started: tokio::sync::watch::Sender<bool>,
+        observed: Arc<std::sync::Mutex<Option<CancellationReason>>>,
+    }
+
+    impl CauseProbeTool {
+        fn new() -> (
+            Self,
+            tokio::sync::watch::Receiver<bool>,
+            Arc<std::sync::Mutex<Option<CancellationReason>>>,
+        ) {
+            let (started, started_rx) = tokio::sync::watch::channel(false);
+            let observed = Arc::new(std::sync::Mutex::new(None));
+            (
+                Self {
+                    started,
+                    observed: observed.clone(),
+                },
+                started_rx,
+                observed,
+            )
+        }
+    }
+
+    impl crate::tools::executor::ToolExecutor for CauseProbeTool {
+        fn execute<'a>(
+            &'a self,
+            _invocation: crate::tools::types::ToolInvocation,
+            context: crate::tools::executor::ToolExecutionContext<'a>,
+        ) -> futures_util::future::BoxFuture<'a, crate::tools::types::ToolExecutionResult> {
+            let started = self.started.clone();
+            let observed = self.observed.clone();
+            Box::pin(async move {
+                // The context is built at tool start, before any cancellation
+                // exists: a start-time copy of the cause could only ever be
+                // the attempt's default.
+                assert!(!context.cancellation.is_cancelled());
+                started.send_replace(true);
+                context.cancellation.cancelled().await;
+                let reason = context.cancellation.reason();
+                *observed.lock().expect("observed cause lock") = Some(reason);
+                crate::tools::types::ToolExecutionResult {
+                    status: crate::tools::types::ToolExecutionStatus::Cancelled { reason },
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                }
+            })
+        }
+    }
+
+    /// Builds the one-tool-call model script the cancellation-cause
+    /// regressions drive.
+    fn cause_probe_registry_and_script(
+        tool: CauseProbeTool,
+    ) -> (crate::tools::executor::ToolRegistry, Vec<FakeStep>) {
+        use crate::tools::types::{
+            ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
+            ToolReplayPolicy,
+        };
+        let definition = ToolDefinition {
+            id: crate::runtime::identity::ToolId::new("tool-cause-probe"),
+            name: "cause_probe".to_owned(),
+            description: "park until cancellation and report the winning cause".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::Sequential,
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let mut registry = crate::tools::executor::ToolRegistry::new();
+        registry
+            .register(definition.clone(), Arc::new(tool))
+            .expect("cause probe registration");
+        let call_id = ToolCallId::new("call-cause-probe");
+        let script = vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallStarted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallArgumentsDelta {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call_id: call_id.clone(),
+                arguments_delta: "{}".to_owned(),
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::ToolCallCompleted {
+                block_index: crate::message::types::ContentBlockIndex::new(0),
+                call: crate::tools::types::ToolCall {
+                    id: call_id,
+                    tool_id: definition.id,
+                    name: definition.name,
+                    arguments: serde_json::json!({}),
+                },
+            }),
+            FakeStep::Emit(crate::model::event::ModelEvent::Completed {
+                finish_reason: crate::model::finish::ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ];
+        (registry, script)
+    }
+
+    /// M9c (Fix C): a foreground execution that started **before** any
+    /// cancellation existed must observe the cause that actually won the
+    /// race, not the attempt's start-time default.
+    ///
+    /// Happens-before: the executor asserts its context is not cancelled and
+    /// only then publishes `started`; the test waits for `started` before
+    /// calling `shutdown`, so runtime drain is provably the first
+    /// cancellation of this attempt. The executor then reads the cause from
+    /// the attempt authority through its context.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn foreground_executor_observes_the_winning_runtime_shutdown_cause() {
+        let (tool, mut started, observed) = CauseProbeTool::new();
+        let (registry, script) = cause_probe_registry_and_script(tool);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) =
+            headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start before any cancellation",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        within_liveness_guard("runtime shutdown", runtime.shutdown())
+            .await
+            .expect("drain reaches quiescence");
+        assert_eq!(
+            *observed.lock().expect("observed cause lock"),
+            Some(CancellationReason::RuntimeShutdown),
+            "the executor reads the winning cause from the attempt authority"
+        );
+        let store = runtime.tool_runtime().durable_store();
+        assert!(
+            store
+                .read_events(None, 256)
+                .expect("events")
+                .events
+                .iter()
+                .any(|envelope| matches!(
+                    &envelope.event,
+                    crate::events::types::RuntimeEvent::AttemptCancelled {
+                        reason: CancellationReason::RuntimeShutdown,
+                        ..
+                    }
+                )),
+            "the attempt terminal event agrees with the executor's observation"
+        );
+    }
+
+    /// M9c (Fix C, first-winner): a user cancellation that won first stays
+    /// the absorbing cause; a later runtime drain never relabels it, and the
+    /// executor reads the same first winner.
+    ///
+    /// Happens-before: the executor publishes `started` before any
+    /// cancellation exists; `cancel_current_attempt` then provably wins the
+    /// first cancellation under the coordinator lock, and only afterwards
+    /// does `shutdown` request `RuntimeShutdown` on the same handle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn first_cancellation_cause_survives_a_later_runtime_drain() {
+        let (tool, mut started, observed) = CauseProbeTool::new();
+        let (registry, script) = cause_probe_registry_and_script(tool);
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (runtime, _model) =
+            headless_runtime(&dir, vec![script, one_turn_script()], Some(registry), None).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("start the foreground tool"))
+            .expect("accepted");
+        within_liveness_guard(
+            "the foreground tool to start before any cancellation",
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("start channel stays open");
+
+        let observations = await_observation(pending.as_ref(), |observation| {
+            matches!(observation, ConversationObservation::AttemptAdmitted { .. })
+        })
+        .await;
+        let attempt_id = observations
+            .iter()
+            .find_map(|observation| match observation {
+                ConversationObservation::AttemptAdmitted { attempt_id } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .expect("the admitted attempt identity");
+        runtime
+            .cancel_current_attempt(&attempt_id)
+            .expect("user cancellation wins first");
+
+        within_liveness_guard("runtime shutdown", runtime.shutdown())
+            .await
+            .expect("drain reaches quiescence");
+        assert_eq!(
+            *observed.lock().expect("observed cause lock"),
+            Some(CancellationReason::UserRequested),
+            "a later runtime drain cannot relabel the first winning cause"
+        );
+        let store = runtime.tool_runtime().durable_store();
+        assert!(
+            store
+                .read_events(None, 256)
+                .expect("events")
+                .events
+                .iter()
+                .any(|envelope| matches!(
+                    &envelope.event,
+                    crate::events::types::RuntimeEvent::AttemptCancelled {
+                        reason: CancellationReason::UserRequested,
+                        ..
+                    }
+                )),
+            "the terminal event reports the first winner"
+        );
+    }
+
+    /// M9c (Blocker A): a recorded durability failure is an error **fact**,
+    /// never permission to stop supervising a sibling owner. One background
+    /// execution exhausts its bounded terminal-publication budget while a
+    /// provider turn is still parked; drain must keep supervising the live
+    /// provider and may return its aggregated settlement failure only after
+    /// the provider has physically settled.
+    ///
+    /// Happens-before: `drain_supervision` fires only from inside the drain
+    /// task, so observing it proves drain reached supervision *with the
+    /// durability failure already recorded* instead of short-circuiting; the
+    /// current-attempt slot is still occupied at that instant, and the
+    /// shutdown result channel is still empty. Only the explicit provider
+    /// release lets the attempt settle, and only then does shutdown return.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn durability_failure_never_abandons_a_live_provider_turn() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-m9c-provider",
+            ))
+            .expect("in-memory store"),
+        );
+        let (release_tx, release_rx) = crate::scripted_suites::support::fake::model_release();
+        let script = vec![
+            FakeStep::Emit(crate::model::event::ModelEvent::Started),
+            FakeStep::ParkUntilReleased(release_rx),
+            FakeStep::Emit(crate::model::event::ModelEvent::Failed {
+                error: crate::model::error::ModelError {
+                    kind: crate::model::error::ModelErrorKind::Cancelled,
+                    message: "provider settled cancellation".to_owned(),
+                    retry_after_ms: None,
+                    provider_code: None,
+                },
+            }),
+        ];
+        let drain_supervision = Arc::new(tokio::sync::Notify::new());
+        let (runtime, model) = headless_runtime_over_store_with(
+            &dir,
+            "conv-m9c-provider",
+            store.clone(),
+            vec![script],
+            Some(CoordinatorProbe {
+                drain_supervision: Some(drain_supervision.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("park the provider"))
+            .expect("accepted");
+        let mut parked = model.parked();
+        parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("provider gate stays open");
+
+        // A *different* owner records the durability failure: one background
+        // execution spends its whole bounded terminal-publication budget.
+        let (executor, mut started, release_background) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let execution_id = commit_background(&runtime, &executor, "call-degrade");
+        started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("start channel stays open");
+        store.arm_fail_accept_times(2);
+        release_background.send_replace(true);
+        await_observation(pending.as_ref(), |observation| {
+            matches!(observation, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "background_terminal_publication")
+        })
+        .await;
+        assert_eq!(
+            runtime
+                .background_status(&execution_id)
+                .expect("record")
+                .state,
+            crate::tools::background::BackgroundLifecycle::PublishingTerminal
+        );
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        // Drain reached supervision *despite* the recorded durability
+        // failure. The old fail-fast drain returned before this point.
+        within_liveness_guard(
+            "drain to park on the live provider turn",
+            drain_supervision.notified(),
+        )
+        .await;
+        assert!(
+            runtime.has_current_attempt(),
+            "the provider turn is still runtime-owned when drain begins supervising"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "a sibling's durability failure must not end supervision of a live provider turn"
+        );
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining
+        );
+
+        // Physical provider settlement is the only thing that may release the
+        // supervisor.
+        release_tx.send_replace(true);
+        let shutdown = done_rx.await.expect("shutdown result channel");
+        assert!(
+            matches!(
+                &shutdown,
+                Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail
+                }) if detail.contains("terminal publication")
+            ),
+            "the unresolved terminal publication is honest settlement evidence: {shutdown:?}"
+        );
+        assert_eq!(
+            runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining,
+            "unproven terminality never publishes Quiescent"
+        );
+        assert!(
+            !runtime.has_current_attempt(),
+            "the supervised provider turn settled before shutdown returned"
+        );
+        assert!(
+            store
+                .read_events(None, 256)
+                .expect("events")
+                .events
+                .iter()
+                .any(|envelope| matches!(
+                    &envelope.event,
+                    crate::events::types::RuntimeEvent::AttemptCancelled {
+                        reason: CancellationReason::RuntimeShutdown,
+                        ..
+                    }
+                )),
+            "the supervised attempt reached its terminal cancellation"
+        );
+    }
+
+    /// M9c (Blocker A / 4.1): one background record's failed terminal
+    /// publication must not release the supervisor from a *sibling*
+    /// background execution that is still physically running.
+    ///
+    /// Happens-before: the failing record's `DurabilityFailed` observation is
+    /// awaited first, so the failure is provably recorded before shutdown
+    /// starts. `drain_supervision` then proves drain entered supervision with
+    /// that failure already known while the sibling is still active, and the
+    /// sibling's own explicit release is the only thing that lets shutdown
+    /// return.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn durability_failure_never_abandons_a_sibling_background_execution() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-m9c-sibling",
+            ))
+            .expect("in-memory store"),
+        );
+        let drain_supervision = Arc::new(tokio::sync::Notify::new());
+        let (runtime, _model) = headless_runtime_over_store_with(
+            &dir,
+            "conv-m9c-sibling",
+            store.clone(),
+            vec![one_turn_script()],
+            Some(CoordinatorProbe {
+                drain_supervision: Some(drain_supervision.clone()),
+                ..CoordinatorProbe::default()
+            }),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        let (failing, mut failing_started, release_failing) = GatedBackgroundExecutor::new();
+        let failing: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(failing);
+        let failing_id = commit_background(&runtime, &failing, "call-failing");
+        let (sibling, mut sibling_started, release_sibling) = GatedBackgroundExecutor::new();
+        let sibling: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(sibling);
+        let sibling_id = commit_background(&runtime, &sibling, "call-sibling");
+        failing_started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("start channel stays open");
+        sibling_started
+            .wait_for(|is_started| *is_started)
+            .await
+            .expect("start channel stays open");
+
+        // Exactly the failing record's bounded publication budget.
+        store.arm_fail_accept_times(2);
+        release_failing.send_replace(true);
+        await_observation(pending.as_ref(), |observation| {
+            matches!(observation, ConversationObservation::DurabilityFailed { operation, .. }
+                if operation == "background_terminal_publication")
+        })
+        .await;
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        within_liveness_guard(
+            "drain to park on the sibling background execution",
+            drain_supervision.notified(),
+        )
+        .await;
+        assert_eq!(
+            runtime
+                .background_status(&sibling_id)
+                .expect("sibling record")
+                .state,
+            crate::tools::background::BackgroundLifecycle::Cancelling,
+            "the sibling received drain cancellation and is still owned"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the failed record must not release the supervisor from the live sibling"
+        );
+
+        release_sibling.send_replace(true);
+        let shutdown = done_rx.await.expect("shutdown result channel");
+        assert!(
+            matches!(
+                &shutdown,
+                Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement {
+                    detail
+                }) if detail.contains("terminal publication")
+            ),
+            "the failed record is still reported: {shutdown:?}"
+        );
+        // The sibling was supervised to its own terminal boundary and its
+        // terminal publication went through the one Pending Inbound path.
+        assert!(
+            runtime
+                .background_status(&sibling_id)
+                .expect("sibling record")
+                .state
+                .is_terminal(),
+            "the sibling reached its terminal state under supervision"
+        );
+        assert_eq!(
+            runtime
+                .background_status(&failing_id)
+                .expect("failing record")
+                .state,
+            crate::tools::background::BackgroundLifecycle::PublishingTerminal,
+            "the unresolved candidate stays explicit, never fabricated terminal"
+        );
+        let pending_items = store.load_pending().expect("pending inbound");
+        assert!(
+            pending_items
+                .iter()
+                .any(|item| { format!("{item:?}").contains(sibling_id.as_str()) }),
+            "the supervised sibling published its terminal inbound durably"
+        );
+        assert!(
+            !pending_items
+                .iter()
+                .any(|item| format!("{item:?}").contains(failing_id.as_str())),
+            "no false terminal inbound exists for the unresolved record"
+        );
+    }
+
+    /// M9c (Fix D): the current-attempt **slot** and the attempt **task**
+    /// are distinct ownership facts. The slot is cleared inside
+    /// `finish_attempt`, but the task still owes the coordinator its final
+    /// admission callback, so quiescence must wait for the task itself.
+    ///
+    /// Happens-before: `attempt_exit_gate` parks the settled attempt task
+    /// after the coordinator lock is released and the slot is provably empty,
+    /// and before the final callback runs. `drain_linearization` proves the
+    /// drain transition committed while the task is parked there, and
+    /// `mark_quiescent` — the one authority that publishes quiescence — is
+    /// then invoked directly and must refuse. Releasing the gate is the only
+    /// thing that lets the task return and shutdown complete.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn attempt_task_exit_belongs_to_the_quiescence_proof() {
+        let attempt_exit_gate = Arc::new(super::Gate::default());
+        attempt_exit_gate.arm();
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            attempt_exit_gate: Some(attempt_exit_gate.clone()),
+            drain_linearization: Some(drain_linearization.clone()),
+            ..CoordinatorProbe::default()
+        }))
+        .await;
+        fixture
+            .runtime
+            .submit_inbound(text_content("one turn"))
+            .expect("accepted");
+        attempt_exit_gate.wait_entered();
+        assert!(
+            !fixture.runtime.has_current_attempt(),
+            "the current-attempt slot is already clear at the parked exit boundary"
+        );
+
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = fixture.runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        within_liveness_guard("the drain linearization", drain_linearization.notified()).await;
+        assert!(
+            !fixture.runtime.inner.lifecycle.mark_quiescent(),
+            "the attempt task still owes a callback, so quiescence is refused"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "an empty current-attempt slot is not attempt-task settlement"
+        );
+        assert_eq!(
+            fixture.runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining
+        );
+
+        let release = {
+            let gate = attempt_exit_gate.clone();
+            tokio::task::spawn_blocking(move || gate.release())
+        };
+        release.await.expect("release the parked attempt task");
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("the attempt task exit completes the quiescence proof");
+        assert_eq!(
+            fixture.runtime.lifecycle_state(),
+            ConversationLifecycleState::Quiescent
+        );
+
+        // A stale handle to the runtime's own admission callback cannot
+        // produce a semantic effect after quiescence.
+        let store = fixture.runtime.tool_runtime().durable_store();
+        let events_before = store.read_events(None, 256).expect("events").events;
+        let canonical_before = store.load_canonical().expect("canonical");
+        let inner = fixture
+            .runtime
+            .weak_inner()
+            .upgrade()
+            .expect("the test still owns the runtime");
+        inner.admit_next_attempt();
+        assert!(!fixture.runtime.has_current_attempt());
+        assert_eq!(
+            store.read_events(None, 256).expect("events").events,
+            events_before
+        );
+        assert_eq!(store.load_canonical().expect("canonical"), canonical_before);
+        assert!(matches!(
+            fixture.runtime.submit_inbound(text_content("late")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+    }
+
+    /// M9c (Fix E / 8.1): the exact `Running -> Draining` linearization, not
+    /// an arrival hint, is what a competing acceptance must lose to.
+    ///
+    /// Happens-before: `drain_linearization` fires immediately after the
+    /// lifecycle CAS commits, while shutdown still holds the coordinator
+    /// lock. The competing `submit_inbound` is released only after that
+    /// signal, so it necessarily queues on the coordinator lock and reads the
+    /// already-published `Draining` state. It commits nothing and consumes no
+    /// sequence.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drain_linearization_precedes_the_refused_acceptance() {
+        let admission_gate = Arc::new(super::Gate::default());
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let fixture = headless_fixture_with(Some(CoordinatorProbe {
+            admission_gate: Some(admission_gate.clone()),
+            drain_linearization: Some(drain_linearization.clone()),
+            ..CoordinatorProbe::default()
+        }))
+        .await;
+        // Freeze admission so the pre-shutdown item stays pending and the
+        // durable acceptance ledger is stable for the assertions below.
+        admission_gate.arm();
+        let first = fixture
+            .runtime
+            .submit_inbound(text_content("before"))
+            .expect("pre-shutdown acceptance");
+        assert_eq!(first.inbound_sequence.get(), 1);
+        admission_gate.wait_entered();
+
+        // The competing acceptance is released only after drain has provably
+        // linearized.
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let (late_tx, late_rx) = tokio::sync::oneshot::channel();
+        let late_runtime = fixture.runtime.clone();
+        tokio::spawn(async move {
+            release_rx.await.expect("release channel stays open");
+            let _ = late_tx.send(late_runtime.submit_inbound(text_content("racing")));
+        });
+
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let shutdown_runtime = fixture.runtime.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(shutdown_runtime.shutdown().await);
+        });
+        within_liveness_guard("the drain linearization", drain_linearization.notified()).await;
+        assert_eq!(
+            fixture.runtime.lifecycle_state(),
+            ConversationLifecycleState::Draining,
+            "the drain transition is committed before the competing acceptance runs"
+        );
+        release_tx
+            .send(())
+            .expect("release the competing acceptance");
+        assert!(
+            matches!(
+                late_rx.await.expect("late acceptance result"),
+                Err(InboundAdmissionError::Shutdown)
+            ),
+            "an acceptance that starts after the drain commit is refused"
+        );
+
+        admission_gate.release();
+        done_rx
+            .await
+            .expect("shutdown result channel")
+            .expect("drain completes");
+
+        let batch = fixture
+            .runtime
+            .tool_runtime()
+            .mailbox()
+            .select_pending_batch()
+            .expect("select")
+            .expect("exactly one pre-shutdown pending item");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "the refused acceptance committed no pending item"
+        );
+        assert_eq!(
+            batch.items()[0].sequence().get(),
+            1,
+            "the refused acceptance consumed no sequence"
         );
     }
 
@@ -5315,6 +6200,8 @@ mod tests {
             Some(CoordinatorProbe {
                 drain_linearization: Some(drain_linearization.clone()),
                 tool_start_pause: Some(tool_start_pause),
+                drain_supervision: None,
+                attempt_exit_gate: None,
                 ..CoordinatorProbe::default()
             }),
         )
@@ -6337,12 +7224,44 @@ mod tests {
         let canonical_before = store.load_canonical().expect("canonical");
         let head_before = store.load_head().expect("head");
         let pending_before = store.load_pending().expect("pending inbound");
+        let revision_before = runtime.capability().current_snapshot().revision();
+        let background_before = runtime.tool_runtime().background().active_snapshot().len();
+
+        // The stale callback source must be proven *gone*, not merely
+        // observed to do nothing: every model invocation stream owner has
+        // left, so no task remains that could still read this watch channel.
+        within_liveness_guard(
+            "every model stream owner to exit",
+            model
+                .streams_exited()
+                .wait_for(|exited| *exited >= requests_before as u64),
+        )
+        .await
+        .expect("stream-exit channel stays open");
 
         // A stale release/callback handle retained by the old owner is now a
         // no-op: it cannot start another provider request or append a fact.
         release_tx.send_replace(false);
         release_tx.send_replace(true);
-        assert_eq!(model.requests().len(), requests_before);
+        // Give the runtime's executor a real scheduling opportunity: any
+        // task that *could* still act would run before this join returns.
+        tokio::task::yield_now().await;
+        tokio::spawn(async {})
+            .await
+            .expect("a scheduling opportunity for any surviving owner");
+
+        // A stale admission callback handle is refused too.
+        let inner = runtime
+            .weak_inner()
+            .upgrade()
+            .expect("the test still owns the runtime");
+        inner.admit_next_attempt();
+        assert!(
+            !runtime.has_current_attempt(),
+            "attempt admission is closed"
+        );
+
+        assert_eq!(model.requests().len(), requests_before, "provider requests");
         assert_eq!(
             store.read_events(None, 256).expect("events").events,
             events_before,
@@ -6353,6 +7272,25 @@ mod tests {
         assert_eq!(
             store.load_pending().expect("pending inbound"),
             pending_before
+        );
+        assert_eq!(
+            runtime.capability().current_snapshot().revision(),
+            revision_before,
+            "capability revisions"
+        );
+        assert_eq!(
+            runtime.tool_runtime().background().active_snapshot().len(),
+            background_before,
+            "background ownership"
+        );
+        assert!(matches!(
+            runtime.submit_inbound(text_content("post-quiescence")),
+            Err(InboundAdmissionError::Shutdown)
+        ));
+        assert_eq!(
+            store.load_pending().expect("pending inbound"),
+            pending_before,
+            "the refused acceptance consumed no sequence"
         );
     }
 

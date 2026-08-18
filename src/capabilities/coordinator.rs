@@ -70,6 +70,21 @@ struct CoordinatorInner {
     base_tool_registry: Arc<ToolRegistry>,
     mcp_servers: McpServerBindings,
     mcp_runtimes: tokio::sync::Mutex<BTreeMap<McpServerId, Arc<McpServerRuntime>>>,
+    /// The ownership cancellation root of every in-flight conversation-owned
+    /// MCP connection (Issue #12, M9c).
+    ///
+    /// Each in-flight connect owner takes a child of this signal, so runtime
+    /// drain can close in-flight *preparation* the same way it closes
+    /// retained runtimes: by cancelling the owner, never by dropping a
+    /// caller future. Cancelling drives an already-spawned stdio process to
+    /// its physical settlement proof before the owner releases its counted
+    /// lifecycle admission.
+    mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal,
+    /// Test-only: parks the next conversation-owned MCP connect at the
+    /// instant physical process ownership exists.
+    #[cfg(test)]
+    connect_ownership_pause:
+        Mutex<Option<Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>>>,
     /// The one shared MCP invalidation synchronization boundary: epoch
     /// mutation (`tools/list_changed`) and epoch validation + snapshot swap
     /// (commit) serialize through the same guard.
@@ -255,6 +270,10 @@ impl CapabilityCoordinator {
                 base_tool_registry: config.base_tool_registry,
                 mcp_servers,
                 mcp_runtimes: tokio::sync::Mutex::new(BTreeMap::new()),
+                mcp_preparation_cancellation: crate::runtime::cancellation::CancellationSignal::new(
+                ),
+                #[cfg(test)]
+                connect_ownership_pause: Mutex::new(None),
                 mcp_invalidation: Arc::new(McpInvalidationState::new()),
                 python_store,
                 base_environment: config.base_environment,
@@ -498,22 +517,13 @@ impl CapabilityCoordinator {
         let mut mcp_epochs = BTreeMap::new();
         // `BTreeMap` iteration is the deterministic identity order.
         for (server_id, binding) in &self.inner.mcp_servers {
-            let mut runtimes = self.inner.mcp_runtimes.lock().await;
-            let runtime = if let Some(runtime) = runtimes.get(server_id) {
-                runtime.clone()
-            } else {
-                let runtime = McpServerRuntime::connect(
-                    server_id,
-                    binding,
-                    &self.inner.workspace,
-                    self.inner.mcp_invalidation.clone(),
-                )
-                .await
-                .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
-                runtimes.insert(server_id.clone(), runtime.clone());
-                runtime
-            };
+            let runtimes = self.inner.mcp_runtimes.lock().await;
+            let retained = runtimes.get(server_id).cloned();
             drop(runtimes);
+            let runtime = match retained {
+                Some(runtime) => runtime,
+                None => self.connect_conversation_owned(server_id, binding).await?,
+            };
             // The epoch snapshot is taken under the shared invalidation
             // guard; the pagination itself never holds it.
             let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
@@ -553,17 +563,28 @@ impl CapabilityCoordinator {
         })
     }
 
-    /// Settles the conversation-owned capability process plane before the
-    /// conversation runtime publishes quiescence. Shared environment-store
-    /// materialization is handled by the counted preparation admission above;
-    /// this method closes only the MCP runtimes retained by this capability
-    /// coordinator.
+    /// Connects one conversation-owned MCP server through an owner whose
+    /// lifetime is independent of this caller (Issue #12, M9c).
     ///
-    /// # Errors
+    /// # Ownership phases
     ///
-    /// Returns a physical-settlement diagnostic when an owned MCP stdio
-    /// process cannot prove its terminality.
-    pub(crate) async fn drain_conversation_owned(&self) -> Result<(), String> {
+    /// ```text
+    /// no physical owner
+    ///   -> conversation-counted preparation owner (spawned task, counted
+    ///      lifecycle admission, ownership cancellation child)
+    ///   -> physical MCP process ownership established (inside connect)
+    ///   -> either  A. transferred into the retained `mcp_runtimes` entry
+    ///      or      B. cancelled/failed and driven to physical settlement
+    /// ```
+    ///
+    /// The counted admission is released only after A or B, so aborting or
+    /// dropping *this* future never removes the physical owner from the
+    /// conversation's quiescence proof. The waiter is not the owner.
+    async fn connect_conversation_owned(
+        &self,
+        server_id: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+    ) -> Result<Arc<McpServerRuntime>, CapabilityPreparationError> {
         let lifecycle = self
             .inner
             .state
@@ -571,25 +592,151 @@ impl CapabilityCoordinator {
             .expect("capability state lock poisoned")
             .conversation_lifecycle
             .clone();
-        let _settlement =
-            if let Some(lifecycle) = lifecycle {
-                Some(lifecycle.try_enter_settlement().map_err(|state| {
-                    format!("capability drain entered lifecycle state {state:?}")
-                })?)
-            } else {
-                None
+        // The owner's own counted admission, acquired before any process is
+        // spawned: if drain already won, nothing is spawned at all.
+        let owner_admission = match &lifecycle {
+            Some(lifecycle) => Some(
+                lifecycle
+                    .try_enter_preparation()
+                    .map_err(|_| CapabilityPreparationError::ConversationInactive)?,
+            ),
+            None => None,
+        };
+        let cancellation = self.inner.mcp_preparation_cancellation.child();
+        #[cfg(test)]
+        let ownership_pause = self
+            .inner
+            .connect_ownership_pause
+            .lock()
+            .expect("connect ownership pause lock")
+            .clone();
+        let inner = Arc::clone(&self.inner);
+        let server_id_owned = server_id.clone();
+        let binding_owned = binding.clone();
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let request = crate::tools::mcp::OwnedConnect::new(
+                &server_id_owned,
+                &binding_owned,
+                &inner.workspace,
+                inner.mcp_invalidation.clone(),
+                cancellation,
+            );
+            #[cfg(test)]
+            let request = request.with_ownership_pause(ownership_pause);
+            let outcome = match McpServerRuntime::connect_owned(request).await {
+                // Phase A: ownership transfer. The runtime is retained
+                // *before* the caller is answered and before this owner
+                // leaves the quiescence accounting, so capability drain
+                // always finds it — even if the caller was aborted.
+                Ok(runtime) => {
+                    let mut runtimes = inner.mcp_runtimes.lock().await;
+                    // A concurrent owner may already have retained this
+                    // identity. This connection is then *not* transferable, so
+                    // this owner takes the cleanup path (phase B) instead of
+                    // orphaning a live process outside the retained set.
+                    if let Some(retained) = runtimes.get(&server_id_owned).cloned() {
+                        drop(runtimes);
+                        match runtime.close().await {
+                            Ok(()) => Ok(retained),
+                            Err(error) => Err(CapabilityPreparationError::Mcp(format!(
+                                "duplicate MCP connection could not settle: {error}"
+                            ))),
+                        }
+                    } else {
+                        runtimes.insert(server_id_owned.clone(), runtime.clone());
+                        drop(runtimes);
+                        Ok(runtime)
+                    }
+                }
+                // Phase B: the connect owner already drove its physical
+                // process (when one existed) to settlement before returning.
+                Err(error) => Err(CapabilityPreparationError::Mcp(error.to_string())),
             };
+            let _ = result_tx.send(outcome);
+            drop(owner_admission);
+        });
+        result_rx.await.unwrap_or_else(|_| {
+            Err(CapabilityPreparationError::Mcp(
+                "the MCP connection owner terminated without an outcome".to_owned(),
+            ))
+        })
+    }
+
+    /// Requests cancellation of every in-flight conversation-owned MCP
+    /// preparation owner (Issue #12, M9c).
+    ///
+    /// This is a synchronous non-blocking control operation taken by the
+    /// runtime drain transition. It never waits: each owner settles its own
+    /// physical process and only then releases the counted lifecycle
+    /// admission that quiescence waits on.
+    pub(crate) fn cancel_conversation_preparation(&self) {
+        self.inner.mcp_preparation_cancellation.cancel();
+    }
+
+    /// Settles the conversation-owned capability process plane before the
+    /// conversation runtime publishes quiescence. Shared environment-store
+    /// materialization is handled by the counted preparation admission above;
+    /// this method closes only the MCP runtimes retained by this capability
+    /// coordinator.
+    ///
+    /// Every retained runtime receives `close` and is awaited to its
+    /// strongest local settlement, **including after a sibling reports a
+    /// failure**: a failed participant is an error fact, never permission to
+    /// abandon another participant that can still act. Failures are collected
+    /// in deterministic identity order and returned together.
+    ///
+    /// # Errors
+    ///
+    /// Returns one physical-settlement diagnostic per owned MCP stdio unit
+    /// that could not prove its terminality.
+    pub(crate) async fn drain_conversation_owned(&self) -> Result<(), Vec<String>> {
+        let lifecycle = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .conversation_lifecycle
+            .clone();
+        let _settlement = match &lifecycle {
+            Some(lifecycle) => match lifecycle.try_enter_settlement() {
+                Ok(admission) => Some(admission),
+                Err(state) => {
+                    return Err(vec![format!(
+                        "capability drain entered lifecycle state {state:?}"
+                    )]);
+                }
+            },
+            None => None,
+        };
         let runtimes = {
             let runtimes = self.inner.mcp_runtimes.lock().await;
             runtimes.values().cloned().collect::<Vec<_>>()
         };
+        let mut failures = Vec::new();
         for runtime in runtimes {
-            runtime
-                .close()
-                .await
-                .map_err(|error| format!("MCP server {}: {error}", runtime.server_id()))?;
+            if let Err(error) = runtime.close().await {
+                failures.push(format!("MCP server {}: {error}", runtime.server_id()));
+            }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures)
+        }
+    }
+
+    /// Installs the test-only MCP connect ownership pause.
+    #[cfg(test)]
+    pub(crate) fn install_connect_ownership_pause(
+        &self,
+        pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
+    ) {
+        *self
+            .inner
+            .connect_ownership_pause
+            .lock()
+            .expect("connect ownership pause lock") = Some(pause);
     }
 
     /// Activates the prepared candidate (the quiescent atomic commit).
@@ -1276,6 +1423,217 @@ mod mcp_race_tests {
         (coordinator, server_id)
     }
 
+    /// A coordinator with `server_ids` self-spawned stdio fixture servers,
+    /// claimed by (and activated with) its own conversation lifecycle so the
+    /// M9c runtime-owned drain path is exercised exactly as the conversation
+    /// runtime composes it.
+    fn claimed_coordinator_with_fixtures(
+        dir: &tempfile::TempDir,
+        server_ids: &[&str],
+        test_name: &str,
+    ) -> (
+        CapabilityCoordinator,
+        crate::runtime::types::ConversationLifecycle,
+        Vec<McpServerId>,
+    ) {
+        let workspace_root = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace_root).expect("workspace");
+        let workspace = Workspace::new(&workspace_root).expect("workspace");
+        let ids: Vec<McpServerId> = server_ids.iter().map(|id| McpServerId::new(*id)).collect();
+        let mcp_servers = ids
+            .iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    crate::tools::mcp::McpServerBinding {
+                        transport: McpTransportConfig::Stdio {
+                            program: std::env::current_exe()
+                                .expect("test executable")
+                                .display()
+                                .to_string(),
+                            args: fixture_spawn_args(test_name),
+                            cwd: None,
+                            environment: std::collections::BTreeMap::from([(
+                                crate::tools::mcp::fixture::FIXTURE_MODE_ENV.to_owned(),
+                                "1".to_owned(),
+                            )]),
+                        },
+                        policy: crate::tools::types::ToolInvocationPolicy::default(),
+                    },
+                )
+            })
+            .collect();
+        let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: ConversationId::new("mcp-drain"),
+            workspace,
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers,
+            base_environment: ToolEnvironment::new(),
+            environment_store_root: dir.path().join("skill-env"),
+        })
+        .expect("coordinator");
+        let lifecycle = crate::runtime::types::ConversationLifecycle::new();
+        assert!(coordinator.claim_conversation_runtime(&lifecycle));
+        assert!(lifecycle.activate());
+        (coordinator, lifecycle, ids)
+    }
+
+    /// Issue #12 (M9c, Blocker A / 4.2): one owned MCP runtime reporting an
+    /// unproven physical settlement must not release the capability drain
+    /// from a sibling runtime that has not been closed yet.
+    ///
+    /// Happens-before: `alpha` is probed to fail its close and `beta` is
+    /// probed to park inside its close. The test waits for `beta`'s close to
+    /// be *entered* — which can only happen after `alpha`'s close already
+    /// returned its failure — and asserts the drain has not returned. Only
+    /// releasing `beta` lets the drain report the collected failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn one_failed_mcp_close_never_abandons_a_sibling_runtime() {
+        use crate::tools::mcp::test_sync::CloseProbe;
+
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, lifecycle, ids) = claimed_coordinator_with_fixtures(
+            &dir,
+            &["alpha", "beta"],
+            "capabilities::coordinator::mcp_race_tests::one_failed_mcp_close_never_abandons_a_sibling_runtime",
+        );
+        // Both fixture servers publish an identical catalog, so the candidate
+        // itself is rejected at registry composition. That is irrelevant here
+        // and deliberately not asserted on: MCP *ownership* is established
+        // when each connection owner retains its runtime, strictly before
+        // composition, and the retained set is exactly what drain owns.
+        let _ = coordinator.prepare_candidate().await;
+        assert_eq!(
+            coordinator.inner.mcp_runtimes.lock().await.len(),
+            2,
+            "both conversation-owned MCP runtimes are retained"
+        );
+
+        let alpha = Arc::new(CloseProbe::failing("injected unproven physical settlement"));
+        let beta = Arc::new(CloseProbe::parking());
+        {
+            let runtimes = coordinator.inner.mcp_runtimes.lock().await;
+            runtimes
+                .get(&ids[0])
+                .expect("alpha runtime")
+                .install_close_probe(alpha.clone());
+            runtimes
+                .get(&ids[1])
+                .expect("beta runtime")
+                .install_close_probe(beta.clone());
+        }
+
+        assert!(lifecycle.begin_drain());
+        let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+        let drain_coordinator = coordinator.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(drain_coordinator.drain_conversation_owned().await);
+        });
+
+        // `beta` can only be entered after `alpha` already returned its
+        // failure, because the drain closes retained runtimes in identity
+        // order.
+        tokio::time::timeout(std::time::Duration::from_secs(60), beta.wait_entered())
+            .await
+            .expect("the sibling runtime must still receive close after a failed sibling");
+        assert!(
+            alpha.was_entered(),
+            "the failing runtime was attempted first"
+        );
+        assert!(
+            matches!(
+                done_rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the drain must not report before the sibling has settled"
+        );
+
+        beta.release();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(60), done_rx)
+            .await
+            .expect("drain completes once every owned runtime settled")
+            .expect("drain result channel");
+        let failures = result.expect_err("the failing close is reported");
+        assert_eq!(failures.len(), 1, "exactly the failing runtime is reported");
+        assert!(
+            failures[0].contains("alpha") && failures[0].contains("injected"),
+            "the collected diagnostic names the failing runtime: {failures:?}"
+        );
+    }
+
+    /// Issue #12 (M9c, Blocker B): waiter lifetime is not ownership lifetime.
+    /// Aborting the `prepare_candidate` future after an MCP stdio process has
+    /// been spawned must not remove that physical owner from the
+    /// conversation's quiescence accounting.
+    ///
+    /// Happens-before: the connect owner parks exactly once physical process
+    /// ownership exists and before the handshake. The caller future is then
+    /// aborted and *joined*, so it is provably gone. Drain linearizes and
+    /// cancels preparation, yet the counted admission is still held and
+    /// `mark_quiescent` refuses. Only releasing the parked owner — which then
+    /// drives its process to physical settlement — completes the proof.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn dropped_mcp_preparation_still_owes_physical_settlement() {
+        use crate::tools::mcp::test_sync::ConnectOwnershipPause;
+
+        if serve_if_fixture_mode(FixtureServer::with_list_changed()).await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let (coordinator, lifecycle, _ids) = claimed_coordinator_with_fixtures(
+            &dir,
+            &["alpha"],
+            "capabilities::coordinator::mcp_race_tests::dropped_mcp_preparation_still_owes_physical_settlement",
+        );
+        let pause = Arc::new(ConnectOwnershipPause::default());
+        coordinator.install_connect_ownership_pause(pause.clone());
+
+        let preparing = coordinator.clone();
+        let caller = tokio::spawn(async move { preparing.prepare_candidate().await });
+        tokio::time::timeout(std::time::Duration::from_secs(60), pause.wait_entered())
+            .await
+            .expect("physical MCP process ownership is established");
+
+        // The waiter is destroyed. Under the reviewed implementation this
+        // released the whole preparation admission and left a detached
+        // physical owner outside the quiescence proof.
+        caller.abort();
+        assert!(
+            caller
+                .await
+                .expect_err("the caller future was aborted")
+                .is_cancelled(),
+            "the caller future is provably gone"
+        );
+
+        assert!(lifecycle.begin_drain());
+        coordinator.cancel_conversation_preparation();
+        assert!(
+            !lifecycle.mark_quiescent(),
+            "the physical MCP owner is still counted after the waiter was dropped"
+        );
+        // Release the owner: it observes its ownership cancellation and
+        // drives the spawned process to its physical settlement proof.
+        pause.release();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            lifecycle.wait_for_no_admissions(),
+        )
+        .await
+        .expect("the physical owner settles and releases its counted admission");
+        coordinator
+            .drain_conversation_owned()
+            .await
+            .expect("a cancelled preparation retains no runtime to close");
+        assert!(
+            lifecycle.mark_quiescent(),
+            "quiescence is reachable only once the physical owner settled"
+        );
+    }
+
     /// The invalidation "notification" hook: the exact mutation the
     /// `tools/list_changed` notification performs, under the shared guard.
     fn advance_notification(coordinator: &CapabilityCoordinator, server_id: &McpServerId) {
@@ -1481,8 +1839,10 @@ mod mcp_race_tests {
             crate::tools::executor::ToolExecutionContext {
                 conversation_id: runtime_bundle.conversation_id(),
                 execution_id: None,
-                cancellation: crate::runtime::CancellationSignal::new(),
-                cancellation_reason: crate::runtime::types::CancellationReason::UserRequested,
+                cancellation: crate::runtime::ExecutionCancellation::detached(
+                    crate::runtime::CancellationSignal::new(),
+                    crate::runtime::types::CancellationReason::UserRequested,
+                ),
                 workspace: runtime_bundle.workspace(),
                 progress: &progress,
                 artifacts: runtime_bundle.artifacts(),

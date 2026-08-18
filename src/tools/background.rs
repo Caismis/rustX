@@ -147,7 +147,7 @@ use crate::events::{
 use crate::message::content::TextBlock;
 use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
 use crate::runtime::RuntimeClock;
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::{CancellationSignal, ExecutionCancellation};
 use crate::runtime::identity::{
     ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
@@ -472,6 +472,14 @@ struct BackgroundRecord {
     /// executor returns, the registry retains the candidate until publication
     /// reaches a terminal outcome.
     pending_terminal: Option<TerminalCandidate>,
+    /// Set when the runner spent its whole bounded terminal-publication
+    /// budget without obtaining durable ownership (Issue #63). The runner
+    /// has returned, so this record can no longer produce any external
+    /// effect: it has reached its strongest available settlement while
+    /// staying explicitly non-terminal, with the candidate retained. Runtime
+    /// drain treats it as settled-with-failure evidence instead of waiting
+    /// for a terminal state that can never arrive.
+    publication_abandoned: bool,
     notification: NotificationState,
 }
 
@@ -784,6 +792,7 @@ impl ConversationBackgroundRegistry {
                 lifecycle: BackgroundLifecycle::Starting,
                 cancellation,
                 cancel_reason: None,
+                publication_abandoned: false,
                 progress: None,
                 result: None,
                 pending_terminal: None,
@@ -1246,11 +1255,16 @@ impl ConversationBackgroundRegistry {
         if snapshot.state != BackgroundLifecycle::PublishingTerminal {
             return;
         }
-        // The bounded publication budget is exhausted. The sink acquires
-        // the coordinator lock and the lock graph already has a
-        // coordinator -> registry edge (the bootstrap handshake), so the
-        // sink is invoked only after every registry lock acquisition above
-        // has been released — never while the registry lock is held.
+        // The bounded publication budget is exhausted. The runner is about
+        // to return, so this record has reached its strongest available
+        // settlement: it can no longer act, but it is explicitly not
+        // terminal. Publishing that fact is what lets runtime drain stop
+        // waiting on *this* record without abandoning any other owner.
+        self.mark_publication_abandoned(execution_id);
+        // The sink acquires the coordinator lock and the lock graph already
+        // has a coordinator -> registry edge (the bootstrap handshake), so
+        // the sink is invoked only after every registry lock acquisition
+        // above has been released — never while the registry lock is held.
         let sink = self.state().failure_sink.clone();
         if let Some(sink) = sink {
             sink.terminal_publication_failed(
@@ -1327,6 +1341,81 @@ impl ConversationBackgroundRegistry {
         drop(state);
         self.notify_state_change();
         Some(snapshot)
+    }
+
+    /// Records that one execution spent its whole bounded terminal-publication
+    /// budget. The runner has returned; only the durable terminal fact is
+    /// missing.
+    fn mark_publication_abandoned(&self, execution_id: &ToolExecutionId) {
+        {
+            let mut state = self.state();
+            let Some(index) = state.index.get(execution_id).copied() else {
+                return;
+            };
+            if state.records[index].lifecycle != BackgroundLifecycle::PublishingTerminal {
+                return;
+            }
+            state.records[index].publication_abandoned = true;
+        }
+        self.notify_state_change();
+    }
+
+    /// The active executions that runtime drain must still supervise.
+    ///
+    /// A record whose durable terminal publication was abandoned is excluded:
+    /// its runner has returned and it can produce no further external effect,
+    /// so re-cancelling and re-awaiting it would spin forever. It remains
+    /// explicit non-terminal evidence through
+    /// [`ConversationBackgroundRegistry::abandoned_publications`].
+    #[must_use]
+    pub(crate) fn unsettled_snapshot(&self) -> Vec<BackgroundExecutionSnapshot> {
+        let state = self.state();
+        state
+            .records
+            .iter()
+            .filter(|record| record.lifecycle.is_active() && !record.publication_abandoned)
+            .map(snapshot_of)
+            .collect()
+    }
+
+    /// The executions whose durable terminal publication was abandoned, in
+    /// allocation order. Each one is settlement evidence that prevents the
+    /// owning runtime from claiming successful quiescence.
+    #[must_use]
+    pub(crate) fn abandoned_publications(&self) -> Vec<ToolExecutionId> {
+        let state = self.state();
+        state
+            .records
+            .iter()
+            .filter(|record| record.publication_abandoned)
+            .map(|record| record.execution_id.clone())
+            .collect()
+    }
+
+    /// Waits until one execution reaches its strongest available settlement:
+    /// a terminal lifecycle, or an explicitly abandoned durable terminal
+    /// publication whose runner has already returned.
+    ///
+    /// Unlike a terminal-only wait this can never strand runtime drain, and
+    /// unlike a global durability-health check it never reports one record's
+    /// failure as another record's settlement.
+    pub(crate) async fn wait_until_settled(&self, execution_id: &ToolExecutionId) {
+        let mut version = self.state_version.subscribe();
+        loop {
+            {
+                let state = self.state();
+                let Some(index) = state.index.get(execution_id).copied() else {
+                    return;
+                };
+                let record = &state.records[index];
+                if record.lifecycle.is_terminal() || record.publication_abandoned {
+                    return;
+                }
+            }
+            if version.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     /// Updates the latest bounded progress snapshot of one execution and
@@ -1467,19 +1556,18 @@ impl ConversationBackgroundRegistry {
                 execution_id: execution_id.clone(),
             };
             let resources = &registry.resources;
-            let cancellation_reason = {
-                let state = registry.state();
-                state
-                    .index
-                    .get(&execution_id)
-                    .and_then(|index| state.records[*index].cancel_reason)
-                    .unwrap_or(CancellationReason::UserRequested)
-            };
+            // The record — not a start-time copy — is the absorbing cause
+            // authority of this execution. The runner starts before any
+            // cancellation exists, so the executor must read the winner
+            // when it observes cancellation.
+            let cause = Arc::new(BackgroundCancellationCause {
+                registry: registry.clone(),
+                execution_id: execution_id.clone(),
+            });
             let context = ToolExecutionContext {
                 conversation_id: &registry.conversation_id,
                 execution_id: Some(&execution_id),
-                cancellation: cancellation.clone(),
-                cancellation_reason,
+                cancellation: ExecutionCancellation::new(cancellation.clone(), cause),
                 workspace: &resources.workspace,
                 progress: &reporter,
                 artifacts: &resources.artifacts,
@@ -1488,6 +1576,29 @@ impl ConversationBackgroundRegistry {
             let result = executor.execute(invocation, context).await;
             registry.settle_terminal(&execution_id, &result);
         })
+    }
+}
+
+/// The conversation background registry record is the absorbing
+/// cancellation-cause authority of one detached execution.
+///
+/// The registry commits the cause at the one `Starting|Running -> Cancelling`
+/// transition and never rewrites it, so this view is a live read of that one
+/// store. It is deliberately not a second cause store: an execution that has
+/// not been cancelled reports the conversation-owned default.
+struct BackgroundCancellationCause {
+    registry: ConversationBackgroundRegistry,
+    execution_id: ToolExecutionId,
+}
+
+impl crate::runtime::cancellation::CancellationCause for BackgroundCancellationCause {
+    fn cause(&self) -> CancellationReason {
+        let state = self.registry.state();
+        state
+            .index
+            .get(&self.execution_id)
+            .and_then(|index| state.records[*index].cancel_reason)
+            .unwrap_or(BACKGROUND_CANCEL_REASON)
     }
 }
 

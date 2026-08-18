@@ -87,8 +87,10 @@ async fn run_with_control(
     let context = ToolExecutionContext {
         conversation_id: &ConversationId::new("conv-1"),
         execution_id: None,
-        cancellation,
-        cancellation_reason: CancellationReason::UserRequested,
+        cancellation: crate::runtime::cancellation::ExecutionCancellation::detached(
+            cancellation,
+            CancellationReason::UserRequested,
+        ),
         workspace: &workspace,
         progress: &reporter,
         artifacts: &artifacts,

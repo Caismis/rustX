@@ -100,7 +100,7 @@ pub mod request_history;
 pub(crate) mod supervised_unit;
 pub mod types;
 
-pub use cancellation::CancellationSignal;
+pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
 pub use continuation::{
     AnthropicContinuation, OpenAiResponsesContinuation, ProviderContinuationState,
 };

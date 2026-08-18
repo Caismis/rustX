@@ -628,8 +628,10 @@ async fn execute_directly(
     let context = ToolExecutionContext {
         conversation_id: fixture.runtime.conversation_id(),
         execution_id: None,
-        cancellation: rustx::runtime::CancellationSignal::new(),
-        cancellation_reason: rustx::runtime::types::CancellationReason::UserRequested,
+        cancellation: rustx::runtime::ExecutionCancellation::detached(
+            rustx::runtime::CancellationSignal::new(),
+            rustx::runtime::types::CancellationReason::UserRequested,
+        ),
         workspace: fixture.runtime.workspace(),
         progress: &reporter,
         artifacts: fixture.runtime.artifacts(),

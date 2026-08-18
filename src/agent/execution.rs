@@ -2892,8 +2892,7 @@ impl<'a> AgentExecution<'a> {
         let context = ToolExecutionContext {
             conversation_id: &self.request.conversation_id,
             execution_id: None,
-            cancellation: self.cancellation.signal(),
-            cancellation_reason: self.cancellation.reason(),
+            cancellation: self.cancellation.execution_cancellation(),
             workspace: self.tool_runtime.workspace(),
             progress: &buffer,
             artifacts: self.tool_runtime.artifacts(),

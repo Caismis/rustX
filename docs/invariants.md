@@ -1632,6 +1632,61 @@ The frozen invariants:
   new shutdown-time attempt. Client detach and transport loss are projection
   lifetime changes, never this semantic drain. Cancellation requested,
   operation settled, and quiescent are never interchangeable.
+- **A settlement failure is evidence, never permission to stop
+  supervising.** A failure in one runtime-owned participant — an exhausted
+  background terminal-publication budget, an MCP runtime whose close cannot
+  prove physical settlement, a degraded durable authority — never releases
+  the supervisor from another participant that can still produce an external
+  effect or call back into the conversation. Drain closes admission, requests
+  cancellation/closure of every concrete owner, and then supervises **each**
+  owner to its own native terminal boundary before it decides anything.
+  Failures are collected in deterministic identity order and reported
+  together as one bounded diagnostic. Every wait has a native boundary that
+  cannot be starved: a background record either settles terminally or
+  explicitly abandons its bounded durable publication (its runner has
+  returned either way), an MCP runtime's close proves or disproves physical
+  settlement, and a counted admission is released only by its owner. No drain
+  wait is conditioned on a global health flag, so one owner's failure can
+  never be mistaken for another owner's settlement. Consequently
+  `shutdown().await == Ok(())` means exactly "the lifecycle reached
+  `Quiescent`", and `Err(RuntimeOwnedSettlement)` means "admission is closed
+  and every settleable owner was supervised to its strongest available
+  boundary, but rustX cannot truthfully prove all required
+  ownership/physical/durable terminal conditions". An unresolved
+  `PublishingTerminal` record stays explicitly non-terminal; it is never
+  reinterpreted as success.
+- **Waiter lifetime is not ownership lifetime.** The future that awaits an
+  operation is never treated as that operation's owner. Once a
+  conversation-owned preparation has created a real physical owner — an MCP
+  stdio process spawned before its handshake completes — cancelling or
+  dropping the caller must not remove that owner from the quiescence proof.
+  The MCP connection owner is therefore a task of its own that holds the
+  counted lifecycle admission and an ownership cancellation signal, and it
+  releases the admission only after it has either **transferred** the
+  connection into the coordinator's retained `mcp_runtimes` or **driven** its
+  spawned process to the same physical settlement proof normal drain uses.
+  Runtime drain cancels those owners; it never drops their futures. `Drop`
+  requesting a shutdown is a cancellation signal, never proof of settlement.
+- **The current-attempt slot and the attempt task are distinct ownership
+  facts.** Clearing the current-attempt slot hands the conversation state
+  back to the coordinator; it does not end the attempt task, which still owes
+  the coordinator its final admission callback. The attempt task therefore
+  holds its own counted lifecycle admission from the publication that fills
+  the slot until the task body has fully returned, so quiescence covers the
+  task's callback authority and not merely the slot. A late callback from a
+  settled attempt is refused by the lifecycle gate *and* is inside the
+  quiescence proof.
+- **A cancellation cause is read from an authority, never copied at start
+  time.** A tool execution context carries a cancellation *view*: the runtime
+  cancellation signal plus a live read of the owner's absorbing first-winner
+  cause. Foreground executions view their attempt's `AgentCancellation`;
+  background executions view their conversation background registry record.
+  Both stores are absorbing — the first cancellation request that wins owns
+  the cause and no later request can relabel it — and there is exactly one
+  store per owned execution. An executor that started before the
+  cancellation race therefore reports the cause that actually won it (for
+  example `RuntimeShutdown` when runtime drain won), not the owner's
+  pre-cancellation default.
 - **Binding a Runtime Client host is a pre-activation composition
   decision.** A `RuntimeClientHost` binds while its runtime is inactive;
   a bind after activation is refused with the typed

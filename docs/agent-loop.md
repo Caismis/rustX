@@ -61,10 +61,20 @@ canonical boundary in `src/tools/executor.rs`:
 - A `ToolExecutor` executes an already-resolved, already-validated
   `ToolInvocation` (call id, tool id, model-facing name, resolved
   foreground/background mode, and the stripped business arguments) inside a
-  `ToolExecutionContext` that carries conversation identity, the runtime
-  `CancellationSignal`, its first-winner semantic cancellation cause, the
-  workspace boundary, the progress reporter, the artifact store, and the
-  explicit authorized environment.
+  `ToolExecutionContext` that carries conversation identity, an
+  `ExecutionCancellation` view, the workspace boundary, the progress
+  reporter, the artifact store, and the explicit authorized environment.
+- `ExecutionCancellation` is the runtime `CancellationSignal` **plus a live
+  read of the owning authority's absorbing first-winner cause** — not a
+  start-time copy of it. A foreground execution views its attempt's
+  `AgentCancellation`; a background execution views its conversation
+  background registry record. Each owned execution has exactly one cause
+  store, and the first cancellation request that wins owns it: a later
+  request delivers the signal but can never relabel the winner. An executor
+  that started before any cancellation existed therefore reports the cause
+  that actually won the race — `RuntimeShutdown` when runtime drain won,
+  `UserRequested` when the user won first — when it normalizes its own
+  cancelled result.
 - The loop preflights every model-issued call **before** the Assistant
   tool-call message is committed: registry identity resolution,
   execution-policy resolution, reserved-metadata extraction, and business

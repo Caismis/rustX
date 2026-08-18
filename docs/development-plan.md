@@ -933,12 +933,44 @@ settled. `Draining` retains narrow durable settlement paths; `Quiescent`
 rejects stale callbacks. An unproven owned process settlement returns a
 runtime failure and does not claim `Quiescent`.
 
+Drain is a supervisor, not a short-circuiting pipeline. It closes admission,
+requests cancellation/closure of every concrete owner, supervises **each**
+owner to its own native terminal boundary, and only then decides. A failure
+in one participant — an exhausted background terminal-publication budget, an
+MCP close that cannot prove physical settlement, a degraded durable authority
+— is an error fact, never permission to abandon a sibling that can still act.
+Failures are collected in deterministic identity order and reported as one
+bounded diagnostic. `Ok(())` still means exactly `Quiescent`;
+`Err(RuntimeOwnedSettlement)` means every settleable owner was supervised to
+its strongest available boundary while some ownership/physical/durable
+terminal condition stayed unproven. An unresolved `PublishingTerminal` record
+stays explicitly non-terminal and is never reinterpreted as success.
+
+Waiter lifetime is not ownership lifetime. A conversation-owned MCP
+connection runs in its own owner task holding the counted lifecycle admission
+and an ownership cancellation signal; it releases that admission only after
+transferring the connection into the coordinator's retained runtimes or
+driving its already-spawned stdio process to the same physical settlement
+proof normal drain uses. Aborting or dropping `prepare_candidate` therefore
+cannot leave a detached physical owner outside the quiescence proof, and
+drain cancels those owners rather than dropping their futures.
+
+The current-attempt slot and the attempt task are distinct ownership facts.
+The slot hands conversation state back to the coordinator; the task still
+owes its final admission callback, so it holds its own counted admission
+until its body has fully returned. `AgentExecution` remains the execution and
+terminal semantic authority; `ConversationRuntime` remains the task/runtime
+lifetime composition authority.
+
 The M9b `arbitrate_model_turn_start` gate remains the model-start
 linearization primitive. A cancellation before that gate commits no provider
 request, Request Snapshot, or `ModelRequestStarted`; a started request is
 awaited to native settlement. Cancellation causes are first-winner absorbing,
 so runtime drain reports `RuntimeShutdown` rather than a fixed
-`UserRequested` construction default.
+`UserRequested` construction default. Executors observe that cause through an
+`ExecutionCancellation` view — the signal plus a live read of the owning
+authority — instead of a start-time copy, so an execution that began before
+the cancellation race still reports the winner.
 
 The Agent Loop still owns foreground structural result settlement. Started
 foreground siblings receive cancellation and settle physically/logically;
@@ -967,11 +999,20 @@ async client shutdown request awaits `ConversationRuntime::shutdown`; its
 `RuntimeShutdown` event only reports that new admission has closed.
 
 Deterministic coverage includes admission-vs-drain and Pending Inbound
-ordering, pre-start and post-start model settlement, parallel foreground
-start-frontier closure, active background drain and terminal publication,
-both background ownership-vs-drain outcomes, capability commit-vs-drain,
-physical process terminality, repeated shutdown, client detach, and the
-late-callback terminal ownership boundary. No SQLite schema change was
+ordering (proved at the exact `Running -> Draining` linearization, not at a
+shutdown-arrival hint), pre-start and post-start model settlement, parallel
+foreground start-frontier closure, active background drain and terminal
+publication, both background ownership-vs-drain outcomes, capability
+commit-vs-drain, physical process terminality, repeated shutdown, client
+detach, and the late-callback terminal ownership boundary (proved after every
+model stream owner has exited, not by poking a channel and looking
+immediately). The corrective pass adds: a durability failure that must not
+abandon a live provider turn or a sibling background execution; two owned MCP
+runtimes where the first close fails and the second must still be closed and
+settled; an aborted MCP preparation whose spawned process still owes physical
+settlement; dynamic foreground cancellation-cause observation and its
+first-winner absorption; and the attempt task's exit as part of the
+quiescence proof. No SQLite schema change was
 required, and M9c does not implement interaction (#64), subagents (#60), or
 the DSH sidecar (#57).
 

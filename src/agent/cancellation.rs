@@ -26,7 +26,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
 use crate::runtime::types::CancellationReason;
 
 /// The adjudication of one model-turn start arbitration.
@@ -232,6 +232,25 @@ impl AgentCancellation {
     pub fn model_cancellation(&self) -> CancellationSignal {
         self.signal.child()
     }
+
+    /// The foreground execution cancellation view of this attempt.
+    ///
+    /// The view carries the attempt signal **and this handle as the cause
+    /// authority**, so an executor that started before cancellation happened
+    /// still observes the absorbing first-winner cause (for example
+    /// `RuntimeShutdown` when runtime drain won the race). No cause is copied
+    /// into the execution context.
+    #[must_use]
+    pub fn execution_cancellation(&self) -> ExecutionCancellation {
+        ExecutionCancellation::new(self.signal.clone(), Arc::new(self.clone()))
+    }
+}
+
+/// The attempt is the cancellation-cause authority of its foreground work.
+impl CancellationCause for AgentCancellation {
+    fn cause(&self) -> CancellationReason {
+        self.reason()
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +290,34 @@ mod tests {
         assert!(!tool_signal.is_cancelled());
         signal.cancel();
         assert!(tool_signal.is_cancelled());
+    }
+
+    /// Issue #12 (M9c): a foreground execution context taken **before** the
+    /// cancellation race reads the winning cause from the attempt authority,
+    /// not from a start-time snapshot of the attempt's default cause.
+    #[tokio::test]
+    async fn execution_view_reports_the_winning_cause_not_the_start_snapshot() {
+        let attempt = AgentCancellation::new(CancellationReason::UserRequested);
+        // The executor's context is built at tool start, long before any
+        // cancellation exists.
+        let view = attempt.execution_cancellation();
+        assert!(!view.is_cancelled());
+        // Runtime drain wins the first cancellation.
+        assert!(attempt.request_cancel(CancellationReason::RuntimeShutdown));
+        view.cancelled().await;
+        assert_eq!(view.reason(), CancellationReason::RuntimeShutdown);
+        assert_eq!(attempt.reason(), CancellationReason::RuntimeShutdown);
+    }
+
+    /// The first winner is absorbing through the execution view as well: a
+    /// later runtime drain cannot relabel a user cancellation.
+    #[tokio::test]
+    async fn execution_view_keeps_the_first_winning_cause() {
+        let attempt = AgentCancellation::new(CancellationReason::UserRequested);
+        let view = attempt.execution_cancellation();
+        assert!(attempt.request_cancel(CancellationReason::UserRequested));
+        assert!(!attempt.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(view.reason(), CancellationReason::UserRequested);
     }
 
     /// The first cancellation authority owns the absorbing semantic cause;
