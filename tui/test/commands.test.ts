@@ -72,6 +72,7 @@ describe("command registry", () => {
         "/status",
         "/debug",
         "/cancel",
+        "/approve",
         "/quit",
       ],
     );
@@ -423,6 +424,42 @@ describe("CommandDispatcher", () => {
     if (outcome.kind === "message") {
       assert.match(outcome.text, /acceptance/);
       assert.match(outcome.text, /runtime owns the terminal settlement/);
+    }
+  });
+
+  it("sends /approve through Runtime Client without local outcome state", async () => {
+    const { peer, dispatcher } = await harness();
+    const responding = dispatcher.submit(
+      "/approve attempt-1-interaction-1 deny human said no",
+    );
+    await peer.awaitRequests(3);
+
+    const request = peer.requests[2];
+    assert.equal(request?.method, "interaction_respond");
+    assert.deepEqual(
+      request?.method === "interaction_respond"
+        ? {
+            interaction_id: request.interaction_id,
+            response: request.response,
+          }
+        : null,
+      {
+        interaction_id: "attempt-1-interaction-1",
+        response: {
+          type: "approval",
+          decision: { type: "deny", reason: "human said no" },
+        },
+      },
+    );
+
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: "attempt-1-interaction-1",
+    });
+    const outcome = await responding;
+    assert.equal(outcome.kind, "message");
+    if (outcome.kind === "message") {
+      assert.match(outcome.text, /response accepted/);
     }
   });
 

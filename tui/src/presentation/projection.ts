@@ -28,6 +28,7 @@
 
 import type {
   AttemptModelView,
+  InteractionRequest,
   RuntimeClientCursor,
   RuntimeClientProtocolEvent,
   RuntimeClientSnapshot,
@@ -51,6 +52,7 @@ export function emptyPresentationState(
     cursor: 0,
     transcript: [],
     inbound: { pending: [], last_drain: undefined },
+    pendingInteractions: [],
     background: [],
     context: { compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
@@ -136,6 +138,7 @@ export function replaceFromSnapshot(
       pending: [...(snapshot.inbound.pending ?? [])],
       last_drain: snapshot.inbound.last_drain,
     },
+    pendingInteractions: [...snapshot.pending_interactions],
     background: [...(snapshot.background ?? [])],
     status: snapshot.status,
     context: snapshot.context,
@@ -193,6 +196,19 @@ export function reduce(
       if (state.attempt?.attemptId === event.attempt_id) {
         next.attempt = { ...state.attempt, lastUsage: event.usage };
       }
+      return next;
+
+    case "interaction_pending":
+      next.pendingInteractions = upsertInteraction(
+        state.pendingInteractions,
+        event.interaction,
+      );
+      return next;
+
+    case "interaction_settled":
+      next.pendingInteractions = state.pendingInteractions.filter(
+        (interaction) => interaction.id !== event.interaction_id,
+      );
       return next;
 
     case "context_compacted":
@@ -563,6 +579,21 @@ function upsertBackground(
   }
   const updated = [...background];
   updated[index] = execution;
+  return updated;
+}
+
+function upsertInteraction(
+  interactions: InteractionRequest[],
+  interaction: InteractionRequest,
+): InteractionRequest[] {
+  const index = interactions.findIndex((entry) => entry.id === interaction.id);
+  if (index === -1) {
+    return [...interactions, interaction].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    );
+  }
+  const updated = [...interactions];
+  updated[index] = interaction;
   return updated;
 }
 

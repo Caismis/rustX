@@ -17,6 +17,11 @@
 //! + RequestSnapshot + ModelRequestStarted, one transaction) → provider request
 //!
 //! Assistant(ToolCall A, ToolCall B) committed
+//!     ↓ ToolRegistry preflight is already complete
+//! PreToolPolicy → Allow | Deny(reason) | Ask(reason)
+//!     ↓ on Ask: InteractionCoordinator rendezvous
+//!     ↓ cancellation/start frontier
+//! exact original PreparedInvocation → executor (or denied result slot)
 //!     ↓ execute, settle every CallSlot, commit ToolResult A then ToolResult B
 //! tool batch is structurally settled
 //!     ↓
@@ -113,19 +118,24 @@
 //! observer starts, and neither an observer's success nor its failure can
 //! decide the terminal outcome.
 //!
+//! # Pre-tool ownership
+//!
+//! `PreToolPolicy` is the one typed pre-tool owner. It runs after
+//! `ToolRegistry::preflight` and after the Assistant `ToolCall` is canonical,
+//! but before the corresponding executor starts. Its view is immutable and
+//! contains only the facts the registry already resolved. An `Ask` decision
+//! is handed to the attempt's required interaction rendezvous; it never
+//! grants a tool-start capability and it never carries replacement arguments.
+//!
 //! # Seams that are intentionally absent
 //!
-//! - **`PreToolPolicy` / pre-dispatch `Allow`/`Deny`**: no concrete native
-//!   consumer exists. `ToolRegistry::preflight` already owns canonical
-//!   identity resolution, reserved-metadata stripping, and business argument
-//!   validation, and nothing in the native tool plane needs a second gate.
 //! - **`ToolExecutionWrapper` / around-dispatch middleware**: no concrete
 //!   native requirement exists that the two seams above cannot express.
 //! - **Post-tool result replacement/blocking**: `ToolResultObservation` is
 //!   immutable by construction. A finalized result is a canonical fact by the
 //!   time an observer sees it.
-//! - **`Ask`/human approval** (Issue #64), **subagent lifecycle** (Issue
-//!   #60), and **turn-stopping/forced continuation**: each needs a real
+//! - **Question/forms** (Issue #64's non-goal), **subagent lifecycle** (Issue
+//!   #60), and **turn-stopping/forced continuation**: each needs a concrete
 //!   native owner first.
 //!
 //! [`AgentExecutionObserver`](super::AgentExecutionObserver) is a different
@@ -141,6 +151,7 @@ use crate::conversation::SurfaceRevision;
 use crate::runtime::identity::{
     AttemptId, CertifiedExtensionIdentity, ConversationId, ToolCallId, ToolId,
 };
+use crate::runtime::interaction::{ApprovalFacts, InteractionRendezvous, UnavailableInteraction};
 use crate::tools::types::{ToolExecutionResult, ToolInvocationMode, ToolOrigin};
 
 /// The bounded failure of one lifecycle extension invocation.
@@ -261,6 +272,99 @@ impl PreStepPolicy for AlwaysEnter {
         _batch: &'a PreStepBatch<'a>,
     ) -> BoxFuture<'a, Result<PreStepDecision, LifecycleError>> {
         Box::pin(async { Ok(PreStepDecision::Enter) })
+    }
+}
+
+/// The immutable facts presented to the one pre-tool policy owner.
+///
+/// The view is borrowed from the original `ToolCall` and the exact
+/// `PreparedInvocation` produced by `ToolRegistry::preflight`. It carries no
+/// mutable Agent Loop state, canonical mutation handle, cancellation handle,
+/// executor, or replacement-invocation channel.
+#[derive(Debug)]
+pub struct PreToolView<'a> {
+    /// The owning conversation.
+    pub conversation_id: &'a ConversationId,
+    /// The current attempt.
+    pub attempt_id: &'a AttemptId,
+    /// The primary model turn that issued the call.
+    pub turn: u32,
+    /// The canonical model-issued call identity.
+    pub call_id: &'a ToolCallId,
+    /// The registry-resolved tool identity.
+    pub tool_id: &'a ToolId,
+    /// The registry-resolved model-facing name.
+    pub tool_name: &'a str,
+    /// The registry-resolved typed origin.
+    pub origin: &'a ToolOrigin,
+    /// The registry-resolved execution mode.
+    pub mode: ToolInvocationMode,
+    /// The schema-validated business arguments.
+    pub arguments: &'a serde_json::Value,
+}
+
+impl PreToolView<'_> {
+    /// Copies the immutable view into the coordinator's owned approval facts.
+    ///
+    /// The copy is made by the semantic owner, not by client input. The
+    /// response path has no corresponding arguments field.
+    #[must_use]
+    pub fn approval_facts(&self, reason: impl Into<String>) -> ApprovalFacts {
+        ApprovalFacts {
+            conversation_id: self.conversation_id.clone(),
+            attempt_id: self.attempt_id.clone(),
+            turn: self.turn,
+            call_id: self.call_id.clone(),
+            tool_id: self.tool_id.clone(),
+            tool_name: self.tool_name.to_owned(),
+            origin: self.origin.clone(),
+            mode: self.mode,
+            arguments: self.arguments.clone(),
+            reason: reason.into(),
+        }
+    }
+}
+
+/// The finite decision of the one pre-tool policy owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreToolDecision {
+    /// Continue to the existing cancellation/tool-start frontier.
+    Allow,
+    /// Do not invoke the executor; settle one typed denied result slot.
+    Deny {
+        /// The bounded policy reason.
+        reason: String,
+    },
+    /// Ask the conversation-owned interaction rendezvous. The request facts
+    /// are constructed from the immutable view after this decision; policy
+    /// code cannot replace tool identity or arguments.
+    Ask {
+        /// The bounded explanation shown to the client.
+        reason: String,
+    },
+}
+
+/// The required typed pre-tool policy seam of one attempt.
+pub trait PreToolPolicy: Send + Sync {
+    /// Evaluates one already-preflighted invocation.
+    fn evaluate<'a>(
+        &'a self,
+        view: &'a PreToolView<'a>,
+    ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>>;
+}
+
+/// The identity pre-tool policy. It preserves the default runtime behavior:
+/// no native product rule exists yet, so every already-preflighted call is
+/// eligible for the existing tool-start frontier.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AlwaysAllow;
+
+impl PreToolPolicy for AlwaysAllow {
+    fn evaluate<'a>(
+        &'a self,
+        _view: &'a PreToolView<'a>,
+    ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
+        Box::pin(async { Ok(PreToolDecision::Allow) })
     }
 }
 
@@ -468,6 +572,8 @@ impl RegisteredToolResultObserver {
 #[derive(Clone)]
 pub struct AttemptLifecycle {
     pre_step: Arc<dyn PreStepPolicy>,
+    pre_tool: Arc<dyn PreToolPolicy>,
+    interaction: Arc<dyn InteractionRendezvous>,
     tool_results: Vec<RegisteredToolResultObserver>,
 }
 
@@ -498,6 +604,8 @@ impl AttemptLifecycle {
     pub fn inert() -> Self {
         Self {
             pre_step: Arc::new(AlwaysEnter),
+            pre_tool: Arc::new(AlwaysAllow),
+            interaction: Arc::new(UnavailableInteraction),
             tool_results: Vec::new(),
         }
     }
@@ -506,6 +614,25 @@ impl AttemptLifecycle {
     #[must_use]
     pub fn with_pre_step_policy(mut self, policy: Arc<dyn PreStepPolicy>) -> Self {
         self.pre_step = policy;
+        self
+    }
+
+    /// Replaces the attempt's single pre-tool policy owner.
+    #[must_use]
+    pub fn with_pre_tool_policy(mut self, policy: Arc<dyn PreToolPolicy>) -> Self {
+        self.pre_tool = policy;
+        self
+    }
+
+    /// Binds the conversation-owned interaction rendezvous used by an
+    /// `Ask` decision. The rendezvous owns pending state and terminal
+    /// response/cancellation coordination; it never executes the tool.
+    #[must_use]
+    pub fn with_interaction_rendezvous(
+        mut self,
+        rendezvous: Arc<dyn InteractionRendezvous>,
+    ) -> Self {
+        self.interaction = rendezvous;
         self
     }
 
@@ -593,6 +720,18 @@ impl AttemptLifecycle {
     #[must_use]
     pub fn pre_step_policy(&self) -> Arc<dyn PreStepPolicy> {
         Arc::clone(&self.pre_step)
+    }
+
+    /// The attempt's one pre-tool policy owner.
+    #[must_use]
+    pub fn pre_tool_policy(&self) -> Arc<dyn PreToolPolicy> {
+        Arc::clone(&self.pre_tool)
+    }
+
+    /// The attempt's required interaction rendezvous.
+    #[must_use]
+    pub fn interaction_rendezvous(&self) -> Arc<dyn InteractionRendezvous> {
+        Arc::clone(&self.interaction)
     }
 
     /// The attempt's bound deferred-context observers, in logical producer

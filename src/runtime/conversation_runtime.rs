@@ -291,6 +291,9 @@ use crate::runtime::inbound::{
     ConversationInboundMailbox, FreshInboundTurn, InboundBatch, InboundItem, InboundObserver,
     InboundSequence, InitialTurnTrigger, MailboxError,
 };
+use crate::runtime::interaction::{
+    InteractionCoordinator, InteractionObserver, InteractionOutcome, InteractionRequest,
+};
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{
@@ -949,6 +952,10 @@ pub(crate) struct RuntimeInner {
     /// `AgentExecution`. Request/event history is read through this handle.
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
+    /// The one conversation-owned native interaction rendezvous (Issue #64).
+    /// It owns pending identity/state and terminal response coordination, but
+    /// never owns Agent Loop execution or canonical history.
+    interaction: Arc<InteractionCoordinator>,
     /// The one authoritative lifecycle and drain authority of this
     /// conversation (Issue #61 / M9c): the single `Inactive -> Running`
     /// activation transition and the `Running -> Draining -> Quiescent`
@@ -1068,6 +1075,14 @@ impl RuntimeInner {
             .get_or_init(|| Arc::new(DrainCompletion::default()))
             .clone();
         if first {
+            // Interaction publication is admitted through the same lifecycle
+            // commit boundary as `Running -> Draining`, so this scan sees
+            // every interaction that won the admission race. The pending
+            // map may become empty before its waiter consumes the terminal
+            // payload; the retained lifecycle guard keeps quiescence behind
+            // that callback-authority settlement.
+            self.interaction
+                .cancel_pending(CancellationReason::RuntimeShutdown);
             // Cancellation intent is requested synchronously after the drain
             // transition wins, so a client-side background cancel cannot
             // create an unchecked post-drain ownership window. The registry
@@ -1448,6 +1463,12 @@ impl RuntimeInner {
         let shutting_down = false;
         let model = state.model.view();
         let observer: Arc<RuntimeObserver> = Arc::new(RuntimeObserver::new(self));
+        // Interaction pending state is an ephemeral runtime observation, but
+        // it still participates in the same bootstrap cut as every other
+        // live projection fact. Installing the observer here means all later
+        // pending/settled transitions enter the one observation queue.
+        let pending_interactions = self.interaction.pending_snapshot();
+        self.interaction.install_observer(observer.clone());
         // ---- T1: the mailbox (frozen: an inactive conversation refuses
         //          inbound) ----
         let inbound_pending = self
@@ -1478,6 +1499,7 @@ impl RuntimeInner {
             model,
             inbound_pending,
             background,
+            pending_interactions,
             capabilities,
         })
     }
@@ -1578,13 +1600,13 @@ impl RuntimeInner {
             cancellation,
             context_runtime,
             &self.tool_runtime,
-            // The identity lifecycle configuration: enter every step, defer
-            // no context. The runtime has no native pre-step policy or
-            // tool-result observer consumer, exactly as it has no certified
-            // context contributor yet (`ContextRuntime::for_attempt`). A
-            // configured owner arrives with the consumer that needs it, not
-            // as speculative plumbing.
-            crate::agent::AttemptLifecycle::inert(),
+            // The runtime's default pre-tool policy is the required
+            // `AlwaysAllow` identity: no native product rule exists yet.
+            // The concrete interaction coordinator is still wired as the
+            // attempt's rendezvous, so a future native policy can Ask without
+            // adding a competing callback or execution path.
+            crate::agent::AttemptLifecycle::inert()
+                .with_interaction_rendezvous(self.interaction.clone()),
         )
         // Neither rejection is reachable: `conversation_id` *is* the tool
         // runtime's own identity (the runtime has no independent
@@ -2281,6 +2303,10 @@ impl ConversationRuntime {
             crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
         );
         let next_attempt_seq = recovery.next_attempt_ordinal();
+        let interaction = Arc::new(InteractionCoordinator::new(
+            conversation_id.clone(),
+            lifecycle.clone(),
+        ));
         let inner = Arc::new(RuntimeInner {
             conversation_id,
             agent_id: config.agent_id,
@@ -2290,6 +2316,7 @@ impl ConversationRuntime {
             mailbox,
             store,
             capability: config.capability,
+            interaction,
             lifecycle,
             clock,
             recovery,
@@ -2412,6 +2439,16 @@ impl ConversationRuntime {
     #[must_use]
     pub fn capability(&self) -> &CapabilityCoordinator {
         &self.inner.capability
+    }
+
+    /// The one conversation-owned native interaction coordinator.
+    ///
+    /// Native policy consumers use this rendezvous for `Ask` decisions. It
+    /// owns pending identity, publication, response validation, and terminal
+    /// answer/cancellation coordination; it never starts or rewrites a tool.
+    #[must_use]
+    pub fn interaction(&self) -> &InteractionCoordinator {
+        &self.inner.interaction
     }
 
     /// The immutable result of this runtime's startup recovery (Issue #12,
@@ -3006,6 +3043,8 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub background: Vec<BackgroundExecutionSnapshot>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,
+    /// Live process-owned native interactions at the bootstrap cut.
+    pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
 }
 
 /// The accepted identity of one submitted inbound message.
@@ -3277,6 +3316,28 @@ impl CapabilityObserver for RuntimeObserver {
         self.push(ConversationObservation::Capability(Arc::new(
             snapshot.clone(),
         )));
+    }
+}
+
+// Interaction pending publication fires while the coordinator's pending-state
+// lock is held; terminal publication fires only after the waiter releases its
+// callback authority and while the coordinator's counted settlement guard is
+// held. Both callbacks are leaves: push only into the queue, never into the
+// Runtime Client projection lock or conversation coordinator lock.
+impl InteractionObserver for RuntimeObserver {
+    fn on_pending(&self, request: &InteractionRequest) {
+        self.push(ConversationObservation::InteractionPending(request.clone()));
+    }
+
+    fn on_settled(
+        &self,
+        interaction_id: &crate::runtime::identity::InteractionId,
+        outcome: &InteractionOutcome,
+    ) {
+        self.push(ConversationObservation::InteractionSettled {
+            interaction_id: interaction_id.clone(),
+            outcome: outcome.clone(),
+        });
     }
 }
 

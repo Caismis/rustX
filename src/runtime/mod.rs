@@ -30,6 +30,9 @@ pub mod continuation;
 pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
+/// The native provider-independent human interaction rendezvous and pending
+/// interaction projection facts (Issue #64).
+pub mod interaction;
 /// The rustX-side driver of one long-lived interactive process (MCP stdio
 /// servers), owning physical settlement of the interactive supervisor unit.
 pub(crate) mod interactive_process;
@@ -110,11 +113,16 @@ pub use conversation_runtime::{
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
-    McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest, RequestId, SkillId,
-    SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
+    InteractionId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
+    RequestId, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId, ToolVersionId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,
+};
+pub use interaction::{
+    ApprovalDecision, ApprovalFacts, InteractionCoordinator, InteractionError, InteractionKind,
+    InteractionObserver, InteractionOutcome, InteractionRendezvous, InteractionRequest,
+    InteractionResponse, InteractionTicket, UnavailableInteraction,
 };
 pub use recovery::{
     AttemptRecoveryClass, BackgroundEvidence, BackgroundRecoveryClass, KnownModelOutcome,

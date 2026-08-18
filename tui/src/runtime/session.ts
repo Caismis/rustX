@@ -50,6 +50,8 @@ import {
   type RuntimeClientProtocolEvent,
   type RuntimeClientSnapshot,
   type RuntimeClientOutcome,
+  type InteractionId,
+  type InteractionResponse,
   type SessionModelConfig,
   type SessionModelView,
   type ToolExecutionId,
@@ -154,6 +156,21 @@ export class RuntimeClientSession {
       throw new Error(`cancel_current_attempt returned ${result.type}`);
     }
     return result.attempt_id;
+  }
+
+  /** Answers one runtime-owned approval interaction. */
+  async respondInteraction(
+    interactionId: InteractionId,
+    response: InteractionResponse,
+  ): Promise<void> {
+    const result = await this.#connection.request({
+      method: "interaction_respond",
+      interaction_id: interactionId,
+      response,
+    });
+    if (result.type !== "interaction_response_accepted") {
+      throw new Error(`interaction_respond returned ${result.type}`);
+    }
   }
 
   /**

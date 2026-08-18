@@ -13,9 +13,10 @@
 //! - [`AgentCancellation`] is the attempt-level cancellation trigger; every
 //!   model invocation observes a child signal through the existing adapter
 //!   cancellation mechanism.
-//! - [`AttemptLifecycle`] carries the two typed phase-specific interception
-//!   seams of Issue #56 — [`PreStepPolicy`] and [`ToolResultObserver`] — as
-//!   one required immutable per-attempt configuration. The loop remains the
+//! - [`AttemptLifecycle`] carries the three typed phase-specific ownership
+//!   seams of Issues #56/#64 — [`PreStepPolicy`], [`PreToolPolicy`], and
+//!   [`ToolResultObserver`] — as one required immutable per-attempt
+//!   configuration. The loop remains the
 //!   lifecycle owner; neither seam receives canonical, tool-identity,
 //!   cancellation, or terminal authority, and neither decides the semantic
 //!   ownership of the context it proposes.
@@ -36,9 +37,10 @@ pub use execution::{
     AgentExecution, AgentExecutionRequest, AgentExecutionResult, DurableFailureKind,
 };
 pub use lifecycle::{
-    AlwaysEnter, AttemptLifecycle, LifecycleError, NoDeferredContext, ObservedToolInvocation,
-    PreStepBatch, PreStepDecision, PreStepPolicy, RegisteredToolResultObserver,
-    ToolResultObservation, ToolResultObserver,
+    AlwaysAllow, AlwaysEnter, AttemptLifecycle, LifecycleError, NoDeferredContext,
+    ObservedToolInvocation, PreStepBatch, PreStepDecision, PreStepPolicy, PreToolDecision,
+    PreToolPolicy, PreToolView, RegisteredToolResultObserver, ToolResultObservation,
+    ToolResultObserver,
 };
 pub use observer::{AgentExecutionObserver, AgentStatusObservation};
 pub use state::{ExecutionState, ExecutionStateMachine};

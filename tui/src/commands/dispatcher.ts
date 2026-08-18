@@ -35,7 +35,11 @@ import {
 } from "../presentation/selectors.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { COMMANDS, parseCommandLine } from "./registry.ts";
-import type { CatalogModelView } from "../protocol/types.ts";
+import type {
+  ApprovalDecision,
+  CatalogModelView,
+  InteractionResponse,
+} from "../protocol/types.ts";
 
 /** What the dispatcher wants the UI to do next. */
 export type CommandOutcome =
@@ -126,6 +130,8 @@ export class CommandDispatcher {
           return info(renderDebug(state, this.#context.diagnostics()));
         case "/cancel":
           return await this.#cancel(argument);
+        case "/approve":
+          return await this.#approve(argument);
         case "/quit":
           return { kind: "quit" };
         default:
@@ -225,6 +231,33 @@ export class CommandDispatcher {
     return info(
       `cancellation requested for attempt ${attemptId}\nThis is acceptance; the runtime owns the terminal settlement.`,
     );
+  }
+
+  async #approve(argument: string): Promise<CommandOutcome> {
+    const parts = argument.split(/\s+/).filter((part) => part.length > 0);
+    if (parts.length < 2) {
+      return info("usage: /approve <interaction-id> <allow|deny> [reason]");
+    }
+    const interactionId = parts[0]!;
+    const decision = parts[1]!;
+    const reasonParts = parts.slice(2);
+    let approval: ApprovalDecision;
+    if (decision === "allow") {
+      if (reasonParts.length > 0) {
+        return info("allow does not accept a replacement argument or reason");
+      }
+      approval = { type: "allow" };
+    } else if (decision === "deny") {
+      approval = {
+        type: "deny",
+        reason: reasonParts.join(" ") || "denied by Runtime Client",
+      };
+    } else {
+      return info("usage: /approve <interaction-id> <allow|deny> [reason]");
+    }
+    const response: InteractionResponse = { type: "approval", decision: approval };
+    await this.#context.session.respondInteraction(interactionId, response);
+    return info(`response accepted for interaction ${interactionId}`);
   }
 }
 

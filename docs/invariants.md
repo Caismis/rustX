@@ -176,6 +176,130 @@ stream and normally commits exactly one terminal `RuntimeEvent`:
   identical cancellation conditions, the loop produces an identical
   ordered `RuntimeEvent` stream and an identical terminal outcome.
 
+## Native interaction and approval coordination (M9.2 / Issue #64)
+
+The native interaction plane is one conversation-owned rendezvous. It is not
+a provider adapter, a client callback, a permission framework, or an Agent
+Loop replacement.
+
+```text
+ToolRegistry::preflight
+  -> canonical Assistant ToolCall
+  -> one AttemptLifecycle::pre_tool policy
+       Allow -> existing start frontier
+       Deny  -> one ToolExecutionStatus::Denied result slot
+       Ask   -> InteractionCoordinator -> typed Runtime Client response
+  -> exact original PreparedInvocation, or no executor
+```
+
+The ownership contract is:
+
+| Concern | Owner |
+| --- | --- |
+| Interaction identity and pending state | `InteractionCoordinator` |
+| Pre-tool decision | the attempt's `PreToolPolicy` |
+| Tool scheduling/start | Agent Loop |
+| Tool identity/validated arguments | original `ToolCall` and `PreparedInvocation` |
+| Tool result slot settlement | Tool Plane / Agent Loop |
+| Response transport | Runtime Client |
+| Rendering/input | TUI projection |
+| Attempt cancellation | `AgentCancellation` |
+| Drain/quiescence | `ConversationRuntime` / `ConversationLifecycle` |
+| Crash recovery | M9 recovery authority |
+
+### Pre-tool boundary and immutable invocation
+
+- `AttemptLifecycle` always contains exactly one typed `PreToolPolicy` and
+  one `InteractionRendezvous`. `AlwaysAllow` is the identity policy because
+  the current product has no native rule requiring approval. There are no
+  optional approval hooks, policy chains, priorities, wrappers, or callbacks
+  hidden in `ToolExecutor`.
+- `PreToolPolicy` runs only after `ToolRegistry::preflight` has resolved the
+  tool identity, invocation metadata, execution mode, and validated business
+  arguments, and after the Assistant `ToolCall` has committed canonically.
+  Its `PreToolView` is read-only and contains no mutation handle, executor,
+  cancellation owner, or dispatch capability.
+- `Allow`, `Deny { reason }`, and `Ask { reason }` are the complete decision
+  vocabulary. An approval request exposes only immutable decision facts. A
+  response has no replacement argument field. Therefore `ToolCallId`,
+  `ToolId`, model-facing name, mode, origin, and validated arguments are
+  unchanged before and after approval; an Allow continues the existing
+  `PreparedInvocation`, never reconstructs one from client data.
+- The Agent Loop checks its existing cancellation/start frontier after an
+  Allow. Allow is a rendezvous result, not unconditional tool-start
+  authority. Cancellation observed there prevents the executor future and
+  produces the existing cancellation result slot.
+
+### Terminal rendezvous and lifecycle
+
+For every interaction exactly one synchronized transition wins:
+
+```text
+Pending --valid response--> Answered
+Pending --owner cancellation or runtime drain--> Cancelled
+```
+
+The response path and cancellation path use the same coordinator pending-state
+mutex. A duplicate, stale, post-cancel, pre-crash, or post-quiescent response
+is `interaction_not_pending`; it cannot wake the waiter, resume execution, or
+mutate runtime state. A response/cancellation winner only decides the
+rendezvous; it does not bypass Agent Loop cancellation or tool-start rules.
+
+Removing the pending map entry is only the terminal decision. The waiter
+payload retains a counted `LifecycleAdmission` until the semantic owner
+consumes or drops it. The Runtime Client `InteractionSettled` observation is
+then published after waiter callback authority is released, inside a second
+counted settlement admission that covers the leaf observer callback. This
+keeps shutdown in `Draining` until both the waiter and the observation
+callback have settled; an empty pending map can never stand in for
+quiescence, and no interaction callback can begin after `Quiescent`.
+
+At `Running -> Draining`, the coordinator closes interaction admission through
+the shared lifecycle commit boundary. Interactions admitted first are
+cancelled through the owner's existing `AgentCancellation` hierarchy and
+settled normally. Drain-first publication is refused. Runtime shutdown
+remains the only semantic shutdown authority.
+
+### Identity, provider availability, and recovery
+
+`InteractionId` is `{AttemptId}-interaction-{ordinal}`. The attempt identity
+domain is recovered from durable history and never reused, so a process-local
+ordinal reset after a crash cannot alias a delayed old response to new work.
+Pending interactions are process/operation-owned observations, not durable
+human-workflow records. A crash leaves no phantom pending interaction; M9
+recovery settles the owning interrupted work from durable evidence, does not
+replay the old request, and does not regenerate it from current policy or
+tool configuration.
+
+The one active Runtime Client attachment is the 0.1 interaction provider. If
+none is present when an `Ask` is published, the coordinator returns
+`Unavailable` and approval fails closed as `Denied`. Detach/EOF/TUI exit never
+fabricates Allow, Deny, or cancellation for an already-published request. A
+later attachment may answer still-live state, which it reconstructs from the
+authoritative snapshot and cursor projection.
+
+### Runtime Client and TUI projection
+
+The Runtime Client carries native interaction facts through typed
+`interaction_respond`, `interaction_pending`, and `interaction_settled`
+messages plus `snapshot.pending_interactions`. Snapshot-at-cursor followed by
+subscribe-after-cursor remains the repair invariant. The TUI renders the
+runtime-owned pending approval and sends the typed response; it owns no
+pending truth, tool execution, arguments, cancellation, or local outcome
+state. Approval is the only 0.1 interaction kind; questions/forms and
+provider-specific payloads are out of scope.
+
+### Denied Tool Plane settlement and parallel calls
+
+Denial is not executor failure. A denied call emits no
+`ToolExecutionStarted`, creates no executor future, and settles exactly one
+normal Tool Plane result slot as `ToolExecutionStatus::Denied { reason }`.
+The resulting canonical `ToolMessage` preserves the original call identity.
+For parallel batches, all individual policy/interaction decisions resolve in
+canonical call order before any executor start frontier advances. A denied or
+cancelled sibling never receives an executor future, and result slots remain
+in canonical model-call order independent of response timing.
+
 ## Turn atomicity
 
 A turn consists of one model response plus all tool calls and corresponding tool results from that response.
@@ -1494,14 +1618,13 @@ The load-bearing split of this seam:
 
 ### Seams intentionally absent
 
-`PreToolPolicy`/pre-dispatch `Allow`-`Deny`, `ToolExecutionWrapper`/
-`around_tool`/middleware chains, post-tool result replacement or retroactive
-blocking, pre-tool argument or identity rewriting, `Ask`/human approval
-(Issue #64), subagent lifecycle observation (Issue #60), and
-`TurnStoppingPolicy`/forced continuation are **absent by decision**, not as
-TODO compatibility hooks. Each would need a concrete native owner or
-consumer that does not exist; the two seams above cover every current
-requirement.
+Tool-execution wrappers/middleware chains, post-tool result replacement or
+retroactive blocking, pre-tool argument or identity rewriting, question/form
+frameworks, generalized permission/risk policy, subagent lifecycle
+observation (Issue #60), and `TurnStoppingPolicy`/forced continuation are
+**absent by decision**, not TODO compatibility hooks. Native pre-tool approval
+is now the concrete bounded Issue #64 seam described above; it does not imply
+any of those broader frameworks.
 
 ## Conversation runtime coordinator (Issue #61)
 

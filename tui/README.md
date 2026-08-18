@@ -125,18 +125,32 @@ spawn rustx
 
 ## Commands
 
-`/help` `/model` `/tools` `/skills` `/status` `/debug` `/cancel` `/quit`
+`/help` `/model` `/tools` `/skills` `/status` `/debug` `/cancel` `/approve` `/quit`
 
 Each either renders projection state or invokes exactly one canonical Runtime
 Client operation. `/model` goes through `model_catalog_get` and `model_set`;
 `/tools` and `/skills` read the capability projection; `/status` prints the
 runtime's own Agent Status rendering; `/debug` shows bounded diagnostics and
-never a credential.
+never a credential; `/approve` sends a finite typed response to one
+runtime-owned Approval interaction. The TUI never edits the displayed tool
+arguments or keeps a local approval outcome.
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill behaviour
 must travel through the real rustX tool and capability path, and rustX has not
 yet defined a client-facing attachment contract.
+
+## Native approvals
+
+Pending approvals arrive as runtime-owned `interaction_pending` events and in
+the authoritative `snapshot.pending_interactions` view. The presentation
+reducer sorts and replaces those facts like every other projection value;
+reconnect/resync discards local assumptions and rebuilds the list from the
+snapshot. The renderer shows the immutable tool identity, mode, reason, and
+validated arguments. `/approve <interaction-id> allow` or
+`/approve <interaction-id> deny [reason]` sends only the typed Runtime Client
+`interaction_respond` request. It never invokes a tool, mutates arguments,
+infers an outcome from detach/EOF, or callbacks into the Agent Loop.
 
 ## The model invariant
 

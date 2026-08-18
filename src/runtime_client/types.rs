@@ -37,6 +37,11 @@
 //! No transport lives here: JSONL/stdio framing is owned by Issue #38 and
 //! any WebSocket transport by Issue #36; both consume this semantic layer
 //! without redefining it.
+//!
+//! Native Approval responses are deliberately finite and provider-neutral.
+//! They contain no replacement `ToolCall` identity or argument channel; the
+//! owning Agent Loop resumes the original prepared invocation only after its
+//! own cancellation/start frontier permits it.
 
 use std::fmt;
 
@@ -47,8 +52,10 @@ use super::snapshot::{CapabilityView, RuntimeClientSnapshot};
 use crate::message::types::UserContentBlock;
 use crate::model::catalog::ModelCatalogView;
 use crate::model::session::{SessionModelConfig, SessionModelView};
+use crate::runtime::identity::InteractionId;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId, ToolExecutionId};
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::interaction::InteractionResponse;
 
 /// The current Runtime Client Protocol version.
 ///
@@ -193,6 +200,16 @@ pub enum RuntimeClientRequest {
         /// Attachment-scoped request id.
         id: RequestId,
     },
+    /// Answer one live native interaction through the runtime-owned
+    /// coordinator. The response has no tool-argument replacement channel.
+    InteractionRespond {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The live interaction identity.
+        interaction_id: InteractionId,
+        /// The finite typed response.
+        response: InteractionResponse,
+    },
     /// Read the authoritative snapshot and its cursor.
     SnapshotGet {
         /// Attachment-scoped request id.
@@ -284,6 +301,7 @@ impl RuntimeClientRequest {
             Self::Initialize { id, .. }
             | Self::SubmitInbound { id, .. }
             | Self::CancelCurrentAttempt { id, .. }
+            | Self::InteractionRespond { id, .. }
             | Self::SnapshotGet { id, .. }
             | Self::SubscribeEvents { id, .. }
             | Self::CapabilityGet { id, .. }
@@ -304,6 +322,7 @@ impl RuntimeClientRequest {
             Self::Initialize { .. } => "initialize",
             Self::SubmitInbound { .. } => "submit_inbound",
             Self::CancelCurrentAttempt { .. } => "cancel_current_attempt",
+            Self::InteractionRespond { .. } => "interaction_respond",
             Self::SnapshotGet { .. } => "snapshot_get",
             Self::SubscribeEvents { .. } => "subscribe_events",
             Self::CapabilityGet { .. } => "capability_get",
@@ -366,6 +385,12 @@ pub enum RuntimeClientResult {
     AttemptCancellationAccepted {
         /// The attempt cancellation was requested for.
         attempt_id: AttemptId,
+    },
+    /// `interaction_respond` succeeded: the coordinator accepted the one
+    /// terminal response transition.
+    InteractionResponseAccepted {
+        /// The interaction identity.
+        interaction_id: InteractionId,
     },
     /// `snapshot_get` succeeded.
     Snapshot {
@@ -449,6 +474,17 @@ pub enum RuntimeClientError {
     },
     /// No attempt is currently cancellable.
     NoCurrentAttempt,
+    /// The interaction was no longer pending. Duplicate, stale, pre-crash,
+    /// and post-quiescent responses all use this bounded contract.
+    InteractionNotPending {
+        /// The stale interaction identity.
+        interaction_id: InteractionId,
+    },
+    /// The response was typed but invalid for the pending interaction.
+    InteractionInvalidResponse {
+        /// The bounded validation diagnostic.
+        message: String,
+    },
     /// The referenced background execution does not exist in the
     /// authoritative conversation registry.
     UnknownBackgroundExecution {
@@ -519,7 +555,8 @@ mod tests {
     use crate::events::types::EVENT_SCHEMA_VERSION;
     use crate::message::content::TextBlock;
     use crate::message::types::UserContentBlock;
-    use crate::runtime::identity::{AttemptId, ToolExecutionId};
+    use crate::runtime::identity::{AttemptId, InteractionId, ToolExecutionId};
+    use crate::runtime::interaction::{ApprovalDecision, InteractionResponse};
     use crate::runtime_client::event::RuntimeClientEvent;
 
     /// The Runtime Client protocol version is a distinct constant from the
@@ -566,6 +603,30 @@ mod tests {
         };
         let value = serde_json::to_value(&request).expect("serialize");
         assert_eq!(value["method"], "submit_inbound");
+        let decoded: RuntimeClientRequest =
+            serde_json::from_value(value).expect("deserialize request");
+        assert_eq!(decoded, request);
+    }
+
+    /// The interaction response is a typed decision only: its wire shape has
+    /// no field through which a client could replace the resolved tool
+    /// arguments.
+    #[test]
+    fn interaction_response_request_round_trips_without_replacement_arguments() {
+        let request = RuntimeClientRequest::InteractionRespond {
+            id: super::RequestId::new(11),
+            interaction_id: InteractionId::new("attempt-1-interaction-1"),
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Deny {
+                    reason: "human denied".to_owned(),
+                },
+            },
+        };
+        let value = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(value["method"], "interaction_respond");
+        assert_eq!(value["interaction_id"], "attempt-1-interaction-1");
+        assert_eq!(value["response"]["type"], "approval");
+        assert!(value["response"].get("arguments").is_none());
         let decoded: RuntimeClientRequest =
             serde_json::from_value(value).expect("deserialize request");
         assert_eq!(decoded, request);
@@ -667,6 +728,12 @@ mod tests {
                 requested: 9,
             },
             RuntimeClientError::NoCurrentAttempt,
+            RuntimeClientError::InteractionNotPending {
+                interaction_id: InteractionId::new("attempt-1-interaction-1"),
+            },
+            RuntimeClientError::InteractionInvalidResponse {
+                message: "bounded".to_owned(),
+            },
             RuntimeClientError::UnknownBackgroundExecution {
                 execution_id: ToolExecutionId::new("exec_1"),
             },

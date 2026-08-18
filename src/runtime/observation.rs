@@ -17,7 +17,9 @@
 //! RuntimeClientProjection (snapshot / cursor / replay / subscribers)
 //! ```
 //!
-//! The runtime never emits Runtime Client projection types: every variant
+//! Native pending/settled interactions are live process-owned observations,
+//! not canonical Message Ledger facts and not recovery input. The runtime
+//! never emits Runtime Client projection types: every variant
 //! carries runtime-owned source types (`RuntimeEvent`, `InboundItem`,
 //! `BackgroundExecutionSnapshot`, the authoritative `CapabilitySnapshot`,
 //! the frozen `AttemptModelView`, …). The Runtime Client projection owns
@@ -62,7 +64,9 @@ use crate::events::types::RuntimeEvent;
 use crate::message::types::MessageBlock;
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::AttemptId;
+use crate::runtime::identity::InteractionId;
 use crate::runtime::inbound::{InboundBatch, InboundItem};
+use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
 use crate::tools::background::BackgroundExecutionSnapshot;
 
 /// One runtime-owned semantic observation.
@@ -122,6 +126,15 @@ pub(crate) enum ConversationObservation {
     },
     /// Runtime drain began and new semantic admission closed.
     Shutdown,
+    /// One native interaction became pending.
+    InteractionPending(InteractionRequest),
+    /// One native interaction reached its terminal rendezvous outcome.
+    InteractionSettled {
+        /// The interaction identity.
+        interaction_id: InteractionId,
+        /// The terminal outcome delivered to its semantic owner.
+        outcome: InteractionOutcome,
+    },
     /// The durable authority (Pending Inbound Inbox / Message Ledger) failed
     /// a storage operation the coordinator must not silently swallow
     /// (Issue #63, Finding 5). The failure consumes that stage's one bounded

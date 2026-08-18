@@ -262,10 +262,10 @@ pub struct ToolExecutionResult {
 
 /// Typed execution status of a tool call.
 ///
-/// Success and failure are not the only states: cancellation, timeout, and
-/// interrupted execution (the runtime restarted while the call was in flight,
-/// so the actual external outcome is unknown) are distinct and must never be
-/// silently collapsed into success or generic error.
+/// Success and failure are not the only states: policy denial, cancellation,
+/// timeout, and interrupted execution (the runtime restarted while the call
+/// was in flight, so the actual external outcome is unknown) are distinct and
+/// must never be silently collapsed into success or generic error.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolExecutionStatus {
@@ -275,6 +275,12 @@ pub enum ToolExecutionStatus {
     Failed {
         /// Human-readable error message.
         error: String,
+    },
+    /// The pre-tool policy denied the already-resolved invocation before an
+    /// executor future was created.
+    Denied {
+        /// The policy or human-readable approval reason.
+        reason: String,
     },
     /// The execution was cancelled.
     Cancelled {

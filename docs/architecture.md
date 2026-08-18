@@ -272,6 +272,103 @@ conversation. The async client shutdown request awaits the runtime operation;
 the `RuntimeShutdown` projection event marks admission closure, while the
 `shutdown_completed` response marks successful quiescence.
 
+## 1.3 Native interaction and approval coordination (M9.2 / Issue #64)
+
+rustX has one provider-independent human-interaction plane. It is a
+conversation-owned rendezvous, not a second execution engine:
+
+```text
+ToolRegistry preflight
+  -> canonical Assistant ToolCall commit
+  -> AttemptLifecycle::pre_tool (immutable PreToolView)
+       Allow ------------------------------┐
+       Deny -> one typed denied result      │
+       Ask -> InteractionCoordinator       │
+                   -> Runtime Client       │
+                   <- typed response       │
+       -> existing cancellation/start frontier
+       -> exact original PreparedInvocation, or one result slot
+```
+
+`InteractionCoordinator` is the sole owner of interaction identity,
+pending state, terminal response/cancellation coordination, and the waiter
+rendezvous. `AgentExecution` remains the owner of tool scheduling and
+execution. The Runtime Client and TUI only project and transport the
+request; neither can mutate canonical history, execute a tool, or rewrite
+arguments.
+
+The ownership table is:
+
+| Concern | Owner |
+| --- | --- |
+| Interaction identity and pending registry | `InteractionCoordinator` |
+| Pre-tool decision | the attempt's required `PreToolPolicy` |
+| Tool scheduling and start | Agent Loop |
+| Tool identity and validated arguments | original `ToolCall` + `PreparedInvocation` |
+| Tool result settlement | Tool Plane / Agent Loop |
+| Response transport | Runtime Client |
+| Rendering and input | TUI projection |
+| Attempt cancellation | `AgentCancellation` |
+| Runtime drain and quiescence | `ConversationRuntime` / `ConversationLifecycle` |
+| Crash recovery | existing M9 recovery owner |
+
+The pre-tool seam is total and typed: `AttemptLifecycle` always carries one
+`PreToolPolicy` and one `InteractionRendezvous`. `AlwaysAllow` is the identity
+policy because the current product has no native rule saying that a specific
+tool requires approval. This issue does not add a permission language,
+risk-classification engine, allowlist, routing layer, or form framework.
+`PreToolPolicy` runs only after registry identity resolution, reserved metadata
+stripping, and business-argument validation, and after the Assistant
+`ToolCall` is canonical. It cannot resolve a tool, dispatch it, or alter the
+prepared invocation.
+
+An approval request contains only immutable, decision-relevant facts:
+conversation/attempt/turn identity, `ToolCallId`, resolved `ToolId`, safe tool
+name, origin, mode, validated arguments, and the policy reason. The response
+vocabulary is finite (`Allow` or `Deny { reason }`) and contains no replacement
+arguments. Allow therefore resumes the exact invocation that was already
+prepared; the Agent Loop checks cancellation again at the existing start
+frontier before creating an executor future.
+
+The coordinator's pending state has one mutex-protected terminal transition:
+
+```text
+Pending --response--> Answered
+Pending --owner cancellation/runtime drain--> Cancelled
+```
+
+The losing operation receives `not_pending` and cannot wake or resume the
+owner. A terminal transition removes the live map entry, but its waiter keeps
+a counted `LifecycleAdmission` until the owner consumes or drops the outcome.
+The Runtime Client settled observation is published only after that waiter
+authority is released and while a second counted settlement admission covers
+the leaf observation callback. Thus an empty pending map is not quiescence,
+and no interaction callback can begin after `Quiescent`.
+
+Interaction IDs are derived as `{AttemptId}-interaction-{ordinal}`. Attempt
+identities are recovered from durable history and never reused, so a process
+restart cannot make a delayed pre-crash response name post-restart work. Live
+pending interactions are process-owned observations, not durable workflow
+records. Recovery does not replay or reconstruct an old approval request; a
+new runtime starts with no phantom pending interaction.
+
+Runtime Client v1 carries the same semantic plane through
+`interaction_respond`, typed acceptance/errors, `interaction_pending` and
+`interaction_settled` events, and `snapshot.pending_interactions`. Snapshot
+plus cursor and subscribe-after-cursor retain the existing repair invariant.
+No capable attachment at publication fails approval closed as `Unavailable`.
+Detaching an attachment only closes admission for future interactions; it
+does not answer, deny, or cancel an already-published request. A later
+attachment can answer a still-live request from the authoritative runtime
+projection.
+
+For a parallel tool batch, every call resolves its own pre-tool decision in
+canonical call order before any executor starts. A denied or cancelled call
+gets exactly one normal Tool Plane result slot and no `ToolExecutionStarted`
+fact or executor future. Canonical ToolCall/result order is independent of
+response timing. A denied result is typed `ToolExecutionStatus::Denied`, not
+executor `Failed`.
+
 ## 2. Layer model
 
 ### Layer 0: Domain and protocol types
@@ -294,9 +391,12 @@ The canonical contracts defined in M1 live in the `src` module tree as follows:
 ```text
 runtime/identity.rs        strong IDs (ConversationId, MessageId, AgentId,
                            AgentVersionId, AttemptId, TurnId, EventId, ToolId,
-                           ToolCallId, ToolExecutionId, ToolVersionId,
+                           InteractionId, ToolCallId, ToolExecutionId, ToolVersionId,
                            McpServerId, SkillId, SkillVersionId, ArtifactId)
                            and CapabilityRevision
+runtime/interaction.rs     provider-independent native Approval request,
+                           response/outcome, coordinator pending registry,
+                           terminal rendezvous, and Runtime Client observation
 runtime/cancellation.rs   CancellationSignal: the one runtime-owned
                            cancellation primitive shared by model adapters,
                            compaction, foreground tool execution, and
@@ -332,6 +432,8 @@ tools/types.rs             ToolDefinition (id, name, description, canonical
                            ToolCallStart, ToolInvocation (stripped/validated
                            canonical invocation), ToolExecutionResult,
                            ToolExecutionStatus, ToolProgress, TruncationState
+agent/lifecycle.rs          required PreToolPolicy / PreToolView seam and
+                           AttemptLifecycle interaction rendezvous binding
 tools/executor.rs          ToolExecutor boundary, ToolExecutionContext,
                            ProgressReporter, ToolRegistry (validating
                            definition/executor registry), PreflightOutcome
@@ -1150,10 +1252,12 @@ second transcript, ledger, or Surface, and the observer is not a privileged
 committer: a later pre-step rejection or cancellation prevents the deferred
 context from ever becoming canonical.
 
-`PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
-replacement, pre-tool argument rewriting, `Ask`/human approval (#64),
-subagent lifecycle observation (#60), and turn-stopping/forced continuation
-are intentionally absent: none has a concrete native owner or consumer.
+Tool-execution wrappers/middleware, post-tool result replacement, pre-tool
+argument or identity rewriting, question/form frameworks, generalized
+permission/risk policy, subagent lifecycle observation (#60), and
+turn-stopping/forced continuation are intentionally absent. The bounded
+native `PreToolPolicy`/Approval seam is implemented by M9.2 above; it does not
+expand into those frameworks.
 `docs/agent-loop.md` section 4.3 carries the full authority matrix.
 
 #### M5 implementation (native tool plane)
@@ -2231,6 +2335,20 @@ Runtime Client is a projection/control/attachment adapter over it.
   therefore still linearize by synchronization, never by timing — the
   coordinator's admission linearization is one documented point, and the
   projection's snapshot/cursor linearization is another.
+- **Native interactions use the same semantic boundary.** A pending approval
+  is folded from `ConversationObservation::InteractionPending` into
+  `RuntimeClientSnapshot.pending_interactions`; its terminal outcome folds
+  through `InteractionSettled` and removes the live entry. Clients answer
+  with the typed `interaction_respond` request, which contains only an
+  `Allow` or `Deny` decision and never replacement tool arguments. A stale,
+  duplicate, pre-crash, or post-quiescent response is the typed
+  `interaction_not_pending` error and has no semantic effect.
+- **Attachment availability is bounded and non-semantic.** The one active
+  attachment represents the 0.1 interaction provider. If none is present at
+  publication, approval fails closed as `Unavailable`; detaching later only
+  closes admission for future requests. It does not answer or cancel a live
+  interaction, and a reattached client repairs from the runtime snapshot and
+  cursor rather than from local prompt state.
 - **The Runtime Client host binds before activation.** A conversation
   runtime has four lifecycle states and one explicit admission/drain
   authority:

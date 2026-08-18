@@ -100,6 +100,7 @@ use crate::runtime::identity::{
     AgentId, AttemptId, ConversationId, EventId, MessageId, ToolCallId, ToolId, TurnId,
 };
 use crate::runtime::inbound::{FreshInboundTurn, InitialTurnTrigger, MailboxError};
+use crate::runtime::interaction::{ApprovalDecision, InteractionOutcome, InteractionResponse};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::executor::{
@@ -114,7 +115,8 @@ use crate::tools::types::{
 use super::assembly::ModelEventAssembler;
 use super::cancellation::{AgentCancellation, StartAdjudication};
 use super::lifecycle::{
-    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, ToolResultObservation,
+    AttemptLifecycle, ObservedToolInvocation, PreStepBatch, PreStepDecision, PreToolDecision,
+    PreToolView, ToolResultObservation,
 };
 use super::observer::{AgentExecutionObserver, AgentStatusObservation};
 use super::state::{ExecutionState, ExecutionStateMachine};
@@ -2469,6 +2471,13 @@ impl<'a> AgentExecution<'a> {
                 },
             })
             .collect();
+        // Resolve every ready call through the one pre-tool policy boundary
+        // before scheduling any executor. This is a deliberately strong
+        // parallel-batch contract: all policy/interaction decisions for the
+        // committed batch settle in canonical call order before the existing
+        // sequential/parallel start frontier advances. The original
+        // PreparedInvocation remains in every slot unchanged.
+        self.resolve_pre_tool_decisions(&mut slots).await;
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -2546,19 +2555,21 @@ impl<'a> AgentExecution<'a> {
                         }
                     }
                     let mut remaining = futures.len();
-                    loop {
-                        if self.cancellation.is_cancelled() {
-                            break;
-                        }
-                        tokio::select! {
-                            biased;
-                            () = self.cancellation.cancelled() => break,
-                            Some((slot_index, result, progress)) = futures.next() => {
-                                slots[slot_index].result = Some(result);
-                                slots[slot_index].progress = progress;
-                                remaining -= 1;
-                                if remaining == 0 {
-                                    break;
+                    if remaining > 0 {
+                        loop {
+                            if self.cancellation.is_cancelled() {
+                                break;
+                            }
+                            tokio::select! {
+                                biased;
+                                () = self.cancellation.cancelled() => break,
+                                Some((slot_index, result, progress)) = futures.next() => {
+                                    slots[slot_index].result = Some(result);
+                                    slots[slot_index].progress = progress;
+                                    remaining -= 1;
+                                    if remaining == 0 {
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -2661,6 +2672,87 @@ impl<'a> AgentExecution<'a> {
             return Err(error);
         }
         Ok(settled)
+    }
+
+    /// Resolves the typed pre-tool decision of every preflight-ready call.
+    ///
+    /// The policy sees only an immutable view of the exact registry-resolved
+    /// facts. `Ask` delegates the wait to the attempt's required interaction
+    /// rendezvous, while the Agent Loop remains the owner of execution and
+    /// cancellation. A provider-unavailable interaction and a policy error
+    /// fail closed as `Denied`; an owner cancellation produces the existing
+    /// cancelled result slot and closes the later tool-start frontier.
+    async fn resolve_pre_tool_decisions(&self, slots: &mut [CallSlot]) {
+        let policy = self.lifecycle.pre_tool_policy();
+        let rendezvous = self.lifecycle.interaction_rendezvous();
+        for slot in slots {
+            if slot.result.is_some() {
+                continue;
+            }
+            if self.cancellation.is_cancelled() {
+                slot.result = Some(cancelled_result(self.cancellation.reason()));
+                continue;
+            }
+            let prepared = slot
+                .prepared
+                .as_ref()
+                .expect("a policy decision requires a preflight-ready invocation");
+            let invocation = &prepared.invocation;
+            let view = PreToolView {
+                conversation_id: &self.request.conversation_id,
+                attempt_id: &self.request.attempt_id,
+                turn: self.turn,
+                call_id: &slot.call.id,
+                tool_id: &invocation.tool_id,
+                tool_name: &invocation.tool_name,
+                origin: &prepared.origin,
+                mode: invocation.mode,
+                arguments: &invocation.arguments,
+            };
+            let decision = match policy.evaluate(&view).await {
+                Ok(decision) => decision,
+                Err(error) => PreToolDecision::Deny {
+                    reason: format!("pre-tool policy failed closed: {}", error.message),
+                },
+            };
+            let resolution = match decision {
+                PreToolDecision::Allow if self.cancellation.is_cancelled() => {
+                    PreToolResolution::Cancelled(self.cancellation.reason())
+                }
+                PreToolDecision::Allow => PreToolResolution::Allow,
+                PreToolDecision::Deny { reason } => PreToolResolution::Denied(reason),
+                PreToolDecision::Ask { reason } => {
+                    let facts = view.approval_facts(reason);
+                    match rendezvous.request_approval(facts, self.cancellation).await {
+                        InteractionOutcome::Answered { response } => match response {
+                            InteractionResponse::Approval { decision } => match decision {
+                                ApprovalDecision::Allow if self.cancellation.is_cancelled() => {
+                                    PreToolResolution::Cancelled(self.cancellation.reason())
+                                }
+                                ApprovalDecision::Allow => PreToolResolution::Allow,
+                                ApprovalDecision::Deny { reason } => {
+                                    PreToolResolution::Denied(reason)
+                                }
+                            },
+                        },
+                        InteractionOutcome::Cancelled { reason } => {
+                            PreToolResolution::Cancelled(reason)
+                        }
+                        InteractionOutcome::Unavailable if self.cancellation.is_cancelled() => {
+                            PreToolResolution::Cancelled(self.cancellation.reason())
+                        }
+                        InteractionOutcome::Unavailable => PreToolResolution::Denied(
+                            "interaction provider unavailable; approval failed closed".to_owned(),
+                        ),
+                    }
+                }
+            };
+            slot.result = match resolution {
+                PreToolResolution::Allow => None,
+                PreToolResolution::Denied(reason) => Some(denied_result(&reason)),
+                PreToolResolution::Cancelled(reason) => Some(cancelled_result(reason)),
+            };
+        }
     }
 
     /// Runs the immutable tool-result observation pass of one structurally
@@ -3286,6 +3378,16 @@ struct SettledCall {
     result: ToolExecutionResult,
 }
 
+/// The result of one pre-tool policy/interaction boundary.
+enum PreToolResolution {
+    /// The existing Tool Plane start frontier may consider the call.
+    Allow,
+    /// The call receives a policy-denied result slot; no executor starts.
+    Denied(String),
+    /// The owner cancellation closed the start frontier.
+    Cancelled(CancellationReason),
+}
+
 /// One deterministic scheduling phase of a tool-call batch.
 enum Group {
     /// The slot is already settled (validation rejection); no barrier.
@@ -3328,6 +3430,22 @@ fn failed_result(error: &str) -> ToolExecutionResult {
     ToolExecutionResult {
         status: ToolExecutionStatus::Failed {
             error: error.to_owned(),
+        },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+    }
+}
+
+/// A policy-denied result is a normal structural Tool Plane result, distinct
+/// from executor failure. It occupies exactly one canonical call slot and
+/// carries no execution-start fact.
+fn denied_result(reason: &str) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Denied {
+            reason: reason.to_owned(),
         },
         content: Vec::new(),
         duration_ms: 0,

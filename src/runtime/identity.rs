@@ -3,8 +3,9 @@
 //! Every identifier is a transparent string-backed newtype. The types are
 //! distinct so that unrelated identifier domains cannot be mixed
 //! accidentally, and they serialize deterministically as plain JSON strings
-//! for persistence. Identifiers are externally assigned in M1; this module
-//! does not generate identifiers.
+//! for persistence. Most identifiers are supplied by their owning boundary;
+//! the conversation runtime derives interaction identities from the already
+//! non-reused attempt domain in `InteractionId::for_attempt`.
 
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +88,18 @@ id_type! {
 }
 
 id_type! {
+    /// Identifies one process-owned native human interaction.
+    ///
+    /// Interaction identities are derived from the conversation runtime's
+    /// non-reused [`AttemptId`] domain plus an ordinal owned by the
+    /// interaction coordinator.  They are deliberately not allocated from
+    /// a process-local counter alone: a response retained by a client from a
+    /// crashed process can therefore never name a different interaction in a
+    /// restarted runtime.
+    InteractionId
+}
+
+id_type! {
     /// Identifies one turn within an attempt.
     TurnId
 }
@@ -164,6 +177,17 @@ impl AttemptId {
     pub fn conversation_ordinal(&self, conversation: &ConversationId) -> Option<u64> {
         let prefix = format!("{conversation}{}", Self::ATTEMPT_INFIX);
         self.as_str().strip_prefix(&prefix)?.parse().ok()
+    }
+}
+
+impl InteractionId {
+    /// The separator between an attempt identity and its interaction ordinal.
+    const INTERACTION_INFIX: &'static str = "-interaction-";
+
+    /// Allocates an interaction identity within one attempt.
+    #[must_use]
+    pub fn for_attempt(attempt: &AttemptId, ordinal: u64) -> Self {
+        Self::new(format!("{attempt}{}{ordinal}", Self::INTERACTION_INFIX))
     }
 }
 

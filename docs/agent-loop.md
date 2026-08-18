@@ -645,6 +645,62 @@ observer failure can never prevent a committed Assistant `ToolCall` batch from
 receiving its complete canonical `ToolMessage` result batch, and it can never
 strand a later sibling's result.
 
+### PreToolPolicy and native approval (M9.2 / Issue #64)
+
+Pre-tool approval is a typed seam in `AttemptLifecycle`, not a wrapper around
+`ToolExecutor`:
+
+```text
+model ToolCall
+  -> ToolRegistry::preflight
+  -> PreparedInvocation
+  -> canonical Assistant ToolCall commit
+  -> PreToolPolicy(immutable PreToolView)
+       Allow
+       Deny { reason }
+       Ask { reason }
+          -> InteractionCoordinator
+          -> Runtime Client typed response
+  -> existing cancellation/start frontier
+  -> exact PreparedInvocation, or one result slot without an executor
+```
+
+The attempt always carries one required policy and one required interaction
+rendezvous. `AlwaysAllow` is the identity policy for the current product,
+which has no native rule requiring approval. The policy sees only the
+conversation/attempt/turn, call and resolved tool identities, safe name,
+origin, mode, and validated business arguments. It cannot resolve registry
+facts, mutate canonical state, dispatch a tool, receive cancellation
+authority, or return replacement arguments.
+
+`Ask` passes those facts to the conversation-owned `InteractionCoordinator`.
+The coordinator owns the pending map, non-reused identity, answer/cancel
+terminal transition, and waiter; the Agent Loop remains the only owner that
+can resume the original invocation. `Allow` is not a start capability: the
+loop checks cancellation again at the existing start frontier. A `Deny` is a
+normal structural Tool Plane result with `ToolExecutionStatus::Denied`, one
+canonical result slot, no `ToolExecutionStarted`, and no executor future.
+
+For a parallel batch rustX resolves every policy/interaction decision in
+canonical call order before any executor starts. This is intentionally a
+strong batch boundary: response timing can neither reorder result slots nor
+let one approved sibling start while another sibling is still awaiting its
+policy decision. Preflight rejection remains the earlier registry-owned
+validation path and never reaches `PreToolPolicy`.
+
+The coordinator's response and owner-cancellation paths use one synchronized
+pending-state transition. The first terminal winner wakes the waiter exactly
+once; later responses are `interaction_not_pending`. Removing the pending
+entry is not waiter settlement: a counted lifecycle admission remains with
+the waiter until it consumes or drops the outcome, and the Runtime Client
+settlement observation is published after that authority is released under a
+second counted settlement admission. This composes with M9c drain without a
+second lifecycle or shutdown participant framework.
+
+The interaction domain is provider-independent and bounded to Approval in
+0.1. Questions/forms, provider SDK payloads, argument rewriting, and a
+generalized permission language are not part of this seam.
+
 ### Request Snapshot implications
 
 Accepted deferred context is an ordinary canonical Ledger/Surface fact before
@@ -666,6 +722,8 @@ assembly, never a re-execution handle.
 |-------|-------------|--------------------|---------------|-------|
 | `ContextContributor` (#55) | finite immutable `ContributorInputSnapshot` | bounded typed proposals | canonical state, identity, provenance, lanes, ordering | Context Assembly |
 | `PreStepPolicy` (#56) | final immutable `AcceptedContext` + attempt/turn/revision identity | `Enter` / `Reject { reason }` | history, Surface, `MessageId`s, tool identity/arguments, cancellation, provider dispatch, terminal state | Agent Loop |
+| `PreToolPolicy` (#64) | immutable preflight-resolved `PreToolView` | `Allow` / `Deny { reason }` / `Ask { reason }` | registry resolution, canonical state, tool identity/arguments, cancellation, executor start | Agent Loop / attempt lifecycle |
+| `InteractionCoordinator` (#64) | immutable Approval facts | one response/cancellation rendezvous | Agent Loop scheduling, canonical history, ToolCall arguments, executor state | ConversationRuntime |
 | `ToolResultObserver` (#56) | immutable finalized `ToolExecutionResult` + canonical `ToolCallId`, batch position, stable `ToolId`/`ToolOrigin`, and the read-only `ObservedToolInvocation` (mode + validated arguments) | bounded deferred `UserMessageProposal`s | the result, the `ToolCall`, `ToolMessage` count, history, cancellation, terminal state, the Effective System Prompt, **and its own provenance/lane/identity** | Agent Loop / tool batch |
 | Deferred context staging | ordered transient proposals + their bound producer reference | candidate input of the next Context Assembly | Ledger and Surface directly; the semantics of what it stages; whether a named extension is trusted | Agent Loop |
 | Context admission | final accepted context | canonical `User` facts + Surface advancement | arbitrary history | Agent Loop + `ConversationState` |
@@ -675,17 +733,16 @@ assembly, never a re-execution handle.
 
 These are absent by decision, not as TODO compatibility hooks:
 
-- **`PreToolPolicy` / pre-dispatch `Allow`/`Deny`** — no concrete native
-  consumer exists. `ToolRegistry::preflight` already owns canonical identity
-  resolution, reserved-metadata stripping, and business argument validation.
 - **`ToolExecutionWrapper` / `around_tool` / middleware chain** — no concrete
-  native requirement that the two seams above cannot express.
+  native requirement that the typed pre-tool seam above cannot express.
 - **Post-tool result replacement or retroactive blocking** — a finalized
   result is canonical by the time an observer sees it;
   `ToolResultObservation` is immutable by construction.
 - **Pre-tool argument or identity rewriting** — a committed Assistant
   `ToolCall` (`id`, `tool_id`, `name`, `arguments`) is a conversation fact.
-- **`Ask` / human approval** — Issue #64 owns real interaction.
+- **Question/forms, generalized permission/risk policy, and provider-specific
+  interaction payloads** — Issue #64 deliberately implements only bounded
+  native Approval.
 - **Subagent lifecycle observation** — Issue #60 owns the native subagent
   runtime; the observation seam follows the owner.
 - **`TurnStoppingPolicy` / forced continuation** — no native owner exists.
@@ -736,6 +793,11 @@ Every valid committed Assistant tool-call message is preflighted before commit
 (see section 3). Once committed, its entire tool-result batch is settled
 structurally exactly once:
 
+- The loop resolves the one `PreToolPolicy` decision for every preflight-ready
+  call before entering the scheduling groups. `Allow` preserves the original
+  `PreparedInvocation`; `Deny` or an unavailable/cancelled `Ask` settles that
+  call's result slot without creating an executor future. This decision phase
+  is in canonical model-call order, including for parallel groups.
 - Result slots are preallocated in model call order, so completion timing
   can never influence message identities or canonical ordering.
 - Scheduling interprets `ToolConcurrencyPolicy` per registered tool: a

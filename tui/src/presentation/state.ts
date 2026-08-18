@@ -33,6 +33,7 @@ import type {
   RuntimeClientBackgroundExecution,
   RuntimeClientContextView,
   RuntimeClientCursor,
+  InteractionRequest,
   SessionModelView,
   ToolCallId,
   ToolId,
@@ -121,6 +122,8 @@ export interface PresentationState {
   transcript: TranscriptEntry[];
   attempt?: AttemptPresentation;
   inbound: InboundDiagnostics;
+  /** Runtime-owned live interactions, reconstructed from snapshot/events. */
+  pendingInteractions: InteractionRequest[];
   background: RuntimeClientBackgroundExecution[];
   status?: AgentStatusView;
   context: RuntimeClientContextView;

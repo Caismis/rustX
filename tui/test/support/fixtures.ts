@@ -10,6 +10,7 @@
 import type {
   AttemptModelView,
   CapabilityView,
+  InteractionRequest,
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientSnapshot,
@@ -17,6 +18,27 @@ import type {
   ToolExecutionResult,
   UserMessageBlock,
 } from "../../src/protocol/types.ts";
+
+export function approvalInteraction(
+  id = "attempt-1-interaction-1",
+): InteractionRequest {
+  return {
+    id,
+    conversation_id: "conv-test",
+    attempt_id: "attempt-1",
+    turn: 2,
+    kind: {
+      type: "approval",
+      call_id: "call-1",
+      tool_id: "tool-bash",
+      tool_name: "bash",
+      origin: "builtin",
+      mode: "foreground",
+      arguments: { command: "printf original" },
+      reason: "native policy requires approval",
+    },
+  };
+}
 
 export function invocation(
   model: string,
@@ -108,6 +130,7 @@ export function snapshot(
     shutting_down: false,
     messages: [],
     inbound: { pending: [] },
+    pending_interactions: [],
     background: [],
     context: { compaction_count: 0 },
     capabilities: capabilities(1),
