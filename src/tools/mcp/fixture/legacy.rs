@@ -50,6 +50,27 @@ pub const LEGACY_FIXTURE_MODE_ENV: &str = "RUSTX_M7_LEGACY_MCP_FIXTURE";
 /// precedes an answered request is durable by the time the parent observes
 /// that answer. No polling and no sleeping is involved.
 pub const LEGACY_JOURNAL_ENV: &str = "RUSTX_M7_LEGACY_FIXTURE_JOURNAL";
+/// The environment variable selecting the error this fixture answers the
+/// `server/discover` probe with (Issue #81).
+///
+/// Real pre-2026 peers do not all answer an unknown pre-`initialize`
+/// request with `-32601`: session middleware commonly rejects it with
+/// `-32600`/`INVALID_REQUEST`-class errors (the production failure behind
+/// Issue #81 was exactly such a peer). `method_not_found` (the default)
+/// covers the plain shape; `invalid_request` covers the peer shape rmcp
+/// 3.1.2's `Auto` mode could not recover from.
+pub const LEGACY_DISCOVER_ERROR_ENV: &str = "RUSTX_M7_LEGACY_FIXTURE_DISCOVER_ERROR";
+/// The `LEGACY_DISCOVER_ERROR_ENV` value answering the probe with `-32601`.
+pub const DISCOVER_ERROR_METHOD_NOT_FOUND: &str = "method_not_found";
+/// The `LEGACY_DISCOVER_ERROR_ENV` value answering the probe with a
+/// correlated `-32600` rejection naming the unsupported revision — the
+/// failing external peer shape of Issue #81.
+pub const DISCOVER_ERROR_INVALID_REQUEST: &str = "invalid_request";
+/// The environment variable overriding the revision this fixture echoes in
+/// its legacy `InitializeResult` (default: [`LEGACY_FIXTURE_REVISION`]).
+/// An unknown revision drives the no-shared-revision path over the legacy
+/// handshake.
+pub const LEGACY_REVISION_ENV: &str = "RUSTX_M7_LEGACY_FIXTURE_REVISION";
 
 /// The revision this fixture negotiates over the legacy `initialize`
 /// handshake — a representative 2025-era revision.
@@ -80,7 +101,21 @@ pub async fn serve_if_legacy_fixture_mode() -> bool {
     if std::env::var_os(LEGACY_FIXTURE_MODE_ENV).is_none() {
         return false;
     }
-    serve(std::env::var_os(LEGACY_JOURNAL_ENV).map(PathBuf::from)).await;
+    let discover_error = std::env::var(LEGACY_DISCOVER_ERROR_ENV)
+        .unwrap_or_else(|_| DISCOVER_ERROR_METHOD_NOT_FOUND.to_owned());
+    let revision =
+        std::env::var(LEGACY_REVISION_ENV)
+            .ok()
+            .map_or(LEGACY_FIXTURE_REVISION, |value| {
+                serde_json::from_value::<ProtocolVersion>(serde_json::Value::String(value))
+                    .expect("a protocol revision string always deserializes")
+            });
+    serve(
+        std::env::var_os(LEGACY_JOURNAL_ENV).map(PathBuf::from),
+        &discover_error,
+        revision,
+    )
+    .await;
     true
 }
 
@@ -125,7 +160,7 @@ fn catalog(changed: bool) -> Vec<Tool> {
 /// <- tools/call mutate               -> notifications/tools/list_changed, then success
 /// <- tools/list                      -> [echo, new_tool]
 /// ```
-async fn serve(journal: Option<PathBuf>) {
+async fn serve(journal: Option<PathBuf>, discover_error: &str, revision: ProtocolVersion) {
     let mut input = BufReader::new(tokio::io::stdin());
     let mut output = tokio::io::stdout();
     let mut line = String::new();
@@ -145,7 +180,14 @@ async fn serve(journal: Option<PathBuf>) {
         match message {
             ClientJsonRpcMessage::Request(request) => {
                 let id = request.id.clone();
-                for message in handle_request(request.request, id, &mut changed, journal.as_ref()) {
+                for message in handle_request(
+                    request.request,
+                    id,
+                    &mut changed,
+                    journal.as_ref(),
+                    discover_error,
+                    &revision,
+                ) {
                     send(&mut output, &message).await;
                 }
             }
@@ -168,17 +210,31 @@ fn handle_request(
     id: RequestId,
     changed: &mut bool,
     journal: Option<&PathBuf>,
+    discover_error: &str,
+    revision: &ProtocolVersion,
 ) -> Vec<ServerJsonRpcMessage> {
     match request {
         // The whole point of this fixture: a peer that has never heard of the
         // MCP 2026-07-28 inline lifecycle. The connection stays open so the
-        // client can fall back on it.
+        // client can fall back on it. The error shape is selectable: real
+        // legacy servers variously answer an unknown pre-`initialize`
+        // request with `-32601` or with session-middleware rejections such
+        // as `-32600` (the Issue #81 production peer shape).
         ClientRequest::DiscoverRequest(_) => {
             record(journal, JOURNAL_DISCOVER);
-            vec![ServerJsonRpcMessage::error(
-                ErrorData::method_not_found::<DiscoverRequestMethod>(),
-                Some(id),
-            )]
+            let error = if discover_error == DISCOVER_ERROR_INVALID_REQUEST {
+                ErrorData::new(
+                    rmcp::model::ErrorCode::INVALID_REQUEST,
+                    "Unsupported protocol version",
+                    Some(serde_json::json!({
+                        "requested": ProtocolVersion::V_2026_07_28,
+                        "supported": [revision],
+                    })),
+                )
+            } else {
+                ErrorData::method_not_found::<DiscoverRequestMethod>()
+            };
+            vec![ServerJsonRpcMessage::error(error, Some(id))]
         }
         ClientRequest::InitializeRequest(request) => {
             // The revision the client offers on the legacy path is rustX's
@@ -197,7 +253,7 @@ fn handle_request(
                     .enable_tool_list_changed()
                     .build(),
             );
-            result.protocol_version = LEGACY_FIXTURE_REVISION;
+            result.protocol_version = revision.clone();
             result.server_info = Implementation::new("rustx-legacy-fixture", "0.0.0");
             vec![legacy_response(ServerResult::InitializeResult(result), id)]
         }

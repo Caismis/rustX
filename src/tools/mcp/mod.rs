@@ -16,10 +16,14 @@
 //! - [`rmcp::ClientLifecycleMode::Auto`] first probes `server/discover` (the
 //!   MCP 2026-07-28 inline lifecycle), walking the offered list downwards
 //!   whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`;
-//! - a peer that does not know `server/discover` at all answers
-//!   `METHOD_NOT_FOUND`, and rmcp falls back to the legacy
-//!   `initialize`/`notifications/initialized` handshake using the newest
-//!   pre-inline revision rustX speaks.
+//! - a peer that does not know `server/discover` proves it by answering the
+//!   probe with a correlated non-modern JSON-RPC error — legacy servers
+//!   variously use `METHOD_NOT_FOUND`, `INVALID_REQUEST`, or
+//!   session-middleware rejections — and rmcp (>= 3.1.3) then falls back to
+//!   the legacy `initialize`/`notifications/initialized` handshake on the
+//!   same connection, offering the newest pre-inline revision rustX speaks;
+//! - a peer that silently ignores the probe hits rmcp's bounded discover
+//!   timeout and takes the same legacy fallback.
 //!
 //! rustX then validates the negotiated revision against its own supported
 //! set (the legacy handshake lets a server echo any revision it likes) and
@@ -1081,8 +1085,10 @@ where
             // `Auto` runs the real negotiation: it probes the inline
             // `server/discover` lifecycle, walks the offered revisions down
             // whenever the peer answers `UNSUPPORTED_PROTOCOL_VERSION`, and
-            // falls back to the legacy `initialize` handshake only when the
-            // peer proves it does not know `server/discover` at all.
+            // falls back to the legacy `initialize` handshake when the peer
+            // proves it is pre-2026 — a correlated non-modern JSON-RPC
+            // error (`METHOD_NOT_FOUND`, `INVALID_REQUEST`, session
+            // middleware rejections, …) or a bounded probe timeout.
             rmcp::ClientLifecycleMode::Auto {
                 preferred_versions: supported_protocol_versions(),
                 legacy_version: Some(legacy_handshake_version()),
