@@ -2590,43 +2590,29 @@ fn find_event_by_id(
 /// ownership opening fact of a subagent lifecycle.
 ///
 /// Terminal callers restate `child_agent_id` so the compound event remains
-/// self-describing, but that repeated field is not authority. Validation
-/// scans only this bounded, typed lifecycle fact rather than trusting a
-/// caller-controlled terminal payload.
+/// self-describing, but that repeated field is not authority. The ownership
+/// fact has one deterministic event identity (`subagent-committed-event:{id}`),
+/// so the authoritative child identity resolves through the unique
+/// `event_id` index in bounded time instead of scanning the event journal.
+/// Duplicate ownership facts are already rejected at commit time by the
+/// `lifecycle_state` uniqueness probe, so a deterministic lookup cannot
+/// miss a second opening fact.
 fn find_subagent_ownership_child(
     transaction: &Transaction<'_>,
     subagent_id: &crate::runtime::identity::SubagentId,
 ) -> Result<AgentId, ConversationStoreError> {
-    let mut statement = transaction
-        .prepare("SELECT event_json FROM events ORDER BY sequence")
-        .map_err(|error| storage(format!("subagent ownership probe: {error}")))?;
-    let rows = statement
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|error| storage(format!("subagent ownership query: {error}")))?;
-    let mut child_agent_id = None;
-    for row in rows {
-        let json = row.map_err(|error| storage(format!("subagent ownership row: {error}")))?;
-        let event: RuntimeEventEnvelope = decode(&json, "subagent ownership event")?;
-        if let RuntimeEvent::SubagentOwnershipCommitted {
-            subagent_id: candidate,
-            child_agent_id: candidate_child,
-            ..
-        } = event.event
-            && candidate == *subagent_id
-        {
-            if child_agent_id.is_some() {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "subagent {subagent_id} has duplicate ownership facts"
-                )));
-            }
-            child_agent_id = Some(candidate_child);
-        }
-    }
-    child_agent_id.ok_or_else(|| {
+    let event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));
+    let envelope = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
             "subagent terminal has no durable ownership fact for {subagent_id}"
         ))
-    })
+    })?;
+    let RuntimeEvent::SubagentOwnershipCommitted { child_agent_id, .. } = envelope.event else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "the subagent ownership event {event_id} is not the typed ownership fact"
+        )));
+    };
+    Ok(child_agent_id)
 }
 
 #[allow(clippy::too_many_lines)] // Keeps all cross-domain reference checks at one transaction seam.
@@ -4182,11 +4168,14 @@ mod tests {
         let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
         let message_id = MessageId::new("subagent-notification-1");
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
-        // The ownership commit opens the lifecycle before the terminal.
+        // The ownership commit opens the lifecycle before the terminal. The
+        // event identity is the deterministic `subagent-committed-event:{id}`
+        // the registry writes in production; terminal validation resolves
+        // the ownership fact through that unique event identity.
         store
             .append_event(envelope(
                 &conversation_id,
-                "subagent-committed-1",
+                &format!("subagent-committed-event:{subagent_id}"),
                 None,
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id: subagent_id.clone(),
@@ -4310,7 +4299,7 @@ mod tests {
             store
                 .append_event(envelope(
                     &conversation_id,
-                    &format!("ownership-{ordinal}"),
+                    &format!("subagent-committed-event:{subagent_id}"),
                     None,
                     RuntimeEvent::SubagentOwnershipCommitted {
                         subagent_id,
@@ -4361,6 +4350,22 @@ mod tests {
 
         let child_a = AgentId::new("agent-a");
         let child_b = AgentId::new("agent-b");
+
+        // A terminal for a child with no durable ownership fact is an
+        // invalid reference: the deterministic ownership-identity lookup
+        // finds no opening fact.
+        assert!(matches!(
+            publish(
+                50,
+                &child_a,
+                SubagentTerminalState::Succeeded,
+                UserSource::Agent {
+                    agent_id: child_a.clone()
+                },
+                "missing-ownership"
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
 
         // The event's repeated child identity is not authority: S owns A,
         // so a success claiming B and authored by B is rejected.

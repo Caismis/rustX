@@ -517,23 +517,39 @@ that a live child produced an Interrupted physical result.
   linearization point — under the mailbox's running-commit section — freezes
   one timestamp, writes the durable `SubagentOwnershipCommitted` fact, and
   opens the `subagent:{id}` lifecycle. The record's `started_at` uses that
-  same timestamp. The committed driver command handle is installed before
-  the start gate opens. If cancellation commits in the bounded handoff
-  window, the intent is retained and the driver receives `Cancel` before it
-  can send `Delegate`; cancellation therefore has no loss window. A durable
-  failure or a lost cancellation race rolls the staged child back completely
-  (killed, conclusively reaped, runtime root removed) before returning, so no
-  unrecorded side effect can exist.
+  same timestamp.
+- **Start-vs-cancel has exactly one arbitration boundary.** The registry
+  mutex linearizes child start-gate release against explicit cancellation:
+  the command-handle install, the lifecycle read, and the synchronous
+  start-gate release all happen inside one critical section. Cancellation
+  committed before that section resolves the gate cancelled — the driver
+  sends `Cancel` before `Delegate` and no child semantic work ever begins.
+  Gate release committed first defines an already-started child, and any
+  later cancellation is in-flight cancellation of it. There is no ordering
+  in which cancellation intent commits before start release and the driver
+  still sends `Delegate` first. A durable failure or a lost cancellation
+  race rolls the staged child back completely (killed, conclusively reaped,
+  runtime root removed) before returning, so no unrecorded side effect can
+  exist.
 - **Cancellation intent is canonical.** Once the intent commits, the child
   settles as cancelled no matter what the physical outcome later reports;
   a result frame that arrives after the intent is absorbed, never
-  canonicalized as success. Child-side cancellation is sticky even when
-  `Cancel` is observed before `AttemptAdmitted`: the child applies the intent
-  as soon as that observation becomes visible, and the existing runtime
-  request-start arbitration prevents a model request after cancellation wins
-  that frontier. Driver escalation after intent (Cancel frame → SIGTERM →
-  SIGKILL on the child's process group) settles cancelled; an explicit
-  process-control failure settles failed.
+  canonicalized as success. Driver escalation after intent (Cancel frame →
+  SIGTERM → SIGKILL on the child's process group) settles cancelled; an
+  explicit process-control failure settles failed.
+- **Child cancellation is runtime-owned, not observation-driven.**
+  `ParentFrame::Cancel` commits directly into the child
+  `ConversationRuntime`'s one-shot cancellation intent through
+  `cancel_current_or_next_attempt`: a current attempt's `AgentCancellation`
+  is requested immediately, and a still-unadmitted attempt starts
+  already-cancelled when the next admission consumes the intent under the
+  one coordinator lock. `AttemptAdmitted` observation is evidence, never a
+  control dependency — the frame is never queued behind observation
+  delivery. The existing durable model-request-start frontier (M9b) alone
+  decides whether a model request may start: cancellation before the
+  frontier yields zero `ModelRequestStarted` and zero provider requests;
+  cancellation after the frontier cancels the one in-flight request and no
+  second model turn follows the settlement.
 - **All model-visible communication is the message bus.** The child's
   answer reaches the parent through the parent's ordinary durable inbound
   path as a `UserSource::Agent` message with the deterministic message id
@@ -570,7 +586,17 @@ that a live child produced an Interrupted physical result.
   `SubagentId`. A successful terminal must pair with
   `UserSource::Agent(child)`; failure, cancellation, and interruption must
   pair with `UserSource::Runtime`. The SQLite compound transaction rejects
-  mismatches before accepting either side.
+  mismatches before accepting either side. The ownership fact is resolved
+  through its deterministic event identity (`subagent-committed-event:{id}`)
+  and the unique `event_id` index — bounded time, never a journal scan.
+- **The subagent registry is validated at runtime construction.** A
+  `ConversationRuntime` accepts a `SubagentRegistry` only when its typed
+  ownership domain matches the runtime — the same `ConversationId`, the
+  same parent `AgentId`, and the exact same canonical mailbox (structural
+  identity, never a file-path comparison) — and only when the registry is
+  pristine (owns no committed child record). A registry for another
+  conversation/agent/mailbox domain or one with live children is rejected
+  typed before anything is claimed.
 - **Parent death is contained.** The parent holds the control channel; its
   death closes the child's stdin, and the child drains and exits without a
   result. Nothing polls PIDs. At recovery, a durably owned, never-settled

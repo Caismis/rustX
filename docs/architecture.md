@@ -3113,17 +3113,33 @@ real --subagent-child     ConversationRuntime + Agent Loop + Context + Tools
 `prepare` validates the bounded task/context and stages a real child through
 its typed Hello/Ready handshake. The one ownership commit freezes one start
 timestamp, durably writes `SubagentOwnershipCommitted`, and creates the
-logical Running record. The driver command handle is installed before its
-start gate opens. If cancellation wins during that handoff, a sticky intent
-causes the driver to send `Cancel` before `Delegate`; the cancellation cannot
-be lost while the control handle is being published. The registry retains no
+logical Running record. Start-vs-cancel has exactly one arbitration
+boundary: the registry mutex covers the command-handle install, the
+lifecycle read, and the synchronous start-gate release in one critical
+section. Cancellation committed first resolves the gate cancelled — the
+driver sends `Cancel` before `Delegate`, so no child semantic work ever
+begins; gate release committed first defines an already-started child whose
+later cancellation is in-flight cancellation. The registry retains no
 `tokio::process::Child`; rollback and the committed driver are the only
 physical teardown owners at their respective phases.
 
+`ConversationRuntime::new` validates the registry's typed ownership domain
+before anything is claimed: the same `ConversationId`, the same parent
+`AgentId`, the exact same canonical mailbox (structural identity, never a
+file-path comparison), and a pristine registry with no committed child
+record. A registry for another domain or one with live children is rejected
+typed.
+
 The child accepts `Delegate` through its ordinary durable inbound path as
-`UserSource::Agent(parent)`. A child-side `Cancel` is sticky across the
-`AttemptAdmitted` observation and uses the existing runtime cancellation and
-model-request-start frontier. The child result is only a candidate on IPC;
+`UserSource::Agent(parent)`. A child-side `Cancel` commits directly into the
+runtime-owned one-shot cancellation intent
+(`cancel_current_or_next_attempt`): a current attempt's `AgentCancellation`
+is requested immediately, and a still-unadmitted attempt starts
+already-cancelled when admission consumes the intent. `AttemptAdmitted`
+observation is evidence, never a control dependency, and the existing
+durable model-request-start frontier (M9b) decides whether a model request
+may start — zero requests before it, in-flight cancellation after it. The
+child result is only a candidate on IPC;
 the parent driver reaps first, then the registry freezes a UTF-8-safe
 byte-bounded candidate and asks the parent mailbox to atomically accept the
 terminal inbound plus `SubagentTerminalPublished`. A normal terminal state is
@@ -3134,7 +3150,9 @@ owning `ConversationRuntime` in `DurabilityFailed`; no false terminal success
 or healthy state is reported.
 
 Terminal validation resolves the child identity from the durable
-`SubagentOwnershipCommitted` fact, so a repeated or caller-controlled
+`SubagentOwnershipCommitted` fact — through its deterministic event identity
+(`subagent-committed-event:{id}`) and the unique `event_id` index in bounded
+time, never a journal scan — so a repeated or caller-controlled
 `child_agent_id` in a terminal event is not authority. Success is
 `UserSource::Agent(child)`; failure, cancellation, and recovery interruption
 are `UserSource::Runtime`. The Explore child capability snapshot contains

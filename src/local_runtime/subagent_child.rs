@@ -35,19 +35,31 @@
 //! interrupted). A `Cancel` frame requests the ordinary attempt
 //! cancellation path; the child never exits on the frame alone — it
 //! settles, reports, drains, and only then exits.
+//!
+//! # Cancellation is runtime-owned, not observation-driven
+//!
+//! `ParentFrame::Cancel` commits directly into the child
+//! `ConversationRuntime`'s one-shot cancellation intent through
+//! `ConversationRuntime::cancel_current_or_next_attempt`: a current
+//! attempt's `AgentCancellation` is requested immediately, and a
+//! still-unadmitted attempt starts already-cancelled when admission
+//! consumes the intent. The `AttemptAdmitted` observation is **evidence,
+//! never a control dependency** — the frame is never queued behind
+//! observation delivery. The existing durable model-request-start frontier
+//! (M9b) alone decides whether a model request may start.
 
 use std::sync::Arc;
 
 use crate::events::types::RuntimeEvent;
 use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
-use crate::runtime::identity::AttemptId;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::subagent::ipc::{
     ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame, ResultFrame,
     SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
 use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
+use crate::runtime::types::CancellationReason;
 
 use super::composition::{LocalConversationCore, LocalRuntimeDependencies};
 
@@ -303,20 +315,28 @@ async fn await_terminal_inner<F>(
 where
     F: Fn(bool) + Send + Sync + 'static,
 {
-    let mut current_attempt: Option<AttemptId> = None;
-    // Cancellation is an intent, not an observation tied to one particular
-    // attempt. Retaining it here makes a Cancel received before
-    // AttemptAdmitted apply as soon as the runtime exposes that attempt.
-    let mut cancellation_requested = false;
     loop {
         tokio::select! {
             frame = read_parent_frame(control) => {
                 match frame {
                     Ok(Some(ParentFrame::Cancel)) => {
-                        cancellation_requested = true;
-                        let delivered = current_attempt.as_ref().is_some_and(|attempt_id| {
-                            runtime.cancel_current_attempt(attempt_id).is_ok()
-                        });
+                        // The cancellation commits directly into the
+                        // runtime-owned one-shot intent under the
+                        // coordinator lock: a current attempt is cancelled
+                        // immediately through its AgentCancellation, and a
+                        // still-unadmitted attempt starts already-cancelled
+                        // when the next admission consumes the intent.
+                        // `delivered` reports whether a current attempt
+                        // existed at this instant (test evidence); the
+                        // pre-admission path arms the runtime intent.
+                        // `AttemptAdmitted` observation is not part of this
+                        // control path — the frame is never queued behind
+                        // observation delivery.
+                        let delivered = runtime
+                            .cancel_current_or_next_attempt(
+                                CancellationReason::UserRequested,
+                            )
+                            .is_some();
                         on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
@@ -334,13 +354,6 @@ where
             () = observations.wait() => {
                 for observation in observations.drain() {
                     match observation {
-                        ConversationObservation::AttemptAdmitted { attempt_id } => {
-                            current_attempt = Some(attempt_id.clone());
-                            if cancellation_requested {
-                                let delivered = runtime.cancel_current_attempt(&attempt_id).is_ok();
-                                on_cancellation(delivered);
-                            }
-                        }
                         ConversationObservation::Event { event, .. } => {
                             match event {
                                 RuntimeEvent::AttemptCompleted { .. } => {
@@ -442,17 +455,19 @@ mod tests {
     use crate::context::{AgentStatusComposer, DefaultTokenEstimator, SessionContextPolicy};
     use crate::model::adapter::ModelAdapter;
     use crate::runtime::conversation_runtime::{
-        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, RuntimeConversationConfig,
+        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, Gate,
+        RuntimeConversationConfig,
     };
     use crate::runtime::identity::{AgentId, ConversationId};
-    use crate::scripted_suites::support::fake::FakeModel;
+    use crate::scripted_suites::support::fake::{FakeModel, FakeStep};
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::ToolRegistry;
     use crate::tools::runtime::ConversationToolRuntime;
 
     async fn child_test_runtime(
         dir: &tempfile::TempDir,
-        pause: StartBoundaryPause,
+        start_pause: Option<StartBoundaryPause>,
+        admission_gate: Option<Arc<Gate>>,
         conversation_id: ConversationId,
         model: Arc<FakeModel>,
     ) -> ConversationRuntime {
@@ -497,31 +512,42 @@ mod tests {
                 subagents: None,
             },
             CoordinatorProbe {
-                start_boundary_pause: Some(pause),
+                start_boundary_pause: start_pause,
+                admission_gate,
                 ..CoordinatorProbe::default()
             },
         )
         .expect("child runtime")
     }
 
-    /// A Cancel frame is received while the runtime has admitted the task but
-    /// is parked before the durable model-request-start arbitration. The
-    /// test deliberately removes the queued `AttemptAdmitted` observation,
-    /// delivers Cancel first, then restores that observation. The sticky
-    /// child path must cancel the attempt on admission and the provider must
-    /// never receive a request.
+    /// Cancel before admission (Issue #60, Blocker B): the delegated
+    /// inbound is durably accepted and the admission worker is parked
+    /// before the coordinator lock; `ParentFrame::Cancel` commits the
+    /// runtime-owned one-shot intent while no attempt exists; the released
+    /// admission consumes the intent and the attempt starts
+    /// already-cancelled. No observation delivery is involved: the
+    /// `AttemptAdmitted` observation is provably still sitting unread in
+    /// the queue when admission proceeds.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn cancellation_before_attempt_admitted_observation_is_sticky() {
+    async fn cancel_before_attempt_admission_arms_the_one_shot_intent() {
         let dir = tempfile::tempdir().expect("temp root");
-        let (pause, mut pre_start, _) = StartBoundaryPause::install(true, false);
+        let admission_gate = Arc::new(Gate::default());
         let model = Arc::new(FakeModel::new(Vec::new()));
-        let conversation_id = ConversationId::new("conv-child-cancel");
-        let runtime = child_test_runtime(&dir, pause, conversation_id.clone(), model.clone()).await;
+        let conversation_id = ConversationId::new("conv-child-cancel-before-admission");
+        let runtime = child_test_runtime(
+            &dir,
+            None,
+            Some(admission_gate.clone()),
+            conversation_id,
+            model.clone(),
+        )
+        .await;
         let observations = Arc::new(PendingObservations::new());
         runtime
             .install_observation_bridge(Arc::clone(&observations))
             .expect("observation bridge");
         runtime.activate();
+        admission_gate.arm();
         runtime
             .submit_sourced_inbound(
                 UserSource::Agent {
@@ -532,24 +558,19 @@ mod tests {
                 })],
             )
             .expect("Delegate enters ordinary child inbound");
-        pre_start
-            .as_mut()
-            .expect("pre-start control")
-            .await_park(1)
-            .await;
+        // The admission worker is parked before the coordinator lock: the
+        // durable inbound is accepted but no attempt exists yet.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking({
+                let admission_gate = admission_gate.clone();
+                move || admission_gate.wait_entered()
+            }),
+        )
+        .await
+        .expect("admission gate liveness")
+        .expect("admission gate entered");
 
-        // AttemptAdmitted has been published by the runtime, but the child
-        // control loop has not consumed it. Remove it so Cancel is provably
-        // handled while current_attempt is None; the test pushes the same
-        // observation back after the cancellation frame.
-        let drained = observations.drain();
-        let attempt_id = drained
-            .iter()
-            .find_map(|observation| match observation {
-                ConversationObservation::AttemptAdmitted { attempt_id } => Some(attempt_id.clone()),
-                _ => None,
-            })
-            .expect("the runtime published AttemptAdmitted");
         let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
         crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
             .await
@@ -571,13 +592,13 @@ mod tests {
             )
             .await
         });
-        // The child has consumed Cancel and requested the runtime's generic
-        // cancellation seam while `current_attempt` is still None. Only then
-        // restore AttemptAdmitted, proving the sticky pre-admission path.
+        // The child consumed Cancel and committed the runtime-owned intent
+        // while the admission worker was still parked: no current attempt
+        // existed, so the before-admission probe fired.
         cancellation_before_admission.notified().await;
-        observations.push(ConversationObservation::AttemptAdmitted { attempt_id });
-        cancellation_after_admission.notified().await;
-        pre_start.take().expect("pre-start control").release();
+        // `AttemptAdmitted` is deliberately NOT consumed here — observation
+        // delivery is provably not part of the cancellation control path.
+        admission_gate.release();
 
         let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
             .await
@@ -599,6 +620,174 @@ mod tests {
                 .events
                 .iter()
                 .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+        // The cancellation committed while the admission worker was still
+        // parked (before-probe fired before `release`), so the one-shot
+        // intent provably won the admission linearization. The shared
+        // observation queue may have been drained by the child loop as
+        // evidence — `AttemptAdmitted` delivery is not part of the control
+        // path, which is exactly what the sequencing above proves.
+        runtime.shutdown().await.expect("child runtime drains");
+    }
+
+    /// Cancel after admission, before request start (Issue #60, Blocker B):
+    /// the attempt is parked at the existing M9 model-turn start boundary
+    /// (before the cancellation-vs-start arbitration). `ParentFrame::Cancel`
+    /// reaches the current attempt's `AgentCancellation` directly — no
+    /// observation delivery is involved — and the M9b frontier resolves
+    /// `CancelledBeforeStart`: zero `ModelRequestStarted`, zero provider
+    /// requests.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_after_admission_before_request_start_wins_the_m9_frontier() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let (pause, mut pre_start, _) = StartBoundaryPause::install(true, false);
+        let model = Arc::new(FakeModel::new(Vec::new()));
+        let conversation_id = ConversationId::new("conv-child-cancel-pre-start");
+        let runtime =
+            child_test_runtime(&dir, Some(pause), None, conversation_id, model.clone()).await;
+        let observations = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(Arc::clone(&observations))
+            .expect("observation bridge");
+        runtime.activate();
+        runtime
+            .submit_sourced_inbound(
+                UserSource::Agent {
+                    agent_id: AgentId::new("agent-parent"),
+                },
+                vec![UserContentBlock::Text(TextBlock {
+                    text: "delegated task".to_owned(),
+                })],
+            )
+            .expect("Delegate enters ordinary child inbound");
+        // The attempt is admitted and parked at the M9 request-start
+        // frontier, before the cancellation-vs-start arbitration.
+        pre_start
+            .as_mut()
+            .expect("pre-start control")
+            .await_park(1)
+            .await;
+
+        let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
+            .await
+            .expect("parent sends Cancel");
+        let child_runtime = runtime.clone();
+        let child_observations = Arc::clone(&observations);
+        let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
+        let after_probe = Arc::clone(&cancellation_after_admission);
+        let waiter = tokio::spawn(async move {
+            let mut child_end = child_end;
+            await_terminal_with_probe(
+                &mut child_end,
+                &child_runtime,
+                &child_observations,
+                Arc::new(tokio::sync::Notify::new()),
+                after_probe,
+            )
+            .await
+        });
+        // The child consumed Cancel and the runtime cancelled the current
+        // attempt directly through its AgentCancellation (a current attempt
+        // exists, so the after-admission probe fires). No observation was
+        // consumed to make this happen.
+        cancellation_after_admission.notified().await;
+        pre_start.take().expect("pre-start control").release();
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
+            .await
+            .expect("child cancellation liveness")
+            .expect("child waiter")
+            .expect("child control loop");
+        assert!(matches!(terminal, AttemptTerminal::Cancelled));
+        assert!(
+            model.requests().is_empty(),
+            "zero provider requests crossed the M9 frontier: {:?}",
+            model.requests()
+        );
+        assert!(
+            !runtime
+                .tool_runtime()
+                .durable_store()
+                .read_events(None, 64)
+                .expect("events")
+                .events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+        runtime.shutdown().await.expect("child runtime drains");
+    }
+
+    /// Cancel after request start (Issue #60, Blocker B): the durable
+    /// request-start frontier was crossed and the provider stream is parked
+    /// awaiting cancellation (the parked watch is the production
+    /// synchronization point). `ParentFrame::Cancel` cancels the in-flight
+    /// request through the existing M9 semantics; exactly one request was
+    /// started and no second model turn follows the cancellation
+    /// settlement.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_after_request_start_cancels_the_in_flight_request() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let model = Arc::new(FakeModel::new(vec![vec![FakeStep::ParkUntilCancelled]]));
+        let conversation_id = ConversationId::new("conv-child-cancel-in-flight");
+        let runtime = child_test_runtime(&dir, None, None, conversation_id, model.clone()).await;
+        let observations = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(Arc::clone(&observations))
+            .expect("observation bridge");
+        runtime.activate();
+        runtime
+            .submit_sourced_inbound(
+                UserSource::Agent {
+                    agent_id: AgentId::new("agent-parent"),
+                },
+                vec![UserContentBlock::Text(TextBlock {
+                    text: "delegated task".to_owned(),
+                })],
+            )
+            .expect("Delegate enters ordinary child inbound");
+        // The request-start frontier was crossed: the provider stream is
+        // parked awaiting cancellation.
+        let mut parked = model.parked();
+        parked
+            .wait_for(|is_parked| *is_parked)
+            .await
+            .expect("provider parked watch");
+        assert_eq!(model.requests().len(), 1, "exactly one request started");
+
+        let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
+            .await
+            .expect("parent sends Cancel");
+        let child_runtime = runtime.clone();
+        let child_observations = Arc::clone(&observations);
+        let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
+        let after_probe = Arc::clone(&cancellation_after_admission);
+        let waiter = tokio::spawn(async move {
+            let mut child_end = child_end;
+            await_terminal_with_probe(
+                &mut child_end,
+                &child_runtime,
+                &child_observations,
+                Arc::new(tokio::sync::Notify::new()),
+                after_probe,
+            )
+            .await
+        });
+        // The child consumed Cancel and the runtime cancelled the in-flight
+        // attempt directly.
+        cancellation_after_admission.notified().await;
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
+            .await
+            .expect("child cancellation liveness")
+            .expect("child waiter")
+            .expect("child control loop");
+        assert!(matches!(terminal, AttemptTerminal::Cancelled));
+        assert_eq!(
+            model.requests().len(),
+            1,
+            "one request total; cancellation never starts a second model turn"
         );
         runtime.shutdown().await.expect("child runtime drains");
     }

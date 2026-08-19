@@ -764,6 +764,20 @@ impl ConversationInboundMailbox {
         &self.conversation_id
     }
 
+    /// Whether two mailbox handles are the exact same canonical mailbox of
+    /// one conversation: the same durable inbound capability and the same
+    /// process-local mailbox state.
+    ///
+    /// This is structural identity — the same shared ownership domain —
+    /// never a file-path comparison. Construction of a
+    /// [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
+    /// uses it to prove a supplied `SubagentRegistry` coordinates the
+    /// conversation's own canonical mailbox.
+    #[must_use]
+    pub(crate) fn shares_domain_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inbound, &other.inbound) && Arc::ptr_eq(&self.state, &other.state)
+    }
+
     /// The shared admission wake handle of this mailbox.
     pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.wake)

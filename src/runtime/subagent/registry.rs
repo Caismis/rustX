@@ -186,6 +186,8 @@ struct RegistryState {
     commit_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
     control_handoff_hook: Option<Arc<ControlHandoffHook>>,
+    #[cfg(test)]
+    gate_release_hook: Option<Arc<GateReleaseHook>>,
     /// Test seam: pre-staged children `prepare` consumes instead of
     /// spawning the real child binary.
     #[cfg(test)]
@@ -428,10 +430,44 @@ impl SubagentRegistry {
                 #[cfg(test)]
                 control_handoff_hook: None,
                 #[cfg(test)]
+                gate_release_hook: None,
+                #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
             })),
             state_version: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// The conversation this registry belongs to (construction ownership
+    /// validation of the runtime that consumes it).
+    #[must_use]
+    pub(crate) fn conversation_id(&self) -> &ConversationId {
+        &self.config.conversation_id
+    }
+
+    /// The parent (delegating) agent identity of this registry's domain.
+    #[must_use]
+    pub(crate) fn parent_agent_id(&self) -> &AgentId {
+        &self.config.agent_id
+    }
+
+    /// Whether this registry's canonical mailbox is exactly the supplied
+    /// mailbox: structural identity (same durable inbound capability and
+    /// same process-local mailbox state), never a file-path comparison.
+    #[must_use]
+    pub(crate) fn shares_mailbox_domain(&self, other: &ConversationInboundMailbox) -> bool {
+        self.config.mailbox.shares_domain_with(other)
+    }
+
+    /// Whether the registry owns no committed child record yet.
+    ///
+    /// A `ConversationRuntime` construction requires a pristine logical
+    /// subagent plane: a registry with live children can never be silently
+    /// adopted by a runtime that did not own their start.
+    #[must_use]
+    pub(crate) fn is_pristine(&self) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.records.is_empty()
     }
 
     /// Reseeds the ordinal sequence from the durable authority during
@@ -688,10 +724,14 @@ impl SubagentRegistry {
                 }),
             },
             Decision::Accepted { .. } => {
+                let driver = staged.into_driver(DelegationFrame { task, context });
+                let (commands, start_gate, task) = driver.split();
                 // This hook is outside the registry lock and after the
-                // durable ownership fact plus the Running record are both
-                // visible. It is the exact handoff edge exercised by the
-                // cancellation regression.
+                // durable ownership fact, the Running record, and the
+                // driver task all exist. It pauses before the gate-release
+                // critical section, so a concurrent cancellation commits
+                // while the command handle is still None — the
+                // deterministic "cancel lock wins first" edge.
                 #[cfg(test)]
                 let control_handoff_hook = {
                     self.state
@@ -707,25 +747,51 @@ impl SubagentRegistry {
 
                 // Point of no return: the child is conversation-owned. The
                 // OS handle moves into the driver task; the registry keeps
-                // only the narrow command handle. The driver's start gate
-                // remains closed until the command handle is installed and
-                // any already-committed cancellation is forwarded.
-                let driver = staged.into_driver(DelegationFrame { task, context });
-                let (commands, start_gate, task) = driver.split();
-                let cancel_before_start = {
+                // only the narrow command handle.
+                //
+                // One synchronization point: the command-handle install,
+                // the lifecycle read, and the start-gate release all happen
+                // under the registry mutex, so the mutex is the exact
+                // arbitration boundary between start-gate release and
+                // explicit cancellation. A cancellation that acquired the
+                // mutex first resolved the gate cancelled — the driver
+                // sends Cancel before Delegate and never allows child
+                // semantic work to begin. A gate release that acquired the
+                // mutex first defines an already-started child whose later
+                // cancellation is in-flight cancellation.
+                {
                     let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                    // Test-only: extract the pause handle before the record
+                    // borrow so the gate-release section is one critical
+                    // section.
+                    #[cfg(test)]
+                    let gate_release_hook = state.gate_release_hook.clone();
                     let index = *state
                         .index
                         .get(&subagent_id)
                         .expect("accepted ownership has a registry record");
                     let record = &mut state.records[index];
                     record.control = Some(commands);
-                    matches!(record.lifecycle, SubagentLifecycle::Cancelling)
-                };
-                // Sending `true` is the sticky handoff: the driver sends
-                // Cancel before Delegate and never allows child semantic
-                // work to begin. Sending `false` opens the normal gate.
-                let _ = start_gate.send(cancel_before_start);
+                    // Test-only: the exact remaining edge — the command
+                    // handle is installed but the start gate is not yet
+                    // released. The pause parks while holding the registry
+                    // mutex, so a concurrent `cancel` provably blocks: the
+                    // edge is unobservable, never best-effort. Production
+                    // has no pause and no equivalent semantic state.
+                    #[cfg(test)]
+                    if let Some(hook) = gate_release_hook {
+                        hook.wait();
+                    }
+                    let cancel_before_start =
+                        matches!(record.lifecycle, SubagentLifecycle::Cancelling);
+                    // Sending `true` resolves the gate cancelled: the
+                    // driver sends Cancel before Delegate and never allows
+                    // child semantic work to begin. Sending `false` opens
+                    // the normal gate. The release is synchronous under the
+                    // same mutex acquisition, so start-vs-cancel has exactly
+                    // one arbitration boundary.
+                    let _ = start_gate.send(cancel_before_start);
+                }
                 let registry = self.clone_for_task();
                 let settlement_id = subagent_id.clone();
                 tokio::spawn(async move {
@@ -1147,11 +1213,21 @@ impl SubagentRegistry {
     }
 
     /// Installs the exact test-only pause between durable ownership/record
-    /// publication and command-handle publication.
+    /// publication and the gate-release critical section.
     #[cfg(test)]
     pub fn install_control_handoff_hook(&self, hook: Arc<ControlHandoffHook>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.control_handoff_hook = Some(hook);
+    }
+
+    /// Installs the test-only pause at the exact remaining start-gate edge:
+    /// the command handle is installed in the record but the start gate is
+    /// not yet released. The pause parks inside the gate-release critical
+    /// section while holding the registry mutex.
+    #[cfg(test)]
+    pub fn install_gate_release_hook(&self, hook: Arc<GateReleaseHook>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.gate_release_hook = Some(hook);
     }
 }
 
@@ -1226,15 +1302,65 @@ pub struct CommitBoundaryHook {
     changed: std::sync::Condvar,
 }
 
-/// A test-only pause after the ownership fact and Running record commit but
-/// before the driver command handle/start gate are published. Production has
-/// no pause or equivalent semantic state; the hook exists only to force the
-/// exact cancellation-handoff interleaving in a regression.
+/// A test-only pause after the ownership fact and Running record commit,
+/// the driver task exists, but before the gate-release critical section.
+/// Production has no pause or equivalent semantic state; the hook exists
+/// only to force the deterministic cancellation-before-install
+/// interleaving in a regression.
 #[cfg(test)]
 #[derive(Debug, Default)]
 pub struct ControlHandoffHook {
     state: std::sync::Mutex<CommitHookState>,
     changed: std::sync::Condvar,
+}
+
+/// A test-only pause at the exact remaining start-gate edge: the driver
+/// command handle is installed in the registry record but the start gate
+/// has not yet been released. The pause parks inside the gate-release
+/// critical section **while holding the registry mutex**, so a concurrent
+/// `cancel` provably blocks on that mutex: the install+release section is
+/// atomic with respect to cancellation. Production has no pause and no
+/// equivalent semantic state; the hook exists only to prove the remaining
+/// edge is serialized, never best-effort.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub struct GateReleaseHook {
+    state: std::sync::Mutex<CommitHookState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl GateReleaseHook {
+    /// Blocks the gate release until [`Self::release`].
+    pub fn wait(&self) {
+        let mut state = self.state.lock().expect("subagent gate-release hook");
+        *state = CommitHookState::Entered;
+        self.changed.notify_all();
+        while matches!(*state, CommitHookState::Entered) {
+            state = self
+                .changed
+                .wait(state)
+                .expect("subagent gate-release hook");
+        }
+    }
+
+    /// Waits until the gate-release pause has been reached.
+    pub fn wait_until_entered(&self) {
+        let mut state = self.state.lock().expect("subagent gate-release hook");
+        while matches!(*state, CommitHookState::Idle) {
+            state = self
+                .changed
+                .wait(state)
+                .expect("subagent gate-release hook");
+        }
+    }
+
+    /// Releases the gate-release pause.
+    pub fn release(&self) {
+        let mut state = self.state.lock().expect("subagent gate-release hook");
+        *state = CommitHookState::Released;
+        self.changed.notify_all();
+    }
 }
 
 #[cfg(test)]
@@ -1725,7 +1851,29 @@ mod tests {
         .expect("driver frame")
         .expect("cancel frame");
         assert!(matches!(first, ParentFrame::Cancel));
-        // No Delegate was sent after cancellation won this handoff frontier.
+        // No Delegate was sent after cancellation won this handoff frontier:
+        // the driver's cancelled-before-start branch never writes it. Drain
+        // every remaining control frame (the escalation then EOF after
+        // reap) and prove the wire carries nothing else.
+        loop {
+            let frame = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                super::super::ipc::read_parent_frame(&mut child.peer),
+            )
+            .await
+            .expect("driver control liveness")
+            .expect("driver frame");
+            match frame {
+                Some(ParentFrame::Cancel) => {}
+                Some(ParentFrame::Delegate(_)) => {
+                    panic!("cancellation won the frontier; Delegate must never be sent")
+                }
+                Some(ParentFrame::Hello(_)) => {
+                    panic!("unexpected Hello after Ready")
+                }
+                None => break,
+            }
+        }
         drop(child.peer);
 
         let settled = plane
@@ -1774,6 +1922,121 @@ mod tests {
         control_handoff_cancellation_is_lossless(true).await;
     }
 
+    /// The remaining start-gate edge (Blocker A) is serialized, not
+    /// best-effort: while the commit holds the registry mutex at exactly
+    /// "command handle installed, gate not yet released", a concurrent
+    /// `cancel` provably blocks. Releasing the gate first defines an
+    /// already-started child: the driver sends `Delegate` first and the
+    /// later cancellation arrives as in-flight cancellation (`Cancel` frame
+    /// after `Delegate`), settling one canonical cancelled terminal.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn gate_release_wins_the_start_cancel_arbitration_and_cancel_becomes_in_flight() {
+        let plane = plane(4);
+        let hook = Arc::new(GateReleaseHook::default());
+        plane.registry.install_gate_release_hook(hook.clone());
+        let mut child = stage_stubborn(&plane);
+        let registry = plane.registry.clone();
+        let spec = start_spec("inspect");
+        let committer = tokio::spawn(async move {
+            let prepared = registry.prepare(&spec).await.expect("prepared");
+            registry.commit(prepared, &CancellationSignal::new()).await
+        });
+
+        hook.wait_until_entered();
+        let subagent_id = SubagentId::for_conversation(&plane.conversation_id, 1);
+        assert!(events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: ownership_subagent_id,
+                ..
+            } if *ownership_subagent_id == subagent_id
+        )));
+
+        // A concurrent cancellation is invoked while the commit provably
+        // holds the registry mutex at the install-but-not-released edge; it
+        // cannot complete until the gate-release section returns.
+        let (cancel_started_tx, cancel_started_rx) = std::sync::mpsc::channel();
+        let (cancel_done_tx, cancel_done_rx) = std::sync::mpsc::channel();
+        let cancel_registry = plane.registry.clone();
+        let cancel_id = subagent_id.clone();
+        let canceller = std::thread::spawn(move || {
+            cancel_started_tx.send(()).expect("cancel-started channel");
+            let snapshot = cancel_registry
+                .cancel(&cancel_id, CancellationReason::UserRequested)
+                .expect("known record");
+            cancel_done_tx.send(()).expect("cancel-done channel");
+            snapshot
+        });
+        cancel_started_rx
+            .recv()
+            .expect("cancel is invoked while the gate release is parked");
+        assert!(
+            cancel_done_rx.try_recv().is_err(),
+            "cancel is provably blocked on the registry mutex held by the parked gate release"
+        );
+
+        hook.release();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
+            .await
+            .expect("commit liveness")
+            .expect("committer")
+            .expect("commit succeeds");
+        let accepted = match outcome {
+            SubagentStartOutcome::Accepted(accepted) => accepted,
+            SubagentStartOutcome::RolledBack => panic!("ownership already committed"),
+        };
+        let cancelling = canceller.join().expect("canceller joins");
+        assert_eq!(cancelling.state, SubagentState::Cancelling);
+
+        // The gate release won: Delegate is the first parent->child frame,
+        // and the committed cancellation arrives after it as in-flight
+        // cancellation.
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::super::ipc::read_parent_frame(&mut child.peer),
+        )
+        .await
+        .expect("driver control liveness")
+        .expect("driver frame")
+        .expect("delegate frame");
+        assert!(
+            matches!(first, ParentFrame::Delegate(_)),
+            "gate release first means Delegate first"
+        );
+        let second = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::super::ipc::read_parent_frame(&mut child.peer),
+        )
+        .await
+        .expect("driver control liveness")
+        .expect("driver frame")
+        .expect("cancel frame");
+        assert!(matches!(second, ParentFrame::Cancel));
+
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Cancelled);
+        let terminal_states = events(&plane)
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id,
+                    state,
+                    ..
+                } if subagent_id == accepted.subagent_id => Some(state),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_states,
+            vec![SubagentTerminalState::Cancelled],
+            "one canonical cancellation"
+        );
+    }
+
     #[tokio::test]
     async fn the_capacity_bound_is_enforced_at_commit() {
         let plane = plane(1);
@@ -1804,6 +2067,16 @@ mod tests {
             error,
             SubagentStartError::CapacityExceeded { max: 1 }
         ));
+        // Settle the committed first child (escalate and reap) so the
+        // fixture leaks no process.
+        let _ = plane
+            .registry
+            .cancel(&first.subagent_id, CancellationReason::UserRequested);
+        plane
+            .registry
+            .wait_until_settled(&first.subagent_id)
+            .await
+            .expect("settled");
     }
 
     #[tokio::test]

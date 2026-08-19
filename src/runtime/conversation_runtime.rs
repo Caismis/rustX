@@ -348,6 +348,29 @@ pub enum ConversationRuntimeError {
         /// The conversation whose tool runtime is not pristine.
         conversation_id: ConversationId,
     },
+    /// The supplied `SubagentRegistry` does not belong to this
+    /// conversation's ownership domain: another `ConversationId`, another
+    /// parent `AgentId`, or a different canonical inbound mailbox.
+    ///
+    /// The runtime may only coordinate the conversation's own subagent
+    /// plane; a registry for another conversation/agent/mailbox domain is
+    /// rejected before anything is claimed.
+    SubagentOwnershipMismatch {
+        /// The registry's conversation owner.
+        registry_conversation: ConversationId,
+        /// The runtime's conversation owner.
+        runtime_conversation: ConversationId,
+    },
+    /// The supplied `SubagentRegistry` already owns a committed child
+    /// record.
+    ///
+    /// Construction requires a pristine logical subagent plane: a registry
+    /// with live children can never be silently adopted by a runtime that
+    /// did not own their start.
+    SubagentRegistryNotPristine {
+        /// The conversation whose subagent plane is not pristine.
+        conversation_id: ConversationId,
+    },
     /// No Tokio execution runtime is current at construction.
     ///
     /// The admission worker must exist before the runtime is usable:
@@ -394,6 +417,17 @@ impl core::fmt::Display for ConversationRuntimeError {
             Self::ToolRuntimeNotQuiescent { conversation_id } => write!(
                 f,
                 "the conversation tool runtime of {conversation_id} is not pristine: it already contains prepared or committed background work and cannot become the inactive semantic base of a new conversation runtime"
+            ),
+            Self::SubagentOwnershipMismatch {
+                registry_conversation,
+                runtime_conversation,
+            } => write!(
+                f,
+                "the subagent registry belongs to conversation {registry_conversation}, not to this runtime's conversation {runtime_conversation}"
+            ),
+            Self::SubagentRegistryNotPristine { conversation_id } => write!(
+                f,
+                "the subagent registry of {conversation_id} is not pristine: it already owns committed child records and cannot become the logical base of a new conversation runtime"
             ),
             Self::NoExecutionRuntime => write!(
                 f,
@@ -672,6 +706,14 @@ struct CoordinatorState {
     /// `AttemptStarted` for one identity, so the invariant is enforced on
     /// both sides.
     next_attempt_seq: u64,
+    /// The committed one-shot child-cancellation intent (Issue #60 child
+    /// side): armed by the subagent child control plane on
+    /// `ParentFrame::Cancel` before any attempt exists, consumed by the
+    /// next admission so the admitted attempt starts already-cancelled and
+    /// its first model-turn arbitration resolves `CancelledBeforeStart`.
+    /// The child is one-shot, so at most one admission ever consumes it;
+    /// a parent conversation never arms it.
+    one_shot_cancel: Option<CancellationReason>,
     /// Whether startup recovery proved that the already-canonical adopted
     /// turn may continue through one new attempt (recovery Class B).
     ///
@@ -2042,6 +2084,17 @@ impl RuntimeInner {
         // against the same signal, so protocol cancellation always reaches
         // the loop.
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        // A one-shot child-cancellation intent (Issue #60 child side) that
+        // committed before this admission linearizes here: the admitted
+        // attempt starts already-cancelled, so its first model-turn
+        // arbitration resolves `CancelledBeforeStart` and no provider
+        // request ever starts. The intent is consumed exactly once; the
+        // child is one-shot, so at most one admission can ever consume it.
+        if let Some(reason) = state.one_shot_cancel.take() {
+            // First winner by construction: the fresh attempt signal has no
+            // prior cause.
+            let _ = cancellation.request_cancel(reason);
+        }
         state.current_attempt = Some(CurrentAttempt {
             attempt_id: attempt_id.clone(),
             cancellation: cancellation.clone(),
@@ -2258,6 +2311,29 @@ impl ConversationRuntime {
                 runtime_conversation: conversation_id,
             });
         }
+        // The subagent registry is a conversation-owned logical plane: the
+        // runtime must not adopt a registry that belongs to another
+        // conversation/agent domain or another canonical mailbox, nor one
+        // that already owns committed children. The typed ownership domain
+        // is validated here, before any claim, so a rejected construction
+        // consumes nothing (Issue #60 hardening).
+        if let Some(subagents) = &config.subagents {
+            let registry_conversation = subagents.conversation_id().clone();
+            if registry_conversation != conversation_id
+                || subagents.parent_agent_id() != &config.agent_id
+                || !subagents.shares_mailbox_domain(&config.tool_runtime.mailbox())
+            {
+                return Err(ConversationRuntimeError::SubagentOwnershipMismatch {
+                    registry_conversation,
+                    runtime_conversation: conversation_id,
+                });
+            }
+            if !subagents.is_pristine() {
+                return Err(ConversationRuntimeError::SubagentRegistryNotPristine {
+                    conversation_id,
+                });
+            }
+        }
         // The initial session model must be able to run under the session
         // context policy. Validating here (and again in `model_set`) is what
         // makes the per-attempt context runtime construction infallible at
@@ -2435,6 +2511,7 @@ impl ConversationRuntime {
                 conversation: Some(conversation),
                 current_attempt: None,
                 next_attempt_seq,
+                one_shot_cancel: None,
                 recovered_continuation,
                 // Durability health after a successful recovery is an
                 // explicit transition, not a silent reset (Issue #12, M9a):
@@ -2873,6 +2950,41 @@ impl ConversationRuntime {
             .cancellation
             .request_cancel(CancellationReason::UserRequested);
         Ok(current.attempt_id.clone())
+    }
+
+    /// Commits a one-shot child cancellation intent into the runtime-owned
+    /// cancellation state (Issue #60 child side).
+    ///
+    /// This is the subagent child control plane's `ParentFrame::Cancel`
+    /// sink: the cancellation never waits for an observation to be
+    /// delivered. Under the one coordinator lock that also owns attempt
+    /// admission:
+    ///
+    /// - a current attempt exists ⇒ its [`AgentCancellation`] receives the
+    ///   cancellation immediately, through the same M9b model-turn start
+    ///   gate as every other cancellation request;
+    /// - no attempt exists yet ⇒ the intent is retained as the coordinator's
+    ///   one-shot sticky cancellation and the next admission consumes it, so
+    ///   the admitted attempt starts already-cancelled and its first
+    ///   model-turn arbitration resolves `CancelledBeforeStart`.
+    ///
+    /// The intent is sticky but one-shot: the child is a one-shot runtime,
+    /// so at most one admission ever consumes it. The child control plane
+    /// is its only producer; a parent conversation never arms it.
+    ///
+    /// Returns the cancelled current attempt identity, or `None` when the
+    /// intent was retained for the next admission.
+    pub(crate) fn cancel_current_or_next_attempt(
+        &self,
+        reason: CancellationReason,
+    ) -> Option<AttemptId> {
+        let mut state = self.inner.lock_state();
+        if let Some(current) = &state.current_attempt {
+            let _ = current.cancellation.request_cancel(reason);
+            return Some(current.attempt_id.clone());
+        }
+        state.one_shot_cancel = Some(reason);
+        None
     }
 
     /// Reads the authoritative session model catalog.
@@ -3966,6 +4078,259 @@ mod tests {
             None => ConversationRuntime::new(config).expect("runtime"),
         };
         (runtime, model, subagents)
+    }
+
+    /// A runtime construction config over one store, with a subagent
+    /// registry built over the same tool runtime and a deliberately
+    /// configurable registry identity (ownership-domain validation tests).
+    /// Returns the registry alongside the config so a test can commit
+    /// children into it before attempting construction.
+    #[allow(clippy::too_many_lines)]
+    async fn subagent_runtime_config_with_registry(
+        dir: &tempfile::TempDir,
+        conversation_id: &str,
+        store: Arc<dyn ConversationStore>,
+        registry_conversation: &ConversationId,
+        registry_agent: &AgentId,
+        runtime_agent: &AgentId,
+    ) -> (
+        crate::runtime::subagent::SubagentRegistry,
+        RuntimeConversationConfig,
+    ) {
+        let conversation_id = ConversationId::new(conversation_id);
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
+            conversation_id.clone(),
+            crate::tools::runtime::ConversationRuntimeConfig {
+                durable_binding: Some(crate::durable::ConversationStoreBinding::new(store)),
+                ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                    &workspace,
+                    dir.path().join("artifacts"),
+                )
+            },
+        )
+        .expect("tool runtime");
+        let coordinator = crate::capabilities::CapabilityCoordinator::new(
+            crate::capabilities::CapabilityCoordinatorConfig {
+                conversation_id: conversation_id.clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(crate::tools::executor::ToolRegistry::new()),
+                mcp_servers: std::collections::BTreeMap::new(),
+                base_environment: tool_runtime.environment().clone(),
+                environment_store_root: dir.path().join("skill-env"),
+            },
+        )
+        .expect("coordinator");
+        let candidate = coordinator.prepare_candidate().await.expect("prepare");
+        coordinator.commit(candidate).expect("commit");
+        let subagents = crate::runtime::subagent::SubagentRegistry::new(
+            crate::runtime::subagent::SubagentRegistryConfig {
+                conversation_id: registry_conversation.clone(),
+                agent_id: registry_agent.clone(),
+                mailbox: tool_runtime.mailbox(),
+                clock: Arc::new(crate::runtime::types::SystemClock),
+                spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                    program: std::path::PathBuf::from("/nonexistent/rustx"),
+                    models: std::path::PathBuf::from("/nonexistent/models.json"),
+                    workspace: workspace.clone(),
+                    runtime_root: dir.path().join("subagents"),
+                    model: crate::model::session::SessionModelConfig::of(
+                        serde_json::from_value(serde_json::json!("local/model"))
+                            .expect("model reference"),
+                    ),
+                    timezone: None,
+                    context: crate::context::SessionContextPolicy {
+                        reserve_tokens: 0,
+                        keep_recent_tokens: 0,
+                        summary_output_cap: None,
+                    },
+                },
+                max_active: 4,
+            },
+        );
+        let model = Arc::new(FakeModel::new(Vec::new()));
+        let adapter: Arc<dyn ModelAdapter> = model.clone();
+        let config = RuntimeConversationConfig {
+            agent_id: runtime_agent.clone(),
+            model: scripted_session_model(adapter),
+            timezone: None,
+            context: ConversationContextConfig {
+                policy: crate::context::SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+                estimator: Arc::new(DefaultTokenEstimator),
+                status_composer: AgentStatusComposer::default(),
+            },
+            tool_runtime,
+            capability: coordinator,
+            clock: None,
+            initial_messages: Vec::new(),
+            subagents: Some(subagents.clone()),
+        };
+        (subagents, config)
+    }
+
+    /// The runtime rejects a `SubagentRegistry` that belongs to another
+    /// conversation's ownership domain before anything is claimed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn construction_rejects_a_registry_for_another_conversation() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-domain",
+            ))
+            .expect("in-memory store"),
+        );
+        let (_subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-domain",
+            store,
+            &ConversationId::new("conv-other-domain"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        let error = ConversationRuntime::new(config).expect_err("mismatched registry domain");
+        assert!(
+            matches!(
+                &error,
+                ConversationRuntimeError::SubagentOwnershipMismatch {
+                    registry_conversation,
+                    runtime_conversation,
+                } if registry_conversation == &ConversationId::new("conv-other-domain")
+                    && runtime_conversation == &ConversationId::new("conv-subagent-domain")
+            ),
+            "the constructor names both ownership domains: {error}"
+        );
+    }
+
+    /// The runtime rejects a `SubagentRegistry` whose parent agent identity
+    /// disagrees with the runtime's own agent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn construction_rejects_a_registry_for_another_parent_agent() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-domain",
+            ))
+            .expect("in-memory store"),
+        );
+        let (_subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-domain",
+            store,
+            &ConversationId::new("conv-subagent-domain"),
+            &AgentId::new("agent-other"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        let error = ConversationRuntime::new(config).expect_err("mismatched parent agent");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::SubagentOwnershipMismatch { .. }
+            ),
+            "a registry for another parent agent is rejected: {error}"
+        );
+    }
+
+    /// A registry that already owns a committed child record can be
+    /// independently committed before runtime construction; the constructor
+    /// must not silently adopt it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn construction_rejects_a_non_pristine_registry_with_committed_children() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-pristine",
+            ))
+            .expect("in-memory store"),
+        );
+        let (subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-pristine",
+            store.clone(),
+            &ConversationId::new("conv-subagent-pristine"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        // A standalone registry over the unbound mailbox can commit a child
+        // before any runtime exists.
+        let (staged, _peer) = stage_runtime_test_child(&dir.path().join("pre-constructed-child"));
+        subagents.push_staged_override(staged);
+        let accepted = match subagents
+            .commit(
+                subagents
+                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        task: "pre-constructed".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-pre-constructed"),
+                    })
+                    .await
+                    .expect("prepare"),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("standalone commit")
+        {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => {
+                panic!("no cancellation was requested")
+            }
+        };
+
+        let error = ConversationRuntime::new(config).expect_err("non-pristine registry");
+        assert!(
+            matches!(
+                error,
+                ConversationRuntimeError::SubagentRegistryNotPristine { .. }
+            ),
+            "the constructor rejects a registry that already owns children: {error}"
+        );
+
+        // Settle the committed child (escalate and reap) so the fixture
+        // leaks no process.
+        let _ = subagents.cancel(
+            &accepted.subagent_id,
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        let settled = subagents
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(
+            settled.state,
+            crate::runtime::subagent::SubagentState::Cancelled
+        );
+    }
+
+    /// The matching pristine registry is accepted: construction keeps its
+    /// normal composition behavior.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn construction_accepts_a_matching_pristine_registry() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-pristine-ok",
+            ))
+            .expect("in-memory store"),
+        );
+        let (_subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-pristine-ok",
+            store,
+            &ConversationId::new("conv-subagent-pristine-ok"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        let runtime = ConversationRuntime::new(config).expect("matching pristine registry");
+        assert!(!runtime.is_activated());
     }
 
     /// Stages a stubborn real child for a registry test; the driver must
