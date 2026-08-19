@@ -55,7 +55,7 @@ use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, StagedChild, SubagentSpawnPlan};
 use super::{
     MAX_CONTEXT_PACKAGE_BYTES, MAX_RESULT_CONTENT_BYTES, MAX_TASK_BYTES, SubagentProfile,
-    SubagentTerminalState, ownership_event, terminal_publication,
+    SubagentTerminalState, bound_utf8, ownership_event, terminal_publication,
 };
 
 /// The highest lifecycle state of one subagent child.
@@ -82,14 +82,14 @@ impl SubagentLifecycle {
     }
 
     const fn is_active(self) -> bool {
-        matches!(self, Self::Running | Self::Cancelling)
+        !self.is_terminal()
     }
 }
 
 /// The canonicalized terminal outcome awaiting publication.
 /// The decision of the commit linearization point.
 enum Decision {
-    Accepted,
+    Accepted { started_at: DateTime<Utc> },
     RolledBack,
     Failed(SubagentStartError),
 }
@@ -184,6 +184,8 @@ struct RegistryState {
     failure_sink: Option<Arc<dyn SubagentDurabilityFailureSink>>,
     #[cfg(test)]
     commit_hook: Option<Arc<CommitBoundaryHook>>,
+    #[cfg(test)]
+    control_handoff_hook: Option<Arc<ControlHandoffHook>>,
     /// Test seam: pre-staged children `prepare` consumes instead of
     /// spawning the real child binary.
     #[cfg(test)]
@@ -322,6 +324,12 @@ pub enum SubagentStartError {
         /// The failure detail.
         detail: String,
     },
+    /// The ownership decision could not return while rollback was proven
+    /// complete.
+    Rollback {
+        /// The failure detail.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for SubagentStartError {
@@ -346,6 +354,9 @@ impl core::fmt::Display for SubagentStartError {
             Self::Spawn { detail } => write!(f, "could not start the child runtime: {detail}"),
             Self::Durability { detail } => {
                 write!(f, "the durable ownership commit failed: {detail}")
+            }
+            Self::Rollback { detail } => {
+                write!(f, "the child rollback was not proven complete: {detail}")
             }
         }
     }
@@ -414,6 +425,8 @@ impl SubagentRegistry {
                 failure_sink: None,
                 #[cfg(test)]
                 commit_hook: None,
+                #[cfg(test)]
+                control_handoff_hook: None,
                 #[cfg(test)]
                 staged_overrides: std::collections::VecDeque::new(),
             })),
@@ -553,16 +566,32 @@ impl SubagentRegistry {
     /// conversation is shutting down, [`SubagentStartError::Capacity`] when
     /// the active bound is full at the linearization point, or
     /// [`SubagentStartError::Durability`] when the ownership commit fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the registry loses its accepted ownership record between
+    /// the durable commit and control-handle publication, which would violate
+    /// the registry's own ownership invariant.
     #[allow(clippy::too_many_lines)] // One commit path, asserted end to end.
     pub async fn commit(
         &self,
         prepared: PreparedSubagent,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<SubagentStartOutcome, SubagentStartError> {
-        if self.config.mailbox.begin_running_admission().is_err() {
-            prepared.staged.rollback().await;
-            return Err(SubagentStartError::ConversationInactive);
-        }
+        // Retain the counted lifecycle admission through the entire
+        // prepared-to-driver handoff, including conclusive rollback. This
+        // prevents runtime drain from declaring quiescence between the
+        // durable ownership decision and publication of the driver control
+        // path; the registry's own cancellation state still handles a drain
+        // that wins after the record is visible.
+        let Ok(_admission) = self.config.mailbox.begin_running_admission() else {
+            return match prepared.staged.rollback().await {
+                Ok(()) => Err(SubagentStartError::ConversationInactive),
+                Err(error) => Err(SubagentStartError::Rollback {
+                    detail: error.to_string(),
+                }),
+            };
+        };
         let PreparedSubagent {
             subagent_id,
             child_agent_id,
@@ -589,7 +618,11 @@ impl SubagentRegistry {
                 let active = state
                     .records
                     .iter()
-                    .filter(|record| record.lifecycle.is_active() && !record.publication_abandoned)
+                    // PublishingTerminal remains an owned, unresolved
+                    // settlement and therefore still consumes capacity. A
+                    // durability-failed runtime separately rejects new
+                    // mutations, but capacity must not silently reopen.
+                    .filter(|record| record.lifecycle.is_active())
                     .count();
                 if active >= config.max_active {
                     return Decision::Failed(SubagentStartError::CapacityExceeded {
@@ -599,6 +632,7 @@ impl SubagentRegistry {
                 if attempt_cancellation.is_cancelled() {
                     return Decision::RolledBack;
                 }
+                let started_at = clock.now();
                 if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
                     &config.conversation_id,
                     &subagent_id,
@@ -606,18 +640,18 @@ impl SubagentRegistry {
                     &child_conversation_id,
                     &tool_call_id,
                     profile,
-                    clock.now(),
+                    started_at,
                 )) {
                     return Decision::Failed(SubagentStartError::Durability {
                         detail: error.to_string(),
                     });
                 }
-                Decision::Accepted
+                Decision::Accepted { started_at }
             }) {
                 Ok(decision) => decision,
                 Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
             };
-            if matches!(decision, Decision::Accepted) {
+            if let Decision::Accepted { started_at } = &decision {
                 let record = SubagentRecord {
                     subagent_id: subagent_id.clone(),
                     child_agent_id: child_agent_id.clone(),
@@ -631,7 +665,7 @@ impl SubagentRegistry {
                     pending_terminal: None,
                     publication_abandoned: false,
                     notification: NotificationState::None,
-                    started_at: clock.now(),
+                    started_at: *started_at,
                 };
                 let index = state.records.len();
                 state.index.insert(subagent_id.clone(), index);
@@ -641,26 +675,57 @@ impl SubagentRegistry {
             decision
         };
         match decision {
-            Decision::RolledBack => {
-                staged.rollback().await;
-                Ok(SubagentStartOutcome::RolledBack)
-            }
-            Decision::Failed(error) => {
-                staged.rollback().await;
-                Err(error)
-            }
-            Decision::Accepted => {
+            Decision::RolledBack => match staged.rollback().await {
+                Ok(()) => Ok(SubagentStartOutcome::RolledBack),
+                Err(error) => Err(SubagentStartError::Rollback {
+                    detail: error.to_string(),
+                }),
+            },
+            Decision::Failed(error) => match staged.rollback().await {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(SubagentStartError::Rollback {
+                    detail: format!("{error}; {rollback}"),
+                }),
+            },
+            Decision::Accepted { .. } => {
+                // This hook is outside the registry lock and after the
+                // durable ownership fact plus the Running record are both
+                // visible. It is the exact handoff edge exercised by the
+                // cancellation regression.
+                #[cfg(test)]
+                let control_handoff_hook = {
+                    self.state
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .control_handoff_hook
+                        .clone()
+                };
+                #[cfg(test)]
+                if let Some(hook) = control_handoff_hook {
+                    hook.wait();
+                }
+
                 // Point of no return: the child is conversation-owned. The
                 // OS handle moves into the driver task; the registry keeps
-                // only the narrow command handle.
+                // only the narrow command handle. The driver's start gate
+                // remains closed until the command handle is installed and
+                // any already-committed cancellation is forwarded.
                 let driver = staged.into_driver(DelegationFrame { task, context });
-                let (commands, task) = driver.split();
-                {
+                let (commands, start_gate, task) = driver.split();
+                let cancel_before_start = {
                     let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    if let Some(&index) = state.index.get(&subagent_id) {
-                        state.records[index].control = Some(commands);
-                    }
-                }
+                    let index = *state
+                        .index
+                        .get(&subagent_id)
+                        .expect("accepted ownership has a registry record");
+                    let record = &mut state.records[index];
+                    record.control = Some(commands);
+                    matches!(record.lifecycle, SubagentLifecycle::Cancelling)
+                };
+                // Sending `true` is the sticky handoff: the driver sends
+                // Cancel before Delegate and never allows child semantic
+                // work to begin. Sending `false` opens the normal gate.
+                let _ = start_gate.send(cancel_before_start);
                 let registry = self.clone_for_task();
                 let settlement_id = subagent_id.clone();
                 tokio::spawn(async move {
@@ -773,7 +838,7 @@ impl SubagentRegistry {
         if record.lifecycle.is_terminal() || record.publication_abandoned {
             return Some(record.snapshot());
         }
-        if !matches!(record.lifecycle, SubagentLifecycle::Cancelling) {
+        if matches!(record.lifecycle, SubagentLifecycle::Running) {
             record.lifecycle = SubagentLifecycle::Cancelling;
             record.cancel_reason = Some(reason);
             if let Some(control) = &record.control {
@@ -791,7 +856,12 @@ impl SubagentRegistry {
             state
                 .records
                 .iter()
-                .filter(|record| record.lifecycle.is_active())
+                .filter(|record| {
+                    matches!(
+                        record.lifecycle,
+                        SubagentLifecycle::Running | SubagentLifecycle::Cancelling
+                    )
+                })
                 .map(|record| record.subagent_id.clone())
                 .collect()
         };
@@ -845,7 +915,7 @@ impl SubagentRegistry {
                 PhysicalOutcome::Completed(frame) => match (cancelling, frame.status) {
                     (false, super::ipc::ChildResultStatus::Succeeded) => TerminalCandidate {
                         state: TerminalState::Succeeded,
-                        content: Some(bound(
+                        content: Some(bound_utf8(
                             frame.content.unwrap_or_default(),
                             MAX_RESULT_CONTENT_BYTES,
                         )),
@@ -856,7 +926,7 @@ impl SubagentRegistry {
                     (false, super::ipc::ChildResultStatus::Failed) => TerminalCandidate {
                         state: TerminalState::Failed,
                         content: None,
-                        diagnostic: Some(bound(
+                        diagnostic: Some(bound_utf8(
                             frame
                                 .diagnostic
                                 .unwrap_or_else(|| "the child attempt failed".to_owned()),
@@ -899,7 +969,7 @@ impl SubagentRegistry {
                     // even after cancellation intent.
                     state: TerminalState::Failed,
                     content: None,
-                    diagnostic: Some(bound(diagnostic, MAX_RESULT_CONTENT_BYTES)),
+                    diagnostic: Some(bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                     reason: None,
                     timestamp,
                 },
@@ -922,7 +992,7 @@ impl SubagentRegistry {
     /// Attempts the durable terminal publication; on failure, enters
     /// `PublishingTerminal` and schedules the bounded retry.
     fn publish_terminal(&self, subagent_id: &SubagentId, candidate: &TerminalCandidate) {
-        let attempt = {
+        let initial_failure = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
                 return;
@@ -948,58 +1018,66 @@ impl SubagentRegistry {
                     record.pending_terminal = None;
                     record.notification = NotificationState::Delivered;
                     publish_snapshot(&mut state, &self.state_version, index);
-                    return;
+                    None
                 }
                 Err(error) => {
                     record.lifecycle = SubagentLifecycle::PublishingTerminal;
                     record.notification = NotificationState::Failed;
                     let diagnostic = error.to_string();
-                    if let Some(sink) = &state.failure_sink {
-                        sink.terminal_publication_failed(subagent_id, &diagnostic);
-                    }
                     publish_snapshot(&mut state, &self.state_version, index);
-                    diagnostic
+                    Some(diagnostic)
                 }
             }
+        };
+        let Some(initial_failure) = initial_failure else {
+            return;
         };
         // Bounded publication retry; the candidate is stable from
         // pending_terminal.
         let registry = self.clone_for_task();
         let id = subagent_id.clone();
         tokio::spawn(async move {
+            let mut diagnostic = initial_failure;
             for _ in 0..2 {
-                if registry.retry_terminal_publication(&id) {
-                    return;
+                match registry.retry_terminal_publication(&id) {
+                    Ok(true) => return,
+                    Ok(false) => {}
+                    Err(error) => diagnostic = error,
                 }
             }
-            registry.mark_publication_abandoned(&id);
+            // Reporting exhausted terminal durability is a callback into the
+            // owning ConversationRuntime. It happens only after the bounded
+            // retry budget is spent and never while the registry mutex is
+            // held; the candidate remains retained as PublishingTerminal.
+            registry.report_terminal_publication_failure(&id, &diagnostic);
         });
-        let _ = attempt;
     }
 
     /// One bounded publication retry. Returns whether the terminal is now
     /// durably committed.
-    fn retry_terminal_publication(&self, subagent_id: &SubagentId) -> bool {
-        if self.config.mailbox.begin_settlement_admission().is_err() {
-            return false;
-        }
+    fn retry_terminal_publication(&self, subagent_id: &SubagentId) -> Result<bool, String> {
+        let _settlement = self
+            .config
+            .mailbox
+            .begin_settlement_admission()
+            .map_err(|error| format!("terminal settlement admission failed: {error}"))?;
         let candidate = {
             let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
-                return true;
+                return Ok(true);
             };
             let record = &state.records[index];
             if record.lifecycle.is_terminal() {
-                return true;
+                return Ok(true);
             }
             record.pending_terminal.clone()
         };
         let Some(candidate) = candidate else {
-            return true;
+            return Ok(true);
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(&index) = state.index.get(subagent_id) else {
-            return true;
+            return Ok(true);
         };
         let record = &state.records[index];
         let (draft, event) = terminal_publication(
@@ -1019,18 +1097,36 @@ impl SubagentRegistry {
                     TerminalState::Cancelled => SubagentLifecycle::Cancelled,
                 };
                 record.pending_terminal = None;
+                record.publication_abandoned = false;
                 record.notification = NotificationState::Delivered;
                 publish_snapshot(&mut state, &self.state_version, index);
-                true
+                Ok(true)
             }
             Err(error) => {
-                let diagnostic = error.to_string();
-                if let Some(sink) = &state.failure_sink {
-                    sink.terminal_publication_failed(subagent_id, &diagnostic);
-                }
-                false
+                state.records[index].notification = NotificationState::Failed;
+                publish_snapshot(&mut state, &self.state_version, index);
+                Err(error.to_string())
             }
         }
+    }
+
+    /// Reports an exhausted terminal-publication budget to the owning
+    /// runtime and only then exposes the explicit abandoned/unresolved fact.
+    /// The failure sink is copied while the registry is locked, but invoked
+    /// after that guard is dropped: the lock graph is
+    /// `ConversationRuntime -> SubagentRegistry`, never the reverse.
+    fn report_terminal_publication_failure(&self, subagent_id: &SubagentId, diagnostic: &str) {
+        let Ok(_settlement) = self.config.mailbox.begin_settlement_admission() else {
+            return;
+        };
+        let sink = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.failure_sink.clone()
+        };
+        if let Some(sink) = sink {
+            sink.terminal_publication_failed(subagent_id, diagnostic);
+        }
+        self.mark_publication_abandoned(subagent_id);
     }
 
     /// Marks a terminal publication abandoned after the bounded retry.
@@ -1048,6 +1144,14 @@ impl SubagentRegistry {
     pub fn install_commit_boundary_hook(&self, hook: Arc<CommitBoundaryHook>) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.commit_hook = Some(hook);
+    }
+
+    /// Installs the exact test-only pause between durable ownership/record
+    /// publication and command-handle publication.
+    #[cfg(test)]
+    pub fn install_control_handoff_hook(&self, hook: Arc<ControlHandoffHook>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.control_handoff_hook = Some(hook);
     }
 }
 
@@ -1075,7 +1179,9 @@ fn terminal_blocks(
         ),
     };
     vec![crate::message::types::UserContentBlock::Text(
-        crate::message::content::TextBlock { text },
+        crate::message::content::TextBlock {
+            text: bound_utf8(text, MAX_RESULT_CONTENT_BYTES),
+        },
     )]
 }
 
@@ -1095,14 +1201,6 @@ const fn reason_text(reason: CancellationReason) -> &'static str {
         CancellationReason::RuntimeShutdown => "the runtime is shutting down",
         CancellationReason::ParentCancelled => "the parent operation was cancelled",
     }
-}
-
-/// Caps a frame-carried payload at the documented bound.
-fn bound(mut value: String, max: usize) -> String {
-    if value.len() > max {
-        value.truncate(max);
-    }
-    value
 }
 
 /// Emits the record's snapshot to the observer and bumps the watch
@@ -1126,6 +1224,45 @@ fn publish_snapshot(
 pub struct CommitBoundaryHook {
     state: std::sync::Mutex<CommitHookState>,
     changed: std::sync::Condvar,
+}
+
+/// A test-only pause after the ownership fact and Running record commit but
+/// before the driver command handle/start gate are published. Production has
+/// no pause or equivalent semantic state; the hook exists only to force the
+/// exact cancellation-handoff interleaving in a regression.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub struct ControlHandoffHook {
+    state: std::sync::Mutex<CommitHookState>,
+    changed: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl ControlHandoffHook {
+    /// Blocks the handoff until [`Self::release`].
+    pub fn wait(&self) {
+        let mut state = self.state.lock().expect("subagent handoff hook");
+        *state = CommitHookState::Entered;
+        self.changed.notify_all();
+        while matches!(*state, CommitHookState::Entered) {
+            state = self.changed.wait(state).expect("subagent handoff hook");
+        }
+    }
+
+    /// Waits until the handoff pause has been reached.
+    pub fn wait_until_entered(&self) {
+        let mut state = self.state.lock().expect("subagent handoff hook");
+        while matches!(*state, CommitHookState::Idle) {
+            state = self.changed.wait(state).expect("subagent handoff hook");
+        }
+    }
+
+    /// Releases the handoff pause.
+    pub fn release(&self) {
+        let mut state = self.state.lock().expect("subagent handoff hook");
+        *state = CommitHookState::Released;
+        self.changed.notify_all();
+    }
 }
 
 #[cfg(test)]
@@ -1232,6 +1369,7 @@ mod tests {
     /// the test-held end of the control channel (protocol semantics).
     struct ScriptedChild {
         peer: tokio::net::UnixStream,
+        pid: u32,
     }
 
     /// Stages a scripted child whose process exits immediately; the test
@@ -1243,7 +1381,7 @@ mod tests {
     /// Stages a scripted child whose process ignores everything and must be
     /// killed; used for cancellation-escalation tests.
     fn stage_stubborn(plane: &TestPlane) -> ScriptedChild {
-        stage_process(plane, "sleep 60")
+        stage_process(plane, "trap '' TERM; exec sleep 60")
     }
 
     fn stage_process(plane: &TestPlane, shell: &str) -> ScriptedChild {
@@ -1257,9 +1395,15 @@ mod tests {
             .process_group(0)
             .spawn()
             .expect("scripted child process");
-        let staged = StagedChild::for_test(child, driver_end, plane.runtime_root.clone());
+        let pid = child.id().expect("scripted child pid");
+        let child_runtime_root = plane.runtime_root.join(format!("test-child-{pid}"));
+        std::fs::create_dir_all(&child_runtime_root).expect("child runtime root");
+        let staged = StagedChild::for_test(child, driver_end, child_runtime_root);
         plane.registry.push_staged_override(staged);
-        ScriptedChild { peer: test_end }
+        ScriptedChild {
+            peer: test_end,
+            pid,
+        }
     }
 
     impl ScriptedChild {
@@ -1454,7 +1598,8 @@ mod tests {
         let plane = plane(4);
         let hook = Arc::new(CommitBoundaryHook::default());
         plane.registry.install_commit_boundary_hook(hook.clone());
-        let _child = stage_exit0(&plane);
+        let child = stage_stubborn(&plane);
+        let pid = child.pid;
         let registry = plane.registry.clone();
         let spec = start_spec("inspect");
         let attempt_cancellation = CancellationSignal::new();
@@ -1474,6 +1619,159 @@ mod tests {
         // would fold.
         assert!(plane.registry.all_snapshots().is_empty());
         assert!(events(&plane).is_empty());
+        #[cfg(unix)]
+        assert!(matches!(
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(i32::try_from(pid).expect("pid fits")),
+                None
+            ),
+            Err(nix::errno::Errno::ESRCH)
+        ));
+    }
+
+    /// The ownership/control handoff race is deterministic: durable
+    /// ownership and the Running projection are visible while the driver
+    /// command handle is deliberately not installed, cancellation commits in
+    /// that exact window, and the resumed handoff forwards the sticky cancel
+    /// before Delegate. The real child is then killed and reaped, and its
+    /// late/no result cannot overtake the canonical cancellation.
+    #[allow(clippy::too_many_lines)]
+    async fn control_handoff_cancellation_is_lossless(runtime_drain: bool) {
+        let plane = plane(4);
+        let hook = Arc::new(ControlHandoffHook::default());
+        plane.registry.install_control_handoff_hook(hook.clone());
+        let mut child = stage_stubborn(&plane);
+        let pid = child.pid;
+        let registry = plane.registry.clone();
+        let spec = start_spec("inspect");
+        let committer = tokio::spawn(async move {
+            let prepared = registry.prepare(&spec).await.expect("prepared");
+            registry.commit(prepared, &CancellationSignal::new()).await
+        });
+
+        hook.wait_until_entered();
+        let subagent_id = SubagentId::for_conversation(&plane.conversation_id, 1);
+        assert!(events(&plane).iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: ownership_subagent_id,
+                ..
+            } if *ownership_subagent_id == subagent_id
+        )));
+
+        let cancelling = if runtime_drain {
+            plane
+                .registry
+                .cancel_all(CancellationReason::RuntimeShutdown);
+            plane
+                .registry
+                .snapshot(&subagent_id)
+                .expect("cancelled record")
+        } else {
+            let registry = plane.registry.clone();
+            tokio::spawn(async move {
+                registry
+                    .cancel(&subagent_id, CancellationReason::UserRequested)
+                    .expect("cancelled record")
+            })
+            .await
+            .expect("cancel task")
+        };
+        assert_eq!(cancelling.state, SubagentState::Cancelling);
+
+        hook.release();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
+            .await
+            .expect("commit liveness")
+            .expect("committer")
+            .expect("commit succeeds after cancellation intent");
+        let accepted = match outcome {
+            SubagentStartOutcome::Accepted(accepted) => accepted,
+            SubagentStartOutcome::RolledBack => panic!("ownership already committed"),
+        };
+        let ownership_timestamp = plane
+            .store
+            .read_events(None, 64)
+            .expect("events")
+            .events
+            .iter()
+            .find_map(|envelope| {
+                matches!(
+                    &envelope.event,
+                    crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                        subagent_id,
+                        ..
+                    } if *subagent_id == accepted.subagent_id
+                )
+                .then_some(envelope.timestamp)
+            })
+            .expect("ownership timestamp");
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&accepted.subagent_id)
+                .expect("accepted snapshot")
+                .started_at,
+            ownership_timestamp,
+            "one ownership commit timestamp feeds event and projection"
+        );
+
+        let first = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            super::super::ipc::read_parent_frame(&mut child.peer),
+        )
+        .await
+        .expect("driver control liveness")
+        .expect("driver frame")
+        .expect("cancel frame");
+        assert!(matches!(first, ParentFrame::Cancel));
+        // No Delegate was sent after cancellation won this handoff frontier.
+        drop(child.peer);
+
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Cancelled);
+        assert!(!settled.publication_abandoned);
+        #[cfg(unix)]
+        assert!(
+            matches!(
+                nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(i32::try_from(pid).expect("pid fits")),
+                    None
+                ),
+                Err(nix::errno::Errno::ESRCH)
+            ),
+            "the direct child was reaped"
+        );
+        let terminal_states = events(&plane)
+            .into_iter()
+            .filter_map(|event| match event {
+                crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id,
+                    state,
+                    ..
+                } if subagent_id == accepted.subagent_id => Some(state),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_states,
+            vec![SubagentTerminalState::Cancelled],
+            "one canonical cancellation, never a success overtaking it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancellation_between_ownership_and_control_publication_is_lossless() {
+        control_handoff_cancellation_is_lossless(false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn runtime_drain_between_ownership_and_control_publication_is_lossless() {
+        control_handoff_cancellation_is_lossless(true).await;
     }
 
     #[tokio::test]
@@ -1560,6 +1858,56 @@ mod tests {
                 .expect("pending")
                 .is_none()
         );
+    }
+
+    /// A physically settled child still owns its capacity while its frozen
+    /// terminal candidate is unresolved. Once the identical publication is
+    /// durably accepted, the slot is released and the next commit may win.
+    #[tokio::test]
+    async fn publishing_terminal_retains_capacity_until_durable_settlement() {
+        let plane = plane(1);
+        let child = stage_exit0(&plane);
+        let first = start(&plane, &start_spec("first")).await;
+        plane.store.arm_fail_accept_times(3);
+        child
+            .complete(ChildResultStatus::Succeeded, Some("first answer"))
+            .await;
+        let unresolved = plane
+            .registry
+            .wait_until_settled(&first.subagent_id)
+            .await
+            .expect("abandoned publication is observable");
+        assert_eq!(unresolved.state, SubagentState::PublishingTerminal);
+        assert!(unresolved.publication_abandoned);
+
+        let _second_child = stage_exit0(&plane);
+        let second_prepared = plane
+            .registry
+            .prepare(&start_spec("second"))
+            .await
+            .expect("private preparation is allowed");
+        let error = plane
+            .registry
+            .commit(second_prepared, &CancellationSignal::new())
+            .await
+            .expect_err("unresolved terminal settlement retains capacity");
+        assert!(matches!(
+            error,
+            SubagentStartError::CapacityExceeded { max: 1 }
+        ));
+
+        assert!(
+            plane
+                .registry
+                .retry_terminal_publication(&first.subagent_id)
+                .unwrap()
+        );
+        let settled = plane
+            .registry
+            .snapshot(&first.subagent_id)
+            .expect("first snapshot");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert!(settled.settled);
     }
 
     #[tokio::test]

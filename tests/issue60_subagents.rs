@@ -18,6 +18,7 @@
 mod common;
 
 use std::process::Stdio;
+use std::sync::Arc;
 
 use rustx::runtime_client::types::{
     RuntimeClientProtocolEvent, RuntimeClientRequest, RuntimeClientResponse, RuntimeClientResult,
@@ -183,6 +184,107 @@ fn route(body: &str) -> common::FixtureReply {
         // The parent's first turn.
         common::sse_fixture("openai_chat", "subagent_tool_call.sse")
     }
+}
+
+/// The hard-parent-death fixture gates the child's provider response. The
+/// parent receives its delegation tool call normally; only the real child
+/// request is held, which makes the child nonterminal while the parent is
+/// killed abruptly.
+fn hard_parent_death_route(body: &str, gate: &Arc<common::HeaderGate>) -> common::FixtureReply {
+    let has_tool_history =
+        body.contains("\\\"role\\\":\\\"tool\\\"") || body.contains("\"role\":\"tool\"");
+    if body.contains("please delegate hard parent death gate") && !has_tool_history {
+        common::sse_fixture("openai_chat", "subagent_hard_death_tool_call.sse")
+    } else if body.contains("hard parent death gate") && !has_tool_history {
+        common::sse_fixture("openai_chat", "subagent_child_answer.sse")
+            .with_header_gate(Arc::clone(gate))
+    } else {
+        // If recovery admits its Runtime-authored interruption, the model
+        // receives a harmless ordinary answer. It must never receive a new
+        // delegation tool call.
+        common::sse_fixture("openai_chat", "plain_text.sse")
+    }
+}
+
+#[cfg(unix)]
+fn direct_subagent_pids(parent_pid: u32) -> Vec<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,args="])
+        .output()
+        .expect("ps must be available for the process regression");
+    assert!(output.status.success(), "ps must succeed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse::<u32>().ok()?;
+            let process_parent_pid = fields.next()?.parse::<u32>().ok()?;
+            let args = fields.collect::<Vec<_>>().join(" ");
+            (process_parent_pid == parent_pid && args.contains("--subagent-child")).then_some(pid)
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn process_state(pid: u32) -> Option<char> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "state=", "-p", &pid.to_string()])
+        .output()
+        .expect("ps must be available for the process regression");
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .chars()
+        .next()
+}
+
+#[cfg(unix)]
+async fn wait_for_direct_subagent(parent_pid: u32) -> Vec<u32> {
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            let children = direct_subagent_pids(parent_pid);
+            if !children.is_empty() {
+                return children;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the real child process must become observable")
+}
+
+#[cfg(unix)]
+async fn wait_for_no_running_processes(pids: &[u32]) {
+    tokio::time::timeout(LIVENESS, async {
+        loop {
+            let running = pids
+                .iter()
+                .filter_map(|pid| process_state(*pid))
+                .any(|state| state != 'Z');
+            if !running {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the old child process must exit after parent death");
+}
+
+fn has_runtime_interrupted_notice(message: &rustx::message::types::MessageBlock) -> bool {
+    matches!(
+        message,
+        rustx::message::types::MessageBlock::User(user)
+            if matches!(user.source, rustx::message::types::UserSource::Runtime)
+                && user.content.iter().any(|block| match block {
+                    rustx::message::types::UserContentBlock::Text(text) => {
+                        text.text.contains("was interrupted")
+                    }
+                    _ => false,
+                })
+    )
 }
 
 /// The complete subagent lifecycle through the real binary: the parent's
@@ -406,4 +508,217 @@ async fn a_subagent_child_runs_end_to_end_through_the_real_process_stack() {
         status.success(),
         "the process must exit cleanly: {status} stderr={stderr}"
     );
+}
+
+/// A real parent process is killed with SIGKILL while its real child is
+/// blocked in a deterministic provider response. The child observes control
+/// EOF, drains, and exits; the next runtime boot classifies the durable
+/// nonterminal ownership as Interrupted exactly once, without adoption,
+/// replay, or relaunch.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn hard_parent_death_terminates_child_and_recovery_is_idempotent() {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use std::os::unix::process::ExitStatusExt;
+
+    let gate = common::HeaderGate::new();
+    let gate_for_server = Arc::clone(&gate);
+    let server = common::FixtureServer::start_with_body(move |_attempt, _head, body| {
+        hard_parent_death_route(body, &gate_for_server)
+    })
+    .await;
+    let root = tempfile::tempdir().expect("temp root");
+    let models = models_json(&server.url("/v1"));
+
+    let mut parent = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let response = parent
+        .request(|id| RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(id),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ),
+        "initial parent must initialize: {response:?}"
+    );
+    let response = parent
+        .request(|id| RuntimeClientRequest::SubmitInbound {
+            id: rustx::runtime_client::RequestId::new(id),
+            content: vec![rustx::message::types::UserContentBlock::Text(
+                rustx::message::content::TextBlock {
+                    text: "please delegate hard parent death gate".to_owned(),
+                },
+            )],
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ),
+        "delegation inbound must be accepted: {response:?}"
+    );
+
+    // The provider gate is reached only by the child's model request, so this
+    // is a deterministic nonterminal frontier rather than a timing guess.
+    tokio::time::timeout(LIVENESS, gate.wait_entered())
+        .await
+        .expect("the child must reach the gated provider response");
+    let parent_pid = parent.child.id().expect("parent pid");
+    let child_pids = wait_for_direct_subagent(parent_pid).await;
+    assert_eq!(child_pids.len(), 1, "one real child process is owned");
+
+    // This is an actual abrupt parent death: no Runtime Client Shutdown and
+    // no graceful transport EOF are sent before SIGKILL.
+    kill(
+        Pid::from_raw(i32::try_from(parent_pid).expect("pid fits")),
+        Signal::SIGKILL,
+    )
+    .expect("SIGKILL the real parent");
+    let parent_status = tokio::time::timeout(LIVENESS, parent.child.wait())
+        .await
+        .expect("hard-killed parent must be waitable")
+        .expect("wait parent");
+    assert_eq!(parent_status.signal(), Some(Signal::SIGKILL as i32));
+    drop(parent.stdin);
+
+    // The child's only route to semantic completion is the parent control
+    // socket. It must leave after EOF while the provider response remains
+    // gated; then release the server task's held socket response.
+    wait_for_no_running_processes(&child_pids).await;
+    gate.release();
+
+    // Reopen the same durable conversation. Recovery has no child process to
+    // adopt and publishes one Runtime-authored Interrupted inbound.
+    let mut recovered = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let response = recovered
+        .request(|id| RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(id),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ),
+        "restarted parent must initialize: {response:?}"
+    );
+
+    let mut recovered_snapshot = None;
+    for _ in 0..4_000 {
+        let response = recovered
+            .request(|id| RuntimeClientRequest::SnapshotGet {
+                id: rustx::runtime_client::RequestId::new(id),
+            })
+            .await;
+        let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+            panic!("snapshot_get must succeed after recovery: {response:?}");
+        };
+        let interrupted = snapshot
+            .messages
+            .iter()
+            .filter(|message| has_runtime_interrupted_notice(message))
+            .count();
+        if interrupted == 1 {
+            recovered_snapshot = Some(snapshot);
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let snapshot = recovered_snapshot.expect("recovery notice must become observable");
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|message| has_runtime_interrupted_notice(message))
+            .count(),
+        1,
+        "recovery publishes exactly one Interrupted notice"
+    );
+    assert!(
+        snapshot.subagents.is_empty(),
+        "recovery does not reattach a live registry child"
+    );
+    assert!(
+        !snapshot.messages.iter().any(|message| match message {
+            rustx::message::types::MessageBlock::User(user) => user.content.iter().any(|block| {
+                matches!(
+                    block,
+                    rustx::message::types::UserContentBlock::Text(text)
+                        if text.text.contains("CHILD-ANSWER")
+                )
+            }),
+            _ => false,
+        }),
+        "recovery never fabricates the gated child success"
+    );
+    assert!(
+        direct_subagent_pids(recovered.child.id().expect("restarted parent pid")).is_empty(),
+        "recovery never relaunches the old child"
+    );
+
+    let response = recovered
+        .request(|id| RuntimeClientRequest::Shutdown {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    assert!(matches!(
+        response.result,
+        Some(RuntimeClientResult::ShutdownCompleted)
+    ));
+    let (status, stderr) = recovered.close_and_wait().await;
+    assert!(status.success(), "recovered runtime shuts down: {stderr}");
+
+    // A second restart must observe the absorbing terminal identity and must
+    // not publish a second Runtime notice or relaunch anything.
+    let mut repeated = Process::spawn(root.path(), &models, SESSION_JSON, "subagent-secret");
+    let response = repeated
+        .request(|id| RuntimeClientRequest::Initialize {
+            id: rustx::runtime_client::RequestId::new(id),
+            protocol_version: rustx::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION_V1,
+        })
+        .await;
+    assert!(
+        matches!(
+            response.result,
+            Some(RuntimeClientResult::Initialized { .. })
+        ),
+        "repeated restart must initialize: {response:?}"
+    );
+    let response = repeated
+        .request(|id| RuntimeClientRequest::SnapshotGet {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    let Some(RuntimeClientResult::Snapshot { snapshot, .. }) = response.result else {
+        panic!("snapshot_get must succeed on repeated restart: {response:?}");
+    };
+    assert_eq!(
+        snapshot
+            .messages
+            .iter()
+            .filter(|message| has_runtime_interrupted_notice(message))
+            .count(),
+        1,
+        "repeated restart is idempotent"
+    );
+    assert!(snapshot.subagents.is_empty());
+    assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
+    let response = repeated
+        .request(|id| RuntimeClientRequest::Shutdown {
+            id: rustx::runtime_client::RequestId::new(id),
+        })
+        .await;
+    assert!(matches!(
+        response.result,
+        Some(RuntimeClientResult::ShutdownCompleted)
+    ));
+    let (status, stderr) = repeated.close_and_wait().await;
+    assert!(status.success(), "repeated runtime shuts down: {stderr}");
 }

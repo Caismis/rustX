@@ -148,6 +148,12 @@ pub enum SpawnError {
         /// The failure detail.
         detail: String,
     },
+    /// The staged child could not be conclusively killed and reaped after a
+    /// pre-commit failure.
+    Rollback {
+        /// The failure detail.
+        detail: String,
+    },
 }
 
 impl core::fmt::Display for SpawnError {
@@ -160,11 +166,47 @@ impl core::fmt::Display for SpawnError {
             Self::Handshake { detail } => {
                 write!(f, "the child startup handshake failed: {detail}")
             }
+            Self::Rollback { detail } => {
+                write!(
+                    f,
+                    "the staged child rollback was not proven complete: {detail}"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for SpawnError {}
+
+/// A pre-commit teardown failure. Returning this error is deliberately
+/// stronger than pretending rollback completed: the caller must not report
+/// a rolled-back ownership decision while the direct child may be
+/// unreaped, nor remove a private runtime root before that reap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RollbackError {
+    /// The direct child could not be waited/reaped conclusively.
+    Reap {
+        /// The failure detail.
+        detail: String,
+    },
+    /// The child was reaped but its private runtime root could not be
+    /// removed.
+    Cleanup {
+        /// The failure detail.
+        detail: String,
+    },
+}
+
+impl core::fmt::Display for RollbackError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Reap { detail } => write!(f, "child reap failed: {detail}"),
+            Self::Cleanup { detail } => write!(f, "child cleanup failed: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for RollbackError {}
 
 /// Spawns and stages one child behind the start gate.
 ///
@@ -193,8 +235,12 @@ pub(crate) async fn spawn_staged(
         }
     };
     if let Err(error) = staged.handshake(spec).await {
-        staged.rollback().await;
-        return Err(error);
+        return match staged.rollback().await {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(SpawnError::Rollback {
+                detail: format!("{error}; {rollback}"),
+            }),
+        };
     }
     Ok(staged)
 }
@@ -245,14 +291,21 @@ async fn spawn_process(
     };
     // The typed startup specification travels over the control channel; no
     // temporary configuration file is ever written.
-    write_parent_frame(
+    if let Err(error) = write_parent_frame(
         &mut staged.control,
         &ParentFrame::Hello(Box::new(spec.clone())),
     )
     .await
-    .map_err(|error| SpawnError::Handshake {
-        detail: error.to_string(),
-    })?;
+    {
+        return match staged.rollback().await {
+            Ok(()) => Err(SpawnError::Handshake {
+                detail: error.to_string(),
+            }),
+            Err(rollback) => Err(SpawnError::Rollback {
+                detail: format!("{error}; {rollback}"),
+            }),
+        };
+    }
     Ok(staged)
 }
 
@@ -292,11 +345,25 @@ impl StagedChild {
     /// Moves the staged child into the driver task at the ownership commit.
     pub(crate) fn into_driver(self, delegate: super::ipc::DelegationFrame) -> ChildDriver {
         let (command_tx, command_rx) = tokio::sync::mpsc::channel(4);
+        // The driver owns the OS handle immediately after this call, but it
+        // cannot send Delegate until the registry has installed its command
+        // handle and resolved any cancellation intent that committed during
+        // the ownership-to-driver handoff.
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            drive_child(self.child, self.control, delegate, command_rx).await
+            let cancelled_before_start = start_rx.await.unwrap_or(true);
+            drive_child(
+                self.child,
+                self.control,
+                delegate,
+                command_rx,
+                cancelled_before_start,
+            )
+            .await
         });
         ChildDriver {
             commands: command_tx,
+            start: start_tx,
             task,
         }
     }
@@ -307,10 +374,33 @@ impl StagedChild {
     /// Called on every pre-commit failure and on every rolled-back commit
     /// attempt; the registry's no-rollback and no-stale-partial-record
     /// guarantees extend to the OS process.
-    pub(crate) async fn rollback(mut self) {
-        kill_group(&self.child, Signal::Kill);
-        let _ = tokio::time::timeout(TERM_GRACE, self.child.wait()).await;
-        let _ = std::fs::remove_dir_all(&self.runtime_root);
+    pub(crate) async fn rollback(mut self) -> Result<(), RollbackError> {
+        kill_group(&self.child, Signal::Term);
+        let term_wait = tokio::time::timeout(TERM_GRACE, self.child.wait()).await;
+        match term_wait {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                return Err(RollbackError::Reap {
+                    detail: format!("wait after SIGTERM: {error}"),
+                });
+            }
+            Err(_) => {
+                kill_group(&self.child, Signal::Kill);
+                self.child
+                    .wait()
+                    .await
+                    .map_err(|error| RollbackError::Reap {
+                        detail: format!("wait after SIGKILL: {error}"),
+                    })?;
+            }
+        }
+        std::fs::remove_dir_all(&self.runtime_root).map_err(|error| RollbackError::Cleanup {
+            detail: format!(
+                "remove child runtime root {}: {error}",
+                self.runtime_root.display()
+            ),
+        })?;
+        Ok(())
     }
 
     /// Constructs a staged child from raw parts (tests only).
@@ -387,6 +477,7 @@ impl StagedChild {
 #[derive(Debug)]
 pub(crate) struct ChildDriver {
     commands: tokio::sync::mpsc::Sender<DriverCommand>,
+    start: tokio::sync::oneshot::Sender<bool>,
     task: tokio::task::JoinHandle<PhysicalOutcome>,
 }
 
@@ -405,9 +496,10 @@ impl ChildDriver {
         self,
     ) -> (
         tokio::sync::mpsc::Sender<DriverCommand>,
+        tokio::sync::oneshot::Sender<bool>,
         tokio::task::JoinHandle<PhysicalOutcome>,
     ) {
-        (self.commands, self.task)
+        (self.commands, self.start, self.task)
     }
 }
 
@@ -424,18 +516,37 @@ async fn drive_child(
     mut control: tokio::net::UnixStream,
     delegate: super::ipc::DelegationFrame,
     mut commands: tokio::sync::mpsc::Receiver<DriverCommand>,
+    cancelled_before_start: bool,
 ) -> PhysicalOutcome {
-    if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await {
-        kill_group(&child, Signal::Kill);
-        let _ = child.wait().await;
+    let mut cancel_deadline = None;
+    if cancelled_before_start {
+        if let Err(error) = write_parent_frame(&mut control, &ParentFrame::Cancel).await {
+            let diagnostic = match reap(&mut child).await {
+                Ok(()) => format!("could not deliver the cancellation: {error}"),
+                Err(reap_error) => {
+                    format!("could not deliver the cancellation: {error}; {reap_error}")
+                }
+            };
+            return PhysicalOutcome::Lost {
+                diagnostic,
+                escalated: true,
+            };
+        }
+        cancel_deadline = Some(tokio::time::Instant::now() + CANCEL_GRACE);
+    } else if let Err(error) =
+        write_parent_frame(&mut control, &ParentFrame::Delegate(delegate)).await
+    {
+        let diagnostic = match reap(&mut child).await {
+            Ok(()) => format!("could not deliver the delegation: {error}"),
+            Err(reap_error) => format!("could not deliver the delegation: {error}; {reap_error}"),
+        };
         return PhysicalOutcome::Lost {
-            diagnostic: format!("could not deliver the delegation: {error}"),
+            diagnostic,
             escalated: true,
         };
     }
     let mut result: Option<ResultFrame> = None;
     let mut violation: Option<String> = None;
-    let mut cancel_deadline: Option<tokio::time::Instant> = None;
     let mut kill_deadline: Option<tokio::time::Instant> = None;
     let mut eof = false;
     loop {
@@ -494,7 +605,12 @@ async fn drive_child(
     // and never a kill signal alone. Closing the write half is the
     // well-behaved child's drain signal after its terminal frame.
     let _ = control.shutdown().await;
-    reap(&mut child).await;
+    if let Err(error) = reap(&mut child).await {
+        return PhysicalOutcome::Lost {
+            diagnostic: format!("the child could not be reaped: {error}"),
+            escalated: true,
+        };
+    }
     match (result, violation) {
         (Some(frame), _) => PhysicalOutcome::Completed(frame),
         (None, Some(diagnostic)) => PhysicalOutcome::Lost {
@@ -510,20 +626,24 @@ async fn drive_child(
 
 /// Reaps the direct child, escalating if it outlives its cancellation
 /// grace after the control channel is gone.
-async fn reap(child: &mut tokio::process::Child) {
-    if tokio::time::timeout(CANCEL_GRACE, child.wait())
-        .await
-        .is_err()
-    {
-        kill_group(child, Signal::Term);
-        if tokio::time::timeout(TERM_GRACE, child.wait())
-            .await
-            .is_err()
-        {
-            kill_group(child, Signal::Kill);
-            let _ = child.wait().await;
-        }
+async fn reap(child: &mut tokio::process::Child) -> Result<(), String> {
+    match tokio::time::timeout(CANCEL_GRACE, child.wait()).await {
+        Ok(Ok(_)) => return Ok(()),
+        Ok(Err(error)) => return Err(format!("wait during reap: {error}")),
+        Err(_) => {}
     }
+    kill_group(child, Signal::Term);
+    match tokio::time::timeout(TERM_GRACE, child.wait()).await {
+        Ok(Ok(_)) => return Ok(()),
+        Ok(Err(error)) => return Err(format!("wait after SIGTERM: {error}")),
+        Err(_) => {}
+    }
+    kill_group(child, Signal::Kill);
+    child
+        .wait()
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("wait after SIGKILL: {error}"))
 }
 
 fn try_wait(child: &mut tokio::process::Child) -> String {
@@ -552,10 +672,10 @@ fn kill_group(child: &tokio::process::Child, signal: Signal) {
                 Signal::Term => nix::sys::signal::Signal::SIGTERM,
                 Signal::Kill => nix::sys::signal::Signal::SIGKILL,
             };
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap_or(i32::MAX)),
-                nix_signal,
-            );
+            let Ok(pid) = i32::try_from(pid) else {
+                return;
+            };
+            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid), nix_signal);
         }
     }
     #[cfg(not(unix))]

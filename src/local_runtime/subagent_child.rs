@@ -43,11 +43,11 @@ use crate::message::content::TextBlock;
 use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
 use crate::runtime::identity::AttemptId;
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
-use crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES;
 use crate::runtime::subagent::ipc::{
     ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame, ResultFrame,
     SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
 };
+use crate::runtime::subagent::{MAX_RESULT_CONTENT_BYTES, bound_utf8};
 
 use super::composition::{LocalConversationCore, LocalRuntimeDependencies};
 
@@ -117,6 +117,7 @@ pub async fn run_subagent_child() -> i32 {
 }
 
 /// The child's typed early exits.
+#[derive(Debug)]
 enum ChildExit {
     /// Composition failed; reportable through `StartupError`.
     Startup(String),
@@ -272,15 +273,51 @@ async fn await_terminal(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
     observations: &Arc<PendingObservations>,
 ) -> Result<AttemptTerminal, ChildExit> {
+    await_terminal_inner(control, runtime, observations, |_| {}).await
+}
+
+#[cfg(test)]
+async fn await_terminal_with_probe(
+    control: &mut tokio::net::UnixStream,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    observations: &Arc<PendingObservations>,
+    cancellation_before_admission: Arc<tokio::sync::Notify>,
+    cancellation_after_admission: Arc<tokio::sync::Notify>,
+) -> Result<AttemptTerminal, ChildExit> {
+    await_terminal_inner(control, runtime, observations, move |delivered| {
+        if delivered {
+            cancellation_after_admission.notify_one();
+        } else {
+            cancellation_before_admission.notify_one();
+        }
+    })
+    .await
+}
+
+async fn await_terminal_inner<F>(
+    control: &mut tokio::net::UnixStream,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    observations: &Arc<PendingObservations>,
+    on_cancellation: F,
+) -> Result<AttemptTerminal, ChildExit>
+where
+    F: Fn(bool) + Send + Sync + 'static,
+{
     let mut current_attempt: Option<AttemptId> = None;
+    // Cancellation is an intent, not an observation tied to one particular
+    // attempt. Retaining it here makes a Cancel received before
+    // AttemptAdmitted apply as soon as the runtime exposes that attempt.
+    let mut cancellation_requested = false;
     loop {
         tokio::select! {
             frame = read_parent_frame(control) => {
                 match frame {
                     Ok(Some(ParentFrame::Cancel)) => {
-                        if let Some(attempt_id) = &current_attempt {
-                            let _ = runtime.cancel_current_attempt(attempt_id);
-                        }
+                        cancellation_requested = true;
+                        let delivered = current_attempt.as_ref().is_some_and(|attempt_id| {
+                            runtime.cancel_current_attempt(attempt_id).is_ok()
+                        });
+                        on_cancellation(delivered);
                         // The frame is a request, not a terminal fact: the
                         // canonical AttemptCancelled settles the attempt.
                     }
@@ -298,7 +335,11 @@ async fn await_terminal(
                 for observation in observations.drain() {
                     match observation {
                         ConversationObservation::AttemptAdmitted { attempt_id } => {
-                            current_attempt = Some(attempt_id);
+                            current_attempt = Some(attempt_id.clone());
+                            if cancellation_requested {
+                                let delivered = runtime.cancel_current_attempt(&attempt_id).is_ok();
+                                on_cancellation(delivered);
+                            }
                         }
                         ConversationObservation::Event { event, .. } => {
                             match event {
@@ -364,19 +405,12 @@ fn final_answer(
         }
         _ => None,
     })?;
-    let mut answer = answer;
-    if answer.len() > MAX_RESULT_CONTENT_BYTES {
-        answer.truncate(MAX_RESULT_CONTENT_BYTES);
-    }
-    Some(answer)
+    Some(bound_utf8(answer, MAX_RESULT_CONTENT_BYTES))
 }
 
 /// Caps one diagnostic at the result-content bound.
-fn bound_diagnostic(mut diagnostic: String) -> String {
-    if diagnostic.len() > MAX_RESULT_CONTENT_BYTES {
-        diagnostic.truncate(MAX_RESULT_CONTENT_BYTES);
-    }
-    diagnostic
+fn bound_diagnostic(diagnostic: String) -> String {
+    bound_utf8(diagnostic, MAX_RESULT_CONTENT_BYTES)
 }
 
 /// Takes over the inherited control channel on fd 0.
@@ -396,4 +430,176 @@ fn take_control_channel() -> std::io::Result<tokio::net::UnixStream> {
     let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(0) };
     std_stream.set_nonblocking(true)?;
     tokio::net::UnixStream::from_std(std_stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
+    use crate::context::{AgentStatusComposer, DefaultTokenEstimator, SessionContextPolicy};
+    use crate::model::adapter::ModelAdapter;
+    use crate::runtime::conversation_runtime::{
+        ConversationContextConfig, ConversationRuntime, CoordinatorProbe, RuntimeConversationConfig,
+    };
+    use crate::runtime::identity::{AgentId, ConversationId};
+    use crate::scripted_suites::support::fake::FakeModel;
+    use crate::scripted_suites::support::model::scripted_session_model;
+    use crate::tools::executor::ToolRegistry;
+    use crate::tools::runtime::ConversationToolRuntime;
+
+    async fn child_test_runtime(
+        dir: &tempfile::TempDir,
+        pause: StartBoundaryPause,
+        conversation_id: ConversationId,
+        model: Arc<FakeModel>,
+    ) -> ConversationRuntime {
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let tool_runtime = ConversationToolRuntime::new(
+            conversation_id.clone(),
+            &workspace,
+            dir.path().join("artifacts"),
+        )
+        .expect("tool runtime");
+        let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: conversation_id.clone(),
+            workspace: tool_runtime.workspace().clone(),
+            base_tool_registry: Arc::new(ToolRegistry::new()),
+            mcp_servers: std::collections::BTreeMap::new(),
+            base_environment: tool_runtime.environment().clone(),
+            environment_store_root: dir.path().join("environments"),
+        })
+        .expect("capability coordinator");
+        let candidate = capability.prepare_candidate().await.expect("candidate");
+        capability.commit(candidate).expect("capability commit");
+        let adapter: Arc<dyn ModelAdapter> = model;
+        ConversationRuntime::with_probe(
+            RuntimeConversationConfig {
+                agent_id: AgentId::new("agent-child"),
+                model: scripted_session_model(adapter),
+                timezone: None,
+                context: ConversationContextConfig {
+                    policy: SessionContextPolicy {
+                        reserve_tokens: 0,
+                        keep_recent_tokens: 0,
+                        summary_output_cap: None,
+                    },
+                    estimator: Arc::new(DefaultTokenEstimator),
+                    status_composer: AgentStatusComposer::default(),
+                },
+                tool_runtime,
+                capability,
+                clock: None,
+                initial_messages: Vec::new(),
+                subagents: None,
+            },
+            CoordinatorProbe {
+                start_boundary_pause: Some(pause),
+                ..CoordinatorProbe::default()
+            },
+        )
+        .expect("child runtime")
+    }
+
+    /// A Cancel frame is received while the runtime has admitted the task but
+    /// is parked before the durable model-request-start arbitration. The
+    /// test deliberately removes the queued `AttemptAdmitted` observation,
+    /// delivers Cancel first, then restores that observation. The sticky
+    /// child path must cancel the attempt on admission and the provider must
+    /// never receive a request.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancellation_before_attempt_admitted_observation_is_sticky() {
+        let dir = tempfile::tempdir().expect("temp root");
+        let (pause, mut pre_start, _) = StartBoundaryPause::install(true, false);
+        let model = Arc::new(FakeModel::new(Vec::new()));
+        let conversation_id = ConversationId::new("conv-child-cancel");
+        let runtime = child_test_runtime(&dir, pause, conversation_id.clone(), model.clone()).await;
+        let observations = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(Arc::clone(&observations))
+            .expect("observation bridge");
+        runtime.activate();
+        runtime
+            .submit_sourced_inbound(
+                UserSource::Agent {
+                    agent_id: AgentId::new("agent-parent"),
+                },
+                vec![UserContentBlock::Text(TextBlock {
+                    text: "delegated task".to_owned(),
+                })],
+            )
+            .expect("Delegate enters ordinary child inbound");
+        pre_start
+            .as_mut()
+            .expect("pre-start control")
+            .await_park(1)
+            .await;
+
+        // AttemptAdmitted has been published by the runtime, but the child
+        // control loop has not consumed it. Remove it so Cancel is provably
+        // handled while current_attempt is None; the test pushes the same
+        // observation back after the cancellation frame.
+        let drained = observations.drain();
+        let attempt_id = drained
+            .iter()
+            .find_map(|observation| match observation {
+                ConversationObservation::AttemptAdmitted { attempt_id } => Some(attempt_id.clone()),
+                _ => None,
+            })
+            .expect("the runtime published AttemptAdmitted");
+        let (mut parent_end, child_end) = tokio::net::UnixStream::pair().expect("control pair");
+        crate::runtime::subagent::ipc::write_parent_frame(&mut parent_end, &ParentFrame::Cancel)
+            .await
+            .expect("parent sends Cancel");
+        let child_runtime = runtime.clone();
+        let child_observations = Arc::clone(&observations);
+        let cancellation_before_admission = Arc::new(tokio::sync::Notify::new());
+        let cancellation_after_admission = Arc::new(tokio::sync::Notify::new());
+        let before_probe = Arc::clone(&cancellation_before_admission);
+        let after_probe = Arc::clone(&cancellation_after_admission);
+        let waiter = tokio::spawn(async move {
+            let mut child_end = child_end;
+            await_terminal_with_probe(
+                &mut child_end,
+                &child_runtime,
+                &child_observations,
+                before_probe,
+                after_probe,
+            )
+            .await
+        });
+        // The child has consumed Cancel and requested the runtime's generic
+        // cancellation seam while `current_attempt` is still None. Only then
+        // restore AttemptAdmitted, proving the sticky pre-admission path.
+        cancellation_before_admission.notified().await;
+        observations.push(ConversationObservation::AttemptAdmitted { attempt_id });
+        cancellation_after_admission.notified().await;
+        pre_start.take().expect("pre-start control").release();
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), waiter)
+            .await
+            .expect("child cancellation liveness")
+            .expect("child waiter")
+            .expect("child control loop");
+        assert!(matches!(terminal, AttemptTerminal::Cancelled));
+        assert!(
+            model.requests().is_empty(),
+            "no model request crossed cancellation: {:?}",
+            model.requests()
+        );
+        assert!(
+            !runtime
+                .tool_runtime()
+                .durable_store()
+                .read_events(None, 64)
+                .expect("events")
+                .events
+                .iter()
+                .any(|event| matches!(event.event, RuntimeEvent::ModelRequestStarted { .. }))
+        );
+        runtime.shutdown().await.expect("child runtime drains");
+    }
 }

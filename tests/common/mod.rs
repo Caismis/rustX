@@ -42,6 +42,44 @@ use rustx::events::types::RuntimeEvent;
 use rustx::runtime::identity::AttemptId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
+
+/// A deterministic gate for a provider response's status line and headers.
+/// The server announces that a matching request reached the response boundary
+/// and then waits until the test explicitly releases it.
+pub struct HeaderGate {
+    entered: watch::Sender<bool>,
+    release: watch::Sender<bool>,
+}
+
+impl HeaderGate {
+    /// Creates a gate that starts closed.
+    pub fn new() -> Arc<Self> {
+        let (entered, _) = watch::channel(false);
+        let (release, _) = watch::channel(false);
+        Arc::new(Self { entered, release })
+    }
+
+    /// Waits until the provider handler has reached the gated response.
+    pub async fn wait_entered(&self) {
+        let mut receiver = self.entered.subscribe();
+        let _ = receiver.wait_for(|entered| *entered).await;
+    }
+
+    /// Releases the gated response.
+    pub fn release(&self) {
+        self.release.send_replace(true);
+    }
+
+    async fn wait_release(&self) {
+        let mut receiver = self.release.subscribe();
+        let _ = receiver.wait_for(|released| *released).await;
+    }
+
+    fn mark_entered(&self) {
+        self.entered.send_replace(true);
+    }
+}
 
 /// One response to serve, described as a sequence of body chunks. A chunk
 /// with a delay lets tests hold a connection open (cancellation tests) or
@@ -53,6 +91,7 @@ pub struct FixtureReply {
     pub reason: &'static str,
     pub headers: Vec<(String, String)>,
     pub header_delay_ms: u64,
+    header_gate: Option<Arc<HeaderGate>>,
     pub chunks: Vec<FixtureChunk>,
 }
 
@@ -85,6 +124,7 @@ impl FixtureReply {
             reason,
             headers: vec![("Content-Type".to_owned(), content_type.to_owned())],
             header_delay_ms: 0,
+            header_gate: None,
             chunks: chunks
                 .into_iter()
                 .map(|(delay_ms, bytes)| FixtureChunk { delay_ms, bytes })
@@ -97,6 +137,13 @@ impl FixtureReply {
     #[must_use]
     pub fn with_header_delay(mut self, delay_ms: u64) -> Self {
         self.header_delay_ms = delay_ms;
+        self
+    }
+
+    /// Holds response headers until the gate is explicitly released.
+    #[must_use]
+    pub fn with_header_gate(mut self, gate: Arc<HeaderGate>) -> Self {
+        self.header_gate = Some(gate);
         self
     }
 
@@ -225,6 +272,10 @@ where
     drop(reader);
 
     let reply = responder(attempt, &head_text, &body_text);
+    if let Some(gate) = &reply.header_gate {
+        gate.mark_entered();
+        gate.wait_release().await;
+    }
     if reply.header_delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(reply.header_delay_ms)).await;
     }

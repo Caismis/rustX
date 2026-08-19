@@ -400,9 +400,10 @@ pub enum RuntimeEvent {
     SubagentTerminalPublished {
         /// The subagent identity.
         subagent_id: SubagentId,
-        /// The child agent identity, restated so the durable authority can
-        /// validate the provenance of a successful result message without
-        /// scanning the journal.
+        /// The child agent identity, restated for a self-describing event.
+        /// Durable validation compares it with the exact
+        /// `SubagentOwnershipCommitted` fact for `subagent_id`; this repeated
+        /// field is not authority by itself.
         child_agent_id: AgentId,
         /// The pending/canonical `MessageId` of the terminal publication.
         message_id: MessageId,

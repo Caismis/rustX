@@ -2667,6 +2667,7 @@ Runtime Client is a projection/control/attachment adapter over it.
   CoordinatorState ──► PendingObservations
   ClientState ──────► PendingObservations
   ConversationBackgroundRegistry ───► PendingObservations
+  SubagentRegistry ────────────────► PendingObservations (observer only)
   CapabilityCoordinator ───────────► PendingObservations
   AgentExecution (attempt task, holds no lock) ──► PendingObservations
 
@@ -2685,6 +2686,16 @@ Runtime Client is a projection/control/attachment adapter over it.
   acquires `CoordinatorState` or `ClientState`. Since Issue #61's
   revision there is no runtime semantic record in the graph at all — the
   runtime performs no fold, so there is no second intermediate lock.
+
+  The subagent terminal-durability sink is a separate rule: the registry
+  copies the sink while its mutex is held, releases that mutex, and only then
+  calls the owning `ConversationRuntime`, which may acquire `CoordinatorState`
+  and publish `DurabilityFailed`. Thus the normal ownership direction is
+  `CoordinatorState -> SubagentRegistry`; there is no held-lock reverse edge.
+  The registry never waits for a process or performs async work while its
+  mutex is held. Runtime Client projection callbacks remain leaf queue
+  writes, and the driver task owns the process handle independently of both
+  logical locks.
 
   All downward edges out of `CoordinatorState` point the same way. The
   `CoordinatorState -> mailbox` edge exists in `admit_next_attempt`,
@@ -3080,6 +3091,57 @@ Configuration is explicit paths only. M10 (#13) owns discovery, precedence,
 profiles, and manifest UX; none of that exists here. Unknown fields are
 rejected everywhere, so a typo fails startup loudly rather than silently
 changing semantics.
+
+#### Native async subagents (Issue #60 / M9.25)
+
+The `subagent` intrinsic is conversation-owned detached work, not a second
+agent loop or a generic task framework:
+
+```text
+ConversationRuntime/coordinator
+        |
+        v
+SubagentRegistry          logical identity, lifecycle, capacity, durability
+        |
+        v
+subagent process driver   sole committed OS-process handle owner
+        |
+        v
+real --subagent-child     ConversationRuntime + Agent Loop + Context + Tools
+```
+
+`prepare` validates the bounded task/context and stages a real child through
+its typed Hello/Ready handshake. The one ownership commit freezes one start
+timestamp, durably writes `SubagentOwnershipCommitted`, and creates the
+logical Running record. The driver command handle is installed before its
+start gate opens. If cancellation wins during that handoff, a sticky intent
+causes the driver to send `Cancel` before `Delegate`; the cancellation cannot
+be lost while the control handle is being published. The registry retains no
+`tokio::process::Child`; rollback and the committed driver are the only
+physical teardown owners at their respective phases.
+
+The child accepts `Delegate` through its ordinary durable inbound path as
+`UserSource::Agent(parent)`. A child-side `Cancel` is sticky across the
+`AttemptAdmitted` observation and uses the existing runtime cancellation and
+model-request-start frontier. The child result is only a candidate on IPC;
+the parent driver reaps first, then the registry freezes a UTF-8-safe
+byte-bounded candidate and asks the parent mailbox to atomically accept the
+terminal inbound plus `SubagentTerminalPublished`. A normal terminal state is
+not observable before that compound commit. `PublishingTerminal` remains
+capacity-owning while the candidate is unresolved. After bounded retry
+exhaustion, the failure sink (called outside the registry mutex) places the
+owning `ConversationRuntime` in `DurabilityFailed`; no false terminal success
+or healthy state is reported.
+
+Terminal validation resolves the child identity from the durable
+`SubagentOwnershipCommitted` fact, so a repeated or caller-controlled
+`child_agent_id` in a terminal event is not authority. Success is
+`UserSource::Agent(child)`; failure, cancellation, and recovery interruption
+are `UserSource::Runtime`. The Explore child capability snapshot contains
+exactly Read/Glob/Grep, with no write, shell, background, MCP, or recursive
+subagent capability. Parent hard death closes the control channel; the child
+exits, and restart classifies the old nonterminal ownership as Interrupted
+without reattach, replay, PID adoption, or relaunch.
 
 Representative `models.json` (no real credential ever appears in a catalog
 checked into a repository — `$ENV_VAR` is the reason the literal form exists

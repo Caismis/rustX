@@ -213,3 +213,24 @@ pub fn register_subagent_child_tools(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{NativeToolPolicies, register_subagent_child_tools};
+    use crate::tools::executor::ToolRegistry;
+
+    #[test]
+    fn subagent_child_registry_is_exactly_the_explore_profile() {
+        let mut registry = ToolRegistry::new();
+        register_subagent_child_tools(&mut registry, NativeToolPolicies::default())
+            .expect("explore tools register");
+        assert_eq!(registry.names(), vec!["read", "glob", "grep"]);
+        assert_eq!(registry.len(), 3);
+        assert!(
+            registry
+                .definitions()
+                .iter()
+                .all(|definition| definition.origin == crate::tools::types::ToolOrigin::Builtin)
+        );
+    }
+}

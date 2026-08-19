@@ -28,7 +28,7 @@ use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvel
 use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
 use crate::model::snapshot::RequestSnapshot;
 use crate::model::types::ModelRequest;
-use crate::runtime::identity::{ConversationId, EventId, MessageId, RequestId};
+use crate::runtime::identity::{AgentId, ConversationId, EventId, MessageId, RequestId};
 use crate::runtime::inbound::InboundSequence;
 
 use super::inbox::{
@@ -2586,12 +2586,72 @@ fn find_event_by_id(
     Ok(Some(decode(&json, "event identity")?))
 }
 
+/// Resolves the authoritative child agent identity from the one durable
+/// ownership opening fact of a subagent lifecycle.
+///
+/// Terminal callers restate `child_agent_id` so the compound event remains
+/// self-describing, but that repeated field is not authority. Validation
+/// scans only this bounded, typed lifecycle fact rather than trusting a
+/// caller-controlled terminal payload.
+fn find_subagent_ownership_child(
+    transaction: &Transaction<'_>,
+    subagent_id: &crate::runtime::identity::SubagentId,
+) -> Result<AgentId, ConversationStoreError> {
+    let mut statement = transaction
+        .prepare("SELECT event_json FROM events ORDER BY sequence")
+        .map_err(|error| storage(format!("subagent ownership probe: {error}")))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| storage(format!("subagent ownership query: {error}")))?;
+    let mut child_agent_id = None;
+    for row in rows {
+        let json = row.map_err(|error| storage(format!("subagent ownership row: {error}")))?;
+        let event: RuntimeEventEnvelope = decode(&json, "subagent ownership event")?;
+        if let RuntimeEvent::SubagentOwnershipCommitted {
+            subagent_id: candidate,
+            child_agent_id: candidate_child,
+            ..
+        } = event.event
+            && candidate == *subagent_id
+        {
+            if child_agent_id.is_some() {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} has duplicate ownership facts"
+                )));
+            }
+            child_agent_id = Some(candidate_child);
+        }
+    }
+    child_agent_id.ok_or_else(|| {
+        ConversationStoreError::InvalidReference(format!(
+            "subagent terminal has no durable ownership fact for {subagent_id}"
+        ))
+    })
+}
+
 #[allow(clippy::too_many_lines)] // Keeps all cross-domain reference checks at one transaction seam.
 fn validate_event_reference(
     transaction: &Transaction<'_>,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
+        RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
+            let key = format!("subagent:{subagent_id}");
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|error| {
+                    storage(format!("subagent ownership uniqueness probe: {error}"))
+                })?;
+            if exists {
+                return Err(ConversationStoreError::TerminalViolation(format!(
+                    "subagent {subagent_id} already has a durable ownership fact"
+                )));
+            }
+        }
         RuntimeEvent::AssistantMessageCommitted { message_id } => {
             if !ledger_message_exists(transaction, message_id)? {
                 return Err(ConversationStoreError::InvalidReference(format!(
@@ -2720,11 +2780,18 @@ fn validate_event_reference(
             }
         }
         RuntimeEvent::SubagentTerminalPublished {
+            subagent_id,
             child_agent_id,
             message_id,
             state,
             ..
         } => {
+            let committed_child_agent_id = find_subagent_ownership_child(transaction, subagent_id)?;
+            if committed_child_agent_id != *child_agent_id {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent {subagent_id} terminal claims child agent {child_agent_id}, but durable ownership committed {committed_child_agent_id}"
+                )));
+            }
             let publication = load_user_notification_tx(transaction, message_id, "subagent")?;
             let provenance_ok = match state {
                 // A successful child answer is authored by the child agent;
@@ -3040,7 +3107,7 @@ mod tests {
     use super::*;
     use crate::context::assembly::ContextGeneration;
     use crate::conversation::ConversationState;
-    use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+    use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, SubagentTerminalState};
     use crate::message::content::TextBlock;
     use crate::message::types::{
         AssistantContentBlock, AssistantMessageBlock, InboundKind, MessageBlock, UserContentBlock,
@@ -4228,6 +4295,145 @@ mod tests {
             Err(ConversationStoreError::InvalidReference(_))
         ));
         assert_eq!(store.load_pending().unwrap().len(), 1);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subagent_terminal_provenance_is_authorized_by_ownership_fact() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+
+        let own = |ordinal: u64, child_agent_id: &AgentId| {
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
+            store
+                .append_event(envelope(
+                    &conversation_id,
+                    &format!("ownership-{ordinal}"),
+                    None,
+                    RuntimeEvent::SubagentOwnershipCommitted {
+                        subagent_id,
+                        child_agent_id: child_agent_id.clone(),
+                        child_conversation_id: crate::runtime::identity::ConversationId::new(
+                            format!("child-{ordinal}"),
+                        ),
+                        tool_call_id: crate::runtime::identity::ToolCallId::new(format!(
+                            "call-{ordinal}"
+                        )),
+                        profile: "explore".to_owned(),
+                    },
+                ))
+                .expect("ownership fact");
+        };
+        let publish = |ordinal: u64,
+                       claimed_child: &AgentId,
+                       state: SubagentTerminalState,
+                       source: UserSource,
+                       suffix: &str|
+         -> Result<(), ConversationStoreError> {
+            let subagent_id =
+                crate::runtime::identity::SubagentId::for_conversation(&conversation_id, ordinal);
+            let message_id = MessageId::new(format!("terminal-{ordinal}-{suffix}"));
+            let event = envelope(
+                &conversation_id,
+                &format!("terminal-{ordinal}-{suffix}"),
+                None,
+                RuntimeEvent::SubagentTerminalPublished {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: claimed_child.clone(),
+                    message_id: message_id.clone(),
+                    state,
+                },
+            );
+            let draft = InboundDraft {
+                message_id: Some(message_id),
+                source,
+                kind: InboundKind::Message,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "terminal".to_owned(),
+                })],
+                timestamp,
+                correlation: Some(format!("subagent-terminal:{subagent_id}")),
+            };
+            store.accept_inbound_with_event(draft, event).map(|_| ())
+        };
+
+        let child_a = AgentId::new("agent-a");
+        let child_b = AgentId::new("agent-b");
+
+        // The event's repeated child identity is not authority: S owns A,
+        // so a success claiming B and authored by B is rejected.
+        own(10, &child_a);
+        assert!(matches!(
+            publish(
+                10,
+                &child_b,
+                SubagentTerminalState::Succeeded,
+                UserSource::Agent {
+                    agent_id: child_b.clone()
+                },
+                "wrong-child"
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+
+        // Correct child provenance succeeds.
+        own(11, &child_a);
+        publish(
+            11,
+            &child_a,
+            SubagentTerminalState::Succeeded,
+            UserSource::Agent {
+                agent_id: child_a.clone(),
+            },
+            "success",
+        )
+        .expect("correct Agent(A) success");
+
+        // Success must not be Runtime-authored.
+        own(12, &child_a);
+        assert!(matches!(
+            publish(
+                12,
+                &child_a,
+                SubagentTerminalState::Succeeded,
+                UserSource::Runtime,
+                "runtime-success"
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+
+        // A failed/cancelled/interrupted terminal must not be Agent-authored.
+        own(13, &child_a);
+        assert!(matches!(
+            publish(
+                13,
+                &child_a,
+                SubagentTerminalState::Failed,
+                UserSource::Agent {
+                    agent_id: child_a.clone()
+                },
+                "agent-failure"
+            ),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+
+        for (ordinal, state) in [
+            (14, SubagentTerminalState::Failed),
+            (15, SubagentTerminalState::Cancelled),
+            (16, SubagentTerminalState::Interrupted),
+        ] {
+            own(ordinal, &child_a);
+            publish(
+                ordinal,
+                &child_a,
+                state,
+                UserSource::Runtime,
+                "runtime-terminal",
+            )
+            .expect("Runtime-authored terminal");
+        }
     }
 
     #[test]

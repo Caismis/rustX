@@ -116,6 +116,24 @@ pub(crate) const MAX_TASK_BYTES: usize = 32 * 1024;
 /// The bounded explicit context-package size.
 pub(crate) const MAX_CONTEXT_PACKAGE_BYTES: usize = 64 * 1024;
 
+/// Bounds model-generated or diagnostic text by UTF-8 bytes without ever
+/// splitting a Unicode scalar value.
+///
+/// The subagent wire and durable-publication contracts are byte bounds. The
+/// greatest character boundary at or below `max_bytes` is therefore the
+/// deterministic truncation point.
+pub(crate) fn bound_utf8(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+    value
+}
+
 /// The durable ownership fact of one subagent child (Issue #60).
 ///
 /// The fact carries exactly the identity a restart needs — the subagent,
@@ -264,4 +282,28 @@ pub fn recovery_terminal_publication(
         })],
         timestamp,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bound_utf8;
+
+    #[test]
+    fn utf8_bounds_are_byte_caps_at_character_boundaries() {
+        let chinese = "界".repeat(32);
+        let chinese_bound = bound_utf8(chinese.clone(), 65);
+        assert!(chinese_bound.len() <= 65);
+        assert_eq!(chinese_bound.len() % "界".len(), 0);
+        assert_eq!(chinese_bound, "界".repeat(21));
+
+        let emoji = "🙂".repeat(20);
+        let emoji_bound = bound_utf8(emoji.clone(), 65);
+        assert!(emoji_bound.len() <= 65);
+        assert_eq!(emoji_bound.len() % "🙂".len(), 0);
+        assert_eq!(emoji_bound, "🙂".repeat(16));
+
+        assert_eq!(bound_utf8("ascii".to_owned(), 5), "ascii");
+        assert_eq!(bound_utf8("ascii".to_owned(), 4), "asci");
+        assert_eq!(bound_utf8("short🙂".to_owned(), 64), "short🙂");
+    }
 }

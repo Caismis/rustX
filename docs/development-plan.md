@@ -1099,12 +1099,15 @@ temporary configuration file.
 The parent side is one `SubagentRegistry` per conversation, the logical
 owner of every child. `prepare` validates bounds and stages the child
 privately behind a start gate; `commit` is the one linearization point —
-under the mailbox's running-commit section it writes the durable
-`SubagentOwnershipCommitted` fact, creates the record, releases the start
-gate, and moves the staged process into the registry-owned driver task, the
-sole OS-handle owner. Capacity is enforced at commit, not at prepare. A
-lost cancellation race or durable failure rolls the staged child back
-completely before returning.
+under the mailbox's running-commit section it freezes one timestamp, writes
+the durable `SubagentOwnershipCommitted` fact, creates the record, installs
+the driver's command handle, and only then opens the start gate. If
+cancellation commits in that handoff window, the driver sends the sticky
+`Cancel` before `Delegate`, so cancellation cannot be lost. The driver task
+is the sole OS-handle owner after the handoff; the registry never retains a
+`tokio::process::Child`. Capacity is enforced at commit, and a lost
+cancellation race or durable failure rolls the staged child back
+completely, including conclusive direct-child reap, before returning.
 
 The control plane is bounded and typed: one `UnixStream` pair on the
 child's fd 0, length-prefixed frames capped at 1 MiB, versioned Hello
@@ -1117,10 +1120,25 @@ durable authority enforces that provenance at the terminal fact's commit.
 
 The driver owns physical supervision: reap-before-settle, Cancel → SIGTERM
 → SIGKILL escalation on the child's process group, and no PID identity.
-Parent death closes the child's stdin; the child drains and exits. Recovery
-classifies a durably owned, never-settled child as interrupted and
-terminalizes it exactly once through the same identity contract as the live
-path — nothing is relaunched, replayed, or reattached.
+Parent death closes the child's stdin; the child drains and exits. Child-side
+cancellation is sticky across `AttemptAdmitted` and reuses the runtime's
+request-start cancellation frontier, so a model request cannot begin after
+cancellation wins that frontier. Recovery classifies a durably owned,
+never-settled child as interrupted and terminalizes it exactly once through
+the same identity contract as the live path — nothing is relaunched, replayed,
+or reattached.
+
+The physical outcome is not a parent terminal state by itself. The child is
+reaped first; then the registry freezes a UTF-8-safe byte-bounded terminal
+candidate and durably accepts the parent terminal inbound plus
+`SubagentTerminalPublished` before exposing `Succeeded`, `Failed`, or
+`Cancelled`. `PublishingTerminal` remains capacity-owning while unresolved.
+The first publication error receives the bounded retry; only exhausted retry
+invokes the sink owned by `ConversationRuntime`, which enters
+`DurabilityFailed` and leaves the candidate observable rather than claiming
+healthy or successful settlement. Terminal provenance is checked against the
+durable `SubagentOwnershipCommitted.child_agent_id`, not merely against the
+repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
@@ -1129,16 +1147,18 @@ tool, so recursion is impossible by construction. Runtime Client v1 carries
 `snapshot.subagents`; the TUI renders the same projection.
 
 Exit criteria (met): deterministic registry tests over scripted staged
-children (capacity at commit, the cancellation race through the
-commit-boundary hook, canonical cancellation over late results,
-escalation-after-cancel, bounded publication retry then abandonment, the
-idempotent correlated retry, ordinal watermark reseed — no sleeps); durable
-exactly-once and provenance tests; recovery interrupted-only classification
-tests; and an end-to-end scenario through the real binary in which a real
-second rustX process answers the provider and the parent consumes the
-child-authored message. No durable workflow, no subagent profile
-configuration surface, no cross-conversation children, and no recursion
-were added.
+children (capacity at commit, the ownership/control cancellation race
+through a test handoff gate, canonical cancellation over late results,
+escalation-after-cancel, conclusive rollback reap, bounded publication retry
+then abandonment, unresolved-capacity retention, the idempotent correlated
+retry, ordinal watermark reseed — no sleeps); a child-side pre-
+`AttemptAdmitted` cancellation regression; owning-runtime durability-health
+and lock-discipline tests; durable exactly-once and ownership-provenance
+tests; UTF-8 byte-bound tests; recovery interrupted-only classification
+tests; and real-binary scenarios for ordinary execution and hard parent
+`SIGKILL` with child EOF containment and repeated idempotent restart. No
+durable workflow, no subagent profile configuration surface,
+cross-conversation children, or recursion were added.
 
 ## Milestone 10 — Local runtime product
 
