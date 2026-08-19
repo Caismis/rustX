@@ -40,6 +40,8 @@ pub(crate) mod ipc;
 pub(crate) mod process;
 
 pub use process::SubagentSpawnPlan;
+#[cfg(test)]
+pub(crate) use registry::CommitBoundaryHook;
 pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentObserver,
     SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,
@@ -134,12 +136,27 @@ pub(crate) fn bound_utf8(mut value: String, max_bytes: usize) -> String {
     value
 }
 
+/// The one canonical durable event identity of a subagent ownership fact
+/// (Issue #60).
+///
+/// A `SubagentOwnershipCommitted` fact has exactly one deterministic
+/// `EventId`, derived from the very `SubagentId` embedded in its payload:
+/// `subagent-committed-event:{subagent_id}`. The durable authority enforces
+/// this binding at write time and revalidates it at read/terminal-validation
+/// time, so a mismatched `EventId`/`SubagentId` pair can never enter
+/// durable authority and a terminal can never resolve an ownership fact
+/// that does not belong to the requested child.
+pub(crate) fn subagent_ownership_event_id(subagent_id: &SubagentId) -> EventId {
+    EventId::new(format!("subagent-committed-event:{subagent_id}"))
+}
+
 /// The durable ownership fact of one subagent child (Issue #60).
 ///
 /// The fact carries exactly the identity a restart needs — the subagent,
 /// the child agent/conversation it owns, the delegating tool call, and the
 /// frozen profile — never the delegated task content, the process id, or
-/// any other process-local state.
+/// any other process-local state. Its event identity is the canonical
+/// [`subagent_ownership_event_id`] of the embedded `SubagentId`.
 pub(crate) fn ownership_event(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
@@ -151,7 +168,7 @@ pub(crate) fn ownership_event(
 ) -> RuntimeEventEnvelope {
     RuntimeEventEnvelope {
         schema_version: EVENT_SCHEMA_VERSION,
-        event_id: EventId::new(format!("subagent-committed-event:{subagent_id}")),
+        event_id: subagent_ownership_event_id(subagent_id),
         sequence: 0,
         conversation_id: conversation_id.clone(),
         attempt_id: None,

@@ -1113,11 +1113,15 @@ sole OS-handle owner after the handoff; the registry never retains a
 cancellation race or durable failure rolls the staged child back
 completely, including conclusive direct-child reap, before returning.
 
-`ConversationRuntime::new` structurally validates the supplied registry's
-ownership domain before anything is claimed: the same `ConversationId`, the
-same parent `AgentId`, the exact same canonical mailbox, and a pristine
-registry with no committed child record. A registry for another domain or
-one with live children is rejected typed.
+`ConversationRuntime::new` validates the registry's typed ownership domain
+before anything is claimed — the same `ConversationId`, the same parent
+`AgentId`, the exact same canonical mailbox — and then makes the
+**authoritative** pristine check only after the mailbox ownership transfer
+binds the canonical mailbox to the runtime's `Inactive` lifecycle. A
+standalone child commit that wins before the binding makes the constructor
+reject with every claim rolled back; a runtime claim that wins first makes
+later standalone child commits fail. The runtime never silently adopts a
+child started outside its ownership transfer.
 
 The control plane is bounded and typed: one `UnixStream` pair on the
 child's fd 0, length-prefixed frames capped at 1 MiB, versioned Hello
@@ -1152,10 +1156,11 @@ invokes the sink owned by `ConversationRuntime`, which enters
 `DurabilityFailed` and leaves the candidate observable rather than claiming
 healthy or successful settlement. Terminal provenance is checked against the
 durable `SubagentOwnershipCommitted.child_agent_id` — resolved through the
-ownership fact's deterministic event identity
-(`subagent-committed-event:{id}`) and the unique `event_id` index in
-bounded time, never a journal scan — not merely against the repeated
-terminal payload.
+ownership fact's canonical event identity (`subagent-committed-event:{id}`,
+derived from the embedded `SubagentId` and enforced by the durable
+authority at write time and revalidated at read time) and the unique
+`event_id` index in bounded time, never a journal scan — not merely against
+the repeated terminal payload.
 
 Capabilities are deny-by-construction: the child composes the base tool
 plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
@@ -1174,8 +1179,13 @@ retry, ordinal watermark reseed — no sleeps); child-side cancellation
 regressions at all three frontiers (before admission, after admission before
 request start, after request start) through the runtime-owned one-shot
 intent with no observation on the control path; owning-runtime
-subagent-registry ownership-domain validation; durable exactly-once and
-ownership-provenance tests; UTF-8 byte-bound tests; recovery
+subagent-registry ownership-domain validation plus both directions of the
+runtime-claim/standalone-commit total order (a standalone commit that wins
+the transfer race makes the constructor reject with every claim rolled
+back; a runtime claim that wins first refuses later standalone starts);
+durable exactly-once and ownership-provenance tests, including the
+canonical `EventId <-> SubagentId` binding rejected at write time and
+revalidated at terminal-validation time; UTF-8 byte-bound tests; recovery
 interrupted-only classification tests; and real-binary scenarios for
 ordinary execution and hard parent `SIGKILL` with child EOF containment and
 repeated idempotent restart. No durable workflow, no subagent profile

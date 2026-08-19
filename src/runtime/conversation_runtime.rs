@@ -2313,10 +2313,13 @@ impl ConversationRuntime {
         }
         // The subagent registry is a conversation-owned logical plane: the
         // runtime must not adopt a registry that belongs to another
-        // conversation/agent domain or another canonical mailbox, nor one
-        // that already owns committed children. The typed ownership domain
-        // is validated here, before any claim, so a rejected construction
-        // consumes nothing (Issue #60 hardening).
+        // conversation/agent domain or another canonical mailbox. The typed
+        // ownership domain is validated here, before any claim, so a
+        // rejected construction consumes nothing (Issue #60 hardening).
+        // Pristine authority is deliberately **not** decided here: a
+        // standalone child ownership commit can still be in flight, so the
+        // authoritative pristine check runs after the mailbox ownership
+        // transfer below (the one total-order point).
         if let Some(subagents) = &config.subagents {
             let registry_conversation = subagents.conversation_id().clone();
             if registry_conversation != conversation_id
@@ -2326,11 +2329,6 @@ impl ConversationRuntime {
                 return Err(ConversationRuntimeError::SubagentOwnershipMismatch {
                     registry_conversation,
                     runtime_conversation: conversation_id,
-                });
-            }
-            if !subagents.is_pristine() {
-                return Err(ConversationRuntimeError::SubagentRegistryNotPristine {
-                    conversation_id,
                 });
             }
         }
@@ -2402,6 +2400,33 @@ impl ConversationRuntime {
             // rejected construction leaves no trace.
             config.tool_runtime.release_conversation_runtime_claim();
             return Err(ConversationRuntimeError::RuntimeAlreadyBound { conversation_id });
+        }
+
+        // ---- Final subagent ownership arbitration (Issue #60) ----
+        //
+        // The tool-runtime/mailbox ownership claim above bound the canonical
+        // mailbox to this runtime's `Inactive` lifecycle. A standalone
+        // `SubagentRegistry::commit` can therefore no longer enter: its
+        // mailbox `begin_running_admission`/`with_running_commit` observes
+        // the runtime-owned `Inactive` lifecycle and is refused. This is
+        // the deterministic total-order point against any standalone child
+        // ownership commit that won the race before the bind. That commit
+        // holds the registry mutex through its durable ownership write and
+        // record publication, so this authoritative pristine check blocks
+        // until it finishes and then observes the non-pristine plane — a
+        // live child started outside this runtime's ownership transfer is
+        // never silently adopted.
+        if let Some(subagents) = &config.subagents
+            && !subagents.is_pristine()
+        {
+            // Transactional construction: roll back every claim acquired so
+            // far — the capability claim and the tool-runtime claim (which
+            // also unbinds the mailbox) — so the failed construction leaves
+            // no runtime/mailbox/capability residue and a later correct
+            // construction with a fresh plane remains possible.
+            config.capability.release_conversation_runtime_claim();
+            config.tool_runtime.release_conversation_runtime_claim();
+            return Err(ConversationRuntimeError::SubagentRegistryNotPristine { conversation_id });
         }
 
         // ---- Startup recovery (Issue #12, M9a) ----
@@ -4331,6 +4356,223 @@ mod tests {
         .await;
         let runtime = ConversationRuntime::new(config).expect("matching pristine registry");
         assert!(!runtime.is_activated());
+    }
+
+    /// The runtime/subagent ownership transfer has one deterministic total
+    /// order. A standalone `SubagentRegistry::commit` that entered its
+    /// mailbox standalone decision before the constructor bound the mailbox
+    /// Inactive publishes its durable ownership and record first; the
+    /// constructor's post-claim pristine arbitration then observes the
+    /// non-pristine plane, rolls back every claim it acquired, and rejects
+    /// typed. The runtime never silently adopts a child started outside its
+    /// ownership transfer.
+    ///
+    /// Production synchronization: the standalone commit holds the registry
+    /// mutex across its durable ownership write and record publication
+    /// (`with_running_commit` + record creation under one lock), so the
+    /// constructor's post-claim `is_pristine()` blocks until the commit
+    /// finishes and then sees the record.
+    ///
+    /// Test hook: the registry's `CommitBoundaryHook` parks the commit
+    /// inside that ownership critical section (mailbox standalone decision
+    /// already crossed, registry mutex held, mailbox still unbound). The
+    /// constructor starts only after the hook is entered, so the forced
+    /// interleaving is: standalone commit in flight -> constructor binds
+    /// mailbox -> commit publishes -> post-claim check rejects.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn a_standalone_subagent_commit_winning_the_transfer_race_rejects_construction() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-transfer-race",
+            ))
+            .expect("in-memory store"),
+        );
+        let (subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-transfer-race",
+            store.clone(),
+            &ConversationId::new("conv-subagent-transfer-race"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+        let tool_runtime = config.tool_runtime.clone();
+        let hook = Arc::new(crate::runtime::subagent::CommitBoundaryHook::default());
+        subagents.install_commit_boundary_hook(hook.clone());
+        let (staged, _peer) = stage_runtime_test_child(&dir.path().join("race-child"));
+        subagents.push_staged_override(staged);
+
+        // The standalone commit task: prepares privately and parks inside
+        // the ownership-commit critical section (the CommitBoundaryHook),
+        // proving it crossed the mailbox standalone decision with the
+        // mailbox still unbound.
+        let commit_registry = subagents.clone();
+        let committer = tokio::spawn(async move {
+            let prepared = commit_registry
+                .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                    profile: crate::runtime::subagent::SubagentProfile::Explore,
+                    task: "transfer race".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("call-transfer-race"),
+                })
+                .await
+                .expect("prepare");
+            commit_registry
+                .commit(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking({
+                let hook = hook.clone();
+                move || hook.wait_until_entered()
+            }),
+        )
+        .await
+        .expect("commit-boundary liveness")
+        .expect("commit-boundary entered");
+
+        // Start the constructor only now: static domain validation passes,
+        // the mailbox is bound to the runtime's Inactive lifecycle, and the
+        // post-claim pristine arbitration blocks on the registry mutex held
+        // by the parked standalone commit.
+        let constructor = tokio::spawn(async move { ConversationRuntime::new(config) });
+        hook.release();
+
+        let commit_outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
+            .await
+            .expect("commit liveness")
+            .expect("committer")
+            .expect("standalone commit succeeds on the unbound mailbox");
+        let accepted = match commit_outcome {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => {
+                panic!("no cancellation was requested")
+            }
+        };
+        let construction = tokio::time::timeout(std::time::Duration::from_secs(10), constructor)
+            .await
+            .expect("constructor liveness")
+            .expect("constructor task");
+        assert!(
+            matches!(
+                construction,
+                Err(ConversationRuntimeError::SubagentRegistryNotPristine { .. })
+            ),
+            "a standalone child commit that won the transfer must make the constructor reject: {construction:?}"
+        );
+
+        // The committed child remains owned by the standalone registry; the
+        // constructor never adopted it and never spawned anything.
+        let snapshots = subagents.all_snapshots();
+        assert_eq!(snapshots.len(), 1, "exactly the standalone child is owned");
+        assert_eq!(
+            snapshots[0].subagent_id, accepted.subagent_id,
+            "the same identity the standalone commit published"
+        );
+        assert!(
+            !tool_runtime.mailbox().is_bound_inactive(),
+            "the failed constructor rolled back the mailbox binding"
+        );
+        // Exactly one durable ownership fact exists — no duplicate child
+        // ownership event from the constructor.
+        let ownership_facts = store
+            .read_events(None, 64)
+            .expect("events")
+            .events
+            .iter()
+            .filter(|envelope| {
+                matches!(
+                    &envelope.event,
+                    crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                        subagent_id,
+                        ..
+                    } if *subagent_id == accepted.subagent_id
+                )
+            })
+            .count();
+        assert_eq!(ownership_facts, 1, "one durable ownership fact");
+
+        // Settle the committed child (escalate and reap) so the fixture
+        // leaks no process.
+        let _ = subagents.cancel(
+            &accepted.subagent_id,
+            crate::runtime::types::CancellationReason::UserRequested,
+        );
+        subagents
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+    }
+
+    /// The opposite side of the same total order: a runtime ownership claim
+    /// that wins first binds the canonical mailbox to the runtime's
+    /// `Inactive` lifecycle, so a later standalone `SubagentRegistry::commit`
+    /// is refused by the lifecycle before it can publish anything. The
+    /// constructor observes a pristine plane and succeeds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-transfer-claim-first",
+            ))
+            .expect("in-memory store"),
+        );
+        let (subagents, config) = subagent_runtime_config_with_registry(
+            &dir,
+            "conv-subagent-transfer-claim-first",
+            store.clone(),
+            &ConversationId::new("conv-subagent-transfer-claim-first"),
+            &AgentId::new("agent-a"),
+            &AgentId::new("agent-a"),
+        )
+        .await;
+
+        // The runtime ownership claim wins first: construction succeeds on
+        // the pristine plane and binds the mailbox Inactive.
+        let _runtime = ConversationRuntime::new(config).expect("construction succeeds");
+        assert!(subagents.is_pristine());
+
+        // A later standalone subagent start is refused by the runtime-owned
+        // Inactive lifecycle at `prepare` — the same lifecycle gate that
+        // guards the ownership commit, and the earliest point of the start
+        // path — so nothing is ever spawned or published.
+        let error = subagents
+            .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                task: "refused after claim".to_owned(),
+                context: None,
+                tool_call_id: ToolCallId::new("call-refused"),
+            })
+            .await
+            .expect_err("standalone start refused by the runtime-owned lifecycle");
+        assert!(matches!(
+            error,
+            crate::runtime::subagent::SubagentStartError::ConversationInactive
+        ));
+        assert!(
+            subagents.is_pristine(),
+            "the refused start published no record"
+        );
+        assert!(subagents.all_snapshots().is_empty());
+        assert!(
+            store
+                .read_events(None, 64)
+                .expect("events")
+                .events
+                .iter()
+                .all(|envelope| !matches!(
+                    envelope.event,
+                    crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+                )),
+            "no durable ownership fact entered the journal"
+        );
     }
 
     /// Stages a stubborn real child for a registry test; the driver must

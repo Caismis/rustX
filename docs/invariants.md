@@ -588,15 +588,27 @@ that a live child produced an Interrupted physical result.
   pair with `UserSource::Runtime`. The SQLite compound transaction rejects
   mismatches before accepting either side. The ownership fact is resolved
   through its deterministic event identity (`subagent-committed-event:{id}`)
-  and the unique `event_id` index — bounded time, never a journal scan.
-- **The subagent registry is validated at runtime construction.** A
-  `ConversationRuntime` accepts a `SubagentRegistry` only when its typed
-  ownership domain matches the runtime — the same `ConversationId`, the
-  same parent `AgentId`, and the exact same canonical mailbox (structural
-  identity, never a file-path comparison) — and only when the registry is
-  pristine (owns no committed child record). A registry for another
-  conversation/agent/mailbox domain or one with live children is rejected
-  typed before anything is claimed.
+  and the unique `event_id` index — bounded time, never a journal scan —
+  and the embedded `SubagentId` is defensively revalidated before
+  `child_agent_id` is trusted as provenance authority.
+- **The durable ownership identity is canonical.** A
+  `SubagentOwnershipCommitted` fact has exactly one deterministic `EventId`
+  derived from the very `SubagentId` embedded in its payload. The durable
+  authority rejects a mismatched `EventId`/`SubagentId` pair at write time
+  — no Event Journal row and no lifecycle opening — and revalidates the
+  binding at terminal-validation time.
+- **The subagent registry is validated at runtime construction with a real
+  total order.** A `ConversationRuntime` accepts a `SubagentRegistry` only
+  when its typed ownership domain matches the runtime — the same
+  `ConversationId`, the same parent `AgentId`, and the exact same canonical
+  mailbox (structural identity, never a file-path comparison). Construction
+  first binds the canonical mailbox to the runtime's `Inactive` lifecycle,
+  then performs the authoritative registry-pristine check under the
+  registry mutex. A standalone child commit that wins before the binding
+  makes the constructor reject (and rolls back every claim it acquired); a
+  runtime claim that wins first makes later standalone child commits fail.
+  The runtime never silently adopts a child started outside its ownership
+  transfer.
 - **Parent death is contained.** The parent holds the control channel; its
   death closes the child's stdin, and the child drains and exits without a
   result. Nothing polls PIDs. At recovery, a durably owned, never-settled

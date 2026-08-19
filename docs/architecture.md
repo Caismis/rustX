@@ -3124,11 +3124,15 @@ later cancellation is in-flight cancellation. The registry retains no
 physical teardown owners at their respective phases.
 
 `ConversationRuntime::new` validates the registry's typed ownership domain
-before anything is claimed: the same `ConversationId`, the same parent
+before anything is claimed — the same `ConversationId`, the same parent
 `AgentId`, the exact same canonical mailbox (structural identity, never a
-file-path comparison), and a pristine registry with no committed child
-record. A registry for another domain or one with live children is rejected
-typed.
+file-path comparison). The ownership transfer then binds the mailbox to the
+runtime's `Inactive` lifecycle and performs the **authoritative** pristine
+check under the registry mutex: a standalone child commit that won before
+the binding makes the constructor reject (rolling back every claim it
+acquired); a runtime claim that wins first makes later standalone child
+commits fail. The runtime never silently adopts a registry with a live
+child started outside its ownership transfer.
 
 The child accepts `Delegate` through its ordinary durable inbound path as
 `UserSource::Agent(parent)`. A child-side `Cancel` commits directly into the
@@ -3150,10 +3154,12 @@ owning `ConversationRuntime` in `DurabilityFailed`; no false terminal success
 or healthy state is reported.
 
 Terminal validation resolves the child identity from the durable
-`SubagentOwnershipCommitted` fact — through its deterministic event identity
-(`subagent-committed-event:{id}`) and the unique `event_id` index in bounded
-time, never a journal scan — so a repeated or caller-controlled
-`child_agent_id` in a terminal event is not authority. Success is
+`SubagentOwnershipCommitted` fact — through its canonical event identity
+(`subagent-committed-event:{id}`, derived from the embedded `SubagentId`,
+which the durable authority enforces at write time and revalidates at
+read time) and the unique `event_id` index in bounded time, never a journal
+scan — so a repeated or caller-controlled `child_agent_id` in a terminal
+event is not authority. Success is
 `UserSource::Agent(child)`; failure, cancellation, and recovery interruption
 are `UserSource::Runtime`. The Explore child capability snapshot contains
 exactly Read/Glob/Grep, with no write, shell, background, MCP, or recursive

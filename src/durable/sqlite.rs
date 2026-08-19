@@ -2591,28 +2591,41 @@ fn find_event_by_id(
 ///
 /// Terminal callers restate `child_agent_id` so the compound event remains
 /// self-describing, but that repeated field is not authority. The ownership
-/// fact has one deterministic event identity (`subagent-committed-event:{id}`),
+/// fact has one deterministic event identity
+/// ([`subagent_ownership_event_id`](crate::runtime::subagent::subagent_ownership_event_id)),
 /// so the authoritative child identity resolves through the unique
 /// `event_id` index in bounded time instead of scanning the event journal.
-/// Duplicate ownership facts are already rejected at commit time by the
-/// `lifecycle_state` uniqueness probe, so a deterministic lookup cannot
-/// miss a second opening fact.
+/// The embedded `SubagentId` is revalidated defensively: the located fact
+/// must actually belong to the requested child before its `child_agent_id`
+/// is trusted as provenance authority. Duplicate ownership facts are
+/// already rejected at commit time by the `lifecycle_state` uniqueness
+/// probe, so a deterministic lookup cannot miss a second opening fact.
 fn find_subagent_ownership_child(
     transaction: &Transaction<'_>,
     subagent_id: &crate::runtime::identity::SubagentId,
 ) -> Result<AgentId, ConversationStoreError> {
-    let event_id = EventId::new(format!("subagent-committed-event:{subagent_id}"));
+    let event_id = crate::runtime::subagent::subagent_ownership_event_id(subagent_id);
     let envelope = find_event_by_id(transaction, &event_id)?.ok_or_else(|| {
         ConversationStoreError::InvalidReference(format!(
             "subagent terminal has no durable ownership fact for {subagent_id}"
         ))
     })?;
-    let RuntimeEvent::SubagentOwnershipCommitted { child_agent_id, .. } = envelope.event else {
-        return Err(ConversationStoreError::InvalidReference(format!(
+    match envelope.event {
+        RuntimeEvent::SubagentOwnershipCommitted {
+            subagent_id: embedded,
+            child_agent_id,
+            ..
+        } if embedded == *subagent_id => Ok(child_agent_id),
+        RuntimeEvent::SubagentOwnershipCommitted {
+            subagent_id: embedded,
+            ..
+        } => Err(ConversationStoreError::InvalidReference(format!(
+            "subagent ownership event {event_id} belongs to {embedded}, not {subagent_id}"
+        ))),
+        _ => Err(ConversationStoreError::InvalidReference(format!(
             "the subagent ownership event {event_id} is not the typed ownership fact"
-        )));
-    };
-    Ok(child_agent_id)
+        ))),
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Keeps all cross-domain reference checks at one transaction seam.
@@ -2622,6 +2635,19 @@ fn validate_event_reference(
 ) -> Result<(), ConversationStoreError> {
     match &envelope.event {
         RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } => {
+            // The durable identity of an ownership fact is canonical: the
+            // EventId must be the deterministic `subagent-committed-event:{id}`
+            // derived from the very SubagentId embedded in the payload. A
+            // mismatched pair is malformed and must never enter durable
+            // authority; the authority rejects it rather than silently
+            // rewriting or accepting it.
+            let canonical = crate::runtime::subagent::subagent_ownership_event_id(subagent_id);
+            if envelope.event_id != canonical {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent ownership event identity {} does not match the canonical identity {canonical} for {subagent_id}",
+                    envelope.event_id
+                )));
+            }
             let key = format!("subagent:{subagent_id}");
             let exists: bool = transaction
                 .query_row(
@@ -4169,13 +4195,15 @@ mod tests {
         let message_id = MessageId::new("subagent-notification-1");
         let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
         // The ownership commit opens the lifecycle before the terminal. The
-        // event identity is the deterministic `subagent-committed-event:{id}`
-        // the registry writes in production; terminal validation resolves
-        // the ownership fact through that unique event identity.
+        // event identity is the canonical
+        // `subagent-committed-event:{id}` the registry writes in production
+        // (the shared `subagent_ownership_event_id` helper); terminal
+        // validation resolves the ownership fact through that unique event
+        // identity.
         store
             .append_event(envelope(
                 &conversation_id,
-                &format!("subagent-committed-event:{subagent_id}"),
+                crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
                 None,
                 RuntimeEvent::SubagentOwnershipCommitted {
                     subagent_id: subagent_id.clone(),
@@ -4299,7 +4327,7 @@ mod tests {
             store
                 .append_event(envelope(
                     &conversation_id,
-                    &format!("subagent-committed-event:{subagent_id}"),
+                    crate::runtime::subagent::subagent_ownership_event_id(&subagent_id).as_ref(),
                     None,
                     RuntimeEvent::SubagentOwnershipCommitted {
                         subagent_id,
@@ -4439,6 +4467,156 @@ mod tests {
             )
             .expect("Runtime-authored terminal");
         }
+    }
+
+    /// The durable identity of a `SubagentOwnershipCommitted` fact is
+    /// canonical: the `EventId` must be the deterministic
+    /// `subagent-committed-event:{id}` derived from the very `SubagentId`
+    /// embedded in the payload. A mismatched pair is malformed and must
+    /// never enter durable authority — no Event Journal row and no
+    /// lifecycle opening.
+    #[test]
+    fn subagent_ownership_rejects_a_mismatched_event_identity() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let s1 = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let s2 = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        // The body names S1 but the EventId is the canonical identity of S2:
+        // the pair must be rejected by the write-side validation.
+        let malformed = envelope(
+            &conversation_id,
+            crate::runtime::subagent::subagent_ownership_event_id(&s2).as_ref(),
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: s1.clone(),
+                child_agent_id: AgentId::new("agent-a"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
+                tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                profile: "explore".to_owned(),
+            },
+        );
+        assert!(matches!(
+            store.append_event(malformed),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert!(
+            store
+                .read_events(None, 64)
+                .expect("events")
+                .events
+                .is_empty(),
+            "no Event Journal row was committed"
+        );
+        // The correct canonical binding for the same body succeeds.
+        let canonical = envelope(
+            &conversation_id,
+            crate::runtime::subagent::subagent_ownership_event_id(&s1).as_ref(),
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: s1.clone(),
+                child_agent_id: AgentId::new("agent-a"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new("child-a"),
+                tool_call_id: crate::runtime::identity::ToolCallId::new("call-a"),
+                profile: "explore".to_owned(),
+            },
+        );
+        store
+            .append_event(canonical)
+            .expect("canonical binding succeeds");
+    }
+
+    /// Even when a malformed ownership fact exists (reachable only through
+    /// a raw database row, since the write path rejects it), the
+    /// deterministic terminal-provenance lookup defensively revalidates the
+    /// embedded `SubagentId` before trusting `child_agent_id`: the located
+    /// fact must actually belong to the requested child.
+    #[test]
+    fn subagent_terminal_provenance_revalidates_the_embedded_subagent_identity() {
+        let store = store();
+        store.initialize(&[]).expect("initialize");
+        let conversation_id = store.conversation_id().clone();
+        let s1 = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let s2 = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        // Raw-insert a fact whose EventId is canonical for S1 but whose
+        // embedded SubagentId is S2 — the state only a bypass of the write
+        // path could produce.
+        let malformed = envelope(
+            &conversation_id,
+            crate::runtime::subagent::subagent_ownership_event_id(&s1).as_ref(),
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: s2.clone(),
+                child_agent_id: AgentId::new("agent-b"),
+                child_conversation_id: crate::runtime::identity::ConversationId::new("child-b"),
+                tool_call_id: crate::runtime::identity::ToolCallId::new("call-b"),
+                profile: "explore".to_owned(),
+            },
+        );
+        {
+            let mut connection = store.lock().expect("store lock");
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .expect("transaction");
+            transaction
+                .execute(
+                    "INSERT INTO events(sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json) VALUES(?1,?2,?3,?4,NULL,NULL,?5)",
+                    params![
+                        1i64,
+                        malformed.event_id.as_str(),
+                        i64::from(malformed.schema_version),
+                        conversation_id.as_str(),
+                        encode(&malformed, "raw subagent ownership").expect("encode")
+                    ],
+                )
+                .expect("raw ownership row");
+            transaction
+                .execute(
+                    "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
+                    [format!("subagent:{s1}")],
+                )
+                .expect("raw lifecycle opening");
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1",
+                    [1i64],
+                )
+                .expect("bump event sequence");
+            transaction.commit().expect("commit raw row");
+        }
+
+        // A terminal for S1 resolves the ownership fact by S1's canonical
+        // EventId and must reject the embedded-S2 mismatch.
+        let message_id = MessageId::new("terminal-s1");
+        let event = envelope(
+            &conversation_id,
+            "terminal-s1-event",
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: s1.clone(),
+                child_agent_id: AgentId::new("agent-b"),
+                message_id: message_id.clone(),
+                state: SubagentTerminalState::Succeeded,
+            },
+        );
+        let draft = InboundDraft {
+            message_id: Some(message_id),
+            source: UserSource::Agent {
+                agent_id: AgentId::new("agent-b"),
+            },
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "terminal".to_owned(),
+            })],
+            timestamp: Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap(),
+            correlation: Some(format!("subagent-terminal:{s1}")),
+        };
+        assert!(
+            matches!(
+                store.accept_inbound_with_event(draft, event),
+                Err(ConversationStoreError::InvalidReference(_))
+            ),
+            "the ownership fact located by S1's canonical EventId belongs to S2 and must be rejected"
+        );
     }
 
     #[test]
