@@ -27,13 +27,19 @@
 //! deterministic content digest over its `source/` files and comparing it
 //! against the claimed identity — never by trusting a marker string alone.
 //! A corrupt published `ToolVersion` fails preparation explicitly and is
-//! never mutated. The environment marker records every deterministic input that
-//! derives the environment identity (format, OS, architecture, digest, lock
-//! digest, Python runtime identity, uv identity); each `ToolVersion ->
-//! environment digest` binding is recorded deterministically outside the
-//! environment's immutable dependency identity, so a reusable environment
-//! never claims one `ToolVersion` as complete GC reference metadata. No GC
-//! exists in M7.
+//! never mutated. There is exactly one identity authority:
+//! `ToolVersionId` is derived once from the canonical source bytes
+//! (sorted package-relative paths, lengths, and raw bytes) and the
+//! executor never writes into the published source root (the harness
+//! disables bytecode caches), so the persisted representation always
+//! validates identically across restarts. The environment marker records
+//! every deterministic input that derives the environment identity
+//! (format, OS, architecture, digest, lock digest, Python runtime
+//! identity, uv identity); each `ToolVersion -> environment digest`
+//! binding is recorded deterministically outside the environment's
+//! immutable dependency identity, so a reusable environment never claims
+//! one `ToolVersion` as complete GC reference metadata. No GC exists in
+//! M7.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -90,6 +96,12 @@ source_root = pathlib.Path(sys.argv[1]).resolve()
 entrypoint = sys.argv[2]
 input_path = pathlib.Path(sys.argv[3]).resolve()
 sys.path.insert(0, str(source_root))
+
+# The published source root is immutable ToolVersion content: importing the
+# tool module must never write `__pycache__` bytecode caches into it, or the
+# next startup's persisted-source revalidation would (correctly) reject the
+# ToolVersion as corrupt.
+sys.dont_write_bytecode = True
 
 def emit(value):
     sys.__stdout__.write(json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n")
@@ -1150,9 +1162,10 @@ impl PythonToolExecutor {
         environment: PythonToolEnvironment,
     ) -> Result<Self, PythonToolError> {
         let harness = store.inner.root.join("python-tool-harness.py");
-        if !harness.exists() {
-            std::fs::write(&harness, PYTHON_HARNESS).map_err(io_error)?;
-        }
+        // The harness is runtime-owned executable code, never ToolVersion
+        // content: it is (re)written idempotently so every store always runs
+        // the current harness.
+        std::fs::write(&harness, PYTHON_HARNESS).map_err(io_error)?;
         let invocation_root = store.inner.root.join("python-invocations");
         std::fs::create_dir_all(&invocation_root).map_err(io_error)?;
         Ok(Self {
@@ -2185,5 +2198,125 @@ mod tests {
             .await
             .expect_err("a timed-out probe must fail preparation");
         assert!(error.to_string().contains("timed out"));
+    }
+
+    /// Stable identity (Issue #81): the one canonical derivation produces
+    /// exactly the same `ToolVersionId` for the same canonical source
+    /// bytes, and any accepted source-content change produces a different
+    /// identity.
+    #[test]
+    fn tool_version_identity_is_stable_and_content_sensitive() {
+        let files = test_package().files;
+        let first = super::tool_version_id(&files);
+        let second = super::tool_version_id(&files);
+        assert_eq!(
+            first, second,
+            "identical canonical source bytes derive an identical identity"
+        );
+        // The canonical representation is the path-sorted file list: the
+        // collector sorts before deriving, so a reordered discovery reads
+        // the same canonical bytes.
+        let mut reordered = files.clone();
+        reordered.reverse();
+        reordered.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(first, super::tool_version_id(&reordered));
+
+        let mut changed = files.clone();
+        let tool = changed
+            .iter_mut()
+            .find(|(path, _)| path == &PathBuf::from("tool.py"))
+            .expect("tool.py");
+        tool.1.extend_from_slice(b"# changed\n");
+        assert_ne!(
+            first,
+            super::tool_version_id(&changed),
+            "an accepted source-content change must change the identity"
+        );
+        let mut renamed = files.clone();
+        renamed[3].0 = PathBuf::from("renamed.py");
+        assert_ne!(
+            first,
+            super::tool_version_id(&renamed),
+            "a relative-path change must change the identity"
+        );
+    }
+
+    /// Publication round-trip (Issue #81): a `ToolVersion` published by one
+    /// store instance revalidates — from the persisted representation, not
+    /// from in-memory state — under a fresh store over the same root, with
+    /// the same identity.
+    #[test]
+    fn published_tool_version_revalidates_identically_across_a_store_reopen() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("store");
+        let package = test_package();
+        let first = PythonToolStore::new(root.clone())
+            .expect("first store")
+            .publish(&package)
+            .expect("first publish");
+        assert_eq!(first.package.tool_version_id, package.tool_version_id);
+        // The store instance is dropped: the reuse path must validate the
+        // persisted bytes alone.
+        let reopened = PythonToolStore::new(root).expect("reopened store");
+        let second = reopened
+            .publish(&package)
+            .expect("reuse must revalidate the persisted source");
+        assert_eq!(second.root, first.root);
+        assert_eq!(second.package.tool_version_id, package.tool_version_id);
+    }
+
+    /// The executor harness never mutates the immutable published source
+    /// root (Issue #81 root cause): importing the tool module must not
+    /// write `__pycache__` bytecode caches into it, or the next startup's
+    /// persisted-source revalidation would reject the `ToolVersion`.
+    ///
+    /// Opt-in by availability, mirroring the `m7_uv` pattern: without a
+    /// real `python3` the acceptance is not exercised.
+    #[test]
+    fn the_harness_leaves_the_published_source_root_pristine() {
+        let python = super::resolve_executable("python3");
+        if !python.is_file() {
+            eprintln!("python3 unavailable; harness pristineness not exercised");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(&source).expect("source dir");
+        std::fs::write(
+            source.join("tool.py"),
+            "def main(arguments):\n    return {\"echo\": arguments}\n",
+        )
+        .expect("tool source");
+        let harness = dir.path().join("harness.py");
+        std::fs::write(&harness, super::PYTHON_HARNESS).expect("harness");
+        let input = dir.path().join("input.json");
+        std::fs::write(&input, br#"{"question": 42}"#).expect("input");
+        let output = std::process::Command::new(&python)
+            .arg(&harness)
+            .arg(&source)
+            .arg("tool:main")
+            .arg(&input)
+            .current_dir(&source)
+            .output()
+            .expect("run the harness");
+        assert!(
+            output.status.success(),
+            "harness failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("harness stdout");
+        assert!(
+            stdout.contains("\"ok\":true"),
+            "the tool executed through the harness: {stdout}"
+        );
+        let entries = super::collect_files(&source).expect("source files");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(path, _)| path.display().to_string())
+                .collect::<Vec<_>>(),
+            ["tool.py"],
+            "the published source root must remain exactly the ToolVersion content"
+        );
     }
 }
