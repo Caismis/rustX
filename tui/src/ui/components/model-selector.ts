@@ -37,13 +37,19 @@
  * off/low/medium/high and asserting one would make the client a second
  * model-configuration authority.
  *
+ * Search runs over the same published catalog facts the rows display — the
+ * model reference, the protocol, the modalities, the capability flags, the
+ * reasoning profile ids, the limits — and over nothing else. See
+ * {@link searchTerms}: there is no `claude`-means-Messages alias and no
+ * family taxonomy, because the client is not an authority on what a model is.
+ *
  * Selection produces a `CatalogModelView` and nothing else. Applying it is
  * one `model_set` request, owned by the dispatcher; this component never
  * mutates session state.
  */
 
 import {
-  fuzzyFilter,
+  fuzzyMatch,
   matchesKey,
   type Component,
   type Focusable,
@@ -100,13 +106,11 @@ export class ModelSelector implements Component, Focusable {
    *
    * With an empty query this is the catalog's own order — the runtime decides
    * how its catalog is ordered, not the client. With a query it is the
-   * deterministic fuzzy ranking of that same list.
+   * deterministic ranking of that same list over the published facts of
+   * {@link searchTerms}.
    */
   visibleModels(): CatalogModelView[] {
-    if (this.#query.length === 0) {
-      return this.#models;
-    }
-    return fuzzyFilter(this.#models, this.#query, (model) => model.model);
+    return filterModels(this.#models, this.#query);
   }
 
   /** The highlighted model, or `undefined` when nothing matches. */
@@ -385,4 +389,127 @@ function truncate(text: string, width: number): string {
   }
   const plain = plainText(text);
   return `${[...plain].slice(0, Math.max(0, width - 1)).join("")}…`;
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+/**
+ * The searchable terms of one catalog row, the model reference first.
+ *
+ * Every term is a field the runtime published through `model_catalog_get`, or
+ * the row label this component already renders for one. Nothing here is a
+ * provider alias, a family name, or a guess: there is no `claude` term, no
+ * `gpt` term, and no mapping from either to a protocol, because inventing one
+ * would make this client a second authority on what a model *is*.
+ *
+ * Session state is deliberately absent too. `configured` and `effective` are
+ * facts about the session, not about the catalog entry, and searching them as
+ * though they were row metadata would let a row match on something it does
+ * not describe.
+ *
+ * The head and the tail are matched differently — see {@link filterModels}.
+ */
+export function searchTerms(model: CatalogModelView): string[] {
+  const capabilities = model.effectiveCapabilities;
+  const terms = [
+    // The head: the model reference.
+    model.model,
+    // The tail: published metadata. Both spellings the runtime and this
+    // overlay use for one protocol fact, so `responses` and
+    // `openai_responses` both find the same rows.
+    model.protocol,
+    protocolLabel(model.protocol),
+    ...capabilities.inputModalities,
+    ...capabilities.outputModalities,
+    // Capability terms are added only when the capability is present: a
+    // negative term would let a query match a model precisely because it
+    // cannot do the thing the query named.
+    ...(capabilities.toolCalls ? ["tools"] : []),
+    ...(capabilities.reasoning ? ["reasoning"] : []),
+    ...(model.reasoningProfiles ?? []).map((profile) => profile.id),
+    ...(model.defaultReasoningProfile === undefined
+      ? []
+      : [model.defaultReasoningProfile]),
+    tokens(model.contextWindow),
+    tokens(model.maxOutputTokens),
+  ];
+  return [...new Set(terms.filter((term) => term.length > 0))];
+}
+
+/** How much worse a metadata match ranks than a good reference match. */
+const METADATA_SCORE = 0;
+/** How much worse an infix metadata match ranks than a whole-term one. */
+const INFIX_PENALTY = 10;
+
+/**
+ * The deterministic ranking of a catalog against one query.
+ *
+ * Two kinds of term, matched two ways, because they are two kinds of string.
+ *
+ * ```text
+ * model reference   free-form, arbitrarily long   fuzzy subsequence
+ * published metadata  a short closed vocabulary   case-insensitive containment
+ * ```
+ *
+ * Fuzzy matching a short label fabricates: `image` is a subsequence of
+ * `anthropic_messages`, so a subsequence rule would return a text-only row
+ * for a query about image input. Containment is precise, still forgiving
+ * enough for prefixes and infixes, and — unlike a corpus built by gluing
+ * every term into one string — a match remains a statement about a single
+ * fact the catalog actually published.
+ *
+ * Every query token must match, so tokens narrow rather than widen. A
+ * whitespace- or slash-separated query is tokenized the way Pi's own filter
+ * tokenizes one.
+ */
+export function filterModels(
+  models: CatalogModelView[],
+  query: string,
+): CatalogModelView[] {
+  const queryTokens = query.split(/[\s/]+/).filter((token) => token.length > 0);
+  if (queryTokens.length === 0) {
+    // The catalog's own order, untouched.
+    return models;
+  }
+  const scored: Array<{ model: CatalogModelView; score: number; index: number }> =
+    [];
+  models.forEach((model, index) => {
+    let score = 0;
+    for (const token of queryTokens) {
+      const best = tokenScore(token, model);
+      if (best === undefined) {
+        return;
+      }
+      score += best;
+    }
+    scored.push({ model, score, index });
+  });
+  // Ties break on catalog position, so the ordering is total and stable.
+  scored.sort((a, b) => a.score - b.score || a.index - b.index);
+  return scored.map((entry) => entry.model);
+}
+
+/** The best score one query token achieves against one row, if any. */
+function tokenScore(
+  token: string,
+  model: CatalogModelView,
+): number | undefined {
+  const [reference = "", ...metadata] = searchTerms(model);
+  const byReference = fuzzyMatch(token, reference);
+  let best = byReference.matches ? byReference.score : undefined;
+  const needle = token.toLowerCase();
+  for (const term of metadata) {
+    const haystack = term.toLowerCase();
+    if (!haystack.includes(needle)) {
+      continue;
+    }
+    const score =
+      METADATA_SCORE + (haystack.length === needle.length ? 0 : INFIX_PENALTY);
+    if (best === undefined || score < best) {
+      best = score;
+    }
+  }
+  return best;
 }

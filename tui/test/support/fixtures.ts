@@ -231,6 +231,20 @@ export function assistantBlocks(
   return { role: "assistant", id, content };
 }
 
+/** One committed canonical system message, with its authority. */
+export function systemMessage(
+  id: string,
+  authority: "platform" | "agent" | "runtime" | "skill" | "fleet",
+  text: string,
+): MessageBlock {
+  return {
+    role: "system",
+    id,
+    authority,
+    content: [{ text }],
+  };
+}
+
 /** One committed canonical tool result message. */
 export function toolMessage(
   id: string,

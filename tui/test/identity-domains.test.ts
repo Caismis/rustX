@@ -19,6 +19,7 @@ import { renderBackground } from "../src/ui/components/activity.ts";
 import { renderToolCard } from "../src/ui/components/tool-card.ts";
 import type { CorrelatedTool } from "../src/presentation/tools.ts";
 import {
+  DEFAULT_PREVIEW_CHARS,
   DEFAULT_PREVIEW_LINES,
   defaultPreferences,
   isBackgroundExecutionExpanded,
@@ -68,7 +69,7 @@ function foregroundCard(preferences = defaultPreferences()): string {
   return plainText(
     renderToolCard(foregroundTool(), {
       expanded: isToolCallExpanded(preferences, COLLIDING),
-      previewLines: preferences.previewLines,
+      budget: preferences.previewBudget,
     }),
   );
 }
@@ -161,7 +162,8 @@ describe("identity domains never alias", () => {
       assert.match(rendered.split("\n")[0] ?? "", /ok/);
       assert.match(rendered, /12ms/);
     }
-    assert.equal(defaultPreferences().previewLines, DEFAULT_PREVIEW_LINES);
+    assert.equal(defaultPreferences().previewBudget.maxLines, DEFAULT_PREVIEW_LINES);
+    assert.equal(defaultPreferences().previewBudget.maxChars, DEFAULT_PREVIEW_CHARS);
   });
 });
 

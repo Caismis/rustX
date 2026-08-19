@@ -15,14 +15,18 @@ import type { ToolExecutionResult } from "../src/protocol/types.ts";
 import { renderToolCard } from "../src/ui/components/tool-card.ts";
 import { hasSpecializedRenderer } from "../src/ui/components/tool-renderers.ts";
 import {
+  DEFAULT_PREVIEW_CHARS,
   DEFAULT_PREVIEW_LINES,
-  RAW_FRAGMENT_PREVIEW_CHARS,
 } from "../src/ui/preferences.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { toolResult } from "./support/fixtures.ts";
 
-const context = { expanded: false, previewLines: DEFAULT_PREVIEW_LINES };
-const expanded = { expanded: true, previewLines: DEFAULT_PREVIEW_LINES };
+const BUDGET = {
+  maxLines: DEFAULT_PREVIEW_LINES,
+  maxChars: DEFAULT_PREVIEW_CHARS,
+};
+const context = { expanded: false, budget: BUDGET };
+const expanded = { expanded: true, budget: BUDGET };
 
 function tool(overrides: Partial<CorrelatedTool> = {}): CorrelatedTool {
   return {
@@ -44,12 +48,17 @@ function settled(result: Partial<ToolExecutionResult> = {}) {
   return { type: "settled" as const, result: toolResult(result) };
 }
 
+function lineCount(rendered: string): number {
+  return rendered.split("\n").length;
+}
+
 describe("runtime-owned outcomes", () => {
   it("reports every settlement exactly as the runtime published it", () => {
     const cases: Array<[Partial<ToolExecutionResult>, RegExp]> = [
       [{}, /ok/],
       [{ status: { type: "failed", error: "boom" } }, /failed/],
-      [{ status: { type: "denied", reason: "human denied" } }, /denied \(human denied\)/],
+      // The header names the settlement; the reason is a separate band.
+      [{ status: { type: "denied", reason: "human denied" } }, /denied/],
       [
         { status: { type: "cancelled", reason: "user_requested" } },
         /cancelled \(user_requested\)/,
@@ -179,10 +188,6 @@ describe("progressive disclosure bounds call details too", () => {
    * Expanding is pure presentation throughout: each case renders the same
    * `CorrelatedTool` twice, with nothing but the collapse flag changed.
    */
-  function lineCount(rendered: string): number {
-    return rendered.split("\n").length;
-  }
-
   it("bounds a huge generic argument object", () => {
     const items = Array.from({ length: 300 }, (_, index) => `item-${index}`);
     const argumentsText = JSON.stringify({ items }, null, 0);
@@ -281,7 +286,7 @@ describe("progressive disclosure bounds call details too", () => {
 
     const collapsed = card(call);
     assert.ok(
-      collapsed.length < RAW_FRAGMENT_PREVIEW_CHARS + 200,
+      collapsed.length < DEFAULT_PREVIEW_CHARS + 200,
       `collapsed fragment card was ${collapsed.length} characters`,
     );
     assert.match(collapsed, /… \d+ more characters · ctrl\+o to expand/);
@@ -383,8 +388,15 @@ describe("progressive disclosure bounds call details too", () => {
       }),
     });
     assert.match(collapsed, /bulk/);
-    assert.match(collapsed, /denied \(human denied\)/);
-    assert.match(collapsed, /human denied/);
+    // The header states the settlement and stops there; the runtime's own
+    // prose lives once, in the bounded reason band below it.
+    assert.match(collapsed.split("\n")[0] ?? "", /denied/);
+    assert.ok(!(collapsed.split("\n")[0] ?? "").includes("human denied"));
+    assert.equal(
+      collapsed.split("\n").filter((line) => line.includes("human denied")).length,
+      1,
+      "one runtime fact, reported once",
+    );
     assert.match(collapsed, /runtime-truncated result \(from 9001 bytes\)/);
   });
 });
@@ -621,5 +633,196 @@ describe("specialized native renderers", () => {
     });
     assert.match(rendered, /\$ ls/);
     assert.match(rendered, /plain output/);
+  });
+});
+
+describe("boundedness in both dimensions", () => {
+  /**
+   * The bug this suite exists for: a line budget alone is not a bound.
+   *
+   * `{"payload": "<50 kB>"}` is three pretty-printed lines, a 50 kB path is
+   * one line, and a 50 kB denial reason is one line. Every case below would
+   * have passed a "show the first 8 lines" rule while printing 50 kB.
+   *
+   * Each case asserts an actual ceiling rather than only the absence of the
+   * last token, and asserts that doubling the input does not move it — a
+   * collapsed card that cannot grow with its input is bounded, whatever the
+   * constants are.
+   */
+  const HUGE = "x".repeat(50_000);
+  const HUGER = "x".repeat(200_000);
+  /**
+   * The widest a collapsed card may be.
+   *
+   * Derived from the policy, not guessed: at most one clipped band per
+   * budget — subject 160, call detail 1000, reason 1000, summary 240, result
+   * detail 1000 — plus header, elision markers, indentation, and the runtime
+   * truncation notice. 4 kB is comfortably above that and three orders of
+   * magnitude below the inputs here.
+   */
+  const CEILING = 4_000;
+
+  function bothSizes(build: (payload: string) => Partial<CorrelatedTool>): {
+    small: string;
+    large: string;
+  } {
+    return { small: card(build(HUGE)), large: card(build(HUGER)) };
+  }
+
+  function assertBounded(name: string, build: (payload: string) => Partial<CorrelatedTool>) {
+    const { small, large } = bothSizes(build);
+    assert.ok(small.length < CEILING, `${name} collapsed to ${small.length} characters`);
+    assert.ok(
+      lineCount(small) <= 4 * DEFAULT_PREVIEW_LINES,
+      `${name} collapsed to ${lineCount(small)} lines`,
+    );
+    // Quadrupling the input may move the card only by the decimal width of
+    // the omitted-count markers. Anything proportional fails here.
+    assert.ok(
+      large.length - small.length < 32,
+      `${name} grew ${large.length - small.length} characters when the input grew 150 kB`,
+    );
+    return small;
+  }
+
+  it("bounds a parsed JSON argument whose bulk is one enormous string", () => {
+    const build = (payload: string) => ({
+      toolId: "tool-mcp-ingest",
+      name: "ingest",
+      argumentsText: JSON.stringify({ payload }),
+    });
+    const collapsed = assertBounded("generic JSON", build);
+    assert.match(collapsed, /ingest/, "the identity survives the bound");
+    // Both dimensions are reported: the closing brace was dropped as a line,
+    // and the payload line was cut mid-content.
+    assert.match(collapsed, /… 1 more argument line · \d+ more characters · ctrl\+o to expand/);
+
+    // Expansion reveals the whole fact the client already holds. It re-renders
+    // the published arguments — no request, no re-execution, no read.
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds an Edit diff whose replacement is one enormous line", () => {
+    const build = (payload: string) => ({
+      toolId: "tool-edit",
+      name: "edit",
+      argumentsText: JSON.stringify({
+        path: "src/lib.rs",
+        edits: [{ oldText: payload, newText: payload }],
+      }),
+    });
+    const collapsed = assertBounded("Edit", build);
+    assert.match(collapsed, /src\/lib\.rs/);
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds a Bash subject that is one enormous command line", () => {
+    const build = (payload: string) => ({
+      toolId: "tool-bash",
+      name: "bash",
+      argumentsText: JSON.stringify({ command: payload }),
+    });
+    const collapsed = assertBounded("Bash", build);
+    assert.match(collapsed, /\$ x/);
+    assert.match(collapsed, /… \d+ more characters/);
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds a Grep subject that is one enormous pattern", () => {
+    assertBounded("Grep", (payload) => ({
+      toolId: "tool-grep",
+      name: "grep",
+      argumentsText: JSON.stringify({ pattern: payload }),
+    }));
+  });
+
+  it("bounds a Read subject that is one enormous path", () => {
+    assertBounded("Read", (payload) => ({
+      toolId: "tool-read",
+      name: "read",
+      argumentsText: JSON.stringify({ path: payload }),
+    }));
+  });
+
+  it("bounds a Write subject that is one enormous path", () => {
+    assertBounded("Write", (payload) => ({
+      toolId: "tool-write",
+      name: "write",
+      argumentsText: JSON.stringify({ path: payload, content: "hi" }),
+    }));
+  });
+
+  it("bounds a result body that is one enormous line", () => {
+    const build = (payload: string) => ({
+      toolId: "tool-unknown",
+      name: "unknown_tool",
+      argumentsText: "{}",
+      lifecycle: settled({ content: [{ type: "text" as const, text: payload }] }),
+    });
+    const collapsed = assertBounded("result text", build);
+    assert.match(collapsed, /ok/, "the runtime settlement survives the bound");
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds an enormous denial reason and never repeats it in the header", () => {
+    const build = (payload: string) => ({
+      lifecycle: settled({ status: { type: "denied" as const, reason: payload } }),
+    });
+    const collapsed = assertBounded("denial reason", build);
+    const header = collapsed.split("\n")[0] ?? "";
+    assert.match(header, /denied/, "the settlement is named");
+    assert.ok(!header.includes("xx"), "the reason is not in the header");
+    assert.ok(header.length < 200, `header was ${header.length} characters`);
+    assert.equal(
+      collapsed.split("\n").filter((line) => line.includes("xxxx")).length,
+      1,
+      "the reason is rendered once, in its own band",
+    );
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds an enormous failure error and never repeats it in the header", () => {
+    const build = (payload: string) => ({
+      lifecycle: settled({ status: { type: "failed" as const, error: payload } }),
+    });
+    const collapsed = assertBounded("failure error", build);
+    const header = collapsed.split("\n")[0] ?? "";
+    assert.match(header, /failed/);
+    assert.ok(!header.includes("xx"));
+    assert.ok(card(build(HUGE), expanded).includes(HUGE));
+  });
+
+  it("bounds a runtime-published summary, so summary is not an escape hatch", () => {
+    // `Write` builds its always-visible summary from the *result's* published
+    // path. A renderer that puts arbitrary runtime text in `summary` cannot
+    // make a collapsed card unbounded, because the shell bounds that band too.
+    const build = (payload: string) => ({
+      toolId: "tool-write",
+      name: "write",
+      argumentsText: JSON.stringify({ path: "out.txt", content: "hi" }),
+      lifecycle: settled({
+        content: [
+          { type: "json" as const, value: { bytes_written: 4, path: payload } },
+        ],
+      }),
+    });
+    const collapsed = assertBounded("summary", build);
+    assert.match(collapsed, /wrote 4 bytes/, "the structural fact survives");
+  });
+
+  it("bounds a huge call and a huge result independently on one card", () => {
+    const build = (payload: string) => ({
+      toolId: "tool-mcp-ingest",
+      name: "ingest",
+      argumentsText: JSON.stringify({ payload }),
+      lifecycle: settled({ content: [{ type: "text" as const, text: payload }] }),
+    });
+    const collapsed = assertBounded("mixed", build);
+    // Both bands are present, and neither starved the other.
+    assert.equal(
+      collapsed.split("\n").filter((line) => line.includes("more characters")).length,
+      2,
+      "each band reports its own elision",
+    );
   });
 });

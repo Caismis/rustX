@@ -39,7 +39,8 @@
  */
 
 import type { ToolExecutionResult, ToolId } from "../../protocol/types.ts";
-import { role, style } from "../theme.ts";
+import type { PreviewBudget } from "../preferences.ts";
+import { role, style, plainText, plainWidth } from "../theme.ts";
 
 /**
  * What a renderer says about the call itself.
@@ -70,10 +71,16 @@ export interface ToolResultPresentation {
   detail?: string[];
 }
 
-/** How much of a long detail section a collapsed card shows. */
+/**
+ * How much of a band a collapsed card shows.
+ *
+ * `budget` is the *detail* budget — the always-visible bands carry their own
+ * fixed budgets from {@link ../preferences.ts}, because a band a reader
+ * cannot expand away is not the reader's line-count preference to spend.
+ */
 export interface ToolRenderContext {
   expanded: boolean;
-  previewLines: number;
+  budget: PreviewBudget;
 }
 
 /**
@@ -132,48 +139,126 @@ export function toLines(body: string): string[] {
 }
 
 /**
- * Bounds one detail section for a collapsed card.
+ * Bounds one band of a collapsed card, in height *and* in content length.
+ *
+ * This is the one disclosure policy of the whole card, and the reason it
+ * takes both dimensions is that either one alone is not a bound. Eight lines
+ * of pretty-printed JSON can carry a 100 kB string; a thousand characters can
+ * arrive as a thousand one-character lines. A band is finite only when both
+ * are capped, so both are, here, once, for every band.
  *
  * This is a *client visual collapse* and says nothing about the runtime's own
  * `TruncationState`, which the card reports separately and unconditionally.
  * `noun` names what was hidden so a card carrying both a long call detail and
  * a long result says which is which.
+ *
+ * Expanding returns the lines untouched. Those lines are already in hand —
+ * they were built from the published call and the committed result — so
+ * expansion re-renders, and never re-requests, re-executes, or reads.
+ */
+export function bounded(
+  lines: string[],
+  budget: PreviewBudget,
+  context: ToolRenderContext,
+  noun = "line",
+): string[] {
+  if (context.expanded) {
+    return lines;
+  }
+  const kept: string[] = [];
+  let used = 0;
+  let consumed = 0;
+  let clipped = 0;
+  for (const line of lines) {
+    if (kept.length >= budget.maxLines || used >= budget.maxChars) {
+      break;
+    }
+    const width = plainWidth(line);
+    const room = budget.maxChars - used;
+    if (width <= room) {
+      kept.push(line);
+      used += width;
+      consumed += 1;
+      continue;
+    }
+    // The line itself is over budget, so this band's bulk is width rather
+    // than height. Keep the part that fits and stop.
+    if (room > 0) {
+      kept.push(clip(line, room));
+      clipped = width - room;
+      used = budget.maxChars;
+      consumed += 1;
+    }
+    break;
+  }
+
+  const hiddenLines = lines.length - consumed;
+  if (hiddenLines === 0 && clipped === 0) {
+    return kept;
+  }
+  // Both dimensions are reported, because hiding either silently would let a
+  // collapsed card look complete when it is not.
+  const parts: string[] = [];
+  if (hiddenLines > 0) {
+    parts.push(`${hiddenLines} more ${hiddenLines === 1 ? noun : `${noun}s`}`);
+  }
+  if (clipped > 0) {
+    parts.push(`${clipped} more character${clipped === 1 ? "" : "s"}`);
+  }
+  return [...kept, role.meta(`… ${parts.join(" · ")} · ctrl+o to expand`)];
+}
+
+/**
+ * Bounds one always-visible line, keeping the band exactly one line.
+ *
+ * The subject and the header are one line by contract, so their elision
+ * marker is inline rather than a second line. Used for bands a reader cannot
+ * scroll past: they must stay finite whatever the runtime published.
+ */
+export function boundedLine(
+  value: string,
+  budget: PreviewBudget,
+  context: ToolRenderContext,
+): string {
+  if (context.expanded || plainWidth(value) <= budget.maxChars) {
+    return value;
+  }
+  const hidden = plainWidth(value) - budget.maxChars;
+  return `${clip(value, budget.maxChars)}${role.meta(`… ${hidden} more characters`)}`;
+}
+
+/**
+ * Bounds one always-visible fragment that has no expanded form at all.
+ *
+ * Header chrome — a tool title, a runtime progress message — is drawn the
+ * same whether the card is open or shut, so it is clipped unconditionally.
+ */
+export function clipText(value: string, maxChars: number): string {
+  return plainWidth(value) <= maxChars ? value : `${clip(value, maxChars)}…`;
+}
+
+/**
+ * Cuts one styled line to a visible-character budget.
+ *
+ * Styling is dropped rather than sliced: slicing through an SGR sequence
+ * would leak escape bytes into the terminal. The band's meaning is in its
+ * text, so losing the colour of a clipped line costs nothing.
+ */
+function clip(line: string, room: number): string {
+  return [...plainText(line)].slice(0, Math.max(0, room)).join("");
+}
+
+/**
+ * Bounds one verbose detail section with the reader's own detail budget.
+ *
+ * The convenience form of {@link bounded} for the two expandable bands.
  */
 export function preview(
   lines: string[],
   context: ToolRenderContext,
   noun = "line",
 ): string[] {
-  if (context.expanded || lines.length <= context.previewLines) {
-    return lines;
-  }
-  const hidden = lines.length - context.previewLines;
-  return [
-    ...lines.slice(0, context.previewLines),
-    role.meta(`… ${hidden} more ${hidden === 1 ? noun : `${noun}s`} · ctrl+o to expand`),
-  ];
-}
-
-/**
- * Bounds one unbroken string for a collapsed card.
- *
- * A partially streamed argument fragment has no line structure to bound, so
- * the raw fallback is bounded by characters instead. Expanding shows the whole
- * fragment the client already holds; nothing is re-fetched to produce it.
- */
-export function previewText(
-  value: string,
-  context: ToolRenderContext,
-  budget: number,
-): string[] {
-  if (context.expanded || value.length <= budget) {
-    return value.length === 0 ? [] : [value];
-  }
-  const hidden = value.length - budget;
-  return [
-    value.slice(0, budget),
-    role.meta(`… ${hidden} more characters · ctrl+o to expand`),
-  ];
+  return bounded(lines, context.budget, context, noun);
 }
 
 /** The text of every textual result block, in publication order. */

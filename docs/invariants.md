@@ -2869,31 +2869,53 @@ contracts and provider protocols. These invariants are frozen by M2:
   identical calls stay two entities.
 
 - **A folded result never reorders canonical content.** rustX's canonical
-  model permits a `tool_call` that is not the last block of its assistant
-  message — `AssistantMessageBlock` is a plain block vector and
-  `StructuralIndex::build` rejects only duplicate calls, duplicate results,
-  and orphan results — so `text A, tool_call X, text B` followed by a result
-  for `X` is a shape the client renders rather than assumes away. A committed
-  tool result is folded into its call's card **only when folding cannot move
-  it across unrelated canonical content**: exactly when the owning assistant
-  message ends in an unbroken run of `tool_call` blocks, so every fact between
-  a call and its result belongs to that same batch. Otherwise no result of
-  that message folds, and each call is drawn as two fragments of one entity —
-  the call at its `tool_call` block, its terminal continuation at the
+  model constrains very little about where a tool result sits.
+  `AssistantMessageBlock` is a plain block vector, so a `tool_call` need not
+  be the last block of its message; and `StructuralIndex::build` rejects only
+  duplicate calls, duplicate results, and orphan results, so a result message
+  need not immediately follow the message that requested it. Both
+  `text A, tool_call X, text B` before a result for `X`, and
+  `Assistant(tool_call X), User(U), ToolResult(X)`, are shapes the client
+  renders rather than assumes away. A committed tool result is folded into its
+  call's card **only if every canonical fact it would be moved across belongs
+  to the same foldable batch** — so fold eligibility is a property of the
+  **complete canonical interval between the call anchor and the result
+  position**, never of the owning assistant message's block tail alone. A
+  batch (an assistant message's trailing unbroken run of `tool_call` blocks)
+  folds only when nothing but `tool_call` blocks follow its first call *and*
+  every transcript entry from the anchor through the batch's last committed
+  result is a result of that same batch. Any `User`, `System`, or unrelated
+  `Assistant` message in that interval unfolds the whole batch: the decision
+  is per batch and all-or-nothing, because folding only the calls whose
+  results happen to be adjacent would move results across their own siblings.
+  A batch that does not fold is drawn as two fragments per call of one entity
+  — the call at its `tool_call` block, its terminal continuation at the
   canonical result message. One identity, canonical order, and never the
   pre-#79 duplication of a raw call block, a running card, and a result block.
+  The fold plan is a pure derivation of the ordered transcript, with no
+  incremental render memory, so a fresh authoritative snapshot reaches the
+  same decision.
 
-- **Client visual collapse is not runtime truncation.** A collapsed tool card
-  bounds *both* its call detail and its result detail, each with its own
-  budget; the card shell owns the bound, and no renderer receives the collapse
-  context, so a huge argument object, a large diff, a long command, or a
-  partially streamed fragment is bounded without any renderer opting in.
-  Identity, runtime lifecycle, failure and denial reasons, runtime-published
-  summaries, and the runtime's own `TruncationState` are never bounded.
-  Expanding re-renders facts the client already holds; it never re-executes a
-  tool, re-reads a file, fetches anything, or issues a runtime request, and it
-  does not undo the runtime's own truncation, which is reported separately and
-  unconditionally.
+- **Client visual collapse is not runtime truncation.** Every
+  externally-derived display band of a collapsed tool card has a finite
+  presentation budget in **both** dimensions — a line count *and* a content
+  length. One dimension is not a bound: `{"payload": "<100 kB>"}` is three
+  pretty-printed lines, a 50 kB path or Grep pattern is one line, and a 50 kB
+  denial reason is one line, so a height-only preview shows all of them in
+  full. The bound covers the subject, both detail bands, the failure/denial
+  reason, and the runtime-published summary, and each detail band has its own
+  budget so a verbose call never starves its result. The card shell owns the
+  bound and no renderer receives the collapse context, so no present or future
+  renderer can forget it or route arbitrary prose through `summary` to escape
+  it. The status header names the settlement the runtime published — `failed`,
+  `denied` — and never carries the runtime's prose explaining it: that lives
+  once, in the bounded reason band, so an unbounded string can never reach an
+  always-visible, never-collapsed header. Only the runtime's own
+  `TruncationState` and the small typed `CancellationReason` are unbounded
+  header facts. Expanding re-renders facts the client already holds; it never
+  re-executes a tool, re-reads a file, fetches anything, or issues a runtime
+  request, and it does not undo the runtime's own truncation, which is
+  reported separately and unconditionally.
 
 - **Presentation identity preserves runtime identity domains.** `ToolCallId`
   (a logical model-issued call) and `ToolExecutionId` (a detached background

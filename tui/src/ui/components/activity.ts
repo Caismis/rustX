@@ -33,12 +33,36 @@ import {
 } from "../../presentation/selectors.ts";
 import {
   type PresentationPreferences,
+  DEFAULT_PREVIEW_CHARS,
+  DEFAULT_PREVIEW_LINES,
+  HEADER_BUDGET,
   isBackgroundExecutionExpanded,
   isToolCallExpanded,
 } from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import { renderToolCard, describeProgress, statusLabel } from "./tool-card.ts";
-import { formatJson, preview } from "./tool-renderers.ts";
+import {
+  type ToolRenderContext,
+  bounded,
+  clipText,
+  formatJson,
+  preview,
+  toLines,
+} from "./tool-renderers.ts";
+
+/**
+ * The disclosure context of a card with no expansion of its own.
+ *
+ * Interaction cards are live runtime prompts, not entities with a collapse
+ * preference, so their bands are always drawn collapsed. They are still
+ * externally-derived text, so they are still bounded — the same invariant the
+ * tool card enforces, applied at the only other place arbitrary runtime and
+ * provider text reaches the screen.
+ */
+const COLLAPSED: ToolRenderContext = {
+  expanded: false,
+  budget: { maxLines: DEFAULT_PREVIEW_LINES, maxChars: DEFAULT_PREVIEW_CHARS },
+};
 
 /**
  * Executions the runtime still tracks whose transcript anchor is gone.
@@ -59,7 +83,7 @@ export function renderOrphanExecutions(
     ...correlation.orphans.map((tool) =>
       renderToolCard(tool, {
         expanded: isToolCallExpanded(preferences, tool.callId),
-        previewLines: preferences.previewLines,
+        budget: preferences.previewBudget,
       }),
     ),
   ].join("\n");
@@ -92,7 +116,7 @@ export function renderBackground(
   const terminal = isBackgroundTerminal(execution.state);
   const glyph = terminal ? role.meta("●") : role.pending("◐");
   const lines = [
-    `${glyph} ${role.toolTitle(style.bold(execution.tool_name))} ${role.chrome("·")} ${
+    `${glyph} ${role.toolTitle(style.bold(clipText(execution.tool_name, HEADER_BUDGET.maxChars)))} ${role.chrome("·")} ${
       terminal ? role.meta(execution.state) : role.pending(execution.state)
     } ${role.meta(execution.execution_id)}`,
   ];
@@ -101,7 +125,19 @@ export function renderBackground(
     lines.push(`  ${role.meta(progress)}`);
   }
   if (execution.result !== undefined) {
-    lines.push(`  ${statusLabel(execution.result)}`);
+    const result = execution.result;
+    lines.push(`  ${statusLabel(result)}`);
+    // The status header names the settlement; the runtime's prose explaining
+    // it goes in its own bounded band, exactly as on a foreground card.
+    const reason =
+      result.status.type === "failed"
+        ? toLines(result.status.error).map((line) => role.error(line))
+        : result.status.type === "denied"
+          ? toLines(result.status.reason).map((line) => role.warning(line))
+          : [];
+    for (const line of bounded(reason, COLLAPSED.budget, COLLAPSED, "reason line")) {
+      lines.push(`  ${line}`);
+    }
     const body: string[] = [];
     for (const content of execution.result.content ?? []) {
       if (content.type === "text") {
@@ -116,7 +152,7 @@ export function renderBackground(
     // identity and never expands this card.
     for (const line of preview(body, {
       expanded: isBackgroundExecutionExpanded(preferences, execution.execution_id),
-      previewLines: preferences.previewLines,
+      budget: preferences.previewBudget,
     })) {
       lines.push(`  ${line}`);
     }
@@ -144,11 +180,19 @@ function renderInteraction(interaction: InteractionRequest): string {
   }
   const kind = interaction.kind;
   return [
-    `${role.pending("?")} ${role.toolTitle(style.bold(kind.tool_name))} ${role.meta(interaction.id)}`,
+    `${role.pending("?")} ${role.toolTitle(style.bold(clipText(kind.tool_name, HEADER_BUDGET.maxChars)))} ${role.meta(interaction.id)}`,
     `  ${role.meta(`${kind.mode} · ${originLabel(kind.origin)} · call ${kind.call_id}`)}`,
-    `  ${kind.reason}`,
+    // The approval reason is runtime prose and the arguments are model
+    // output: both are externally derived, so both are bounded here the same
+    // way the tool card bounds them. An approval prompt that scrolls its own
+    // question off the screen is an approval prompt nobody can answer.
+    ...bounded(toLines(kind.reason), COLLAPSED.budget, COLLAPSED, "reason line").map(
+      (line) => `  ${line}`,
+    ),
     // The arguments are shown exactly as the runtime validated them. The
     // client never edits them and never sends back a modified call.
-    ...formatJson(kind.arguments).map((line) => `  ${role.meta(line)}`),
+    ...bounded(formatJson(kind.arguments), COLLAPSED.budget, COLLAPSED, "argument line").map(
+      (line) => `  ${role.meta(line)}`,
+    ),
   ].join("\n");
 }

@@ -172,10 +172,18 @@ infers an outcome from detach/EOF, or callbacks into the Agent Loop.
 ## The model selector
 
 `/model` opens a searchable overlay over the catalog `model_catalog_get`
-published. It fuzzy-filters on the model reference, marks the configured model
-as current, and shows the highlighted entry's effective capability, context
-window, output limit, and reasoning profiles — each exactly as the catalog
-published it. A reasoning-capable model that declares no profiles is shown as
+published. It searches the model reference *and* the useful metadata the
+catalog publishes about a row — the protocol (by wire spelling and by display
+label), the input and output modalities, the tool and reasoning capabilities,
+the reasoning profile ids, and the context/output limits — marks the
+configured model as current, and shows the highlighted entry's effective
+capability, context window, output limit, and reasoning profiles, each exactly
+as the catalog published it. The reference is matched fuzzily; the metadata
+terms are a short closed vocabulary and are matched by containment, because
+`image` is a fuzzy subsequence of `anthropic_messages` and a text-only row
+must not answer a query about image input. Session state is not searchable
+row metadata, and there is no `claude`- or `gpt`-shaped alias: the client is
+not an authority on what a model is. A reasoning-capable model that declares no profiles is shown as
 exactly that: there is no universal off/low/medium/high, and inventing one
 would make this client a second model-configuration authority. The overlay also
 states the configured/effective pair and, while an attempt is running, that the
@@ -241,16 +249,33 @@ orphan results. So `text A, tool_call X, text B` followed by a result for `X`
 is a shape the TUI must render, not one it may assume away — and drawing that
 result inside the earlier `X` card would move it before `text B`.
 
-> **A committed tool result is folded into its call's card only when folding
-> cannot move it across unrelated canonical content.**
+Nor does it require a result message to immediately follow the message that
+requested it, so `Assistant(tool_call X)`, `User(U)`, `ToolResult(X)` is
+representable too — and folding *that* result would move it before the user's
+turn.
 
-Folding applies exactly when the owning assistant message ends in an unbroken
-run of `tool_call` blocks — the batch — so every fact between a call and its
-result is another call or result of that same batch. That is the common case
-and it renders as one card. When any non-`tool_call` content follows the first
-call of a message, *no* result of that message folds (folding only the trailing
-ones would reorder the results against each other). Each call is then drawn as
-two fragments of one entity:
+> **A committed tool result folds into its call's card only if every canonical
+> fact it would be moved across belongs to the same foldable batch.**
+
+Fold eligibility is therefore a property of the **complete canonical interval
+between the call anchor and the result position**, not of the owning
+assistant message's block tail. A batch — an assistant message's trailing
+unbroken run of `tool_call` blocks — folds only when both hold:
+
+```text
+inside the message   nothing but tool_calls follows the batch's first call
+across the interval  every entry from the anchor through the batch's last
+                     committed result is a result of that same batch
+```
+
+Any `User`, `System`, or unrelated `Assistant` message in that interval
+unfolds the batch. The decision is per batch and all-or-nothing: folding only
+the calls whose results happen to be adjacent would move results across their
+own siblings. The plan is derived fresh from the ordered transcript every
+time — no `alreadyFolded` memory — so a resync agrees with itself.
+
+When a batch does not fold, each of its calls is drawn as two fragments of one
+entity:
 
 ```text
 A
@@ -287,30 +312,42 @@ usable.
 
 ### Visual collapse is not runtime truncation
 
-A collapsed card bounds **both** the call detail and the result detail, and
-says how many lines are hidden in each. The card shell owns that bound, not
-the renderers — a renderer never receives the collapse context, so a huge MCP
-argument object, a large Edit diff, a forty-line Bash command, and a partially
-streamed argument fragment are all bounded without any renderer having to
-remember to do it, including renderers written later. The bands that carry
-identity and runtime truth are never bounded:
+> **Every externally-derived band of a collapsed card is finite in both line
+> count and content length.**
+
+One dimension is not a bound. `{"payload": "<100 kB>"}` is three
+pretty-printed lines; a 50 kB path, Grep pattern, or Bash command is one line;
+a 50 kB denial reason is one line. A "show the first 8 lines" rule prints all
+of them in full. So every band carries a two-dimensional budget:
 
 ```text
-header         glyph, title, runtime lifecycle    always visible
-subject        the one-line identity of the call  always visible
+header         glyph, title, runtime lifecycle    clipped, always visible
+subject        the one-line identity of the call  bounded, always visible
 call detail    argument JSON, a diff, a command   bounded when collapsed
-reason         failure / denial prose             always visible
-result summary runtime-published counts           always visible
+reason         failure / denial prose             bounded when collapsed
+result summary runtime-published counts           bounded, always visible
 result detail  the body                           bounded when collapsed
 truncation     the runtime's own TruncationState  always visible
 ```
 
-Each detail band has its own budget, so a verbose call never squeezes its
-result off the screen. A streaming fragment with no line structure is bounded
-by characters instead.
+The card shell owns the bound, not the renderers — a renderer never receives
+the collapse context, so a huge MCP argument object, a large Edit diff, a
+forty-line Bash command, and a partially streamed fragment are all bounded
+without any renderer having to remember to do it, including renderers written
+later, and including one that puts arbitrary prose in `summary`. The two
+detail bands have separate budgets, so a verbose call never squeezes its
+result off the screen. An elision marker names both dimensions when both
+apply: `… 2 more lines · 49016 more characters · ctrl+o to expand`.
+
+The status header names the settlement the runtime published — `failed`,
+`denied` — and stops there. The runtime's prose explaining it appears once, in
+the bounded reason band, because an always-visible header that no collapse can
+shrink is the wrong home for an unbounded string. `cancelled (user_requested)`
+keeps its reason: a `CancellationReason` is a small typed enum, not prose.
 
 Expanding re-renders facts the client already holds: no re-execution, no
-filesystem access, no network, no runtime request. The runtime's own
+filesystem access, no network, no runtime request. The subject stays one line
+either way; expanded, it is the complete published value. The runtime's own
 `TruncationState` is a different fact, reported separately and always —
 expanding never undoes it.
 

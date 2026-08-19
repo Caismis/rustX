@@ -13,6 +13,7 @@ import {
   ModelSelector,
   capabilityLine,
   reasoningLine,
+  searchTerms,
 } from "../src/ui/components/model-selector.ts";
 import { plainText } from "../src/ui/theme.ts";
 import type { CatalogModelView } from "../src/protocol/types.ts";
@@ -86,6 +87,117 @@ describe("search", () => {
     assert.ok(
       lines(component).some((line) => line.includes('no model matches "zzzz"')),
     );
+  });
+
+  /**
+   * Issue #79 asks for fuzzy search over "model reference and useful display
+   * metadata". Each case below matches on a `CatalogModelView` field the
+   * runtime published, and the last one proves the corpus does not fabricate.
+   */
+  it("still matches the model reference", () => {
+    const component = selector();
+    component.setQuery("model-b");
+    assert.deepEqual(
+      component.visibleModels().map((model) => model.model),
+      ["beta/model-b"],
+    );
+  });
+
+  it("matches the published protocol, by label and by wire spelling", () => {
+    for (const query of ["Messages", "anthropic_messages"]) {
+      const component = selector();
+      component.setQuery(query);
+      assert.deepEqual(
+        component.visibleModels().map((model) => model.model),
+        ["beta/sonnet-x"],
+        `query ${query}`,
+      );
+    }
+    const responses = selector();
+    responses.setQuery("Responses");
+    assert.deepEqual(
+      responses.visibleModels().map((model) => model.model),
+      ["beta/model-b"],
+    );
+  });
+
+  it("matches a published input modality", () => {
+    const component = selector();
+    component.setQuery("image");
+    assert.deepEqual(
+      component.visibleModels().map((model) => model.model),
+      ["alpha/model-a"],
+      "only the row whose catalog declares image input",
+    );
+  });
+
+  it("matches a published reasoning profile id and the reasoning capability", () => {
+    const profile = selector();
+    profile.setQuery("high");
+    assert.deepEqual(
+      profile.visibleModels().map((model) => model.model),
+      ["alpha/model-a"],
+    );
+
+    const capability = selector();
+    capability.setQuery("reasoning");
+    assert.deepEqual(
+      capability.visibleModels().map((model) => model.model),
+      ["alpha/model-a"],
+      "a row without the capability publishes no reasoning term",
+    );
+  });
+
+  it("matches the published tool capability", () => {
+    const component = selector();
+    component.setQuery("tools");
+    assert.equal(component.visibleModels().length, CATALOG.length);
+  });
+
+  it("narrows rather than widens when tokens are combined", () => {
+    const component = selector();
+    component.setQuery("beta messages");
+    assert.deepEqual(
+      component.visibleModels().map((model) => model.model),
+      ["beta/sonnet-x"],
+      "every token must match a published term",
+    );
+  });
+
+  it("never fabricates a match from metadata the catalog did not publish", () => {
+    for (const query of ["image", "high", "reasoning"]) {
+      const component = selector();
+      component.setQuery(query);
+      const matched = component.visibleModels().map((model) => model.model);
+      assert.ok(
+        !matched.includes("beta/model-b") && !matched.includes("beta/sonnet-x"),
+        `${query} matched a row whose catalog never published it`,
+      );
+    }
+  });
+
+  it("searches only catalog-published facts, never session state", () => {
+    // The corpus is built from the row. `configured` and `effective` are
+    // facts about the session, so they are not searchable row metadata, and
+    // no provider alias is invented from a model reference either.
+    const terms = searchTerms(CATALOG[0]!);
+    assert.deepEqual(terms, [
+      "alpha/model-a",
+      "openai_chat_completions",
+      "Chat Completions",
+      "text",
+      "image",
+      "tools",
+      "reasoning",
+      "low",
+      "medium",
+      "high",
+      "200k",
+      "8k",
+    ]);
+    for (const forbidden of ["configured", "effective", "current", "claude", "gpt"]) {
+      assert.ok(!terms.includes(forbidden), `${forbidden} is not a catalog fact`);
+    }
   });
 
   it("accepts printable input and ignores control sequences", () => {

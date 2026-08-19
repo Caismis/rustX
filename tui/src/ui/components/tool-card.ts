@@ -27,22 +27,35 @@
  *
  * ## The shell owns progressive disclosure
  *
- * A card is laid out in bands, and only two of them are ever bounded:
+ * A card is laid out in bands, and every one of them is bounded:
  *
  * ```text
- * header        glyph, title, runtime lifecycle   always visible
- * subject       the one-line identity of the call always visible
- * call detail   argument JSON, a diff, a command  bounded when collapsed
- * reason        failure / denial prose            always visible
- * result summary runtime-published counts         always visible
- * result detail the body                          bounded when collapsed
- * truncation    the runtime's own TruncationState always visible
+ * header         glyph, title, runtime lifecycle   clipped, always visible
+ * subject        the one-line identity of the call bounded, always visible
+ * call detail    argument JSON, a diff, a command  bounded when collapsed
+ * reason         failure / denial prose            bounded when collapsed
+ * result summary runtime-published counts          bounded, always visible
+ * result detail  the body                          bounded when collapsed
+ * truncation     the runtime's own TruncationState always visible
  * ```
  *
- * Both detail bands get their own budget rather than sharing one, so a call
- * with a huge argument object never squeezes its result off the screen (and
- * the reverse). Renderers never see the collapse context, which is what makes
- * the bound impossible for a present or future renderer to forget.
+ * **Every** band above carries a finite budget, and each budget is finite in
+ * two dimensions: a line count *and* a content length. One dimension is not a
+ * bound. `{"payload": "<100 kB>"}` is three pretty-printed lines, a 50 kB
+ * path is one line, and a 50 kB denial reason is one line — a height-only
+ * budget shows all three in full. {@link ../preferences.ts} holds the one
+ * policy, {@link ./tool-renderers.ts} holds the one function that applies it,
+ * and renderers never see the collapse context, which is what makes the bound
+ * impossible for a present or future renderer to forget.
+ *
+ * The two *detail* bands get their own budget rather than sharing one, so a
+ * call with a huge argument object never squeezes its result off the screen
+ * (and the reverse).
+ *
+ * Expanding a card spends only facts the client already holds — the published
+ * arguments and the committed result — so it issues no runtime request, no
+ * re-execution, no filesystem read, and no refetch. The subject stays one
+ * line either way; expanded, it is the complete published value.
  *
  * ## Cards split when, and only when, folding would reorder canonical facts
  *
@@ -65,18 +78,24 @@
 
 import type { ToolExecutionResult } from "../../protocol/types.ts";
 import type { CorrelatedTool, ToolLifecycle } from "../../presentation/tools.ts";
-import { RAW_FRAGMENT_PREVIEW_CHARS } from "../preferences.ts";
+import {
+  HEADER_BUDGET,
+  SUBJECT_BUDGET,
+  SUMMARY_BUDGET,
+} from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
   type ToolPresentationRenderer,
   type ToolRenderContext,
   type ToolResultPresentation,
+  bounded,
+  boundedLine,
+  clipText,
   genericRenderer,
   genericResultLines,
   parseArguments,
   preview,
-  previewText,
   rendererFor,
   toLines,
 } from "./tool-renderers.ts";
@@ -97,7 +116,7 @@ export function renderToolCard(
 ): string {
   const args = parseArguments(tool.argumentsText);
   const renderer = rendererFor(tool.toolId);
-  const call = presentCall(renderer.renderCall(args), tool, context);
+  const call = presentCall(renderer.renderCall(args), tool);
   const lines: string[] = [];
 
   if (part === "continuation") {
@@ -106,9 +125,9 @@ export function renderToolCard(
     // subject — so it reads as that call settling rather than as a second
     // tool record, and it carries the runtime lifecycle.
     lines.push(
-      `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${role.toolTitle(style.bold(call.title))}${statusSuffix(tool.lifecycle)}`,
+      `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${title(call)}${statusSuffix(tool.lifecycle)}`,
     );
-    pushSubject(lines, call);
+    pushSubject(lines, call, context);
     pushResult(lines, renderer, tool, args, context);
     return lines.join("\n");
   }
@@ -117,11 +136,11 @@ export function renderToolCard(
   // rendered below, at the result's own canonical position, and restating the
   // settlement here would report one runtime fact twice.
   lines.push(
-    `${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${role.toolTitle(style.bold(call.title))}${
+    `${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${title(call)}${
       part === "call" ? `${role.chrome(" · ")}${role.meta("result below")}` : statusSuffix(tool.lifecycle)
     }`,
   );
-  pushSubject(lines, call);
+  pushSubject(lines, call, context);
   for (const line of preview(call.detail ?? [], context, "argument line")) {
     lines.push(`  ${line}`);
   }
@@ -133,20 +152,40 @@ export function renderToolCard(
 }
 
 /**
+ * The card title, which is header chrome and therefore never expandable.
+ *
+ * Usually a renderer constant (`Bash`), but the fallback is the runtime's
+ * published tool name or tool id, which is externally derived. Clipped
+ * unconditionally: a header is drawn the same open or shut, so there is no
+ * expanded form in which the rest could appear.
+ */
+function title(call: ToolCallPresentation): string {
+  return role.toolTitle(style.bold(clipText(call.title, HEADER_BUDGET.maxChars)));
+}
+
+/**
  * The subject band, which is one line by contract and one line in fact.
  *
  * A renderer builds a subject from published arguments — a path, a command's
- * first line, a pattern — and a published string may contain a newline. The
- * shell enforces the band rather than trusting every renderer to, so an
- * argument with embedded newlines cannot turn the always-visible band into an
- * unbounded one.
+ * first line, a pattern — so it is externally derived in both dimensions: it
+ * may contain a newline, and it may be 50 kB long. The shell enforces the
+ * band rather than trusting every renderer to.
+ *
+ * The rule, stated once: the subject is always exactly one line; collapsed it
+ * is bounded to {@link SUBJECT_BUDGET} with an inline elision marker, and
+ * expanded it is the complete published value the client already holds.
  */
-function pushSubject(lines: string[], call: ToolCallPresentation): void {
+function pushSubject(
+  lines: string[],
+  call: ToolCallPresentation,
+  context: ToolRenderContext,
+): void {
   if (call.subject === undefined || call.subject.length === 0) {
     return;
   }
   const [first, ...rest] = call.subject.split("\n");
-  lines.push(`  ${first ?? ""}${rest.length === 0 ? "" : role.meta(" …")}`);
+  const head = boundedLine(first ?? "", SUBJECT_BUDGET, context);
+  lines.push(`  ${head}${rest.length === 0 ? "" : role.meta(" …")}`);
 }
 
 /** The settled bands: reason, summary, bounded body, runtime truncation. */
@@ -179,7 +218,6 @@ function pushResult(
 function presentCall(
   presentation: ToolCallPresentation | undefined,
   tool: CorrelatedTool,
-  context: ToolRenderContext,
 ): ToolCallPresentation {
   const fallbackTitle = tool.name || tool.toolId;
   if (presentation === undefined) {
@@ -189,7 +227,7 @@ function presentCall(
     return {
       title: fallbackTitle,
       subject: generic?.subject,
-      detail: generic?.detail ?? rawArgumentLines(tool, context),
+      detail: generic?.detail ?? rawArgumentLines(tool),
     };
   }
   return {
@@ -199,22 +237,18 @@ function presentCall(
 }
 
 /**
- * Arguments that are not JSON yet, shown verbatim and bounded.
+ * Arguments that are not JSON yet, shown verbatim as ordinary detail.
  *
- * A streaming fragment has no line structure to bound, so this band is bounded
- * by characters. It is bounded *here*, before the line budget applies, so a
- * single 100 kB fragment cannot pass through as "one line".
+ * A streaming fragment is frequently one unbroken line and has no structure
+ * to exploit, which is exactly the case the two-dimensional budget exists
+ * for. Nothing special happens here: the band goes through the same bound as
+ * every other, and the content budget is what stops it.
  */
-function rawArgumentLines(
-  tool: CorrelatedTool,
-  context: ToolRenderContext,
-): string[] {
+function rawArgumentLines(tool: CorrelatedTool): string[] {
   const text = tool.argumentsText.trim();
-  // Character bound first, then hand ordinary lines to the shell's line
-  // budget: a fragment is bounded whether its bulk is width or height.
-  return previewText(text, context, RAW_FRAGMENT_PREVIEW_CHARS)
-    .flatMap((chunk) => chunk.split("\n"))
-    .map((line) => role.meta(line));
+  return text.length === 0
+    ? []
+    : text.split("\n").map((line) => role.meta(line));
 }
 
 function resultBody(
@@ -227,11 +261,12 @@ function resultBody(
     renderer.renderResult?.(result, args);
   const body = specialized ?? genericResultLines(result);
 
-  // A failure or denial reason is runtime-published prose and is always
-  // shown, whatever the renderer decided about the body. It is prose the
-  // runtime wrote, so it gets its own budget rather than none at all: the
-  // beginning of the explanation is always on screen, and a pathologically
-  // long one still cannot fill the terminal.
+  // A failure or denial reason is runtime-published prose, shown whatever the
+  // renderer decided about the body, and shown *here* rather than in the
+  // status header. The header states the settlement the runtime published —
+  // `failed`, `denied` — and this band carries the explanation, bounded. Prose
+  // of unbounded length has no business in an always-visible, never-collapsed
+  // header, and putting it in both places reported one fact twice.
   const reason: string[] = [];
   if (result.status.type === "failed") {
     reason.push(...toLines(result.status.error).map((line) => role.error(line)));
@@ -241,7 +276,12 @@ function resultBody(
   }
   return [
     ...preview(reason, context, "reason line"),
-    ...(body.summary ?? []),
+    // `summary` is contractually a short structural fact — `42 matches`,
+    // `wrote 120 bytes` — and is bounded anyway. A documented contract a
+    // renderer could forget is not an invariant, and this band is always
+    // visible, so it is the obvious way to smuggle arbitrary tool prose past
+    // progressive disclosure. Now it is not.
+    ...bounded(body.summary ?? [], SUMMARY_BUDGET, context, "summary line"),
     ...preview(body.detail ?? [], context),
   ];
 }
@@ -331,7 +371,15 @@ function settledParts(result: ToolExecutionResult): string[] {
   return parts;
 }
 
-/** The runtime's own settlement, spelled out. Never softened. */
+/**
+ * The runtime's own settlement, spelled out. Never softened.
+ *
+ * The header names the settlement and nothing else. `failed` and `denied`
+ * both carry runtime-published prose, and prose belongs in the bounded reason
+ * band below — restating it here would put an unbounded, uncollapsible string
+ * in the header and report the same fact twice. `cancelled` keeps its reason
+ * because a `CancellationReason` is a small typed enum, not prose.
+ */
 export function statusLabel(result: ToolExecutionResult): string {
   switch (result.status.type) {
     case "success":
@@ -339,7 +387,7 @@ export function statusLabel(result: ToolExecutionResult): string {
     case "failed":
       return role.error("failed");
     case "denied":
-      return role.warning(`denied (${result.status.reason})`);
+      return role.warning("denied");
     case "cancelled":
       return role.warning(`cancelled (${result.status.reason})`);
     case "timed_out":
@@ -353,6 +401,12 @@ export function statusLabel(result: ToolExecutionResult): string {
   }
 }
 
+/**
+ * The runtime's own progress, compactly.
+ *
+ * `message` is runtime-published prose drawn into a header that has no
+ * expanded form, so it is clipped like every other header fragment.
+ */
 export function describeProgress(
   progress: { message?: string; completed?: number; total?: number } | undefined,
 ): string | undefined {
@@ -361,7 +415,7 @@ export function describeProgress(
   }
   const pieces: string[] = [];
   if (progress.message !== undefined) {
-    pieces.push(progress.message);
+    pieces.push(clipText(progress.message, HEADER_BUDGET.maxChars));
   }
   if (progress.completed !== undefined) {
     pieces.push(

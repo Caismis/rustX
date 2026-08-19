@@ -26,28 +26,57 @@
  * ## Where a committed result is drawn
  *
  * A canonical `role: "tool"` message arrives *after* the assistant message
- * that requested it, and rustX's canonical model does not require a
- * `tool_call` to be the last block of that message: `AssistantMessageBlock`
- * holds a plain `Vec<AssistantContentBlock>`, and `StructuralIndex::build`
- * rejects only duplicate calls, duplicate results, and orphan results — never
- * a call followed by more text. So `text A, tool_call X, text B` followed by
- * a result for `X` is a shape this client must render correctly.
+ * that requested it, and rustX's canonical model constrains almost nothing
+ * beyond that. `AssistantMessageBlock` holds a plain
+ * `Vec<AssistantContentBlock>`, so a `tool_call` need not be the last block
+ * of its message; and `StructuralIndex::build` rejects only duplicate calls,
+ * duplicate results, and orphan results, so a result message need not
+ * immediately follow the message that requested it. Both of these are shapes
+ * the projection can hold and this client must render correctly:
  *
- * Drawing that result inside the earlier `X` card would move it *before*
- * `text B`, reordering canonical content. Hence the fold invariant:
+ * ```text
+ * Assistant: text A, tool_call X, text B      Assistant: tool_call X
+ * ToolResult X                                User: U
+ *                                             ToolResult X
+ * ```
  *
- * > A committed tool result is folded into its call's card only when folding
- * > cannot move it across unrelated canonical content. It can, exactly when
- * > the owning assistant message ends in an unbroken run of `tool_call`
- * > blocks — the batch — so every fact between a call and its result is
- * > another call or another result of that same batch.
+ * In the first, drawing the result inside the `X` card moves it before
+ * `text B`. In the second, it moves it before the user's message. Both
+ * reorder canonical content, so neither may fold. Hence the invariant:
  *
- * When any non-`tool_call` content follows the first `tool_call` of a
- * message, no result of that message folds. Each call is then drawn in two
- * parts of one entity: the call at the `tool_call` block, and its terminal
- * continuation at the canonical result message. That is one identity in
- * canonical order, not the pre-#79 duplication of a raw call block, a
- * separate running card, and a separate result block.
+ * > A committed tool result folds into its call's card only if every
+ * > canonical fact it would be moved across belongs to the same foldable
+ * > batch. Fold eligibility is therefore a property of the **complete
+ * > canonical interval between the call anchor and the result position** —
+ * > never of the owning assistant message alone.
+ *
+ * Concretely, a *batch* is the trailing unbroken run of `tool_call` blocks of
+ * one assistant entry, and it folds only when both hold:
+ *
+ * ```text
+ * inside the message   nothing but tool_calls follows the batch's first call
+ * across the interval  every entry from the anchor through the batch's last
+ *                      committed result is a result of that same batch
+ * ```
+ *
+ * The second condition is what a per-message rule cannot express, and it is
+ * checked against the ordered `PresentationState.transcript` — the same
+ * authoritative projection everything else here reads. A `User`, `System`, or
+ * unrelated `Assistant` message anywhere in that interval unfolds the batch.
+ *
+ * The decision is per *batch*, all or nothing. Folding only the calls whose
+ * results happen to be adjacent would move some results across their own
+ * siblings, so a batch that cannot fold coherently splits coherently: every
+ * call in it is drawn in two parts of one entity — the call at its
+ * `tool_call` block, and its terminal continuation at the canonical result
+ * message. That is one identity in canonical order, not the pre-#79
+ * duplication of a raw call block, a separate running card, and a separate
+ * result block.
+ *
+ * All of it is derived, every time, from the current transcript. There is no
+ * `alreadyFolded` set, no memory of the last render, and no incremental batch
+ * state, so a fresh authoritative snapshot reaches the same decision as a
+ * state folded event by event.
  */
 
 import type {
@@ -110,10 +139,11 @@ export interface ToolCorrelation {
   /**
    * Calls whose committed result is drawn *inside* the call's own card.
    *
-   * A subset of {@link anchoredCalls}: exactly the calls in the trailing
-   * `tool_call` run of their assistant message, for which folding preserves
-   * canonical order. A committed result outside this set renders as the
-   * terminal continuation of its card, at its own canonical position.
+   * A subset of {@link anchoredCalls}: exactly the calls of a batch that
+   * folds — one whose trailing `tool_call` run is unbroken *and* whose
+   * canonical interval from anchor to last result crosses nothing else. A
+   * committed result outside this set renders as the terminal continuation
+   * of its card, at its own canonical position.
    */
   foldedResults: ReadonlySet<ToolCallId>;
   /**
@@ -142,27 +172,32 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
   const byCallId = new Map<ToolCallId, CorrelatedTool>();
   const anchoredCalls = new Set<ToolCallId>();
   const anchoredResults = new Set<ToolCallId>();
-  const foldableCalls = new Set<ToolCallId>();
+  const batches: CallBatch[] = [];
 
   // 1. Conversation content: the assistant's own call blocks, streaming or
-  //    committed, in canonical order.
-  for (const entry of state.transcript) {
+  //    committed, in canonical order. Each entry's transcript position is
+  //    kept, because fold eligibility is a question about positions.
+  state.transcript.forEach((entry, index) => {
     for (const call of transcriptCalls(entry)) {
       anchoredCalls.add(call.callId);
       byCallId.set(call.callId, call);
     }
-    for (const callId of foldableCallsOf(entry)) {
-      foldableCalls.add(callId);
+    const batch = batchOf(entry, index);
+    if (batch !== undefined) {
+      batches.push(batch);
     }
-  }
+  });
 
-  // 2. Conversation content: committed canonical results.
-  for (const entry of state.transcript) {
+  // 2. Conversation content: committed canonical results, and where each one
+  //    sits in canonical order.
+  const resultPositions = new Map<ToolCallId, number>();
+  state.transcript.forEach((entry, index) => {
     if (entry.kind !== "committed" || entry.message.role !== "tool") {
-      continue;
+      return;
     }
     const message = entry.message;
     anchoredResults.add(message.tool_call_id);
+    resultPositions.set(message.tool_call_id, index);
     const existing = byCallId.get(message.tool_call_id);
     byCallId.set(message.tool_call_id, {
       callId: message.tool_call_id,
@@ -172,7 +207,7 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
       lifecycle: { type: "settled", result: message.result },
       committed: true,
     });
-  }
+  });
 
   // 3. Execution lifecycle: the attempt's own foreground projection. It is
   //    the authority on assembled/running/settled and on progress.
@@ -195,11 +230,19 @@ export function correlateTools(state: PresentationState): ToolCorrelation {
     (tool) =>
       !anchoredCalls.has(tool.callId) && !anchoredResults.has(tool.callId),
   );
-  const foldedResults = new Set(
-    [...anchoredResults].filter(
-      (callId) => anchoredCalls.has(callId) && foldableCalls.has(callId),
-    ),
-  );
+  // 4. The fold plan, derived from the whole ordered transcript rather than
+  //    from any one message's tail.
+  const foldedResults = new Set<ToolCallId>();
+  for (const batch of batches) {
+    if (!foldsInPlace(batch, resultPositions, state.transcript)) {
+      continue;
+    }
+    for (const callId of batch.callIds) {
+      if (anchoredCalls.has(callId) && anchoredResults.has(callId)) {
+        foldedResults.add(callId);
+      }
+    }
+  }
   return { byCallId, anchoredCalls, anchoredResults, foldedResults, orphans };
 }
 
@@ -214,10 +257,11 @@ export function correlatedTool(
 /**
  * Whether a committed tool result message is already shown by its call's card.
  *
- * True only when folding preserves canonical order — see the fold invariant
- * at the top of this file. Rendering a folded result again as its own record
- * would duplicate one runtime fact in two places; rendering an *unfoldable*
- * one inside the call card would reorder canonical content instead.
+ * True only when folding preserves canonical order across the whole interval
+ * between call and result — see the fold invariant at the top of this file.
+ * Rendering a folded result again as its own record would duplicate one
+ * runtime fact in two places; rendering an *unfoldable* one inside the call
+ * card would reorder canonical content instead.
  */
 export function isFoldedToolResult(
   correlation: ToolCorrelation,
@@ -255,23 +299,82 @@ export function runningTools(correlation: ToolCorrelation): CorrelatedTool[] {
 // ---------------------------------------------------------------------------
 
 /**
- * The calls of one assistant entry whose results may fold into their cards.
+ * One assistant entry's trailing run of `tool_call` blocks, and where it sits.
  *
- * All of them when the message ends in an unbroken run of `tool_call` blocks,
- * none of them otherwise. The decision is per *message*, never per call: a
- * mixed message that folded only its trailing calls would reorder the
- * remaining results against the folded ones.
+ * The batch is the unit of the fold decision. It is the message's *trailing*
+ * run because a call followed by more content in the same message can never
+ * fold: its result would move before that content.
  */
-function foldableCallsOf(entry: TranscriptEntry): ToolCallId[] {
+interface CallBatch {
+  /** The transcript position of the assistant entry that issued the calls. */
+  anchor: number;
+  /** The calls of the batch, in canonical block order. */
+  callIds: ToolCallId[];
+}
+
+/**
+ * The foldable-shaped batch of one assistant entry, when it has one.
+ *
+ * `undefined` when the entry issues no calls, or when non-`tool_call` content
+ * follows its first call — the intra-message half of the invariant. The
+ * decision is per *message*, never per call: a mixed message that folded only
+ * its trailing calls would reorder the remaining results against the folded
+ * ones.
+ */
+function batchOf(entry: TranscriptEntry, anchor: number): CallBatch | undefined {
   const blocks = callIdByBlock(entry);
   const first = blocks.findIndex((callId) => callId !== undefined);
   if (first < 0) {
-    return [];
+    return undefined;
   }
   // Everything from the first call onward must itself be a call. When it is,
   // that tail *is* the batch, because no call can precede `first`.
   const tail = blocks.slice(first);
-  return tail.every((callId) => callId !== undefined) ? (tail as ToolCallId[]) : [];
+  return tail.every((callId) => callId !== undefined)
+    ? { anchor, callIds: tail as ToolCallId[] }
+    : undefined;
+}
+
+/**
+ * Whether one batch's committed results may be drawn at the call anchor.
+ *
+ * The interval half of the invariant, and the part a per-message rule cannot
+ * express. Folding moves every committed result of the batch up to the anchor,
+ * so it crosses every canonical entry in between. That is safe exactly when
+ * each of those entries is itself a result of this same batch — a `User`,
+ * `System`, or unrelated `Assistant` message in the interval, or a result
+ * belonging to some other call, means folding would reorder canonical content.
+ *
+ * Nothing here consults timing, adjacency heuristics, or provider behaviour:
+ * the interval is read straight off the ordered transcript.
+ */
+function foldsInPlace(
+  batch: CallBatch,
+  resultPositions: ReadonlyMap<ToolCallId, number>,
+  transcript: readonly TranscriptEntry[],
+): boolean {
+  const positions = batch.callIds
+    .map((callId) => resultPositions.get(callId))
+    .filter((position): position is number => position !== undefined);
+  if (positions.length === 0) {
+    // Nothing committed yet, so nothing to move. A card with no committed
+    // result renders whole at its anchor either way.
+    return false;
+  }
+  const last = Math.max(...positions);
+  const members = new Set(batch.callIds);
+  for (let index = batch.anchor + 1; index <= last; index += 1) {
+    const entry = transcript[index];
+    if (
+      entry?.kind === "committed" &&
+      entry.message.role === "tool" &&
+      members.has(entry.message.tool_call_id)
+    ) {
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 
 /** One entry's blocks as their call id, or `undefined`, in canonical order. */

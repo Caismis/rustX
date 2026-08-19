@@ -19,9 +19,11 @@ import {
   attemptView,
   foreground,
   snapshot,
+  systemMessage,
   toolCallBlock,
   toolMessage,
   toolResult,
+  userMessage,
 } from "./support/fixtures.ts";
 import { blockText, prefs, stateOf, transcriptString } from "./support/render.ts";
 
@@ -279,6 +281,168 @@ describe("tool-result chronology", () => {
     assert.match(rendered[2] ?? "", /\$ two/);
     assert.match(rendered[3] ?? "", /first result/);
     assert.match(rendered[4] ?? "", /second result/);
+  });
+
+  /**
+   * The interval half of the invariant.
+   *
+   * `StructuralIndex::build` rejects orphan results, duplicate calls, and
+   * duplicate results — and nothing else. It never requires a tool result to
+   * immediately follow the assistant message that requested it, so the
+   * canonical domain can hold a `User` or `System` message in between, and a
+   * fold rule that reads only the owning message's block tail would move the
+   * result across it.
+   */
+  it("does not fold a result across an intervening user message", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
+        ]),
+        userMessage("m2", "wait, stop"),
+        toolMessage("m3", "call-1", "tool-bash", toolResult({
+          content: [{ type: "text", text: "842 passed" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 3, "call, user turn, continuation");
+    assert.match(rendered[0] ?? "", /\$ cargo test/);
+    assert.match(rendered[0] ?? "", /result below/);
+    assert.ok(
+      !(rendered[0] ?? "").includes("842 passed"),
+      "the result body may not appear in the earlier call fragment",
+    );
+    assert.match(rendered[1] ?? "", /wait, stop/);
+    assert.match(rendered[2] ?? "", /↳/);
+    assert.match(rendered[2] ?? "", /842 passed/);
+  });
+
+  it("does not fold a result across an intervening system message", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
+        ]),
+        systemMessage("m2", "runtime", "policy reloaded"),
+        toolMessage("m3", "call-1", "tool-bash", toolResult({
+          content: [{ type: "text", text: "842 passed" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 3);
+    assert.match(rendered[0] ?? "", /result below/);
+    assert.ok(!(rendered[0] ?? "").includes("842 passed"));
+    assert.match(rendered[1] ?? "", /policy reloaded/);
+    assert.match(rendered[2] ?? "", /↳/);
+    assert.match(rendered[2] ?? "", /842 passed/);
+  });
+
+  it("does not fold a result across an unrelated assistant message", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
+        ]),
+        assistantBlocks("m2", [{ type: "text", text: "meanwhile" }]),
+        toolMessage("m3", "call-1", "tool-bash", toolResult({
+          content: [{ type: "text", text: "842 passed" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 3);
+    assert.ok(!(rendered[0] ?? "").includes("842 passed"));
+    assert.equal(rendered[1], "meanwhile");
+    assert.match(rendered[2] ?? "", /↳/);
+  });
+
+  it("never partially folds a parallel batch interrupted mid-results", () => {
+    // Folding `call-a` alone would draw its result at the anchor while
+    // `call-b`'s stays below the user turn. The batch is the unit, so both
+    // split and no result crosses `U`.
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-a", "tool-bash", "bash", { command: "one" }),
+          toolCallBlock("call-b", "tool-bash", "bash", { command: "two" }),
+        ]),
+        toolMessage("m2", "call-a", "tool-bash", toolResult({
+          content: [{ type: "text", text: "first result" }],
+        })),
+        userMessage("m3", "U"),
+        toolMessage("m4", "call-b", "tool-bash", toolResult({
+          content: [{ type: "text", text: "second result" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 5);
+    assert.match(rendered[0] ?? "", /\$ one/);
+    assert.match(rendered[0] ?? "", /result below/);
+    assert.match(rendered[1] ?? "", /\$ two/);
+    assert.match(rendered[1] ?? "", /result below/);
+    assert.match(rendered[2] ?? "", /first result/);
+    assert.match(rendered[3] ?? "", /U/);
+    assert.match(rendered[4] ?? "", /second result/);
+    // The canonical positions of both results are preserved, so neither one
+    // was moved across the user turn.
+    assert.ok(!(rendered[0] ?? "").includes("first result"));
+    assert.ok(!(rendered[1] ?? "").includes("second result"));
+    assert.ok(!(rendered[4] ?? "").includes("first result"));
+  });
+
+  it("still folds an uninterrupted batch, without split fragments", () => {
+    // The control for the case above: same batch, nothing in the interval.
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-a", "tool-bash", "bash", { command: "one" }),
+          toolCallBlock("call-b", "tool-bash", "bash", { command: "two" }),
+        ]),
+        toolMessage("m2", "call-a", "tool-bash", toolResult({
+          content: [{ type: "text", text: "first result" }],
+        })),
+        toolMessage("m3", "call-b", "tool-bash", toolResult({
+          content: [{ type: "text", text: "second result" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 2, "one whole card per call, no continuations");
+    assert.match(rendered[0] ?? "", /first result/);
+    assert.match(rendered[1] ?? "", /second result/);
+    assert.ok(!rendered.some((block) => block.includes("↳")));
+    assert.ok(!rendered.some((block) => block.includes("result below")));
+  });
+
+  it("derives the same fold decision from a fresh snapshot", () => {
+    // The fold plan is a pure derivation of the ordered transcript: no
+    // `alreadyFolded` memory, so a resync cannot disagree with itself.
+    const messages = [
+      assistantBlocks("m1", [
+        toolCallBlock("call-a", "tool-bash", "bash", { command: "one" }),
+        toolCallBlock("call-b", "tool-bash", "bash", { command: "two" }),
+      ]),
+      toolMessage("m2", "call-a", "tool-bash"),
+      userMessage("m3", "U"),
+      toolMessage("m4", "call-b", "tool-bash"),
+    ];
+    const left = stateOf({ messages });
+    const right = replaceFromSnapshot(snapshot({ messages }), 7);
+
+    assert.deepEqual(
+      [...correlateTools(left).foldedResults].sort(),
+      [...correlateTools(right).foldedResults].sort(),
+    );
+    assert.equal(correlateTools(right).foldedResults.size, 0);
+    assert.equal(transcriptString(left), transcriptString(right));
   });
 
   it("draws a whole card when the result has no call anchor at all", () => {

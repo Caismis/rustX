@@ -368,7 +368,7 @@ function toolBlock(
         // One expansion state for the whole entity: expanding a split call
         // expands both of its parts, because they are one card.
         expanded: isToolCallExpanded(context.preferences, callId),
-        previewLines: context.preferences.previewLines,
+        budget: context.preferences.previewBudget,
       },
       part,
     ),

@@ -25,6 +25,14 @@
  * anything, and it is unrelated to the runtime's own result truncation, which
  * is reported separately and always.
  *
+ * ## Disclosure is bounded in two dimensions
+ *
+ * A collapsed band is finite in *height* and in *content length*, and the
+ * budgets below are the single policy that says so. One dimension is not a
+ * bound: three pretty-printed JSON lines can carry 100 kB, and a 50 kB path
+ * is one line. {@link PreviewBudget} carries both, the card shell applies it
+ * to every externally-derived band, and no renderer is asked to remember.
+ *
  * ## Two identity domains, never one
  *
  * ```text
@@ -42,16 +50,55 @@
 
 import type { ToolCallId, ToolExecutionId } from "../protocol/types.ts";
 
+/**
+ * The finite budget of one collapsed presentation band.
+ *
+ * Two dimensions, because a band is unbounded if either one is. A line budget
+ * alone leaves `{"payload": "<100 kB on one line>"}` — three pretty-printed
+ * lines — free to fill the terminal, and a character budget alone leaves ten
+ * thousand short lines free to do the same. Every externally-derived text
+ * band in a collapsed card is bounded by both.
+ */
+export interface PreviewBudget {
+  /** How many lines of the band a collapsed card shows. */
+  maxLines: number;
+  /** How many visible characters of the band a collapsed card shows. */
+  maxChars: number;
+}
+
 /** How many detail lines a collapsed card shows, per detail section. */
 export const DEFAULT_PREVIEW_LINES = 8;
 
 /**
- * How many characters of an unparsed argument fragment a collapsed card shows.
+ * How many visible characters a collapsed detail section shows.
  *
- * A partially streamed argument fragment is frequently one unbroken line, so a
- * line budget alone does not bound it. This is the character budget that does.
+ * Sized so ordinary output — the eight lines the height budget already
+ * allows, at terminal width — is never clipped, while a single 50 kB line
+ * is. The bound is on *content*, so it does not matter whether the bulk of a
+ * band arrives as height or as width.
  */
-export const RAW_FRAGMENT_PREVIEW_CHARS = 400;
+export const DEFAULT_PREVIEW_CHARS = 1_000;
+
+/**
+ * The always-visible identity line of a call: a path, a command, a pattern.
+ *
+ * One line by contract, and now finite by contract too: a published path or
+ * pattern is externally derived and may be arbitrarily long.
+ */
+export const SUBJECT_BUDGET: PreviewBudget = { maxLines: 1, maxChars: 160 };
+
+/** The card title and header chrome. Externally derived, so also finite. */
+export const HEADER_BUDGET: PreviewBudget = { maxLines: 1, maxChars: 80 };
+
+/**
+ * The always-visible runtime-published summary band.
+ *
+ * `summary` is a documented *structural* contract — `42 matches`, `wrote 120
+ * bytes` — but a contract a renderer could forget is not an invariant. The
+ * shell bounds it too, so no present or future renderer can route arbitrary
+ * tool prose through `summary` to escape progressive disclosure.
+ */
+export const SUMMARY_BUDGET: PreviewBudget = { maxLines: 4, maxChars: 240 };
 
 export interface PresentationPreferences {
   /** Whether model reasoning is rendered, or replaced by a compact marker. */
@@ -60,8 +107,8 @@ export interface PresentationPreferences {
   expandedToolCalls: ReadonlySet<ToolCallId>;
   /** Expanded background cards, keyed by the runtime's `ToolExecutionId`. */
   expandedBackgroundExecutions: ReadonlySet<ToolExecutionId>;
-  /** How many detail lines a collapsed card shows, per detail section. */
-  previewLines: number;
+  /** The collapsed budget of one verbose detail section. */
+  previewBudget: PreviewBudget;
 }
 
 export function defaultPreferences(): PresentationPreferences {
@@ -69,7 +116,10 @@ export function defaultPreferences(): PresentationPreferences {
     reasoningVisible: true,
     expandedToolCalls: new Set(),
     expandedBackgroundExecutions: new Set(),
-    previewLines: DEFAULT_PREVIEW_LINES,
+    previewBudget: {
+      maxLines: DEFAULT_PREVIEW_LINES,
+      maxChars: DEFAULT_PREVIEW_CHARS,
+    },
   };
 }
 

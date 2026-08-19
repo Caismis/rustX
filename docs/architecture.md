@@ -3458,13 +3458,21 @@ requested it, which is why the same call never appears simultaneously as
 transcript JSON, a running card, and a separate result block.
 
 *A folded result never reorders canonical content.* rustX's canonical model
-permits a `tool_call` that is not the last block of its assistant message, so a
-committed result is folded into its call's card **only when folding cannot move
-it across unrelated canonical content** — exactly when the owning assistant
-message ends in an unbroken run of `tool_call` blocks. Otherwise no result of
-that message folds, and the call is drawn as two fragments of one entity: the
+permits a `tool_call` that is not the last block of its assistant message, and
+does not require a result message to immediately follow the message that
+requested it, so a committed result is folded into its call's card **only if
+every canonical fact it would be moved across belongs to the same foldable
+batch**. Fold eligibility is a property of the complete canonical interval
+between the call anchor and the result position, not of the owning assistant
+message's block tail: a batch (the message's trailing unbroken run of
+`tool_call` blocks) folds only when nothing but `tool_call` blocks follow its
+first call *and* every transcript entry from the anchor through the batch's
+last committed result is a result of that same batch. An intervening `User`,
+`System`, or unrelated `Assistant` message unfolds the whole batch, all-or-
+nothing, and each of its calls is drawn as two fragments of one entity: the
 call at its `tool_call` block and its terminal continuation at the canonical
-result message.
+result message. The plan is a pure derivation of the ordered transcript, so a
+fresh snapshot reaches the same decision as an incrementally folded state.
 
 *Tool identity chooses presentation; runtime facts choose semantics.* A stable
 `ToolId` selects a specialized renderer — Bash, Read, Grep, Glob, Edit, Write
@@ -3477,12 +3485,17 @@ recognise a shape returns nothing and the generic renderer takes over, so
 unknown, MCP, and Python tools are always fully usable.
 
 *Display preferences are not runtime state.* Reasoning visibility and which
-cards are expanded live in the app, not in `PresentationState`. A collapsed
-card bounds both its call detail and its result detail, each with its own
-budget, and the card shell owns that bound so no renderer can forget it;
-identity, runtime lifecycle, failure reasons, and the runtime's own
-`TruncationState` are never bounded. Expanding a card re-renders facts the
-client already holds — it never re-executes a tool or fetches anything — and it
+cards are expanded live in the app, not in `PresentationState`. Every
+externally-derived band of a collapsed card — subject, both detail bands, the
+failure/denial reason, and the runtime-published summary — is finite in *both*
+line count and content length, because one dimension is not a bound: a 100 kB
+JSON string is three pretty-printed lines and a 50 kB path is one. The two
+detail bands keep separate budgets, and the card shell owns the bound so no
+renderer can forget it or bypass it through `summary`. The status header names
+the settlement (`failed`, `denied`) while the runtime's prose explaining it
+lives once in the bounded reason band; only the runtime's own
+`TruncationState` and the typed `CancellationReason` are unbounded header
+facts. Expanding a card re-renders facts the client already holds — it never re-executes a tool or fetches anything — and it
 is unrelated to the runtime's own `TruncationState`, which is always reported.
 Expansion state is kept in two sets, one per runtime identity domain
 (`ToolCallId` for foreground cards, `ToolExecutionId` for background ones), so
