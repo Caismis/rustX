@@ -1036,6 +1036,11 @@ impl RuntimeInner {
     /// capability commits that have their own native synchronization owner.
     fn begin_drain(self: &Arc<Self>) -> Result<Arc<DrainCompletion>, ShutdownError> {
         let mut first = false;
+        // Runtime shutdown is only a cancellation contender. The active
+        // attempt's AgentCancellation remains the one cause authority, so
+        // every runtime-driven interaction settlement must use the winner it
+        // records rather than blindly relabeling the work as RuntimeShutdown.
+        let mut interaction_cancel_reason = CancellationReason::RuntimeShutdown;
         {
             let state = self.lock_state();
             match self.lifecycle.state() {
@@ -1053,6 +1058,7 @@ impl RuntimeInner {
                         let _ = current
                             .cancellation
                             .request_cancel(CancellationReason::RuntimeShutdown);
+                        interaction_cancel_reason = current.cancellation.reason();
                     }
                     debug_assert!(
                         self.lifecycle.begin_drain(),
@@ -1087,8 +1093,7 @@ impl RuntimeInner {
             // map may become empty before its waiter consumes the terminal
             // payload; the retained lifecycle guard keeps quiescence behind
             // that callback-authority settlement.
-            self.interaction
-                .cancel_pending(CancellationReason::RuntimeShutdown);
+            self.interaction.cancel_pending(interaction_cancel_reason);
             // Cancellation intent is requested synchronously after the drain
             // transition wins, so a client-side background cancel cannot
             // create an unchecked post-drain ownership window. The registry
@@ -3451,7 +3456,7 @@ mod tests {
     use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId, ToolId};
     use crate::runtime::interaction::{
         ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
-        InteractionSettleGate,
+        InteractionSettleGate, InteractionWaitCancellationGate,
     };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
@@ -4571,19 +4576,29 @@ mod tests {
         );
         assert!(!runtime.has_current_attempt());
 
-        let _settled = loop {
+        let settled_outcome = loop {
             match subscription.next().await {
                 EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
-                    if let RuntimeClientEvent::InteractionSettled { interaction_id, .. } = event
+                    if let RuntimeClientEvent::InteractionSettled {
+                        interaction_id,
+                        outcome,
+                    } = event
                         && interaction_id == pending.id
                     {
-                        break interaction_id;
+                        break outcome;
                     }
                 }
                 EventDelivery::Pending => unreachable!("next never returns Pending"),
                 delivery => panic!("settled interaction stream ended: {delivery:?}"),
             }
         };
+        assert_eq!(
+            settled_outcome,
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            },
+            "RuntimeShutdown wins when no earlier attempt cancellation exists"
+        );
         let (after_shutdown, _) = host.snapshot().expect("post-shutdown snapshot");
         assert!(after_shutdown.pending_interactions.is_empty());
 
@@ -4644,16 +4659,314 @@ mod tests {
             0,
             "cancelled-before-start emits no ToolExecutionStarted"
         );
+        let attempt_cancel_reasons = journal
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                crate::events::types::RuntimeEvent::AttemptCancelled { reason, .. } => {
+                    Some(*reason)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            attempt_cancel_reasons,
+            vec![CancellationReason::RuntimeShutdown],
+            "the interaction, tool, and attempt all use the same winner"
+        );
+    }
+
+    /// A user cancellation that wins the owning attempt must remain the cause
+    /// of every runtime-driven interaction settlement. The waiter is parked
+    /// after observing cancellation but before it can call the coordinator;
+    /// shutdown therefore has to settle the pending map and propagate the
+    /// `AgentCancellation` winner itself.
+    #[allow(clippy::too_many_lines)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction() {
+        use crate::message::types::ContentBlockIndex;
+        use crate::model::event::ModelEvent;
+        use crate::model::finish::ModelFinishReason;
+        use crate::tools::types::{ToolCall, ToolCallStart};
+
+        let definition = ToolDefinition {
+            id: ToolId::new("tool-approval-user-first"),
+            name: "approval".to_owned(),
+            description: "a deterministic approval test tool".to_owned(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }),
+            execution_policy: ToolExecutionPolicy::ForegroundOnly,
+            concurrency_policy: ToolConcurrencyPolicy::default(),
+            replay_policy: ToolReplayPolicy::Never,
+            origin: ToolOrigin::Builtin,
+        };
+        let tool = FakeTool::new(definition.clone(), success_result("must not run"));
+        let tool_calls = tool.calls();
+        let tool_started = tool.started();
+        let mut registry = ToolRegistry::new();
+        tool.register(&mut registry);
+
+        let call_id = ToolCallId::new("call-runtime-user-first");
+        let scripts = vec![vec![
+            FakeStep::Emit(ModelEvent::Started),
+            FakeStep::Emit(ModelEvent::ToolCallStarted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCallStart {
+                    id: call_id.clone(),
+                    tool_id: definition.id.clone(),
+                    name: definition.name.clone(),
+                },
+            }),
+            FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+                block_index: ContentBlockIndex::new(0),
+                call_id: call_id.clone(),
+                arguments_delta: "{\"text\":\"hi\"}".to_owned(),
+            }),
+            FakeStep::Emit(ModelEvent::ToolCallCompleted {
+                block_index: ContentBlockIndex::new(0),
+                call: ToolCall {
+                    id: call_id,
+                    tool_id: definition.id,
+                    name: definition.name,
+                    arguments: serde_json::json!({"text": "hi"}),
+                },
+            }),
+            FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::ToolCalls,
+                usage: None,
+            }),
+        ]];
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let drain_linearization = Arc::new(tokio::sync::Notify::new());
+        let probe = CoordinatorProbe {
+            drain_linearization: Some(drain_linearization.clone()),
+            ..CoordinatorProbe::default()
+        };
+        let (runtime, _) = headless_runtime(&dir, scripts, Some(registry), Some(probe)).await;
+        runtime.install_test_pre_tool_policy(Arc::new(RuntimeAskPolicy));
+
+        let waiter_gate = Arc::new(InteractionWaitCancellationGate::default());
+        waiter_gate.arm();
+        runtime
+            .inner
+            .interaction
+            .install_wait_cancellation_gate(waiter_gate.clone());
+        let settle_gate = Arc::new(InteractionSettleGate::default());
+        settle_gate.arm();
+        runtime
+            .inner
+            .interaction
+            .install_settle_gate(settle_gate.clone());
+
+        let host = RuntimeClientHost::new(RuntimeClientHostConfig {
+            runtime: runtime.clone(),
+            replay_limit: None,
+        })
+        .expect("Runtime Client host");
+        let (attachment, initialized) = host
+            .attach(RUNTIME_CLIENT_PROTOCOL_VERSION_V1)
+            .expect("Runtime Client attachment");
+        let cursor = match initialized {
+            RuntimeClientResult::Initialized { cursor, .. } => cursor,
+            other => panic!("unexpected initialization result: {other:?}"),
+        };
+        let subscription = attachment
+            .subscribe_events(cursor)
+            .expect("Runtime Client subscription");
+
+        runtime.activate();
+        let accepted = attachment.handle_request(RuntimeClientRequest::SubmitInbound {
+            id: RequestId::new(1),
+            content: text_content("request approval"),
+        });
+        assert!(matches!(
+            accepted.result,
+            Some(RuntimeClientResult::InboundAccepted { .. })
+        ));
+
+        let pending = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if let RuntimeClientEvent::InteractionPending { interaction } = event {
+                        break interaction;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("pending interaction stream ended: {delivery:?}"),
+            }
+        };
+        let (attempt_id, cancellation) = {
+            let state = runtime.inner.state.lock().expect("runtime state lock");
+            let current = state
+                .current_attempt
+                .as_ref()
+                .expect("pending interaction has an active attempt");
+            (current.attempt_id.clone(), current.cancellation.clone())
+        };
+        assert_eq!(pending.attempt_id, attempt_id);
+
+        // This is the first-winner commit. The waiter observes the signal but
+        // is then parked before it can call coordinator.cancel.
+        assert!(cancellation.request_cancel(CancellationReason::UserRequested));
+        assert_eq!(cancellation.reason(), CancellationReason::UserRequested);
+        let waiter_gate_for_wait = waiter_gate.clone();
+        tokio::task::spawn_blocking(move || waiter_gate_for_wait.wait_entered())
+            .await
+            .expect("waiter cancellation gate task");
+
+        // Drain now contends with the already-cancelled attempt. Its own
+        // RuntimeShutdown request must lose, and the drain path must use the
+        // UserRequested reason when it removes the pending interaction.
+        let runtime_for_shutdown = runtime.clone();
+        let (shutdown_sender, mut shutdown_receiver) = tokio::sync::oneshot::channel();
+        let drain_wait = drain_linearization.notified();
+        tokio::spawn(async move {
+            let _ = shutdown_sender.send(runtime_for_shutdown.shutdown().await);
+        });
+        drain_wait.await;
+        assert_eq!(cancellation.reason(), CancellationReason::UserRequested);
+        assert!(!cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        assert_eq!(cancellation.reason(), CancellationReason::UserRequested);
+
+        let settle_gate_for_wait = settle_gate.clone();
+        tokio::task::spawn_blocking(move || settle_gate_for_wait.wait_entered())
+            .await
+            .expect("drain interaction settle gate task");
+        assert_eq!(
+            runtime.inner.lifecycle.state(),
+            ConversationLifecycleState::Draining
+        );
+        assert_eq!(runtime.inner.interaction.pending_count(), 0);
+        assert_eq!(
+            shutdown_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+
+        // Releasing the drain transition only hands the UserRequested result
+        // to the still-parked waiter. Quiescence remains impossible until the
+        // waiter releases its own cancellation gate and drops the payload.
+        settle_gate.release();
+        assert_eq!(
+            shutdown_receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
+        waiter_gate.release();
+        shutdown_receiver
+            .await
+            .expect("shutdown completion sender")
+            .expect("runtime reaches quiescence");
+        assert_eq!(
+            runtime.inner.lifecycle.state(),
+            ConversationLifecycleState::Quiescent
+        );
+        assert_eq!(runtime.inner.interaction.pending_count(), 0);
+
+        let settled_outcome = loop {
+            match subscription.next().await {
+                EventDelivery::Event(RuntimeClientProtocolEvent { event, .. }) => {
+                    if let RuntimeClientEvent::InteractionSettled {
+                        interaction_id,
+                        outcome,
+                    } = event
+                        && interaction_id == pending.id
+                    {
+                        break outcome;
+                    }
+                }
+                EventDelivery::Pending => unreachable!("next never returns Pending"),
+                delivery => panic!("settled interaction stream ended: {delivery:?}"),
+            }
+        };
+        assert_eq!(
+            settled_outcome,
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        );
+        let (snapshot, _) = host.snapshot().expect("post-shutdown snapshot");
+        assert!(snapshot.pending_interactions.is_empty());
+
+        let stale = attachment.handle_request(RuntimeClientRequest::InteractionRespond {
+            id: RequestId::new(2),
+            interaction_id: pending.id.clone(),
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        });
+        assert_eq!(
+            stale.error,
+            Some(RuntimeClientError::InteractionNotPending {
+                interaction_id: pending.id.clone()
+            })
+        );
+
+        let canonical = runtime
+            .inner
+            .store
+            .load_canonical()
+            .expect("canonical tool settlement");
+        let tool_messages = canonical
+            .iter()
+            .filter_map(|message| match message {
+                MessageBlock::Tool(tool) => Some(tool),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(tool_messages.len(), 1, "one structural tool result slot");
+        assert!(matches!(
+            &tool_messages[0].result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
+        ));
+        assert!(!matches!(
+            &tool_messages[0].result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown
+            }
+        ));
+        assert!(tool_calls.borrow().is_empty(), "executor was never invoked");
+        assert!(!*tool_started.borrow(), "executor never started");
+
+        let journal = runtime
+            .inner
+            .store
+            .read_events(None, 256)
+            .expect("runtime event journal")
+            .events;
         assert_eq!(
             journal
                 .iter()
                 .filter(|envelope| matches!(
                     envelope.event,
-                    crate::events::types::RuntimeEvent::AttemptCancelled { .. }
+                    crate::events::types::RuntimeEvent::ToolExecutionStarted { .. }
                 ))
                 .count(),
-            1,
-            "the attempt has one cancellation terminal event"
+            0,
+            "cancelled-before-start emits no ToolExecutionStarted"
+        );
+        let attempt_cancel_reasons = journal
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                crate::events::types::RuntimeEvent::AttemptCancelled { reason, .. } => {
+                    Some(*reason)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            attempt_cancel_reasons,
+            vec![CancellationReason::UserRequested]
+        );
+        assert_eq!(
+            settled_outcome,
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            },
+            "no RuntimeShutdown interaction terminal exists for this attempt"
         );
     }
 

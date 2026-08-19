@@ -254,6 +254,18 @@ is `interaction_not_pending`; it cannot wake the waiter, resume execution, or
 mutate runtime state. A response/cancellation winner only decides the
 rendezvous; it does not bypass Agent Loop cancellation or tool-start rules.
 
+`AgentCancellation` is the only cancellation-cause authority for an
+attempt-owned interaction. The coordinator retains that owning handle only to
+consume its already-selected first-winner cause at the terminal boundary; it
+does not rank or replace causes. A response that arrives after cancellation
+has become observable records the same `Cancelled { reason }` outcome and is
+rejected as `interaction_not_pending`, even if the waiter has not yet polled
+its cancellation future. Runtime drain requests `RuntimeShutdown` as a
+contender, reads the active attempt's winner, and passes that reason to
+runtime-driven pending settlement. Thus `UserRequested` survives a later
+drain, while an otherwise uncancelled attempt consistently reports
+`RuntimeShutdown`.
+
 Removing the pending map entry is only the terminal decision. The waiter
 payload retains a counted `LifecycleAdmission` until the semantic owner
 consumes or drops it. The Runtime Client `InteractionSettled` observation is
@@ -264,10 +276,12 @@ callback have settled; an empty pending map can never stand in for
 quiescence, and no interaction callback can begin after `Quiescent`.
 
 At `Running -> Draining`, the coordinator closes interaction admission through
-the shared lifecycle commit boundary. Interactions admitted first are
-cancelled through the owner's existing `AgentCancellation` hierarchy and
-settled normally. Drain-first publication is refused. Runtime shutdown
-remains the only semantic shutdown authority.
+the shared lifecycle commit boundary. `ConversationRuntime` has one active
+attempt slot, and all live native pending interactions are admitted by that
+attempt's AgentExecution. Interactions admitted first are cancelled through
+that owner's existing `AgentCancellation` hierarchy and settled with its
+winner. Drain-first publication is refused. Runtime shutdown remains the
+only semantic shutdown authority.
 
 The final proof is on the real `ConversationRuntime` path, not only in
 coordinator unit tests: a Runtime Client pending event is followed through

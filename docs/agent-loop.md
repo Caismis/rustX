@@ -710,6 +710,17 @@ settlement observation is published after that authority is released under a
 second counted settlement admission. This composes with M9c drain without a
 second lifecycle or shutdown participant framework.
 
+The coordinator does not arbitrate cancellation causes. Each runtime-owned
+pending interaction retains the owning attempt's `AgentCancellation` handle.
+If that authority has already selected a cause before a waiter or client
+response reaches the terminal transition, the interaction records the same
+`Cancelled { reason }` outcome and the response is `interaction_not_pending`;
+it cannot publish `Answered`. Runtime drain is also only a cancellation
+contender: after requesting `RuntimeShutdown`, `ConversationRuntime` reads the
+active attempt's first-winner reason and propagates it to pending interaction
+settlement. `UserRequested` therefore survives a later drain, while
+`RuntimeShutdown` is recorded consistently when it wins first.
+
 The interaction domain is provider-independent and bounded to Approval in
 0.1. Questions/forms, provider SDK payloads, argument rewriting, and a
 generalized permission language are not part of this seam.

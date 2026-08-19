@@ -359,6 +359,25 @@ authority is released and while a second counted settlement admission covers
 the leaf observation callback. Thus an empty pending map is not quiescence,
 and no interaction callback can begin after `Quiescent`.
 
+`AgentCancellation` remains the sole cause authority for an attempt-owned
+interaction. The coordinator retains the owning handle to consume its
+already-selected first-winner reason at this boundary, but performs no cause
+arbitration of its own. A response that arrives after cancellation is
+observable cannot publish `Answered`; it is rejected as `not_pending` after
+the matching `Cancelled { reason }` transition. During drain,
+`ConversationRuntime` requests `RuntimeShutdown`, reads the active attempt's
+winner, and propagates that reason to every live pending interaction. A prior
+`UserRequested` cause therefore remains `UserRequested`; absent an earlier
+winner, all interaction, tool, and attempt cancellation facts report
+`RuntimeShutdown`.
+
+The runtime has one active `CurrentAttempt` slot. A runtime-created native
+interaction is published only by that attempt's AgentExecution, so every live
+pending interaction at drain belongs to the one cancellation authority being
+propagated. `finish_attempt` clears the slot only after the attempt's semantic
+settlement and final callback, while interaction waiter admissions keep
+quiescence behind the same boundary.
+
 Interaction IDs are derived as `{AttemptId}-interaction-{ordinal}`. Attempt
 identities are recovered from durable history and never reused, so a process
 restart cannot make a delayed pre-crash response name post-restart work. Live

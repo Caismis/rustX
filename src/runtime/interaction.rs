@@ -266,6 +266,11 @@ impl Drop for WaiterPayload {
 
 struct PendingInteraction {
     request: InteractionRequest,
+    /// The owning attempt cancellation authority. This is the same handle
+    /// used by the waiter and lets a response that arrives after cancellation
+    /// became observable consume the already-selected cause instead of
+    /// publishing an `Answered` terminal outcome.
+    cancellation: AgentCancellation,
     sender: oneshot::Sender<WaiterPayload>,
     admission: LifecycleAdmission,
 }
@@ -325,6 +330,68 @@ impl InteractionSettleGate {
     }
 }
 
+/// Test-only gate after an owning cancellation has become observable by the
+/// waiter, but before that waiter attempts the coordinator terminal
+/// transition. It proves that runtime drain can settle the pending entry using
+/// the already-selected `AgentCancellation` cause without relying on waiter
+/// scheduling.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct InteractionWaitCancellationGate {
+    state: Mutex<InteractionWaitCancellationGateState>,
+    condvar: std::sync::Condvar,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct InteractionWaitCancellationGateState {
+    armed: bool,
+    entered: bool,
+    released: bool,
+}
+
+#[cfg(test)]
+impl InteractionWaitCancellationGate {
+    pub(crate) fn arm(&self) {
+        let mut state = self.state.lock().expect("interaction waiter gate lock");
+        state.armed = true;
+        state.entered = false;
+        state.released = false;
+    }
+
+    fn enter(&self) {
+        let mut state = self.state.lock().expect("interaction waiter gate lock");
+        if !state.armed {
+            return;
+        }
+        state.entered = true;
+        self.condvar.notify_all();
+        while !state.released {
+            state = self
+                .condvar
+                .wait(state)
+                .expect("interaction waiter gate wait");
+        }
+        state.armed = false;
+    }
+
+    pub(crate) fn wait_entered(&self) {
+        let mut state = self.state.lock().expect("interaction waiter gate lock");
+        while !state.entered {
+            state = self
+                .condvar
+                .wait(state)
+                .expect("interaction waiter gate wait");
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        let mut state = self.state.lock().expect("interaction waiter gate lock");
+        state.released = true;
+        self.condvar.notify_all();
+    }
+}
+
 #[derive(Default)]
 struct CoordinatorState {
     next_ordinal_by_attempt: BTreeMap<AttemptId, u64>,
@@ -340,6 +407,8 @@ pub(crate) struct InteractionCoordinator {
     observer: Mutex<Option<Arc<dyn InteractionObserver>>>,
     #[cfg(test)]
     settle_gate: Mutex<Option<Arc<InteractionSettleGate>>>,
+    #[cfg(test)]
+    wait_cancellation_gate: Mutex<Option<Arc<InteractionWaitCancellationGate>>>,
 }
 
 impl core::fmt::Debug for InteractionCoordinator {
@@ -363,6 +432,8 @@ impl InteractionCoordinator {
             observer: Mutex::new(None),
             #[cfg(test)]
             settle_gate: Mutex::new(None),
+            #[cfg(test)]
+            wait_cancellation_gate: Mutex::new(None),
         }
     }
 
@@ -372,11 +443,34 @@ impl InteractionCoordinator {
     }
 
     #[cfg(test)]
+    pub(crate) fn install_wait_cancellation_gate(
+        &self,
+        gate: Arc<InteractionWaitCancellationGate>,
+    ) {
+        *self
+            .wait_cancellation_gate
+            .lock()
+            .expect("interaction waiter gate lock") = Some(gate);
+    }
+
+    #[cfg(test)]
     fn park_after_terminal_transition(&self) {
         let gate = self
             .settle_gate
             .lock()
             .expect("interaction gate lock")
+            .take();
+        if let Some(gate) = gate {
+            gate.enter();
+        }
+    }
+
+    #[cfg(test)]
+    fn park_before_waiter_cancellation(&self) {
+        let gate = self
+            .wait_cancellation_gate
+            .lock()
+            .expect("interaction waiter gate lock")
             .take();
         if let Some(gate) = gate {
             gate.enter();
@@ -434,10 +528,11 @@ impl InteractionCoordinator {
     /// # Panics
     ///
     /// Panics if the coordinator's internal synchronization state is poisoned.
-    fn publish_approval(
+    fn publish_approval_with_cancellation(
         &self,
         attempt_id: AttemptId,
         facts: ApprovalFacts,
+        cancellation: &AgentCancellation,
     ) -> Result<InteractionTicket, InteractionOutcome> {
         let id = self.allocate_id(&attempt_id)?;
         let request = facts.into_request(self.conversation_id.clone(), attempt_id, id.clone());
@@ -452,6 +547,7 @@ impl InteractionCoordinator {
                     id.clone(),
                     PendingInteraction {
                         request: request.clone(),
+                        cancellation: cancellation.clone(),
                         sender,
                         admission,
                     },
@@ -464,6 +560,16 @@ impl InteractionCoordinator {
             .map_err(|_| InteractionOutcome::Unavailable)?
     }
 
+    #[cfg(test)]
+    fn publish_approval(
+        &self,
+        attempt_id: AttemptId,
+        facts: ApprovalFacts,
+    ) -> Result<InteractionTicket, InteractionOutcome> {
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        self.publish_approval_with_cancellation(attempt_id, facts, &cancellation)
+    }
+
     /// Requests approval through the coordinator and waits for the owner.
     pub(crate) async fn request_approval(
         &self,
@@ -471,7 +577,8 @@ impl InteractionCoordinator {
         facts: ApprovalFacts,
         cancellation: &AgentCancellation,
     ) -> InteractionOutcome {
-        let ticket = match self.publish_approval(attempt_id, facts) {
+        let ticket = match self.publish_approval_with_cancellation(attempt_id, facts, cancellation)
+        {
             Ok(ticket) => ticket,
             Err(outcome) => return outcome,
         };
@@ -493,6 +600,8 @@ impl InteractionCoordinator {
                 // The response and cancellation paths use the same pending
                 // map transition.  If a response already won, this call is
                 // stale and the receiver still returns the response.
+                #[cfg(test)]
+                self.park_before_waiter_cancellation();
                 let _ = self.cancel(&id, cancellation.reason());
                 receiver.await.ok()
             }
@@ -518,7 +627,13 @@ impl InteractionCoordinator {
         response: InteractionResponse,
     ) -> Result<(), InteractionError> {
         let outcome = InteractionOutcome::Answered { response };
-        self.settle(interaction_id, outcome, true)
+        if self.settle(interaction_id, outcome, true)? {
+            Err(InteractionError::NotPending {
+                interaction_id: interaction_id.clone(),
+            })
+        } else {
+            Ok(())
+        }
     }
 
     /// Cancels one pending interaction with the owner's first-winner cause.
@@ -532,6 +647,7 @@ impl InteractionCoordinator {
             InteractionOutcome::Cancelled { reason },
             false,
         )
+        .map(|_| ())
     }
 
     /// Settles every interaction that was admitted before runtime drain.
@@ -598,9 +714,9 @@ impl InteractionCoordinator {
     fn settle(
         &self,
         interaction_id: &InteractionId,
-        outcome: InteractionOutcome,
+        mut outcome: InteractionOutcome,
         validate_response: bool,
-    ) -> Result<(), InteractionError> {
+    ) -> Result<bool, InteractionError> {
         // Keep the observer callback inside the lifecycle's narrow
         // settlement path. This admission is acquired before the pending
         // state lock, preserving the lifecycle -> coordinator lock order
@@ -618,6 +734,17 @@ impl InteractionCoordinator {
                 interaction_id: interaction_id.clone(),
             });
         };
+        let cancellation_won = validate_response && pending.cancellation.is_cancelled();
+        if cancellation_won {
+            // AgentCancellation owns cause arbitration. A response that
+            // arrives after that authority has already won can only trigger
+            // the same cancellation terminal outcome; it cannot publish an
+            // Answered result and leave the interaction out of sync with its
+            // owning attempt.
+            outcome = InteractionOutcome::Cancelled {
+                reason: pending.cancellation.reason(),
+            };
+        }
         if validate_response && let InteractionOutcome::Answered { response } = &outcome {
             validate_response_for(&pending.request, response)?;
         }
@@ -647,7 +774,7 @@ impl InteractionCoordinator {
         #[cfg(test)]
         self.park_after_terminal_transition();
         let _ = pending.sender.send(payload);
-        Ok(())
+        Ok(cancellation_won)
     }
 
     fn notify_pending(&self, request: &InteractionRequest) {
@@ -913,6 +1040,64 @@ mod tests {
         assert_eq!(
             coordinator.wait(ticket, &cancellation).await,
             InteractionOutcome::Answered { response }
+        );
+    }
+
+    /// `AgentCancellation` owns the first-winner cause even if its waiter has
+    /// not yet reached the coordinator. A client response in that scheduler
+    /// window must settle the same cancellation outcome, never `Answered`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn cancellation_authority_wins_before_waiter_terminal_poll() {
+        let coordinator = coordinator();
+        coordinator.set_provider_available(true);
+        let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+        let ticket = coordinator
+            .publish_approval_with_cancellation(
+                AttemptId::new("conversation-attempt-1"),
+                facts("c1"),
+                &cancellation,
+            )
+            .expect("provider is available");
+        let id = ticket.id.clone();
+        let waiter_gate = Arc::new(InteractionWaitCancellationGate::default());
+        waiter_gate.arm();
+        coordinator.install_wait_cancellation_gate(waiter_gate.clone());
+
+        let waiter_coordinator = Arc::clone(&coordinator);
+        let waiter_cancellation = cancellation.clone();
+        let waiter =
+            tokio::spawn(
+                async move { waiter_coordinator.wait(ticket, &waiter_cancellation).await },
+            );
+
+        assert!(cancellation.request_cancel(CancellationReason::UserRequested));
+        let waiter_gate_for_wait = waiter_gate.clone();
+        tokio::task::spawn_blocking(move || waiter_gate_for_wait.wait_entered())
+            .await
+            .expect("waiter cancellation gate task");
+        assert_eq!(cancellation.reason(), CancellationReason::UserRequested);
+
+        assert_eq!(
+            coordinator
+                .respond(
+                    &id,
+                    InteractionResponse::Approval {
+                        decision: ApprovalDecision::Allow,
+                    },
+                )
+                .expect_err("the response is stale once cancellation already won"),
+            InteractionError::NotPending {
+                interaction_id: id.clone()
+            }
+        );
+        assert_eq!(coordinator.pending_count(), 0);
+
+        waiter_gate.release();
+        assert_eq!(
+            waiter.await.expect("waiter task"),
+            InteractionOutcome::Cancelled {
+                reason: CancellationReason::UserRequested
+            }
         );
     }
 
