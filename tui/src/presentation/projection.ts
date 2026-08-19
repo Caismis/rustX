@@ -253,8 +253,13 @@ export function reduce(
         event.delta,
       );
 
-    case "tool_call_started":
-      return withStreaming(next, state, event.message_id, (message) => ({
+    case "tool_call_started": {
+      // The foreground slot is created here, exactly as the Rust projection
+      // creates it, so an incremental client and a fresh snapshot describe
+      // the same execution list. Deferring the slot to
+      // `tool_execution_started` would lose the runtime-published name and
+      // arguments, which that event does not repeat.
+      withStreaming(next, state, event.message_id, (message) => ({
         ...message,
         blocks: [
           ...message.blocks,
@@ -268,9 +273,18 @@ export function reduce(
           },
         ],
       }));
+      return withForeground(next, state, event.attempt_id, (foreground) =>
+        upsertForeground(foreground, event.call.id, (existing) => ({
+          call_id: event.call.id,
+          tool_id: event.call.tool_id,
+          name: event.call.name,
+          state: existing?.state ?? { type: "assembled", arguments: "" },
+        })),
+      );
+    }
 
-    case "tool_call_arguments_delta":
-      return withStreaming(next, state, event.message_id, (message) => ({
+    case "tool_call_arguments_delta": {
+      withStreaming(next, state, event.message_id, (message) => ({
         ...message,
         blocks: message.blocks.map((block) =>
           block.kind === "tool_call" && block.callId === event.call_id
@@ -281,20 +295,37 @@ export function reduce(
             : block,
         ),
       }));
+      return withForeground(next, state, event.attempt_id, (foreground) =>
+        updateForeground(foreground, event.call_id, (existing) =>
+          withArguments(
+            existing,
+            argumentsOf(existing) + event.arguments_delta,
+          ),
+        ),
+      );
+    }
 
-    case "tool_call_assembled":
-      return withStreaming(next, state, event.message_id, (message) => ({
+    case "tool_call_assembled": {
+      const assembled = JSON.stringify(event.call.arguments);
+      withStreaming(next, state, event.message_id, (message) => ({
         ...message,
         blocks: message.blocks.map((block) =>
           block.kind === "tool_call" && block.callId === event.call.id
             ? {
                 ...block,
                 name: event.call.name,
-                argumentsText: JSON.stringify(event.call.arguments),
+                argumentsText: assembled,
               }
             : block,
         ),
       }));
+      return withForeground(next, state, event.attempt_id, (foreground) =>
+        updateForeground(foreground, event.call.id, (existing) => ({
+          ...withArguments(existing, assembled),
+          name: event.call.name,
+        })),
+      );
+    }
 
     case "tool_execution_started":
       return withForeground(next, state, event.attempt_id, (foreground) =>
@@ -555,6 +586,58 @@ function argumentsOf(
   existing: AttemptPresentation["foreground"][number] | undefined,
 ): string {
   return existing === undefined ? "" : existing.state.arguments;
+}
+
+/** Replaces the arguments of one foreground slot, keeping its lifecycle. */
+function withArguments(
+  slot: AttemptPresentation["foreground"][number],
+  args: string,
+): AttemptPresentation["foreground"][number] {
+  switch (slot.state.type) {
+    case "assembled":
+      return { ...slot, state: { type: "assembled", arguments: args } };
+    case "running":
+      return {
+        ...slot,
+        state: {
+          type: "running",
+          arguments: args,
+          progress: slot.state.progress,
+        },
+      };
+    default:
+      return {
+        ...slot,
+        state: {
+          type: "settled",
+          arguments: args,
+          result: slot.state.result,
+        },
+      };
+  }
+}
+
+/**
+ * Updates an existing foreground slot, or does nothing.
+ *
+ * Unlike {@link upsertForeground} this never creates a slot: an argument
+ * fragment for a call the projection has not seen started describes nothing
+ * the runtime published, so it is dropped rather than guessed into existence.
+ */
+function updateForeground(
+  foreground: AttemptPresentation["foreground"],
+  callId: string,
+  update: (
+    existing: AttemptPresentation["foreground"][number],
+  ) => AttemptPresentation["foreground"][number],
+): AttemptPresentation["foreground"] {
+  const index = foreground.findIndex((entry) => entry.call_id === callId);
+  if (index === -1) {
+    return foreground;
+  }
+  const updated = [...foreground];
+  updated[index] = update(foreground[index]!);
+  return updated;
 }
 
 function upsertForeground(
