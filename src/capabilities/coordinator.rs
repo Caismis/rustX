@@ -7,6 +7,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
+use crate::capabilities::availability::{
+    CapabilityAvailability, CapabilitySourceId, CapabilitySourceState,
+};
 use crate::capabilities::error::{CapabilityCommitError, CapabilityPreparationError};
 use crate::capabilities::snapshot::CapabilitySnapshot;
 use crate::runtime::identity::{CapabilityRevision, ConversationId, McpServerId};
@@ -45,6 +48,12 @@ pub struct CapabilityCoordinatorConfig {
 struct CoordinatorState {
     revision: CapabilityRevision,
     snapshot: Arc<CapabilitySnapshot>,
+    /// The authoritative availability of every evaluated optional
+    /// capability source (Issue #81). Mutated only at the commit
+    /// linearization point; projected outward read-only. Never part of the
+    /// execution identity: it neither enters the `CapabilitiesManifest`
+    /// nor advances `CapabilityRevision`.
+    availability: CapabilityAvailability,
     /// The number of active attempt capability leases.
     active_attempts: u64,
     /// The next environment staging sequence (never enters any digest).
@@ -136,16 +145,20 @@ pub struct CapabilityCoordinator {
 /// The read-only observation seam of the capability coordinator.
 ///
 /// A state observer receives the authoritative active snapshot after every
-/// actual capability activation (a revision swap). Identical no-op
-/// commits never fire the observer. The callback fires while the
+/// actual capability activation (a revision swap), together with the
+/// authoritative per-source availability state, and again whenever a commit
+/// changes availability without changing the executable set (the revision
+/// does not advance for a diagnostic-only change). A commit that changes
+/// neither never fires the observer. The callback fires while the
 /// coordinator synchronization boundary is held, so the observed order is
 /// exactly the commit linearization order. An observer must never call
 /// back into the coordinator; the Runtime Client projection (Issue #37)
 /// treats each callback as one projection fold under its own
 /// synchronization boundary.
 pub trait CapabilityObserver: Send + Sync {
-    /// Observes one activated immutable capability snapshot.
-    fn on_snapshot(&self, snapshot: &CapabilitySnapshot);
+    /// Observes one activated immutable capability snapshot and its
+    /// authoritative availability state.
+    fn on_snapshot(&self, snapshot: &CapabilitySnapshot, availability: &CapabilityAvailability);
 }
 
 /// A prepared but not yet committed candidate capability.
@@ -161,9 +174,19 @@ pub struct PreparedCapabilityCandidate {
     effective_environment: ToolEnvironment,
     candidate_registry: Arc<ToolRegistry>,
     mcp_epochs: BTreeMap<McpServerId, u64>,
+    /// The per-source availability outcome of this preparation (Issue
+    /// #81). Only sources whose state is [`CapabilitySourceState::Ready`]
+    /// contributed executors to `candidate_registry`.
+    availability: CapabilityAvailability,
 }
 
 impl PreparedCapabilityCandidate {
+    /// The prepared availability outcome of this candidate.
+    #[must_use]
+    pub fn availability(&self) -> &CapabilityAvailability {
+        &self.availability
+    }
+
     /// The discovered and validated Skill packages of the candidate.
     #[must_use]
     pub fn skill_packages(&self) -> &[Arc<crate::skills::SkillPackage>] {
@@ -281,6 +304,7 @@ impl CapabilityCoordinator {
                 state: Mutex::new(CoordinatorState {
                     revision: CapabilityRevision::default(),
                     snapshot: initial_snapshot,
+                    availability: CapabilityAvailability::new(),
                     active_attempts: 0,
                     _next_staging: AtomicU64::new(0),
                     conversation_lifecycle: None,
@@ -411,10 +435,22 @@ impl CapabilityCoordinator {
     /// package-manager subprocess; a materialization failure leaves the
     /// active capability unchanged.
     ///
+    /// # Optional-source isolation (Issue #81)
+    ///
+    /// The custom Python tool plane and each configured MCP server are
+    /// **optional** capability sources: one's failure is recorded as its
+    /// typed [`CapabilitySourceState::Unavailable`] state and preparation
+    /// continues with the remaining sources. Only successfully prepared
+    /// capability objects enter the candidate registry, so a failed source
+    /// can never produce a partially initialized executor in the active
+    /// snapshot, never erase the native base, and never suppress a sibling
+    /// source that initialized successfully.
+    ///
     /// # Errors
     ///
-    /// Returns [`CapabilityPreparationError`] for discovery, conflict,
-    /// environment, or store failures.
+    /// Returns [`CapabilityPreparationError`] for failures of the *base*
+    /// capability plane itself: Skill discovery, dependency conflicts,
+    /// shared environment materialization, or registry composition.
     ///
     /// # Panics
     ///
@@ -475,25 +511,100 @@ impl CapabilityCoordinator {
         let skills = Arc::new(SkillSnapshot::new(
             packages.into_iter().map(Arc::new).collect(),
         ));
+        // ---- Optional capability sources (Issue #81) ----
+        //
+        // Each optional source is prepared in isolation: its failure is
+        // recorded as its own typed availability state, never as a
+        // preparation error of the whole candidate.
+        let mut availability = CapabilityAvailability::new();
+        let python_tools = match self.prepare_python_tools().await {
+            Ok(tools) => {
+                availability.insert(CapabilitySourceId::Python, CapabilitySourceState::Ready);
+                tools
+            }
+            Err(reason) => {
+                availability.insert(
+                    CapabilitySourceId::Python,
+                    CapabilitySourceState::Unavailable { reason },
+                );
+                Vec::new()
+            }
+        };
+        let mut mcp_tools = Vec::new();
+        let mut mcp_epochs = BTreeMap::new();
+        // `BTreeMap` iteration is the deterministic identity order.
+        for (server_id, binding) in &self.inner.mcp_servers {
+            match self.prepare_mcp_server(server_id, binding).await {
+                Ok((epoch, tools)) => {
+                    mcp_epochs.insert(server_id.clone(), epoch);
+                    mcp_tools.extend(tools);
+                    availability.insert(
+                        CapabilitySourceId::Mcp(server_id.clone()),
+                        CapabilitySourceState::Ready,
+                    );
+                }
+                Err(reason) => {
+                    availability.insert(
+                        CapabilitySourceId::Mcp(server_id.clone()),
+                        CapabilitySourceState::Unavailable { reason },
+                    );
+                }
+            }
+        }
+        mcp_tools.extend(python_tools);
+        let candidate_registry = Arc::new(
+            self.inner
+                .base_tool_registry
+                .compose(mcp_tools)
+                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
+        );
+        Ok(PreparedCapabilityCandidate {
+            base_revision,
+            skills,
+            python,
+            node,
+            effective_environment,
+            candidate_registry,
+            mcp_epochs,
+            availability,
+        })
+    }
+
+    /// Prepares the complete custom Python tool plane: discovery,
+    /// publication, environment materialization, and executor construction
+    /// for every discovered package.
+    ///
+    /// The plane is one optional capability source: any failure rejects the
+    /// whole plane (the caller records `Python` unavailable) so a partial
+    /// Python executor set can never enter the candidate.
+    async fn prepare_python_tools(
+        &self,
+    ) -> Result<
+        Vec<(
+            crate::tools::types::ToolDefinition,
+            Arc<dyn crate::tools::executor::ToolExecutor>,
+        )>,
+        String,
+    > {
         let python_packages = PythonToolDiscovery::new(&self.inner.workspace)
             .discover()
-            .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+            .map_err(|error| error.to_string())?;
         let mut python_tools = Vec::new();
         for package in python_packages {
             let published = self
                 .inner
                 .python_store
                 .publish(&package)
-                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+                .map_err(|error| error.to_string())?;
             let environment = self
                 .inner
                 .python_store
                 .ensure_environment(&published)
                 .await
-                .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?;
+                .map_err(|error| error.to_string())?;
             let executor = Arc::new(
                 PythonToolExecutor::new(&self.inner.python_store, published, environment)
-                    .map_err(|error| CapabilityPreparationError::Python(error.to_string()))?,
+                    .map_err(|error| error.to_string())?,
             );
             python_tools.push((
                 crate::tools::types::ToolDefinition {
@@ -513,54 +624,55 @@ impl CapabilityCoordinator {
                 executor as Arc<dyn crate::tools::executor::ToolExecutor>,
             ));
         }
-        let mut mcp_tools = Vec::new();
-        let mut mcp_epochs = BTreeMap::new();
-        // `BTreeMap` iteration is the deterministic identity order.
-        for (server_id, binding) in &self.inner.mcp_servers {
-            let runtimes = self.inner.mcp_runtimes.lock().await;
-            let retained = runtimes.get(server_id).cloned();
-            drop(runtimes);
-            let runtime = match retained {
-                Some(runtime) => runtime,
-                None => self.connect_conversation_owned(server_id, binding).await?,
-            };
-            // The epoch snapshot is taken under the shared invalidation
-            // guard; the pagination itself never holds it.
-            let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
-            let tools = runtime
-                .list_tools()
+        Ok(python_tools)
+    }
+
+    /// Prepares one configured MCP server: connect (or reuse the retained
+    /// runtime), snapshot the invalidation epoch, and fetch its complete
+    /// catalog under the epoch-stability check.
+    ///
+    /// Each server is one optional capability source: the caller records a
+    /// failure as that server's own unavailable state and continues with
+    /// the remaining servers.
+    async fn prepare_mcp_server(
+        &self,
+        server_id: &McpServerId,
+        binding: &crate::tools::mcp::McpServerBinding,
+    ) -> Result<
+        (
+            u64,
+            Vec<(
+                crate::tools::types::ToolDefinition,
+                Arc<dyn crate::tools::executor::ToolExecutor>,
+            )>,
+        ),
+        String,
+    > {
+        let runtimes = self.inner.mcp_runtimes.lock().await;
+        let retained = runtimes.get(server_id).cloned();
+        drop(runtimes);
+        let runtime = match retained {
+            Some(runtime) => runtime,
+            None => self
+                .connect_conversation_owned(server_id, binding)
                 .await
-                .map_err(|error| CapabilityPreparationError::Mcp(error.to_string()))?;
-            let epoch_after = self.inner.mcp_invalidation.epoch(server_id);
-            if epoch_before != epoch_after {
-                return Err(CapabilityPreparationError::Mcp(
-                    "MCP tool catalog changed during discovery".to_owned(),
-                ));
-            }
-            mcp_epochs.insert(server_id.clone(), epoch_after);
-            mcp_tools.extend(crate::tools::mcp::definitions(
-                server_id,
-                binding.policy,
-                &runtime,
-                tools,
-            ));
+                .map_err(|error| error.to_string())?,
+        };
+        // The epoch snapshot is taken under the shared invalidation
+        // guard; the pagination itself never holds it.
+        let epoch_before = self.inner.mcp_invalidation.epoch(server_id);
+        let tools = runtime
+            .list_tools()
+            .await
+            .map_err(|error| error.to_string())?;
+        let epoch_after = self.inner.mcp_invalidation.epoch(server_id);
+        if epoch_before != epoch_after {
+            return Err("MCP tool catalog changed during discovery".to_owned());
         }
-        mcp_tools.extend(python_tools);
-        let candidate_registry = Arc::new(
-            self.inner
-                .base_tool_registry
-                .compose(mcp_tools)
-                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
-        );
-        Ok(PreparedCapabilityCandidate {
-            base_revision,
-            skills,
-            python,
-            node,
-            effective_environment,
-            candidate_registry,
-            mcp_epochs,
-        })
+        Ok((
+            epoch_after,
+            crate::tools::mcp::definitions(server_id, binding.policy, &runtime, tools),
+        ))
     }
 
     /// Prepares the **base-only** candidate of a subagent child runtime
@@ -622,6 +734,7 @@ impl CapabilityCoordinator {
             effective_environment: self.inner.base_environment.clone(),
             candidate_registry,
             mcp_epochs: BTreeMap::new(),
+            availability: CapabilityAvailability::new(),
         })
     }
 
@@ -810,6 +923,17 @@ impl CapabilityCoordinator {
     /// rejected as stale; an identical candidate is a no-op that returns
     /// the current snapshot without fabricating a new revision.
     ///
+    /// # Availability (Issue #81)
+    ///
+    /// The candidate's per-source availability outcome replaces the
+    /// authoritative availability state at the same linearization point.
+    /// Availability is control-plane health, not execution identity:
+    /// [`CapabilityRevision`] advances only when the effective committed
+    /// executable capability set changes, so an availability-only change
+    /// never fabricates a revision — but it still fires the observer, so
+    /// the Runtime Client projection observes the new state. A rejected
+    /// candidate (stale, busy, or MCP-invalidated) mutates nothing.
+    ///
     /// # Lifecycle (Issue #61)
     ///
     /// Once a `ConversationRuntime` owns this coordinator, live capability
@@ -926,8 +1050,18 @@ impl CapabilityCoordinator {
                 }
             }
             if candidate_is_noop(&candidate, &state.snapshot) {
-                return Ok(state.snapshot.clone());
+                let availability_changed =
+                    Self::install_availability(&mut state, &candidate.availability);
+                let snapshot = state.snapshot.clone();
+                drop(invalidation);
+                if availability_changed {
+                    // An availability-only change never advances the
+                    // revision, but it is still observed.
+                    Self::fire_observer(&self.inner.observer, &snapshot, &state.availability);
+                }
+                return Ok(snapshot);
             }
+            Self::install_availability(&mut state, &candidate.availability);
             let revision = CapabilityRevision::new(state.revision.get() + 1);
             let snapshot = Arc::new(CapabilitySnapshot::new(
                 self.inner.conversation_id.clone(),
@@ -941,16 +1075,9 @@ impl CapabilityCoordinator {
             ));
             state.revision = revision;
             state.snapshot = snapshot.clone();
+            let availability = state.availability.clone();
             drop(invalidation);
-            let observer = self
-                .inner
-                .observer
-                .lock()
-                .expect("capability observer lock poisoned")
-                .clone();
-            if let Some(observer) = &observer {
-                observer.on_snapshot(&snapshot);
-            }
+            Self::fire_observer(&self.inner.observer, &snapshot, &availability);
             Ok(snapshot)
         };
         let result = if let Some(lifecycle) = lifecycle {
@@ -963,6 +1090,56 @@ impl CapabilityCoordinator {
         drop(state);
         self.inner.condvar.notify_all();
         result
+    }
+
+    /// The current authoritative availability state of every evaluated
+    /// optional capability source (Issue #81).
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the capability state lock is poisoned, which would
+    /// mean a previous operation panicked while holding the lock.
+    #[must_use]
+    pub fn availability(&self) -> CapabilityAvailability {
+        self.inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .availability
+            .clone()
+    }
+
+    /// Installs the candidate's availability outcome into the authoritative
+    /// state, returning whether it changed. Availability mutates only at
+    /// the commit linearization point (a rejected candidate never reaches
+    /// this).
+    fn install_availability(
+        state: &mut CoordinatorState,
+        availability: &CapabilityAvailability,
+    ) -> bool {
+        if state.availability == *availability {
+            return false;
+        }
+        state.availability.clone_from(availability);
+        true
+    }
+
+    /// Fires the installed observer with the activated snapshot and the
+    /// authoritative availability, under the same synchronization boundary
+    /// the commit held (lock order: capability state lock -> observer
+    /// lock).
+    fn fire_observer(
+        observer_slot: &Mutex<Option<Arc<dyn CapabilityObserver>>>,
+        snapshot: &CapabilitySnapshot,
+        availability: &CapabilityAvailability,
+    ) {
+        let observer = observer_slot
+            .lock()
+            .expect("capability observer lock poisoned")
+            .clone();
+        if let Some(observer) = &observer {
+            observer.on_snapshot(snapshot, availability);
+        }
     }
 
     /// Acquires one attempt capability lease (RAII).
@@ -1015,18 +1192,18 @@ impl CapabilityCoordinator {
         *self.inner.commit_hook.lock().expect("commit hook lock") = Some(hook);
     }
 
-    /// Installs the observer and captures the active snapshot as one
-    /// atomic coordinator section.
+    /// Installs the observer and captures the active snapshot and the
+    /// authoritative availability state as one atomic coordinator section.
     ///
     /// This is the capability half of the Issue #61 adapter bootstrap
     /// handshake: installation and the snapshot capture share the one
     /// capability state synchronization boundary (the same section a
     /// commit holds while firing the observer), so an activation either
-    /// linearizes before the section (its snapshot is the returned seed
-    /// and no observation was fired — the observer did not exist yet) or
-    /// after it (the installed observer fires it into the bridge queue).
-    /// No activation can be lost between the seed and the live
-    /// observation stream and none can be applied twice.
+    /// linearizes before the section (its snapshot and availability are
+    /// the returned seed and no observation was fired — the observer did
+    /// not exist yet) or after it (the installed observer fires it into
+    /// the bridge queue). No activation can be lost between the seed and
+    /// the live observation stream and none can be applied twice.
     ///
     /// # Panics
     ///
@@ -1035,7 +1212,7 @@ impl CapabilityCoordinator {
     pub(crate) fn install_observer_and_snapshot(
         &self,
         observer: Arc<dyn CapabilityObserver>,
-    ) -> Arc<CapabilitySnapshot> {
+    ) -> (Arc<CapabilitySnapshot>, CapabilityAvailability) {
         // Lock order: capability state lock -> observer lock, the same
         // order `commit` uses when it fires the observer.
         let state = self
@@ -1044,7 +1221,7 @@ impl CapabilityCoordinator {
             .lock()
             .expect("capability state lock poisoned");
         *self.inner.observer.lock().expect("observer lock") = Some(observer);
-        state.snapshot.clone()
+        (state.snapshot.clone(), state.availability.clone())
     }
 
     /// The shared MCP invalidation state (test observability). Only

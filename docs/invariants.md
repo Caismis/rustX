@@ -742,11 +742,21 @@ observed only at the next quiescent re-discovery.
   documentation.
 - **MCP protocol-revision negotiation.** rustX offers the resolved rmcp
   build's complete `ProtocolVersion::KNOWN_VERSIONS`, newest first, through
-  `ClientLifecycleMode::Auto`, and connects on whichever revision the peer
-  and rustX actually share. rustX validates the negotiated revision against
-  that offered set, because the legacy `initialize` handshake lets a server
-  echo any revision; a peer sharing no revision fails with a bounded
-  `McpError::ProtocolCompatibility`. The negotiated revision also selects the
+  `ClientLifecycleMode::Auto`, and connects on the highest revision the peer
+  and rustX actually share. rmcp (>= 3.1.3) probes the 2026-07-28 inline
+  lifecycle (`server/discover`), walks the offered revisions down on
+  `UNSUPPORTED_PROTOCOL_VERSION`, and classifies any other correlated
+  non-modern JSON-RPC probe rejection — legacy peers variously answer an
+  unknown pre-`initialize` request with `METHOD_NOT_FOUND`,
+  `INVALID_REQUEST`, or session-middleware errors — as a legacy peer,
+  falling back to the `initialize` handshake on the same connection with
+  the newest pre-inline revision; a probe the peer silently ignores hits a
+  bounded timeout and takes the same fallback. rustX validates the
+  negotiated revision against that offered set, because the legacy
+  `initialize` handshake lets a server echo any revision; a peer sharing no
+  revision fails with a bounded `McpError::ProtocolCompatibility`, which
+  the capability plane records as that server's unavailable state — never a
+  runtime-fatal error. The negotiated revision also selects the
   invalidation mechanism — `subscriptions/listen` from 2026-07-28 onwards,
   the plain `notifications/tools/list_changed` callback before it. At most
   one invalidation mechanism is installed per connection; when the server

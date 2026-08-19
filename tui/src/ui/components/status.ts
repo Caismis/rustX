@@ -23,7 +23,11 @@
 
 import type { PresentationState } from "../../presentation/state.ts";
 import { correlateTools, runningTools } from "../../presentation/tools.ts";
-import { activeBackground, outcomeLabel } from "../../presentation/selectors.ts";
+import {
+  activeBackground,
+  outcomeLabel,
+  unavailableCapabilities,
+} from "../../presentation/selectors.ts";
 import { role, style, plainWidth } from "../theme.ts";
 
 /**
@@ -214,6 +218,21 @@ export function footerSegments(
     segments.push({ text: role.error("shutting down"), priority: 0 });
   }
   segments.push({ text: role.meta(`cap r${state.capabilities.revision}`), priority: 3 });
+  const unavailable = unavailableCapabilities(state);
+  if (unavailable.length > 0) {
+    segments.push({
+      text: role.warning(
+        `${unavailable.length} cap unavailable (${unavailable
+          .map((entry) =>
+            entry.source.type === "mcp"
+              ? `mcp ${entry.source.server_id}`
+              : entry.source.type,
+          )
+          .join(", ")})`,
+      ),
+      priority: 2,
+    });
+  }
   segments.push({ text: role.chrome(connectionState), priority: 1 });
   return segments;
 }

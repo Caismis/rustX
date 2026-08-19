@@ -598,6 +598,23 @@ export interface CapabilityView {
   revision: CapabilityRevision;
   tools?: RuntimeClientTool[];
   skills?: RuntimeClientSkill[];
+  /** Typed availability of every evaluated optional capability source. */
+  sources?: CapabilitySourceView[];
+}
+
+/** The identity of one optional capability source (Issue #81). */
+export type CapabilitySourceDescriptor =
+  | { type: "python" }
+  | { type: "mcp"; server_id: McpServerId };
+
+/** The availability of one optional capability source. */
+export type CapabilitySourceStateView =
+  | { type: "ready" }
+  | { type: "unavailable"; reason: string };
+
+export interface CapabilitySourceView {
+  source: CapabilitySourceDescriptor;
+  state: CapabilitySourceStateView;
 }
 
 export type TokenMeasurementSource = "provider_reported" | "estimated";

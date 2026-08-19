@@ -941,7 +941,7 @@ impl RuntimeClientHost {
         let mut projection = RuntimeClientProjection::new(
             seed.conversation_id.clone(),
             seed.messages.clone(),
-            super::projection::capability_view(&seed.capabilities),
+            super::projection::capability_view(&seed.capabilities, &seed.capability_availability),
             seed.model.clone(),
             replay_limit,
         );

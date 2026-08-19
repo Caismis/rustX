@@ -1538,7 +1538,8 @@ impl RuntimeInner {
             });
         }
         // ---- R: the capability coordinator, the cut itself ----
-        let capabilities = self.capability.install_observer_and_snapshot(observer);
+        let (capabilities, capability_availability) =
+            self.capability.install_observer_and_snapshot(observer);
         drop(state);
         Ok(RuntimeBootstrapSnapshot {
             conversation_id: self.conversation_id.clone(),
@@ -1550,6 +1551,7 @@ impl RuntimeInner {
             subagents,
             pending_interactions,
             capabilities,
+            capability_availability,
         })
     }
 
@@ -3335,6 +3337,9 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     pub subagents: Vec<crate::runtime::subagent::SubagentSnapshot>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,
+    /// The authoritative capability-source availability at the cut
+    /// (Issue #81).
+    pub capability_availability: crate::capabilities::CapabilityAvailability,
     /// Live process-owned native interactions at the bootstrap cut.
     pub pending_interactions: Vec<crate::runtime::interaction::InteractionRequest>,
 }
@@ -3612,10 +3617,15 @@ impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
 // authoritative `CapabilitySnapshot`; the Runtime Client projection owns
 // the translation into its capability view.
 impl CapabilityObserver for RuntimeObserver {
-    fn on_snapshot(&self, snapshot: &CapabilitySnapshot) {
-        self.push(ConversationObservation::Capability(Arc::new(
-            snapshot.clone(),
-        )));
+    fn on_snapshot(
+        &self,
+        snapshot: &CapabilitySnapshot,
+        availability: &crate::capabilities::CapabilityAvailability,
+    ) {
+        self.push(ConversationObservation::Capability {
+            snapshot: Arc::new(snapshot.clone()),
+            availability: availability.clone(),
+        });
     }
 }
 

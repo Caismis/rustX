@@ -458,10 +458,11 @@ pub struct RuntimeClientStatusFact {
 /// The deterministic active capability projection.
 ///
 /// Projected from the active [`CapabilitySnapshot`]
-/// ([`crate::capabilities::CapabilitySnapshot`]): the revision, the
-/// deterministic tool catalog, and the deterministic Skill catalog. No
-/// executors, environment paths, package-manager state, or private
-/// dependency internals appear.
+/// ([`crate::capabilities::CapabilitySnapshot`]) plus the
+/// coordinator-owned availability state (Issue #81): the revision, the
+/// deterministic tool catalog, the deterministic Skill catalog, and the
+/// typed per-source availability. No executors, environment paths,
+/// package-manager state, or private dependency internals appear.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityView {
@@ -473,6 +474,50 @@ pub struct CapabilityView {
     /// The deterministic Skill catalog ordered by Skill name.
     #[serde(default)]
     pub skills: Vec<RuntimeClientSkill>,
+    /// The typed availability of every evaluated optional capability
+    /// source, in deterministic source-identity order (Issue #81).
+    #[serde(default)]
+    pub sources: Vec<CapabilitySourceView>,
+}
+
+/// The client-visible identity of one optional capability source (Issue
+/// #81).
+///
+/// Native tools never appear here: their construction is part of the core
+/// runtime and remains fatal at composition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CapabilitySourceDescriptor {
+    /// The custom Python tool plane.
+    Python,
+    /// One configured MCP server.
+    Mcp {
+        /// The authoritative server identity.
+        server_id: crate::runtime::identity::McpServerId,
+    },
+}
+
+/// The client-visible availability of one optional capability source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CapabilitySourceStateView {
+    /// The source initialized; its capabilities are usable.
+    Ready,
+    /// The source is unavailable; `reason` is the bounded diagnostic.
+    Unavailable {
+        /// The bounded failure diagnostic.
+        reason: String,
+    },
+}
+
+/// One optional capability source's availability projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilitySourceView {
+    /// The stable source identity.
+    pub source: CapabilitySourceDescriptor,
+    /// The authoritative availability state.
+    pub state: CapabilitySourceStateView,
 }
 
 /// One external tool catalog entry.

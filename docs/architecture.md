@@ -3068,6 +3068,26 @@ returning already-active runtimes and both activating through the one
 `ConversationRuntime::activate` boundary. The startup capability commit
 happens *before* the conversation runtime is constructed, so it is not
 subject to the runtime's lifecycle gate.
+
+Startup failure ownership (Issue #81): failures that prove the core runtime
+itself cannot be constructed — startup files, model catalog/credentials/
+bindings, session configuration, workspace/private-store ownership, native
+tool plane construction, or the base capability plane (environment-store
+layout, malformed Skills, dependency conflicts, shared environment
+materialization) — remain fatal composition errors. Failures of **optional
+external capability sources** — the custom Python tool plane and each
+configured MCP server independently — are isolated by the capability plane
+into typed availability state (`CapabilitySourceState::Unavailable { reason }`
+keyed by `CapabilitySourceId`), and composition continues: the base/native
+capability set is never conditional on an optional source, one MCP server's
+failure never suppresses another, and only successfully prepared capability
+objects enter the committed active snapshot. The Runtime Client capability
+projection (`CapabilityView.sources`) carries the typed state, so a client
+observes *why* a source is unavailable instead of inferring failure from a
+dead transport. `CapabilityRevision` advances only when the effective
+committed executable capability set changes; an availability-only change
+never fabricates a revision but is still observed.
+
 The governing invariant:
 
 > One local runtime process owns one conversation session. That session owns
