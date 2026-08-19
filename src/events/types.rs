@@ -59,8 +59,8 @@ use crate::model::error::ModelError;
 use crate::model::finish::ModelFinishReason;
 use crate::model::types::ModelUsage;
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, RequestId, ToolCallId, ToolExecutionId, ToolId,
-    TurnId,
+    AgentId, AttemptId, ConversationId, EventId, MessageId, RequestId, SubagentId, ToolCallId,
+    ToolExecutionId, ToolId, TurnId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeError, TokenMeasurement};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
@@ -361,6 +361,74 @@ pub enum RuntimeEvent {
         /// The terminal state represented by the notification.
         state: BackgroundTerminalState,
     },
+    /// Conversation ownership of one asynchronous one-shot subagent child
+    /// committed durably (Issue #60).
+    ///
+    /// This is the **subagent-start** fact: it commits strictly before the
+    /// child process receives its delegation, so no child model/tool side
+    /// effect can begin without durable evidence that this `SubagentId`
+    /// existed, which `ToolCall` delegated it, which child identities it
+    /// owns, and that ownership committed. Without it, a process restart
+    /// could not distinguish "a child was owned and never settled" from
+    /// "no child ever existed", and the conversation-scoped ordinal
+    /// allocator could reuse an identity that already entered durable
+    /// authority.
+    ///
+    /// The fact opens the `subagent:{subagent_id}` durable lifecycle;
+    /// [`RuntimeEvent::SubagentTerminalPublished`] closes it exactly once.
+    /// The fact carries no attempt identity: a committed child deliberately
+    /// outlives the attempt that started it.
+    SubagentOwnershipCommitted {
+        /// The allocated subagent identity.
+        subagent_id: SubagentId,
+        /// The child agent identity (the provenance of the child's later
+        /// model-visible answer).
+        child_agent_id: AgentId,
+        /// The child's own durable conversation identity.
+        child_conversation_id: ConversationId,
+        /// The model-issued tool call that delegated the work.
+        tool_call_id: ToolCallId,
+        /// The child profile identity frozen at start.
+        profile: String,
+    },
+    /// A subagent child's terminal publication was durably accepted. The
+    /// event is committed in the same transaction as the Pending Inbound
+    /// row and references that row by `MessageId`; it never embeds the
+    /// publication body. A successful terminal references the
+    /// `UserSource::Agent(child)` result message; every other terminal
+    /// references the `UserSource::Runtime` notice.
+    SubagentTerminalPublished {
+        /// The subagent identity.
+        subagent_id: SubagentId,
+        /// The child agent identity, restated so the durable authority can
+        /// validate the provenance of a successful result message without
+        /// scanning the journal.
+        child_agent_id: AgentId,
+        /// The pending/canonical `MessageId` of the terminal publication.
+        message_id: MessageId,
+        /// The terminal state represented by the publication.
+        state: SubagentTerminalState,
+    },
+}
+
+/// The durable terminal outcome of an asynchronous one-shot subagent child
+/// (Issue #60).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentTerminalState {
+    /// The child completed and its bounded answer was durably accepted by
+    /// the parent conversation with `UserSource::Agent(child)` provenance.
+    Succeeded,
+    /// The child failed or its process/protocol settlement failed.
+    Failed,
+    /// Cancellation intent won settlement (explicit cancel or runtime
+    /// drain).
+    Cancelled,
+    /// The owning process restarted while the child was non-terminal: the
+    /// child process did not survive the parent and its actual outcome is
+    /// **unknown**. Recovery never converts this into a known failure and
+    /// never reattaches to or replays the old child.
+    Interrupted,
 }
 
 /// The durable terminal outcome of a detached background execution.

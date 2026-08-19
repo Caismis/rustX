@@ -320,6 +320,27 @@ fn commit_background_ownership_through(
     store.append_event(event)
 }
 
+/// Commits the durable subagent-ownership fact of one child through a store
+/// handle, rejecting every other event payload.
+///
+/// The narrow capability must not become a general Event Journal seam: the
+/// subagent plane may commit exactly the one execution fact that grants a
+/// child the right to begin detached semantic work, and nothing else.
+fn commit_subagent_ownership_through(
+    store: &(impl ConversationStore + ?Sized),
+    event: RuntimeEventEnvelope,
+) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+    if !matches!(
+        event.event,
+        crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+    ) {
+        return Err(ConversationStoreError::InvalidReference(
+            "the subagent capability commits only a subagent ownership fact".to_owned(),
+        ));
+    }
+    store.append_event(event)
+}
+
 /// The narrow backend-independent capability used by the Pending Inbound
 /// Inbox and its process-local mailbox.
 ///
@@ -328,12 +349,15 @@ fn commit_background_ownership_through(
 /// interface only; the conversation execution plane receives the full
 /// [`ConversationStore`] separately.
 ///
-/// Two — and only two — Event Journal facts are reachable here, both because
-/// they are inseparable from a background execution's own durable ownership:
+/// Four — and only four — Event Journal facts are reachable here, all
+/// because they are inseparable from a detached execution's own durable
+/// ownership:
 ///
 /// ```text
-/// commit_background_ownership  -> BackgroundExecutionCommitted   (start commit)
-/// accept_inbound_with_event    -> BackgroundTerminalPublished    (terminal commit)
+/// commit_background_ownership  -> BackgroundExecutionCommitted   (background start commit)
+/// commit_subagent_ownership    -> SubagentOwnershipCommitted     (subagent start commit)
+/// accept_inbound_with_event    -> BackgroundTerminalPublished    (background terminal commit)
+/// accept_inbound_with_event    -> SubagentTerminalPublished      (subagent terminal commit)
 /// ```
 ///
 /// Each is a typed single-purpose transition, never a generic event append.
@@ -365,6 +389,19 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// [`RuntimeEvent::BackgroundExecutionCommitted`](crate::events::types::RuntimeEvent::BackgroundExecutionCommitted);
     /// every other event is rejected.
     fn commit_background_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+
+    /// Commits the durable subagent-ownership fact of one child runtime
+    /// (Issue #60).
+    ///
+    /// The commit happens strictly **before** the child receives its
+    /// delegation, so no child semantic side effect can begin without
+    /// durable evidence of the owning `SubagentId`. The payload must be a
+    /// [`RuntimeEvent::SubagentOwnershipCommitted`](crate::events::types::RuntimeEvent::SubagentOwnershipCommitted);
+    /// every other event is rejected.
+    fn commit_subagent_ownership(
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
@@ -665,6 +702,13 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         commit_background_ownership_through(self, event)
     }
 
+    fn commit_subagent_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_ownership_through(self, event)
+    }
+
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {
         ConversationStore::select_pending_batch(self)
     }
@@ -713,6 +757,13 @@ impl ConversationInboundCapability for StoreInboundCapability {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         commit_background_ownership_through(self.store.as_ref(), event)
+    }
+
+    fn commit_subagent_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        commit_subagent_ownership_through(self.store.as_ref(), event)
     }
 
     fn select_pending_batch(&self) -> Result<Option<PendingBatch>, ConversationStoreError> {

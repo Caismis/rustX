@@ -922,6 +922,26 @@ impl ConversationInboundMailbox {
         Ok(self.inbound.commit_background_ownership(event)?)
     }
 
+    /// Commits the durable subagent-ownership fact of one child runtime
+    /// (Issue #60).
+    ///
+    /// This is the narrow subagent start-commit capability, identical in
+    /// shape to [`ConversationInboundMailbox::commit_background_ownership`]:
+    /// the commit is the linearization point that grants a staged child the
+    /// right to receive its delegation, so the subagent registry performs
+    /// it strictly before releasing the child's start gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] when the durable authority rejects
+    /// the fact; the caller must then tear the staged child down.
+    pub(crate) fn commit_subagent_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_subagent_ownership(event)?)
+    }
+
     /// Selects the currently pending items as one finite watermark-bounded
     /// batch, without consuming them.
     ///

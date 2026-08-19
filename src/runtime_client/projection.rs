@@ -770,15 +770,17 @@ impl RuntimeClientProjection {
                     context: self.snapshot.context.clone(),
                 }]
             }
-            // INTERNAL: compaction start/failure and the background
+            // INTERNAL: compaction start/failure and the background/subagent
             // ownership/terminal publication facts are durable execution
-            // facts; the client projection learns the resulting background
-            // snapshot and inbound message through its native
-            // background/mailbox/message projections.
+            // facts; the client projection learns the resulting background /
+            // subagent snapshot and inbound message through its native
+            // background/subagent/mailbox/message projections.
             RuntimeEvent::CompactionStarted
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::BackgroundExecutionCommitted { .. }
-            | RuntimeEvent::BackgroundTerminalPublished { .. } => Vec::new(),
+            | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::SubagentOwnershipCommitted { .. }
+            | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
         }
     }
 

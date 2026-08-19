@@ -483,23 +483,30 @@ impl ConversationStore for SqliteConversationStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| storage(format!("accept/event transaction: {error}")))?;
         let accepted = accept_inbound_tx(self, &transaction, draft)?;
-        if event.event_id.as_str().is_empty()
-            && let RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } = &event.event
-        {
-            event.event_id = EventId::new(format!("background-terminal-event:{execution_id}"));
+        if event.event_id.as_str().is_empty() {
+            match &event.event {
+                RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } => {
+                    event.event_id =
+                        EventId::new(format!("background-terminal-event:{execution_id}"));
+                }
+                RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } => {
+                    event.event_id = EventId::new(format!("subagent-terminal-event:{subagent_id}"));
+                }
+                _ => {}
+            }
         }
-        let RuntimeEvent::BackgroundTerminalPublished {
-            message_id: event_message_id,
-            ..
-        } = &event.event
-        else {
-            return Err(ConversationStoreError::InvalidReference(
-                "inbound/event acceptance requires a background terminal fact".to_owned(),
-            ));
+        let event_message_id = match &event.event {
+            RuntimeEvent::BackgroundTerminalPublished { message_id, .. }
+            | RuntimeEvent::SubagentTerminalPublished { message_id, .. } => message_id.clone(),
+            _ => {
+                return Err(ConversationStoreError::InvalidReference(
+                    "inbound/event acceptance requires a detached terminal fact".to_owned(),
+                ));
+            }
         };
-        if event_message_id != &accepted.message_id {
+        if event_message_id != accepted.message_id {
             return Err(ConversationStoreError::InvalidReference(format!(
-                "background terminal fact references {}, accepted inbound is {}",
+                "detached terminal fact references {}, accepted inbound is {}",
                 event_message_id, accepted.message_id
             )));
         }
@@ -2703,32 +2710,7 @@ fn validate_event_reference(
             }
         }
         RuntimeEvent::BackgroundTerminalPublished { message_id, .. } => {
-            let pending_json: Option<String> = transaction
-                .query_row(
-                    "SELECT message_json FROM pending_inbound WHERE message_id=?1",
-                    [message_id.as_str()],
-                    |row| row.get(0),
-                )
-                .map_err(|error| storage(format!("background notification reference: {error}")))?;
-            let message = if let Some(json) = pending_json {
-                MessageBlock::User(decode::<UserMessageBlock>(
-                    &json,
-                    "background pending notification",
-                )?)
-            } else {
-                load_message_tx(transaction, message_id)?
-            };
-            let MessageBlock::User(notification) = message else {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "background terminal fact references non-User notification {message_id}"
-                )));
-            };
-            if notification.id != *message_id {
-                return Err(ConversationStoreError::InvalidReference(format!(
-                    "background terminal fact references {message_id}, but the stored notification is {}",
-                    notification.id
-                )));
-            }
+            let notification = load_user_notification_tx(transaction, message_id, "background")?;
             if notification.source != UserSource::Runtime
                 || notification.kind != InboundKind::Message
             {
@@ -2737,9 +2719,74 @@ fn validate_event_reference(
                 )));
             }
         }
+        RuntimeEvent::SubagentTerminalPublished {
+            child_agent_id,
+            message_id,
+            state,
+            ..
+        } => {
+            let publication = load_user_notification_tx(transaction, message_id, "subagent")?;
+            let provenance_ok = match state {
+                // A successful child answer is authored by the child agent;
+                // every other terminal is a runtime-authored notice.
+                crate::events::types::SubagentTerminalState::Succeeded => {
+                    publication.source
+                        == UserSource::Agent {
+                            agent_id: child_agent_id.clone(),
+                        }
+                }
+                crate::events::types::SubagentTerminalState::Failed
+                | crate::events::types::SubagentTerminalState::Cancelled
+                | crate::events::types::SubagentTerminalState::Interrupted => {
+                    publication.source == UserSource::Runtime
+                }
+            };
+            if !provenance_ok || publication.kind != InboundKind::Message {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "subagent terminal fact references an ineligible publication {message_id}"
+                )));
+            }
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// Loads the User notification a detached terminal fact references: the
+/// pending row when it has not been adopted yet, otherwise the canonical
+/// Ledger row.
+fn load_user_notification_tx(
+    transaction: &Transaction<'_>,
+    message_id: &MessageId,
+    domain: &str,
+) -> Result<UserMessageBlock, ConversationStoreError> {
+    let pending_json: Option<String> = transaction
+        .query_row(
+            "SELECT message_json FROM pending_inbound WHERE message_id=?1",
+            [message_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| storage(format!("{domain} notification reference: {error}")))?;
+    let message = if let Some(json) = pending_json {
+        MessageBlock::User(decode::<UserMessageBlock>(
+            &json,
+            "detached pending notification",
+        )?)
+    } else {
+        load_message_tx(transaction, message_id)?
+    };
+    let MessageBlock::User(notification) = message else {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "{domain} terminal fact references non-User notification {message_id}"
+        )));
+    };
+    if notification.id != *message_id {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "{domain} terminal fact references {message_id}, but the stored notification is {}",
+            notification.id
+        )));
+    }
+    Ok(notification)
 }
 
 fn requires_compound_transaction(event: &RuntimeEvent) -> bool {
@@ -2750,6 +2797,7 @@ fn requires_compound_transaction(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::CompactionCompleted { .. }
             | RuntimeEvent::ModelRequestStarted { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::SubagentTerminalPublished { .. }
     )
 }
 
@@ -2866,6 +2914,17 @@ fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)> {
     if let RuntimeEvent::BackgroundTerminalPublished { execution_id, .. } = &event.event {
         return vec![(format!("background:{execution_id}"), true)];
     }
+    // The subagent lifecycle is the same shape: opened by the ownership
+    // commit (before the child may begin any semantic work) and closed
+    // exactly once by the terminal publication, so a restart can tell an
+    // owned-but-unsettled child from one that never existed, and a second
+    // terminal publication is a typed `TerminalViolation`.
+    if let RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. } = &event.event {
+        return vec![(format!("subagent:{subagent_id}"), false)];
+    }
+    if let RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } = &event.event {
+        return vec![(format!("subagent:{subagent_id}"), true)];
+    }
     let attempt = event.attempt_id.as_ref().or(match &event.event {
         RuntimeEvent::AttemptStarted { attempt_id }
         | RuntimeEvent::AttemptCompleted { attempt_id, .. }
@@ -2902,6 +2961,7 @@ fn is_terminal(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::AttemptLimitExceeded { .. }
             | RuntimeEvent::AttemptFailed { .. }
             | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::SubagentTerminalPublished { .. }
     )
 }
 
