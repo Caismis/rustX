@@ -202,11 +202,6 @@ pub(crate) enum ProtocolError {
         /// The decode failure detail.
         detail: String,
     },
-    /// The peer's protocol version is not spoken here.
-    UnsupportedVersion {
-        /// The version the peer announced.
-        announced: u16,
-    },
     /// The transport closed or failed mid-protocol.
     Transport {
         /// The I/O failure detail.
@@ -222,10 +217,6 @@ impl core::fmt::Display for ProtocolError {
             }
             Self::UnknownKind { kind } => write!(f, "unknown control frame kind {kind}"),
             Self::Malformed { detail } => write!(f, "malformed control frame: {detail}"),
-            Self::UnsupportedVersion { announced } => write!(
-                f,
-                "unsupported subagent control protocol version {announced}"
-            ),
             Self::Transport { detail } => write!(f, "control transport failed: {detail}"),
         }
     }
@@ -451,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn an_oversized_frame_is_rejected_before_allocation() {
         let (mut parent, mut child) = pair();
-        let length = (MAX_FRAME_BYTES + 1) as u32;
+        let length = u32::try_from(MAX_FRAME_BYTES + 1).expect("bound fits u32");
         parent
             .write_all(&length.to_le_bytes())
             .await

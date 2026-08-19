@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-final","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"The child counted three files."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-final","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-final","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[],"usage":{"prompt_tokens":40,"completion_tokens":6,"total_tokens":46}}
+
+data: [DONE]

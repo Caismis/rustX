@@ -41,7 +41,7 @@
 //! bars new submissions through the ordinary path.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use chrono::{DateTime, Utc};
 
@@ -87,6 +87,14 @@ impl SubagentLifecycle {
 }
 
 /// The canonicalized terminal outcome awaiting publication.
+/// The decision of the commit linearization point.
+enum Decision {
+    Accepted,
+    RolledBack,
+    Failed(SubagentStartError),
+}
+
+/// The canonicalized terminal outcome awaiting publication.
 #[derive(Debug, Clone)]
 struct TerminalCandidate {
     state: TerminalState,
@@ -96,6 +104,10 @@ struct TerminalCandidate {
     diagnostic: Option<String>,
     /// The cancellation detail (cancelled only).
     reason: Option<CancellationReason>,
+    /// The publication timestamp, frozen at canonicalization so a bounded
+    /// retry rebuilds the byte-identical draft and an ambiguous commit
+    /// resolves as the idempotent correlation retry, never a conflict.
+    timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +184,10 @@ struct RegistryState {
     failure_sink: Option<Arc<dyn SubagentDurabilityFailureSink>>,
     #[cfg(test)]
     commit_hook: Option<Arc<CommitBoundaryHook>>,
+    /// Test seam: pre-staged children `prepare` consumes instead of
+    /// spawning the real child binary.
+    #[cfg(test)]
+    staged_overrides: std::collections::VecDeque<StagedChild>,
 }
 
 /// The public lifecycle vocabulary of one subagent snapshot.
@@ -398,6 +414,8 @@ impl SubagentRegistry {
                 failure_sink: None,
                 #[cfg(test)]
                 commit_hook: None,
+                #[cfg(test)]
+                staged_overrides: std::collections::VecDeque::new(),
             })),
             state_version: tokio::sync::watch::Sender::new(0),
         }
@@ -407,7 +425,7 @@ impl SubagentRegistry {
     /// startup recovery, so a recovered conversation never reissues an
     /// ordinal that already entered durable authority.
     pub fn restore_sequence_watermark(&self, highest_ordinal: u64) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.next_ordinal = state.next_ordinal.max(highest_ordinal + 1);
     }
 
@@ -417,7 +435,7 @@ impl SubagentRegistry {
         &self,
         observer: Arc<dyn SubagentObserver>,
     ) -> Vec<SubagentSnapshot> {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let snapshots: Vec<SubagentSnapshot> =
             state.records.iter().map(SubagentRecord::snapshot).collect();
         for snapshot in &snapshots {
@@ -429,7 +447,7 @@ impl SubagentRegistry {
 
     /// Installs the durability-failure sink.
     pub fn install_failure_sink(&self, sink: Arc<dyn SubagentDurabilityFailureSink>) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.failure_sink = Some(sink);
     }
 
@@ -459,7 +477,7 @@ impl SubagentRegistry {
             return Err(SubagentStartError::ConversationInactive);
         }
         let ordinal = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let ordinal = state.next_ordinal;
             state.next_ordinal += 1;
             ordinal
@@ -474,11 +492,34 @@ impl SubagentRegistry {
             &self.config.agent_id,
             spec.profile,
         );
-        let staged = super::process::spawn_staged(&self.config.spawn, &child_spec)
-            .await
-            .map_err(|error| SubagentStartError::Spawn {
-                detail: error.to_string(),
-            })?;
+        let staged = {
+            #[cfg(test)]
+            {
+                let override_child = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .staged_overrides
+                    .pop_front();
+                if let Some(staged) = override_child {
+                    return Ok(PreparedSubagent {
+                        subagent_id,
+                        child_agent_id,
+                        child_conversation_id,
+                        tool_call_id: spec.tool_call_id.clone(),
+                        profile: spec.profile,
+                        task: spec.task.clone(),
+                        context: spec.context.clone(),
+                        staged,
+                    });
+                }
+            }
+            super::process::spawn_staged(&self.config.spawn, &child_spec)
+                .await
+                .map_err(|error| SubagentStartError::Spawn {
+                    detail: error.to_string(),
+                })?
+        };
         Ok(PreparedSubagent {
             subagent_id,
             child_agent_id,
@@ -491,12 +532,28 @@ impl SubagentRegistry {
         })
     }
 
+    /// Installs a pre-staged child `prepare` consumes instead of spawning
+    /// (tests only).
+    #[cfg(test)]
+    pub(crate) fn push_staged_override(&self, staged: StagedChild) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.staged_overrides.push_back(staged);
+    }
+
     /// **Commit.** The one commit/rollback linearization point.
     ///
     /// A rolled-back or failed commit tears the staged child down
     /// completely (killed, reaped, runtime root removed) before returning;
     /// a successful commit publishes the durable ownership event, creates
     /// the record, releases the start gate, and returns the tool result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SubagentStartError::ConversationInactive`] when the
+    /// conversation is shutting down, [`SubagentStartError::Capacity`] when
+    /// the active bound is full at the linearization point, or
+    /// [`SubagentStartError::Durability`] when the ownership commit fails.
+    #[allow(clippy::too_many_lines)] // One commit path, asserted end to end.
     pub async fn commit(
         &self,
         prepared: PreparedSubagent,
@@ -516,13 +573,8 @@ impl SubagentRegistry {
             context,
             staged,
         } = prepared;
-        enum Decision {
-            Accepted,
-            RolledBack,
-            Failed(SubagentStartError),
-        }
         let decision = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let mailbox = self.config.mailbox.clone();
             let clock = self.config.clock.clone();
             let config = &self.config;
@@ -604,7 +656,7 @@ impl SubagentRegistry {
                 let driver = staged.into_driver(DelegationFrame { task, context });
                 let (commands, task) = driver.split();
                 {
-                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                     if let Some(&index) = state.index.get(&subagent_id) {
                         state.records[index].control = Some(commands);
                     }
@@ -614,6 +666,7 @@ impl SubagentRegistry {
                 tokio::spawn(async move {
                     let outcome = task.await.unwrap_or(PhysicalOutcome::Lost {
                         diagnostic: "the child driver task failed".to_owned(),
+                        escalated: false,
                     });
                     registry.settle_from_driver(&settlement_id, outcome);
                 });
@@ -644,7 +697,7 @@ impl SubagentRegistry {
     /// The consistency snapshot of one subagent, if the registry knows it.
     #[must_use]
     pub fn snapshot(&self, subagent_id: &SubagentId) -> Option<SubagentSnapshot> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .index
             .get(subagent_id)
@@ -654,14 +707,14 @@ impl SubagentRegistry {
     /// The consistency snapshots of every known subagent, in ordinal order.
     #[must_use]
     pub fn all_snapshots(&self) -> Vec<SubagentSnapshot> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.records.iter().map(SubagentRecord::snapshot).collect()
     }
 
     /// The unsettled subagents in deterministic ordinal order (drain).
     #[must_use]
     pub fn unsettled_snapshot(&self) -> Vec<SubagentSnapshot> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .records
             .iter()
@@ -677,7 +730,7 @@ impl SubagentRegistry {
     /// The subagents whose terminal publication was abandoned.
     #[must_use]
     pub fn abandoned_publications(&self) -> Vec<SubagentSnapshot> {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .records
             .iter()
@@ -690,7 +743,7 @@ impl SubagentRegistry {
     /// work (drain observability).
     #[must_use]
     pub fn has_unresolved_delivery_work(&self) -> bool {
-        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state
             .records
             .iter()
@@ -714,7 +767,7 @@ impl SubagentRegistry {
         if self.config.mailbox.begin_settlement_admission().is_err() {
             return self.snapshot(subagent_id);
         }
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let &index = state.index.get(subagent_id)?;
         let record = &mut state.records[index];
         if record.lifecycle.is_terminal() || record.publication_abandoned {
@@ -734,7 +787,7 @@ impl SubagentRegistry {
     /// Cancels every active subagent (runtime drain).
     pub fn cancel_all(&self, reason: CancellationReason) {
         let ids: Vec<SubagentId> = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             state
                 .records
                 .iter()
@@ -743,7 +796,7 @@ impl SubagentRegistry {
                 .collect()
         };
         for id in ids {
-            let _ = self.cancel(&id, reason.clone());
+            let _ = self.cancel(&id, reason);
         }
     }
 
@@ -774,7 +827,7 @@ impl SubagentRegistry {
             return;
         }
         let candidate = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
                 return;
             };
@@ -783,6 +836,11 @@ impl SubagentRegistry {
                 return;
             }
             let cancelling = matches!(record.lifecycle, SubagentLifecycle::Cancelling);
+            // The publication timestamp freezes at canonicalization: every
+            // later bounded retry rebuilds the byte-identical draft, so an
+            // ambiguous commit resolves as the idempotent correlation
+            // retry, never a conflict.
+            let timestamp = self.config.clock.now();
             let candidate = match outcome {
                 PhysicalOutcome::Completed(frame) => match (cancelling, frame.status) {
                     (false, super::ipc::ChildResultStatus::Succeeded) => TerminalCandidate {
@@ -793,6 +851,7 @@ impl SubagentRegistry {
                         )),
                         diagnostic: None,
                         reason: None,
+                        timestamp,
                     },
                     (false, super::ipc::ChildResultStatus::Failed) => TerminalCandidate {
                         state: TerminalState::Failed,
@@ -804,12 +863,14 @@ impl SubagentRegistry {
                             MAX_RESULT_CONTENT_BYTES,
                         )),
                         reason: None,
+                        timestamp,
                     },
                     (false, super::ipc::ChildResultStatus::Cancelled) => TerminalCandidate {
                         state: TerminalState::Cancelled,
                         content: None,
                         diagnostic: None,
                         reason: Some(CancellationReason::UserRequested),
+                        timestamp,
                     },
                     // Cancellation intent is canonical: a completed frame
                     // after the intent settles as cancelled.
@@ -817,16 +878,30 @@ impl SubagentRegistry {
                         state: TerminalState::Cancelled,
                         content: None,
                         diagnostic: None,
-                        reason: record.cancel_reason.clone(),
+                        reason: record.cancel_reason,
+                        timestamp,
                     },
                 },
-                PhysicalOutcome::Lost { diagnostic } => TerminalCandidate {
+                PhysicalOutcome::Lost {
+                    escalated: true, ..
+                } if cancelling => TerminalCandidate {
+                    // The child died to the driver's own escalation after
+                    // cancellation intent: that is the physical settlement
+                    // of the cancellation, not a failure.
+                    state: TerminalState::Cancelled,
+                    content: None,
+                    diagnostic: None,
+                    reason: record.cancel_reason,
+                    timestamp,
+                },
+                PhysicalOutcome::Lost { diagnostic, .. } => TerminalCandidate {
                     // An explicit process-control failure settles as failed
                     // even after cancellation intent.
                     state: TerminalState::Failed,
                     content: None,
                     diagnostic: Some(bound(diagnostic, MAX_RESULT_CONTENT_BYTES)),
                     reason: None,
+                    timestamp,
                 },
             };
             record.pending_terminal = Some(candidate.clone());
@@ -837,9 +912,7 @@ impl SubagentRegistry {
                 .or_else(|| {
                     candidate
                         .reason
-                        .as_ref()
-                        .map(reason_text)
-                        .map(str::to_owned)
+                        .map(|reason| reason_text(reason).to_owned())
                 });
             candidate
         };
@@ -850,7 +923,7 @@ impl SubagentRegistry {
     /// `PublishingTerminal` and schedules the bounded retry.
     fn publish_terminal(&self, subagent_id: &SubagentId, candidate: &TerminalCandidate) {
         let attempt = {
-            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
                 return;
             };
@@ -861,7 +934,7 @@ impl SubagentRegistry {
                 &record.child_agent_id,
                 candidate_state(candidate),
                 terminal_blocks(record, candidate),
-                self.config.clock.now(),
+                candidate.timestamp,
             );
             let result = self.config.mailbox.accept_draft_with_event(draft, event);
             let record = &mut state.records[index];
@@ -911,7 +984,7 @@ impl SubagentRegistry {
             return false;
         }
         let candidate = {
-            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let Some(&index) = state.index.get(subagent_id) else {
                 return true;
             };
@@ -924,7 +997,7 @@ impl SubagentRegistry {
         let Some(candidate) = candidate else {
             return true;
         };
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(&index) = state.index.get(subagent_id) else {
             return true;
         };
@@ -935,7 +1008,7 @@ impl SubagentRegistry {
             &record.child_agent_id,
             candidate_state(&candidate),
             terminal_blocks(record, &candidate),
-            self.config.clock.now(),
+            candidate.timestamp,
         );
         match self.config.mailbox.accept_draft_with_event(draft, event) {
             Ok(_) => {
@@ -962,7 +1035,7 @@ impl SubagentRegistry {
 
     /// Marks a terminal publication abandoned after the bounded retry.
     fn mark_publication_abandoned(&self, subagent_id: &SubagentId) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(&index) = state.index.get(subagent_id) else {
             return;
         };
@@ -973,7 +1046,7 @@ impl SubagentRegistry {
     /// Installs a commit-boundary hook (tests only).
     #[cfg(test)]
     pub fn install_commit_boundary_hook(&self, hook: Arc<CommitBoundaryHook>) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.commit_hook = Some(hook);
     }
 }
@@ -998,11 +1071,7 @@ fn terminal_blocks(
             "Subagent {} (profile {}) was cancelled ({}).",
             record.subagent_id,
             record.profile.name(),
-            candidate
-                .reason
-                .as_ref()
-                .map(reason_text)
-                .unwrap_or("cancelled")
+            candidate.reason.map_or("cancelled", reason_text)
         ),
     };
     vec![crate::message::types::UserContentBlock::Text(
@@ -1020,7 +1089,7 @@ const fn candidate_state(candidate: &TerminalCandidate) -> SubagentTerminalState
 }
 
 /// The human-readable cancellation detail.
-const fn reason_text(reason: &CancellationReason) -> &'static str {
+const fn reason_text(reason: CancellationReason) -> &'static str {
     match reason {
         CancellationReason::UserRequested => "requested by the user",
         CancellationReason::RuntimeShutdown => "the runtime is shutting down",
@@ -1094,4 +1163,502 @@ impl CommitBoundaryHook {
         *state = CommitHookState::Released;
         self.changed.notify_all();
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::super::ipc::{ChildFrame, ChildResultStatus, ParentFrame, ResultFrame};
+    use super::super::{SubagentProfile, SubagentTerminalState};
+    use super::*;
+    use crate::durable::ConversationStore;
+    use crate::runtime::types::{CancellationReason, SystemClock};
+
+    /// A registry over a real (in-memory) durable store with a test seam
+    /// for staged children.
+    struct TestPlane {
+        _dir: tempfile::TempDir,
+        registry: SubagentRegistry,
+        store: Arc<crate::durable::SqliteConversationStore>,
+        conversation_id: ConversationId,
+        runtime_root: std::path::PathBuf,
+    }
+
+    fn plane(max_active: usize) -> TestPlane {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let workspace = dir.path().join("workspace");
+        let runtime_root = dir.path().join("runtime");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        std::fs::create_dir_all(&runtime_root).expect("runtime root");
+        let conversation_id = ConversationId::new("conv-test");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(conversation_id.clone())
+                .expect("in-memory store"),
+        );
+        let mailbox = ConversationInboundMailbox::over_store(store.clone());
+        let registry = SubagentRegistry::new(SubagentRegistryConfig {
+            conversation_id: conversation_id.clone(),
+            agent_id: AgentId::new("agent-parent"),
+            mailbox,
+            clock: Arc::new(SystemClock),
+            spawn: SubagentSpawnPlan {
+                program: std::path::PathBuf::from("/nonexistent/rustx"),
+                models: std::path::PathBuf::from("/nonexistent/models.json"),
+                workspace,
+                runtime_root: runtime_root.clone(),
+                model: crate::model::session::SessionModelConfig::of(
+                    serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+                ),
+                timezone: None,
+                context: SessionContextPolicy {
+                    reserve_tokens: 0,
+                    keep_recent_tokens: 0,
+                    summary_output_cap: None,
+                },
+            },
+            max_active,
+        });
+        TestPlane {
+            _dir: dir,
+            registry,
+            store,
+            conversation_id,
+            runtime_root,
+        }
+    }
+
+    /// A scripted child: one trivial real process (kill/reap semantics) and
+    /// the test-held end of the control channel (protocol semantics).
+    struct ScriptedChild {
+        peer: tokio::net::UnixStream,
+    }
+
+    /// Stages a scripted child whose process exits immediately; the test
+    /// drives the protocol over `peer`.
+    fn stage_exit0(plane: &TestPlane) -> ScriptedChild {
+        stage_process(plane, "true")
+    }
+
+    /// Stages a scripted child whose process ignores everything and must be
+    /// killed; used for cancellation-escalation tests.
+    fn stage_stubborn(plane: &TestPlane) -> ScriptedChild {
+        stage_process(plane, "sleep 60")
+    }
+
+    fn stage_process(plane: &TestPlane, shell: &str) -> ScriptedChild {
+        let (driver_end, test_end) = tokio::net::UnixStream::pair().expect("pair");
+        let child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(shell)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("scripted child process");
+        let staged = StagedChild::for_test(child, driver_end, plane.runtime_root.clone());
+        plane.registry.push_staged_override(staged);
+        ScriptedChild { peer: test_end }
+    }
+
+    impl ScriptedChild {
+        /// Awaits the delegated task and answers with one terminal result.
+        async fn complete(mut self, status: ChildResultStatus, content: Option<&str>) {
+            let frame = super::super::ipc::read_parent_frame(&mut self.peer)
+                .await
+                .expect("delegate frame");
+            assert!(
+                matches!(frame, Some(ParentFrame::Delegate(_))),
+                "the committed child is delegated first"
+            );
+            super::super::ipc::write_child_frame(
+                &mut self.peer,
+                &ChildFrame::Result(ResultFrame {
+                    status,
+                    content: content.map(str::to_owned),
+                    diagnostic: None,
+                }),
+            )
+            .await
+            .expect("result frame");
+        }
+    }
+
+    fn spec(task: &str) -> SubagentStartSpec {
+        SubagentStartSpec {
+            profile: SubagentProfile::Explore,
+            task: task.to_owned(),
+            context: None,
+            tool_call_id: ToolCallId::new("call-1"),
+        }
+    }
+
+    fn start_spec(task: &str) -> SubagentStartSpec {
+        spec(task)
+    }
+
+    async fn start(plane: &TestPlane, spec: &SubagentStartSpec) -> SubagentAccepted {
+        let prepared = plane.registry.prepare(spec).await.expect("prepared");
+        match plane
+            .registry
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .expect("commit")
+        {
+            SubagentStartOutcome::Accepted(accepted) => accepted,
+            SubagentStartOutcome::RolledBack => panic!("no cancellation was requested"),
+        }
+    }
+
+    /// Reads the durable event journal.
+    fn events(plane: &TestPlane) -> Vec<crate::events::types::RuntimeEvent> {
+        let mut all = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = plane.store.read_events(cursor, 100).expect("events");
+            if page.events.is_empty() {
+                return all;
+            }
+            cursor = page.next_sequence;
+            all.extend(page.events.into_iter().map(|envelope| envelope.event));
+            if cursor.is_none() {
+                return all;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_successful_child_settles_through_the_durable_inbound() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect the workspace")).await;
+        child
+            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Succeeded);
+        assert_eq!(settled.detail.as_deref(), Some("the answer"));
+        // The result entered the parent's durable pending inbound with the
+        // child agent provenance, exactly once.
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert_eq!(pending.items.len(), 1);
+        let item = &pending.items[0];
+        assert_eq!(
+            item.correlation.as_deref(),
+            Some(super::super::terminal_correlation(&accepted.subagent_id).as_str())
+        );
+        assert!(matches!(
+            item.message.source,
+            crate::message::types::UserSource::Agent { ref agent_id }
+                if *agent_id == accepted.child_agent_id
+        ));
+        let journal = events(&plane);
+        assert!(journal.iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { subagent_id, .. }
+                if *subagent_id == accepted.subagent_id
+        )));
+        assert!(journal.iter().any(|event| matches!(
+            event,
+            crate::events::types::RuntimeEvent::SubagentTerminalPublished {
+                subagent_id,
+                state: SubagentTerminalState::Succeeded,
+                ..
+            } if *subagent_id == accepted.subagent_id
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_failed_child_settles_as_a_runtime_notice() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        child.complete(ChildResultStatus::Failed, None).await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Failed);
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert!(matches!(
+            pending.items[0].message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_is_canonical_over_a_late_result() {
+        let plane = plane(4);
+        let child = stage_stubborn(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        let cancelled = plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
+            .expect("known");
+        assert_eq!(cancelled.state, SubagentState::Cancelling);
+        child
+            .complete(ChildResultStatus::Succeeded, Some("late"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        // The committed cancellation intent wins over the late success.
+        assert_eq!(settled.state, SubagentState::Cancelled);
+        let pending = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("one pending batch");
+        assert!(matches!(
+            pending.items[0].message.source,
+            crate::message::types::UserSource::Runtime
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_child_lost_to_driver_escalation_after_cancel_settles_cancelled() {
+        let plane = plane(4);
+        // The child never answers the Cancel frame; the driver escalates
+        // (Cancel -> SIGTERM -> SIGKILL) and reaps it.
+        let _child = stage_stubborn(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        let _ = plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested);
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(settled.state, SubagentState::Cancelled);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_commit_losing_the_cancellation_race_rolls_back_completely() {
+        let plane = plane(4);
+        let hook = Arc::new(CommitBoundaryHook::default());
+        plane.registry.install_commit_boundary_hook(hook.clone());
+        let _child = stage_exit0(&plane);
+        let registry = plane.registry.clone();
+        let spec = start_spec("inspect");
+        let attempt_cancellation = CancellationSignal::new();
+        let committer = {
+            let attempt_cancellation = attempt_cancellation.clone();
+            tokio::spawn(async move {
+                let prepared = registry.prepare(&spec).await.expect("prepared");
+                registry.commit(prepared, &attempt_cancellation).await
+            })
+        };
+        hook.wait_until_entered();
+        attempt_cancellation.cancel();
+        hook.release();
+        let outcome = committer.await.expect("committer");
+        assert!(matches!(outcome, Ok(SubagentStartOutcome::RolledBack)));
+        // No record, no durable trace, no ordinal consumption that recovery
+        // would fold.
+        assert!(plane.registry.all_snapshots().is_empty());
+        assert!(events(&plane).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_capacity_bound_is_enforced_at_commit() {
+        let plane = plane(1);
+        let _first_child = stage_stubborn(&plane);
+        let first = start(&plane, &start_spec("first")).await;
+        assert_eq!(
+            plane
+                .registry
+                .snapshot(&first.subagent_id)
+                .expect("snapshot")
+                .state,
+            SubagentState::Running
+        );
+        // prepare stages privately even at capacity; the commit is the
+        // linearization point that refuses.
+        let _second_child = stage_exit0(&plane);
+        let prepared = plane
+            .registry
+            .prepare(&start_spec("second"))
+            .await
+            .expect("prepared");
+        let error = plane
+            .registry
+            .commit(prepared, &CancellationSignal::new())
+            .await
+            .expect_err("capacity");
+        assert!(matches!(
+            error,
+            SubagentStartError::CapacityExceeded { max: 1 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_an_invalid_task_before_any_spawn() {
+        let plane = plane(4);
+        let error = plane
+            .registry
+            .prepare(&start_spec(""))
+            .await
+            .expect_err("empty task");
+        assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
+        let oversized = "x".repeat(MAX_TASK_BYTES + 1);
+        let error = plane
+            .registry
+            .prepare(&start_spec(&oversized))
+            .await
+            .expect_err("oversized task");
+        assert!(matches!(error, SubagentStartError::InvalidTask { .. }));
+        let mut oversized_context = start_spec("inspect");
+        oversized_context.context = Some("x".repeat(MAX_CONTEXT_PACKAGE_BYTES + 1));
+        let error = plane
+            .registry
+            .prepare(&oversized_context)
+            .await
+            .expect_err("oversized context");
+        assert!(matches!(error, SubagentStartError::ContextOversized { .. }));
+        assert!(plane.registry.all_snapshots().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_terminal_publication_failure_is_retried_then_abandoned() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        // The initial publication plus both bounded retries fail.
+        plane.store.arm_fail_accept_times(3);
+        child
+            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .await;
+        let settled = plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("abandoned resolves the wait");
+        assert!(settled.publication_abandoned);
+        assert_eq!(settled.state, SubagentState::PublishingTerminal);
+        // Nothing reached the durable authority.
+        assert!(
+            plane
+                .store
+                .select_pending_batch()
+                .expect("pending")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ambiguous_publication_commit_resolves_exactly_once() {
+        let plane = plane(4);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        child
+            .complete(ChildResultStatus::Succeeded, Some("the answer"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        // A retry of the same correlated publication is an idempotent
+        // no-op, never a second message. Rebuild the byte-identical draft:
+        // the frozen candidate timestamp is the committed one.
+        let first = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("batch");
+        assert_eq!(first.items.len(), 1);
+        let committed_at = first.items[0]
+            .message
+            .timestamp
+            .expect("terminal notifications carry a timestamp");
+        let (draft, event) = super::super::terminal_publication(
+            &plane.conversation_id,
+            &accepted.subagent_id,
+            &accepted.child_agent_id,
+            SubagentTerminalState::Succeeded,
+            vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: "the answer".to_owned(),
+                },
+            )],
+            committed_at,
+        );
+        plane
+            .store
+            .accept_inbound_with_event(draft, event)
+            .expect("idempotent retry");
+        let second = plane
+            .store
+            .select_pending_batch()
+            .expect("pending")
+            .expect("batch");
+        assert_eq!(second.items.len(), 1, "exactly once");
+    }
+
+    #[tokio::test]
+    async fn the_ordinal_sequence_reseeds_above_the_durable_watermark() {
+        let plane = plane(4);
+        plane.registry.restore_sequence_watermark(7);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        assert_eq!(
+            accepted.subagent_id.as_str(),
+            "conv-test-subagent-8",
+            "the next ordinal never reissues a durable identity"
+        );
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+    }
+
+    #[tokio::test]
+    async fn cancel_of_an_unknown_or_terminal_subagent_is_a_noop() {
+        let plane = plane(4);
+        let unknown = SubagentId::new("conv-test-subagent-99");
+        assert!(
+            plane
+                .registry
+                .cancel(&unknown, CancellationReason::UserRequested)
+                .is_none()
+        );
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &start_spec("inspect")).await;
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        let after = plane
+            .registry
+            .cancel(&accepted.subagent_id, CancellationReason::UserRequested)
+            .expect("known");
+        assert_eq!(after.state, SubagentState::Succeeded);
+    }
+
+    use crate::context::SessionContextPolicy;
 }

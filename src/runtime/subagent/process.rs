@@ -31,6 +31,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use chrono_tz::Tz;
+use tokio::io::AsyncWriteExt;
 
 use crate::context::SessionContextPolicy;
 use crate::model::session::SessionModelConfig;
@@ -45,14 +46,23 @@ use super::ipc::{
 /// plane), so a handshake that outlasts this bound is a hung child; the
 /// stage is then torn down. This is a supervision policy bound, never a
 /// test synchronization mechanism.
+#[cfg(not(test))]
 const STARTUP_LIVENESS: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const STARTUP_LIVENESS: Duration = Duration::from_secs(5);
 
 /// The grace a child gets to drain after a `Cancel` frame before the
 /// supervisor escalates to `SIGTERM` on the child's process group.
+#[cfg(not(test))]
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const CANCEL_GRACE: Duration = Duration::from_millis(200);
 
 /// The grace after `SIGTERM` before `SIGKILL`.
+#[cfg(not(test))]
 const TERM_GRACE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const TERM_GRACE: Duration = Duration::from_millis(200);
 
 /// The composition inputs one child process is spawned with.
 ///
@@ -270,6 +280,11 @@ pub(crate) enum PhysicalOutcome {
     Lost {
         /// The bounded diagnostic.
         diagnostic: String,
+        /// Whether the driver escalated the child to a signal kill. A child
+        /// that died to the driver's own escalation after cancellation
+        /// intent is physically cancelled, not failed; the registry
+        /// canonicalizes on this evidence.
+        escalated: bool,
     },
 }
 
@@ -298,6 +313,23 @@ impl StagedChild {
         let _ = std::fs::remove_dir_all(&self.runtime_root);
     }
 
+    /// Constructs a staged child from raw parts (tests only).
+    ///
+    /// The test plays the child role over `control`'s peer while `child`
+    /// supplies the real OS-process kill/reap semantics the driver owns.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        child: tokio::process::Child,
+        control: tokio::net::UnixStream,
+        runtime_root: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            child,
+            control,
+            runtime_root,
+        }
+    }
+
     /// Completes the startup handshake: awaits `Ready` (or an honest
     /// `StartupError`), bounded by the startup liveness guard.
     async fn handshake(&mut self, spec: &SubagentChildSpec) -> Result<(), SpawnError> {
@@ -317,7 +349,7 @@ impl StagedChild {
                             detail: error.message,
                         });
                     }
-                    Ok(Some(ChildFrame::Diagnostic(_))) => continue,
+                    Ok(Some(ChildFrame::Diagnostic(_))) => {}
                     Ok(Some(ChildFrame::Result(_))) => {
                         return Err(SpawnError::Handshake {
                             detail: "the child produced a result before delegation".to_owned(),
@@ -398,6 +430,7 @@ async fn drive_child(
         let _ = child.wait().await;
         return PhysicalOutcome::Lost {
             diagnostic: format!("could not deliver the delegation: {error}"),
+            escalated: true,
         };
     }
     let mut result: Option<ResultFrame> = None;
@@ -436,7 +469,7 @@ async fn drive_child(
                     Err(error) => violation = Some(error.to_string()),
                 }
             }
-            _ = async {
+            () = async {
                 match cancel_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending().await,
@@ -445,7 +478,7 @@ async fn drive_child(
                 kill_group(&child, Signal::Term);
                 kill_deadline = Some(tokio::time::Instant::now() + TERM_GRACE);
             }
-            _ = async {
+            () = async {
                 match kill_deadline {
                     Some(deadline) => tokio::time::sleep_until(deadline).await,
                     None => std::future::pending().await,
@@ -458,13 +491,19 @@ async fn drive_child(
         }
     }
     // Terminal settlement requires the reaped process, never a frame alone
-    // and never a kill signal alone.
+    // and never a kill signal alone. Closing the write half is the
+    // well-behaved child's drain signal after its terminal frame.
+    let _ = control.shutdown().await;
     reap(&mut child).await;
     match (result, violation) {
         (Some(frame), _) => PhysicalOutcome::Completed(frame),
-        (None, Some(diagnostic)) => PhysicalOutcome::Lost { diagnostic },
+        (None, Some(diagnostic)) => PhysicalOutcome::Lost {
+            diagnostic,
+            escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
+        },
         (None, None) => PhysicalOutcome::Lost {
             diagnostic: "the child exited without a terminal result".to_owned(),
+            escalated: kill_deadline.is_some() || cancel_deadline.is_some(),
         },
     }
 }
@@ -513,7 +552,10 @@ fn kill_group(child: &tokio::process::Child, signal: Signal) {
                 Signal::Term => nix::sys::signal::Signal::SIGTERM,
                 Signal::Kill => nix::sys::signal::Signal::SIGKILL,
             };
-            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pid as i32), nix_signal);
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(i32::try_from(pid).unwrap_or(i32::MAX)),
+                nix_signal,
+            );
         }
     }
     #[cfg(not(unix))]

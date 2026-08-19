@@ -336,7 +336,7 @@ impl LocalConversationCore {
     ///
     /// This is the same semantic stack as [`LocalConversationCore::compose`]
     /// — the real `ConversationRuntime`, Agent Loop, Context Assembly, Tool
-    /// Plane, and ModelAdapter — with the child-specific composition
+    /// Plane, and `ModelAdapter` — with the child-specific composition
     /// differences made explicit and deny-by-construction:
     ///
     /// - the startup input is the typed [`SubagentChildSpec`], never a
@@ -361,7 +361,7 @@ impl LocalConversationCore {
     ///
     /// Returns the first composition failure, exactly like the ordinary
     /// composition path.
-    pub fn compose_subagent_child(
+    pub(crate) fn compose_subagent_child(
         spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
         dependencies: &LocalRuntimeDependencies,
     ) -> Result<Self, LocalRuntimeError> {

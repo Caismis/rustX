@@ -4100,6 +4100,136 @@ mod tests {
         assert_eq!(store.load_pending().unwrap().len(), 1);
     }
 
+    /// A subagent terminal publication is a correlated User inbound plus the
+    /// `SubagentTerminalPublished` fact in one transaction: the retry is an
+    /// idempotent no-op, a second terminal for the same child violates the
+    /// lifecycle, and the provenance rules (Agent-authored success versus
+    /// Runtime-authored notice) are enforced.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn subagent_terminal_publication_is_idempotent_and_terminal_unique() {
+        let store = store();
+        let conversation_id = store.conversation_id().clone();
+        let subagent_id =
+            crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 1);
+        let child_agent_id = crate::runtime::identity::AgentId::new(format!("agent-{subagent_id}"));
+        let message_id = MessageId::new("subagent-notification-1");
+        let timestamp = Utc.with_ymd_and_hms(2026, 8, 7, 12, 0, 0).unwrap();
+        // The ownership commit opens the lifecycle before the terminal.
+        store
+            .append_event(envelope(
+                &conversation_id,
+                "subagent-committed-1",
+                None,
+                RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id: subagent_id.clone(),
+                    child_agent_id: child_agent_id.clone(),
+                    child_conversation_id: crate::runtime::identity::ConversationId::new(
+                        subagent_id.as_str(),
+                    ),
+                    tool_call_id: crate::runtime::identity::ToolCallId::new("call-sub"),
+                    profile: "explore".to_owned(),
+                },
+            ))
+            .unwrap();
+        let event = envelope(
+            &conversation_id,
+            "subagent-event-1",
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                message_id: message_id.clone(),
+                state: crate::events::types::SubagentTerminalState::Succeeded,
+            },
+        );
+        // A successful child answer is authored by the child agent.
+        let draft_for_store = || InboundDraft {
+            message_id: Some(message_id.clone()),
+            source: UserSource::Agent {
+                agent_id: child_agent_id.clone(),
+            },
+            kind: InboundKind::Message,
+            content: draft("subagent").content,
+            timestamp,
+            correlation: Some(format!("subagent-terminal:{subagent_id}")),
+        };
+        let (accepted, persisted) = store
+            .accept_inbound_with_event(draft_for_store(), event.clone())
+            .unwrap();
+        assert!(!accepted.retried);
+        assert_eq!(persisted.sequence, 2, "the ownership commit is sequence 1");
+
+        let (retried, persisted_retry) = store
+            .accept_inbound_with_event(draft_for_store(), event)
+            .unwrap();
+        assert!(retried.retried);
+        assert_eq!(persisted_retry.sequence, persisted.sequence);
+
+        // The terminal fact closed the lifecycle, so a second terminal for
+        // the same child violates it.
+        let second_message_id = MessageId::new("subagent-notification-2");
+        let second_event = envelope(
+            &conversation_id,
+            "subagent-event-2",
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: subagent_id.clone(),
+                child_agent_id: child_agent_id.clone(),
+                message_id: second_message_id.clone(),
+                state: crate::events::types::SubagentTerminalState::Failed,
+            },
+        );
+        let second_draft = InboundDraft {
+            message_id: Some(second_message_id),
+            source: UserSource::Runtime,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "second".to_owned(),
+            })],
+            timestamp,
+            correlation: Some("subagent-terminal:other".to_owned()),
+        };
+        assert!(matches!(
+            store.accept_inbound_with_event(second_draft, second_event),
+            Err(ConversationStoreError::TerminalViolation(_))
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 1);
+
+        // Provenance: a failed terminal must be a Runtime-authored notice —
+        // an Agent-authored one is an ineligible publication.
+        let other_id = crate::runtime::identity::SubagentId::for_conversation(&conversation_id, 2);
+        let other_message_id = MessageId::new("subagent-notification-3");
+        let wrong_provenance = envelope(
+            &conversation_id,
+            "subagent-event-3",
+            None,
+            RuntimeEvent::SubagentTerminalPublished {
+                subagent_id: other_id.clone(),
+                child_agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+                message_id: other_message_id.clone(),
+                state: crate::events::types::SubagentTerminalState::Failed,
+            },
+        );
+        let wrong_draft = InboundDraft {
+            message_id: Some(other_message_id),
+            source: UserSource::Agent {
+                agent_id: crate::runtime::identity::AgentId::new("agent-other"),
+            },
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "wrong".to_owned(),
+            })],
+            timestamp,
+            correlation: Some(format!("subagent-terminal:{other_id}")),
+        };
+        assert!(matches!(
+            store.accept_inbound_with_event(wrong_draft, wrong_provenance),
+            Err(ConversationStoreError::InvalidReference(_))
+        ));
+        assert_eq!(store.load_pending().unwrap().len(), 1);
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn event_journal_enforces_dependencies_order_and_terminal_absorption() {

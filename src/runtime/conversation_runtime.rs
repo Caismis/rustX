@@ -3091,14 +3091,13 @@ impl ConversationRuntime {
     /// owns between attempts; the subagent child driver (Issue #60) reads
     /// its final answer here after the attempt's canonical terminal event.
     #[must_use]
-    pub(crate) fn settled_ledger(&self) -> Option<Vec<MessageBlock>> {
-        self.inner
-            .state
-            .lock()
-            .expect("runtime lock")
-            .conversation
-            .as_ref()
-            .map(|conversation| conversation.ledger().audit_records().to_vec())
+    /// Reads the canonical ledger from the durable authority.
+    ///
+    /// Every committed message is durable by definition, so a terminal
+    /// observer (Issue #60's child result extraction) races nothing even
+    /// while an attempt still owns the in-memory conversation state.
+    pub(crate) fn durable_ledger(&self) -> Option<Vec<MessageBlock>> {
+        self.inner.store.load_canonical().ok()
     }
 }
 
@@ -3505,6 +3504,18 @@ impl InteractionObserver for RuntimeObserver {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    /// The settled canonical ledger of this conversation, or `None` while
+    /// an attempt owns the in-memory conversation state.
+    pub(crate) fn settled_ledger(&self) -> Option<Vec<MessageBlock>> {
+        self.inner
+            .state
+            .lock()
+            .expect("runtime lock")
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.ledger().audit_records().to_vec())
+    }
+
     /// The runtime-owned Message Ledger records, or `None` while an attempt
     /// owns the conversation state.
     pub(crate) fn coordinator_ledger(&self) -> Option<Vec<MessageBlock>> {

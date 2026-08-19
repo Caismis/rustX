@@ -2,7 +2,7 @@
 //! --subagent-child` internal mode.
 //!
 //! The child is a real rustX runtime — the same `ConversationRuntime`,
-//! Agent Loop, Context Assembly, Tool Plane, and ModelAdapter as an
+//! Agent Loop, Context Assembly, Tool Plane, and `ModelAdapter` as an
 //! interactive session — composed headlessly from the typed
 //! [`SubagentChildSpec`] that arrives over the control channel. The driver
 //! itself is a thin bounded loop:
@@ -152,23 +152,21 @@ async fn run_child(
     .map_err(|error| ChildExit::Protocol(error.to_string()))?;
 
     // The start gate: no semantic work before the delegation arrives.
-    let delegate = loop {
-        match read_parent_frame(control).await {
-            Ok(Some(ParentFrame::Delegate(delegate))) => break delegate,
-            Ok(Some(ParentFrame::Cancel)) | Ok(None) => {
-                // Cancelled (or orphaned) before any work began: drain and
-                // exit. The parent settles the cancelled/interrupted
-                // terminal itself from the physical outcome.
-                let _ = runtime.shutdown().await;
-                return Ok(());
-            }
-            Ok(Some(ParentFrame::Hello(_))) => {
-                return Err(ChildExit::Protocol(
-                    "a second Hello frame arrived".to_owned(),
-                ));
-            }
-            Err(error) => return Err(ChildExit::Protocol(error.to_string())),
+    let delegate = match read_parent_frame(control).await {
+        Ok(Some(ParentFrame::Delegate(delegate))) => delegate,
+        Ok(Some(ParentFrame::Cancel) | None) => {
+            // Cancelled (or orphaned) before any work began: drain and
+            // exit. The parent settles the cancelled/interrupted terminal
+            // itself from the physical outcome.
+            let _ = runtime.shutdown().await;
+            return Ok(());
         }
+        Ok(Some(ParentFrame::Hello(_))) => {
+            return Err(ChildExit::Protocol(
+                "a second Hello frame arrived".to_owned(),
+            ));
+        }
+        Err(error) => return Err(ChildExit::Protocol(error.to_string())),
     };
 
     // The delegated task enters through the child's ordinary durable
@@ -344,7 +342,11 @@ async fn await_terminal(
 fn final_answer(
     runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
 ) -> Option<String> {
-    let ledger = runtime.settled_ledger()?;
+    // The terminal observation fires on the durable commit inside the
+    // attempt, before the coordinator's in-memory conversation state is
+    // restored — so the answer must be read from the durable authority,
+    // where the committed assistant message already exists by definition.
+    let ledger = runtime.durable_ledger()?;
     let answer = ledger.iter().rev().find_map(|message| match message {
         MessageBlock::Assistant(assistant) => {
             let text: String = assistant

@@ -126,6 +126,17 @@ impl FixtureServer {
     where
         F: Fn(u64, &str) -> FixtureReply + Send + Sync + 'static,
     {
+        Self::start_with_body(move |attempt, head, _body| responder(attempt, head)).await
+    }
+
+    /// Starts a server whose responder also sees the request body, for
+    /// conversations whose request ordering is nondeterministic (Issue #60:
+    /// a subagent child runtime calls the same provider concurrently with
+    /// its parent).
+    pub async fn start_with_body<F>(responder: F) -> Self
+    where
+        F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync + 'static,
+    {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind fixture server");
@@ -185,7 +196,7 @@ async fn serve_connection<F>(
     responder: &Arc<F>,
 ) -> std::io::Result<()>
 where
-    F: Fn(u64, &str) -> FixtureReply + Send + Sync,
+    F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync,
 {
     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
     let (mut read_half, mut write_half) = tokio::io::split(socket);
@@ -206,13 +217,14 @@ where
     if content_length > 0 {
         reader.read_exact(&mut body).await?;
     }
+    let body_text = String::from_utf8_lossy(&body).into_owned();
     request_bodies
         .lock()
         .expect("request bodies lock")
-        .push(String::from_utf8_lossy(&body).into_owned());
+        .push(body_text.clone());
     drop(reader);
 
-    let reply = responder(attempt, &head_text);
+    let reply = responder(attempt, &head_text, &body_text);
     if reply.header_delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(reply.header_delay_ms)).await;
     }

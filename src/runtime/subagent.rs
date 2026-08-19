@@ -243,7 +243,8 @@ fn content_source(state: SubagentTerminalState, child_agent_id: &AgentId) -> Use
 /// path — the same `MessageId` and the same producer correlation — so a
 /// live publication and a recovery publication are mutually exclusive by
 /// construction. Nothing is relaunched and no old process is reattached.
-pub(crate) fn recovery_terminal_publication(
+#[must_use]
+pub fn recovery_terminal_publication(
     conversation_id: &ConversationId,
     subagent_id: &SubagentId,
     child_agent_id: &AgentId,
