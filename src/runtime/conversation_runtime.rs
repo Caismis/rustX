@@ -298,8 +298,8 @@ use crate::runtime::interaction::{
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{
-    CancellationReason, ConversationLifecycle, ConversationLifecycleState, DurabilityGate,
-    DurableOperation, RuntimeClock, SystemClock,
+    CancellationReason, ConversationLifecycle, ConversationLifecycleState, DurabilityFailureCommit,
+    DurabilityGate, DurableOperation, RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -1354,26 +1354,30 @@ impl RuntimeInner {
     /// authority ([`DurabilityGate::commit_failure`]) and published as a
     /// [`ConversationObservation::DurabilityFailed`] exactly once; no
     /// further re-kick is armed, so a persistent or alternating fault cannot
-    /// become a hot loop. A failure of a different transient stage consumes
-    /// its own allowance without erasing the first stage's debt.
+    /// become a hot loop. The observation is published only when the commit
+    /// reports that THIS call installed the absorbing fact, and it carries
+    /// the authoritative operation and diagnostic returned by the commit
+    /// (see [`Self::commit_failure_and_observe`]) — a later caller can
+    /// never publish a second observation. A failure of a different
+    /// transient stage consumes its own allowance without erasing the first
+    /// stage's debt.
     fn record_durability_failure(
         &self,
         state: &mut CoordinatorState,
         operation: DurableOperation,
         diagnostic: String,
     ) {
-        // Absorbing winner: once the one authoritative failure fact exists,
-        // later failures never re-commit it and never re-observe.
-        if self.durability_gate.is_failed() {
+        // Absorbing winner: the absorbing commit itself reports whether this
+        // call installed the fact, so a caller-side guard is only needed
+        // where retry bookkeeping must not run on an already-failed runtime.
+        if !operation.is_transient() {
+            self.commit_failure_and_observe(operation, diagnostic);
             return;
         }
-        if !operation.is_transient() {
-            self.durability_gate
-                .commit_failure(operation, diagnostic.clone());
-            self.observe(ConversationObservation::DurabilityFailed {
-                operation: operation.as_str().to_owned(),
-                diagnostic,
-            });
+        // The transient path arms coordinator-owned retry bookkeeping; that
+        // bookkeeping must never run once the absorbing fact exists, so the
+        // failed-gate check stays ahead of the admission cycle.
+        if self.durability_gate.is_failed() {
             return;
         }
         let retry_armed = {
@@ -1394,11 +1398,21 @@ impl RuntimeInner {
             });
             self.wake.notify.notify_one();
         } else {
-            self.durability_gate
-                .commit_failure(operation, diagnostic.clone());
+            self.commit_failure_and_observe(operation, diagnostic);
+        }
+    }
+
+    /// Commits the absorbing `DurabilityFailed` fact through the one
+    /// authority and publishes the single
+    /// [`ConversationObservation::DurabilityFailed`] only when THIS call
+    /// installed the fact; the observation's operation and diagnostic are
+    /// the authoritative ones returned by the commit.
+    fn commit_failure_and_observe(&self, operation: DurableOperation, diagnostic: String) {
+        let outcome = self.durability_gate.commit_failure(operation, diagnostic);
+        if let DurabilityFailureCommit::Committed(failure) = outcome {
             self.observe(ConversationObservation::DurabilityFailed {
-                operation: operation.as_str().to_owned(),
-                diagnostic,
+                operation: failure.operation.as_str().to_owned(),
+                diagnostic: failure.diagnostic,
             });
         }
     }
@@ -3633,20 +3647,21 @@ impl ConversationRuntime {
     /// production `record_durability_failure` path (Issue #60 regression
     /// seam).
     ///
-    /// The operation is a non-transient event-journal failure, so the
-    /// runtime enters `DurabilityFailed` immediately and the shared
-    /// durability frontier (`DurabilityGate`) is marked failed under the
-    /// same commit — exactly what a real exhaustion (subagent or
+    /// The given operation is committed through the one authority: a
+    /// non-transient operation enters `DurabilityFailed` immediately and
+    /// marks the shared durability frontier (`DurabilityGate`) failed under
+    /// the same commit — exactly what a real exhaustion (subagent or
     /// background terminal publication) performs. Tests use it to force the
     /// health-failure side of the ownership-vs-failure total order
     /// deterministically.
-    pub(crate) fn force_durability_failure_for_test(&self, diagnostic: &str) {
+    pub(crate) fn force_durability_failure_for_test(
+        &self,
+        operation: DurableOperation,
+        diagnostic: &str,
+    ) {
         let mut state = self.inner.lock_state();
-        self.inner.record_durability_failure(
-            &mut state,
-            DurableOperation::EventJournal,
-            diagnostic.to_owned(),
-        );
+        self.inner
+            .record_durability_failure(&mut state, operation, diagnostic.to_owned());
     }
 
     /// The settled canonical ledger of this conversation, or `None` while
@@ -7095,7 +7110,10 @@ mod tests {
 
         // The runtime then commits DurabilityFailed; the already-owned
         // child is not retroactively reclaimed.
-        runtime.force_durability_failure_for_test("synthetic durability failure");
+        runtime.force_durability_failure_for_test(
+            DurableOperation::EventJournal,
+            "synthetic durability failure",
+        );
         await_observation(&pending, |observation| {
             matches!(
                 observation,
@@ -7202,7 +7220,10 @@ mod tests {
         let failing_runtime = runtime.clone();
         let failure_thread = std::thread::spawn(move || {
             failed_started_tx.send(()).expect("failure-started channel");
-            failing_runtime.force_durability_failure_for_test("synthetic durability failure");
+            failing_runtime.force_durability_failure_for_test(
+                DurableOperation::EventJournal,
+                "synthetic durability failure",
+            );
             failed_done_tx.send(()).expect("failure-done channel");
         });
         failed_started_rx
@@ -7307,7 +7328,10 @@ mod tests {
         runtime.activate();
 
         // The runtime commits DurabilityFailed first.
-        runtime.force_durability_failure_for_test("synthetic durability failure");
+        runtime.force_durability_failure_for_test(
+            DurableOperation::EventJournal,
+            "synthetic durability failure",
+        );
         await_observation(&pending, |observation| {
             matches!(
                 observation,
@@ -7408,7 +7432,10 @@ mod tests {
 
         // The runtime then commits DurabilityFailed; the already-owned
         // execution is not reclaimed.
-        runtime.force_durability_failure_for_test("synthetic durability failure");
+        runtime.force_durability_failure_for_test(
+            DurableOperation::EventJournal,
+            "synthetic durability failure",
+        );
         await_observation(&pending, |observation| {
             matches!(
                 observation,
@@ -7513,7 +7540,10 @@ mod tests {
         let failing_runtime = runtime.clone();
         let failure_thread = std::thread::spawn(move || {
             failed_started_tx.send(()).expect("failure-started channel");
-            failing_runtime.force_durability_failure_for_test("synthetic durability failure");
+            failing_runtime.force_durability_failure_for_test(
+                DurableOperation::EventJournal,
+                "synthetic durability failure",
+            );
             failed_done_tx.send(()).expect("failure-done channel");
         });
         failed_started_rx
@@ -7927,8 +7957,9 @@ mod tests {
 
     /// The absorbing winner is never replaced (Issue #60 single
     /// source-of-truth): the first committed durability failure stays the
-    /// authoritative fact — a second failure neither rewrites its operation/
-    /// diagnostic nor publishes a second `DurabilityFailed` observation.
+    /// authoritative fact — a second failure with a *different* operation
+    /// and diagnostic neither rewrites the stored operation/diagnostic nor
+    /// publishes a second `DurabilityFailed` observation.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_second_durability_failure_never_replaces_the_absorbing_first() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -7947,7 +7978,10 @@ mod tests {
         runtime.activate();
 
         // Failure A commits first through the single production commit seam.
-        runtime.force_durability_failure_for_test("first absorbing failure");
+        runtime.force_durability_failure_for_test(
+            DurableOperation::EventJournal,
+            "first absorbing failure",
+        );
         let observations = await_observation(&pending, |observation| {
             matches!(
                 observation,
@@ -7974,10 +8008,14 @@ mod tests {
         assert_eq!(failure.operation, DurableOperation::EventJournal);
         assert_eq!(failure.diagnostic, "first absorbing failure");
 
-        // Failure B arrives later through the same seam: the guard observes
-        // the absorbing winner and neither rewrites the fact nor publishes a
+        // Failure B arrives later through the same seam, with a genuinely
+        // different operation and diagnostic: the guard observes the
+        // absorbing winner and neither rewrites the fact nor publishes a
         // second observation.
-        runtime.force_durability_failure_for_test("second failure must not win");
+        runtime.force_durability_failure_for_test(
+            DurableOperation::SubagentTerminalPublication,
+            "second failure must not win",
+        );
         let failure = runtime
             .inner
             .durability_gate
