@@ -1,0 +1,7 @@
+data: {"id":"chatcmpl-hard-sub","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_hard_subagent","type":"function","function":{"name":"subagent","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-hard-sub","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"profile\":\"explore\",\"task\":\"hard parent death gate\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-hard-sub","object":"chat.completion.chunk","created":1,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]

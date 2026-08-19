@@ -34,7 +34,7 @@ use rustx::conversation::message_id_of;
 use rustx::durable::{ConversationStore, InboundDraft, SqliteConversationStore};
 use rustx::events::types::{
     AttemptFailure, BackgroundTerminalState, EVENT_SCHEMA_VERSION, RuntimeEvent,
-    RuntimeEventEnvelope,
+    RuntimeEventEnvelope, SubagentTerminalState,
 };
 use rustx::message::content::TextBlock;
 use rustx::message::types::{
@@ -46,8 +46,8 @@ use rustx::model::{
     ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestParams, RequestSnapshot,
 };
 use rustx::runtime::identity::{
-    AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId,
-    ToolId, TurnId,
+    AgentId, AttemptId, CapabilityRevision, ConversationId, EventId, MessageId, SubagentId,
+    ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 use rustx::runtime::recovery::{
     AttemptRecoveryClass, KnownModelOutcome, RecoveryError, RecoveryEvidence, RecoveryPlan,
@@ -2765,4 +2765,131 @@ fn two_concurrently_unsettled_attempts_fail_recovery_closed() {
             "a failed recovery terminalizes nothing"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #60 — subagent recovery: interrupted-only classification
+// ---------------------------------------------------------------------------
+
+fn commit_subagent_ownership(store: &SqliteConversationStore, subagent: &SubagentId) {
+    store
+        .append_event(envelope(
+            &format!("subagent-committed-event:{subagent}"),
+            None,
+            None,
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id: subagent.clone(),
+                child_agent_id: AgentId::new(format!("agent-{subagent}")),
+                child_conversation_id: ConversationId::new(subagent.as_str()),
+                tool_call_id: ToolCallId::new("call-sub"),
+                profile: "explore".to_owned(),
+            },
+        ))
+        .expect("subagent ownership");
+}
+
+/// A subagent child that was durably owned and never settled does not
+/// survive its owning process. Recovery publishes the honest interrupted
+/// terminal notice exactly once — never a failure, never a relaunch, never
+/// a reattach.
+#[test]
+fn nonterminal_subagent_work_is_terminalized_exactly_once_and_never_relaunched() {
+    let durable = Durable::new();
+    let subagent = SubagentId::for_conversation(&conversation_id(), 1);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        commit_subagent_ownership(&store, &subagent);
+        // CRASH while the child runtime was running.
+    }
+
+    let report = recover_reopened(&durable);
+    assert_eq!(
+        report.subagent_classes().len(),
+        1,
+        "the durably owned child is classified"
+    );
+    assert_eq!(report.subagent_classes()[0].evidence.subagent_id, subagent);
+    assert_eq!(
+        report.reconciliation().subagent_terminals,
+        vec![subagent.clone()]
+    );
+    assert_eq!(
+        report.highest_subagent_ordinal(),
+        1,
+        "the ordinal watermark is recovered from durable evidence"
+    );
+
+    let store = durable.open();
+    let published: Vec<SubagentTerminalState> = all_events(&store)
+        .into_iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::SubagentTerminalPublished { state, .. } => Some(state),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        published,
+        vec![SubagentTerminalState::Interrupted],
+        "unknown is published as interrupted, never as a known failure"
+    );
+    let pending = store.load_pending().expect("pending");
+    assert_eq!(pending.len(), 1, "exactly one terminal notification");
+    assert_eq!(
+        pending[0].message_id,
+        MessageId::new(format!("subagent-{subagent}-terminal")),
+        "the recovery notification reuses the live identity contract"
+    );
+    assert_eq!(
+        pending[0].correlation.as_deref(),
+        Some(format!("subagent-terminal:{subagent}").as_str()),
+    );
+
+    // Repeated restarts change nothing.
+    for restart in 0..2 {
+        let report = recover_reopened(&durable);
+        assert!(
+            report.subagent_classes().is_empty(),
+            "restart #{restart} sees an absorbing subagent terminal"
+        );
+        assert!(report.reconciliation().is_empty());
+        let store = durable.open();
+        assert_eq!(
+            store.load_pending().expect("pending").len(),
+            1,
+            "no duplicate terminal inbound after restart #{restart}"
+        );
+    }
+}
+
+/// A durably settled subagent (ownership + terminal) is not recovery work:
+/// the fold closes over the absorbing terminal and restart is a no-op.
+#[test]
+fn a_durably_settled_subagent_needs_no_recovery() {
+    let durable = Durable::new();
+    let subagent = SubagentId::for_conversation(&conversation_id(), 1);
+    {
+        let store = durable.open();
+        store.initialize(&[]).expect("bootstrap");
+        commit_subagent_ownership(&store, &subagent);
+        let (draft, event) = rustx::runtime::subagent::recovery_terminal_publication(
+            &conversation_id(),
+            &subagent,
+            &AgentId::new(format!("agent-{subagent}")),
+            "explore",
+            fixed_time(),
+        );
+        store
+            .accept_inbound_with_event(draft, event)
+            .expect("terminal publication");
+    }
+
+    let report = recover_reopened(&durable);
+    assert!(report.subagent_classes().is_empty());
+    assert!(report.reconciliation().is_empty());
+    assert_eq!(
+        report.highest_subagent_ordinal(),
+        1,
+        "the watermark still reseeds from settled evidence"
+    );
 }

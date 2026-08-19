@@ -99,6 +99,12 @@ pub mod recovery;
 /// demand from the native durable conversation authority. Not client
 /// projection state.
 pub mod request_history;
+/// Native async one-shot subagents (Issue #60): conversation-owned child
+/// rustX runtimes reusing the real runtime stack headlessly. The logical
+/// owner is [`subagent::SubagentRegistry`]; the sole low-level process
+/// owner is the driver task; the message bus is always the destination
+/// conversation's ordinary durable inbound path.
+pub mod subagent;
 /// The shared structural ownership core of every rustX-owned supervised
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
 /// coordination only — it is not part of the public runtime API.

@@ -112,7 +112,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg_attr(not(test), allow(unused_imports))]
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
-use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view};
+use super::projection::{RuntimeClientProjection, SubscriberPoll, background_view, subagent_view};
 use super::types::{
     AttachmentId, RUNTIME_CLIENT_PROTOCOL_VERSION_V1, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientProtocolEvent, RuntimeClientResult,
@@ -736,6 +736,49 @@ impl ClientInner {
         })
     }
 
+    /// Inspects one subagent child through the conversation runtime's
+    /// authoritative registry (Issue #60).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
+    /// subagent identity.
+    pub(crate) fn subagent_status(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let Some(snapshot) = self.runtime.subagent_status(subagent_id) else {
+            return Err(RuntimeClientError::UnknownSubagent {
+                subagent_id: subagent_id.clone(),
+            });
+        };
+        Ok(RuntimeClientResult::SubagentStatus {
+            subagent: subagent_view(&snapshot),
+        })
+    }
+
+    /// Requests cancellation of one subagent child through the
+    /// authoritative registry. Acceptance and eventual settlement remain
+    /// distinct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
+    /// subagent identity.
+    pub(crate) fn subagent_cancel(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let Some(snapshot) = self.runtime.subagent_cancel(subagent_id) else {
+            return Err(RuntimeClientError::UnknownSubagent {
+                subagent_id: subagent_id.clone(),
+            });
+        };
+        Ok(RuntimeClientResult::SubagentCancelAccepted {
+            subagent: subagent_view(&snapshot),
+        })
+    }
+
     /// Drains the conversation runtime and returns only after it is
     /// quiescent. Runtime Client remains a control adapter: the semantic
     /// lifecycle and all settlement ownership remain in `ConversationRuntime`.
@@ -1152,6 +1195,35 @@ impl RuntimeClientHost {
         execution_id: &ToolExecutionId,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.background_cancel(execution_id)
+    }
+
+    /// Inspects one subagent child through the authoritative registry
+    /// (Issue #60).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
+    /// subagent identity.
+    pub fn subagent_status(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.subagent_status(subagent_id)
+    }
+
+    /// Requests cancellation of one subagent child through the
+    /// authoritative registry. Acceptance and eventual settlement remain
+    /// distinct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::UnknownSubagent`] for an unknown
+    /// subagent identity.
+    pub fn subagent_cancel(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.subagent_cancel(subagent_id)
     }
 
     /// Drains the local runtime and completes only at runtime quiescence.
@@ -1746,6 +1818,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -1816,6 +1889,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                subagents: None,
             },
             probe,
         )
@@ -4674,6 +4748,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::with_probe(
@@ -4748,6 +4823,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                subagents: None,
             },
             runtime_probe,
         )
@@ -4831,6 +4907,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5385,6 +5462,7 @@ mod tests {
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         }
     }
 

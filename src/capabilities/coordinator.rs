@@ -563,6 +563,68 @@ impl CapabilityCoordinator {
         })
     }
 
+    /// Prepares the **base-only** candidate of a subagent child runtime
+    /// (Issue #60).
+    ///
+    /// The child's capability plane is its profile-frozen base registry and
+    /// nothing else: no Skill discovery, no Python/Node environment
+    /// materialization, no Python tool publication, and no MCP connection.
+    /// The candidate is therefore deterministic, cheap, and exactly the
+    /// deny-by-construction set the profile names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CapabilityPreparationError::ConversationInactive`] when the
+    /// claiming conversation is already draining, and
+    /// [`CapabilityPreparationError::ToolRegistry`] if the base composition
+    /// violates a registry invariant.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the coordinator state lock is poisoned, the same
+    /// contract as every other coordinator boundary.
+    pub fn prepare_base_only_candidate(
+        &self,
+    ) -> Result<PreparedCapabilityCandidate, CapabilityPreparationError> {
+        let lifecycle = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .conversation_lifecycle
+            .clone();
+        let _admission = if let Some(lifecycle) = lifecycle {
+            Some(
+                lifecycle
+                    .try_enter_preparation()
+                    .map_err(|_| CapabilityPreparationError::ConversationInactive)?,
+            )
+        } else {
+            None
+        };
+        let base_revision = self
+            .inner
+            .state
+            .lock()
+            .expect("capability state lock poisoned")
+            .revision;
+        let candidate_registry = Arc::new(
+            self.inner
+                .base_tool_registry
+                .compose(Vec::new())
+                .map_err(|error| CapabilityPreparationError::ToolRegistry(error.to_string()))?,
+        );
+        Ok(PreparedCapabilityCandidate {
+            base_revision,
+            skills: Arc::new(SkillSnapshot::new(Vec::new())),
+            python: None,
+            node: None,
+            effective_environment: self.inner.base_environment.clone(),
+            candidate_registry,
+            mcp_epochs: BTreeMap::new(),
+        })
+    }
+
     /// Connects one conversation-owned MCP server through an owner whose
     /// lifetime is independent of this caller (Issue #12, M9c).
     ///

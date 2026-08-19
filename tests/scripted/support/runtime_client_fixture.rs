@@ -261,6 +261,7 @@ impl RuntimeClientFixtureBuilder {
             capability: coordinator,
             clock: None,
             initial_messages: self.initial_messages,
+            subagents: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {

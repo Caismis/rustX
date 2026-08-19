@@ -99,6 +99,25 @@ pub async fn serve(arguments: impl IntoIterator<Item = String>) -> ProcessOutcom
 /// Diagnostics go to stderr with `writeln!`; `println!` is never used, so
 /// stdout carries protocol records and nothing else.
 pub async fn run_process(arguments: impl IntoIterator<Item = String>) -> i32 {
+    let arguments: Vec<String> = arguments.into_iter().collect();
+    // The internal subagent-child mode (Issue #60): one exact flag, no
+    // paths — the typed startup specification arrives over the inherited
+    // control channel (fd 0).
+    if arguments
+        .iter()
+        .any(|argument| argument == "--subagent-child")
+    {
+        if arguments.len() != 1 {
+            let mut stderr = std::io::stderr();
+            let _ = writeln!(
+                stderr,
+                "rustx: --subagent-child is an internal mode and takes no other arguments"
+            );
+            let _ = stderr.flush();
+            return 2;
+        }
+        return super::subagent_child::run_subagent_child().await;
+    }
     let outcome = serve(arguments).await;
     if let Some(diagnostic) = outcome.diagnostic() {
         let mut stderr = std::io::stderr();

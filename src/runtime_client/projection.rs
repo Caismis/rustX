@@ -220,6 +220,7 @@ impl RuntimeClientProjection {
                 },
                 pending_interactions: Vec::new(),
                 background: Vec::new(),
+                subagents: Vec::new(),
                 status: None,
                 context: RuntimeClientContextView::default(),
                 capabilities: initial_capabilities,
@@ -277,6 +278,9 @@ impl RuntimeClientProjection {
             .clone_from(&seed.pending_interactions);
         for existing in &seed.background {
             upsert_background(&mut self.snapshot.background, background_view(existing));
+        }
+        for existing in &seed.subagents {
+            upsert_subagent(&mut self.snapshot.subagents, subagent_view(existing));
         }
         // An inactive runtime has never admitted an attempt, composed an
         // Agent Status, or compacted, so `attempt`, `status`, and
@@ -377,6 +381,11 @@ impl RuntimeClientProjection {
                 let view = background_view(&snapshot);
                 upsert_background(&mut self.snapshot.background, view.clone());
                 vec![RuntimeClientEvent::BackgroundExecutionUpdated { execution: view }]
+            }
+            ConversationObservation::Subagent(snapshot) => {
+                let view = subagent_view(&snapshot);
+                upsert_subagent(&mut self.snapshot.subagents, view.clone());
+                vec![RuntimeClientEvent::SubagentUpdated { subagent: view }]
             }
             ConversationObservation::Capability(snapshot) => {
                 // The projection owns the translation of the authoritative
@@ -770,15 +779,17 @@ impl RuntimeClientProjection {
                     context: self.snapshot.context.clone(),
                 }]
             }
-            // INTERNAL: compaction start/failure and the background
+            // INTERNAL: compaction start/failure and the background/subagent
             // ownership/terminal publication facts are durable execution
-            // facts; the client projection learns the resulting background
-            // snapshot and inbound message through its native
-            // background/mailbox/message projections.
+            // facts; the client projection learns the resulting background /
+            // subagent snapshot and inbound message through its native
+            // background/subagent/mailbox/message projections.
             RuntimeEvent::CompactionStarted
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::BackgroundExecutionCommitted { .. }
-            | RuntimeEvent::BackgroundTerminalPublished { .. } => Vec::new(),
+            | RuntimeEvent::BackgroundTerminalPublished { .. }
+            | RuntimeEvent::SubagentOwnershipCommitted { .. }
+            | RuntimeEvent::SubagentTerminalPublished { .. } => Vec::new(),
         }
     }
 
@@ -1316,6 +1327,35 @@ fn upsert_background(
         *existing = view;
     } else {
         background.push(view);
+    }
+}
+
+/// Projects one authoritative subagent registry snapshot into the external
+/// Runtime Client shape (Issue #60).
+pub(crate) fn subagent_view(
+    snapshot: &crate::runtime::subagent::SubagentSnapshot,
+) -> super::snapshot::RuntimeClientSubagent {
+    super::snapshot::RuntimeClientSubagent {
+        subagent_id: snapshot.subagent_id.clone(),
+        child_agent_id: snapshot.child_agent_id.clone(),
+        child_conversation_id: snapshot.child_conversation_id.clone(),
+        profile: snapshot.profile.clone(),
+        state: snapshot.state,
+        detail: snapshot.detail.clone(),
+    }
+}
+
+fn upsert_subagent(
+    subagents: &mut Vec<super::snapshot::RuntimeClientSubagent>,
+    view: super::snapshot::RuntimeClientSubagent,
+) {
+    if let Some(existing) = subagents
+        .iter_mut()
+        .find(|entry| entry.subagent_id == view.subagent_id)
+    {
+        *existing = view;
+    } else {
+        subagents.push(view);
     }
 }
 

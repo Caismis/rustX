@@ -1565,6 +1565,7 @@ fn native_tools_register_under_every_legal_execution_policy() {
             &mut registry,
             NativeToolResources {
                 background: runtime.background().clone(),
+                subagents: None,
             },
             NativeToolPolicies::uniform(ToolInvocationPolicy {
                 execution,
@@ -1712,6 +1713,7 @@ fn mixed_native_policies_coexist_and_preflight_independently() {
         &mut registry,
         NativeToolResources {
             background: runtime.background().clone(),
+            subagents: None,
         },
         NativeToolPolicies {
             read: ToolInvocationPolicy {
@@ -1915,6 +1917,7 @@ fn default_native_policies_are_conservative_for_every_ordinary_tool() {
         &mut registry,
         NativeToolResources {
             background: runtime.background().clone(),
+            subagents: None,
         },
         defaults,
     )

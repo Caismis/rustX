@@ -127,6 +127,12 @@ impl RuntimeAttachment {
             RuntimeClientRequest::BackgroundCancel { execution_id, .. } => {
                 self.inner.background_cancel(&execution_id)
             }
+            RuntimeClientRequest::SubagentStatus { subagent_id, .. } => {
+                self.inner.subagent_status(&subagent_id)
+            }
+            RuntimeClientRequest::SubagentCancel { subagent_id, .. } => {
+                self.inner.subagent_cancel(&subagent_id)
+            }
             RuntimeClientRequest::Detach { .. } => {
                 self.detach();
                 Ok(RuntimeClientResult::Detached)

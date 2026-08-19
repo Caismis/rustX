@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use super::snapshot::{
     AgentStatusView, CapabilityView, RuntimeClientBackgroundExecution, RuntimeClientContextView,
+    RuntimeClientSubagent,
 };
 use crate::events::types::AttemptLimit;
 use crate::message::types::{ContentBlockIndex, MessageBlock, UserMessageBlock};
@@ -291,6 +292,16 @@ pub enum RuntimeClientEvent {
     BackgroundExecutionUpdated {
         /// The canonical registry snapshot after the transition.
         execution: RuntimeClientBackgroundExecution,
+    },
+
+    /// One subagent child transitioned in the authoritative conversation
+    /// registry (Issue #60).
+    ///
+    /// Subagent children are conversation-owned: they survive attempt
+    /// termination, client detach, and client reconnect.
+    SubagentUpdated {
+        /// The canonical registry snapshot after the transition.
+        subagent: RuntimeClientSubagent,
     },
 
     /// The active capability set was activated (a revision swap).

@@ -764,6 +764,20 @@ impl ConversationInboundMailbox {
         &self.conversation_id
     }
 
+    /// Whether two mailbox handles are the exact same canonical mailbox of
+    /// one conversation: the same durable inbound capability and the same
+    /// process-local mailbox state.
+    ///
+    /// This is structural identity — the same shared ownership domain —
+    /// never a file-path comparison. Construction of a
+    /// [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
+    /// uses it to prove a supplied `SubagentRegistry` coordinates the
+    /// conversation's own canonical mailbox.
+    #[must_use]
+    pub(crate) fn shares_domain_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inbound, &other.inbound) && Arc::ptr_eq(&self.state, &other.state)
+    }
+
     /// The shared admission wake handle of this mailbox.
     pub(crate) fn wake(&self) -> Arc<tokio::sync::Notify> {
         Arc::clone(&self.wake)
@@ -920,6 +934,26 @@ impl ConversationInboundMailbox {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, MailboxError> {
         Ok(self.inbound.commit_background_ownership(event)?)
+    }
+
+    /// Commits the durable subagent-ownership fact of one child runtime
+    /// (Issue #60).
+    ///
+    /// This is the narrow subagent start-commit capability, identical in
+    /// shape to [`ConversationInboundMailbox::commit_background_ownership`]:
+    /// the commit is the linearization point that grants a staged child the
+    /// right to receive its delegation, so the subagent registry performs
+    /// it strictly before releasing the child's start gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MailboxError::Durable`] when the durable authority rejects
+    /// the fact; the caller must then tear the staged child down.
+    pub(crate) fn commit_subagent_ownership(
+        &self,
+        event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, MailboxError> {
+        Ok(self.inbound.commit_subagent_ownership(event)?)
     }
 
     /// Selects the currently pending items as one finite watermark-bounded

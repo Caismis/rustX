@@ -54,6 +54,7 @@ export function emptyPresentationState(
     inbound: { pending: [], last_drain: undefined },
     pendingInteractions: [],
     background: [],
+    subagents: [],
     context: { compaction_count: 0 },
     capabilities: { revision: 0, tools: [], skills: [] },
     sessionModel,
@@ -140,6 +141,7 @@ export function replaceFromSnapshot(
     },
     pendingInteractions: [...snapshot.pending_interactions],
     background: [...(snapshot.background ?? [])],
+    subagents: [...(snapshot.subagents ?? [])],
     status: snapshot.status,
     context: snapshot.context,
     capabilities: snapshot.capabilities,
@@ -393,6 +395,10 @@ export function reduce(
       next.background = upsertBackground(state.background, event.execution);
       return next;
 
+    case "subagent_updated":
+      next.subagents = upsertSubagent(state.subagents, event.subagent);
+      return next;
+
     case "capability_published":
       next.capabilities = event.capabilities;
       return next;
@@ -579,6 +585,21 @@ function upsertBackground(
   }
   const updated = [...background];
   updated[index] = execution;
+  return updated;
+}
+
+function upsertSubagent(
+  subagents: PresentationState["subagents"],
+  subagent: PresentationState["subagents"][number],
+): PresentationState["subagents"] {
+  const index = subagents.findIndex(
+    (entry) => entry.subagent_id === subagent.subagent_id,
+  );
+  if (index === -1) {
+    return [...subagents, subagent];
+  }
+  const updated = [...subagents];
+  updated[index] = subagent;
   return updated;
 }
 

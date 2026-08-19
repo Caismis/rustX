@@ -23,6 +23,7 @@ pub mod cli;
 pub mod composition;
 pub mod config;
 pub mod serve;
+pub mod subagent_child;
 
 pub use cli::{ArgumentError, USAGE, parse_arguments};
 pub use composition::{

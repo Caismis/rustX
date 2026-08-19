@@ -1087,6 +1087,130 @@ waiter-settlement tests; and TUI projection/render/typed-response tests.
 No permission framework, durable human workflow, provider-specific payload,
 generic runtime participant abstraction, or ask-user forms were added.
 
+### M9.25 — Native async one-shot subagents (Issue #60, delivered)
+
+M9.25 adds conversation-owned, asynchronous, one-shot child rustX runtimes.
+The `subagent` native tool delegates a bounded task; the child is a real
+separate OS process running the same `ConversationRuntime`/Agent
+Loop/Context/Tool/Model stack headlessly, composed from the typed
+`SubagentChildSpec` that arrives over the control channel — never from a
+temporary configuration file.
+
+The parent side is one `SubagentRegistry` per conversation, the logical
+owner of every child. `prepare` validates bounds and stages the child
+privately behind a start gate; `commit` is the one linearization point —
+under the mailbox's running-commit section it freezes one timestamp, writes
+the durable `SubagentOwnershipCommitted` fact, and creates the record. The
+registry mutex is then the exact start-vs-cancel arbitration boundary: the
+command-handle install, the lifecycle read, and the synchronous start-gate
+release happen in one critical section. Cancellation committed before that
+section resolves the gate cancelled — the driver sends `Cancel` before
+`Delegate`, so no child semantic work ever begins and cancellation cannot
+be lost; gate release committed first defines an already-started child
+whose later cancellation is in-flight cancellation. The driver task is the
+sole OS-handle owner after the handoff; the registry never retains a
+`tokio::process::Child`. Capacity is enforced at commit, and a lost
+cancellation race or durable failure rolls the staged child back
+completely, including conclusive direct-child reap, before returning.
+
+`ConversationRuntime::new` validates the registry's typed ownership domain
+before anything is claimed — the same `ConversationId`, the same parent
+`AgentId`, the exact same canonical mailbox — and then makes the
+**authoritative** pristine check only after the mailbox ownership transfer
+binds the canonical mailbox to the runtime's `Inactive` lifecycle. A
+standalone child commit that wins before the binding makes the constructor
+reject with every claim rolled back; a runtime claim that wins first makes
+later standalone child commits fail. The runtime never silently adopts a
+child started outside its ownership transfer.
+
+The control plane is bounded and typed: one `UnixStream` pair on the
+child's fd 0, length-prefixed frames capped at 1 MiB, versioned Hello
+handshake, Delegate start gate, Cancel request, and Ready/StartupError/
+Result/Diagnostic replies. IPC is transport only; every model-visible
+message crosses through the destination conversation's ordinary durable
+inbound path. The child's answer arrives as a `UserSource::Agent` message;
+failure, cancellation, and interruption are Runtime-authored notices. The
+durable authority enforces that provenance at the terminal fact's commit.
+
+The driver owns physical supervision: reap-before-settle, Cancel → SIGTERM
+→ SIGKILL escalation on the child's process group, and no PID identity.
+Parent death closes the child's stdin; the child drains and exits. Child-side
+cancellation commits directly into the runtime-owned one-shot intent
+(`cancel_current_or_next_attempt`): a current attempt's `AgentCancellation`
+is requested immediately, and a still-unadmitted attempt starts
+already-cancelled when admission consumes the intent. `AttemptAdmitted`
+observation is evidence, never a control dependency, and the existing
+durable model-request-start frontier (M9b) decides whether a model request
+may start — zero requests before it, in-flight cancellation after it.
+Recovery classifies a durably owned, never-settled child as interrupted and
+terminalizes it exactly once through the same identity contract as the live
+path — nothing is relaunched, replayed, or reattached.
+
+The physical outcome is not a parent terminal state by itself. The child is
+reaped first; then the registry freezes a UTF-8-safe byte-bounded terminal
+candidate and durably accepts the parent terminal inbound plus
+`SubagentTerminalPublished` before exposing `Succeeded`, `Failed`, or
+`Cancelled`. `PublishingTerminal` remains capacity-owning while unresolved.
+The first publication error receives the bounded retry; only exhausted retry
+invokes the sink owned by `ConversationRuntime`, which enters
+`DurabilityFailed` and leaves the candidate observable rather than claiming
+healthy or successful settlement. `DurabilityFailed` is the fail-closed
+frontier for **new** conversation-owned durable ownership: the runtime-owned
+`DurabilityGate` is the **single authoritative storage of the absorbing
+failure fact** (committed through its one mutation API) and the
+synchronization frontier shared with both the subagent and background
+registries; `ConversationRuntime` owns the durability policy and the
+coordinator keeps only transient admission-cycle retry bookkeeping, never a
+second failed-state authority. Every new ownership commit
+holds that gate across its durable write and record publication, giving the
+failure commit and ownership commits one deterministic total order. A
+failure that wins first refuses new subagent/background ownership (staged
+child/runner rolled back conclusively, no durable fact, no record, no
+Delegate); an ownership that wins first is already durably owned and keeps
+its settlement authority. `DurabilityFailed` is deliberately distinct from
+`Draining` — it closes new semantic mutation only, never the settlement of
+already-owned work. Terminal provenance is checked against the
+durable `SubagentOwnershipCommitted.child_agent_id` — resolved through the
+ownership fact's canonical event identity (`subagent-committed-event:{id}`,
+derived from the embedded `SubagentId` and enforced by the durable
+authority at write time and revalidated at read time) and the unique
+`event_id` index in bounded time, never a journal scan — not merely against
+the repeated terminal payload.
+
+Capabilities are deny-by-construction: the child composes the base tool
+plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
+tool, so recursion is impossible by construction. Runtime Client v1 carries
+`subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
+`snapshot.subagents`; the TUI renders the same projection.
+
+Exit criteria (met): deterministic registry tests over scripted staged
+children (capacity at commit, cancellation before and after the start-gate
+arbitration through the registry-mutex linearization — `Cancel`-before-
+`Delegate` when cancellation wins, `Delegate`-then-`Cancel` as in-flight
+cancellation when the gate wins — canonical cancellation over late results,
+escalation-after-cancel, conclusive rollback reap, bounded publication retry
+then abandonment, unresolved-capacity retention, the idempotent correlated
+retry, ordinal watermark reseed — no sleeps); child-side cancellation
+regressions at all three frontiers (before admission, after admission before
+request start, after request start) through the runtime-owned one-shot
+intent with no observation on the control path; owning-runtime
+subagent-registry ownership-domain validation plus both directions of the
+runtime-claim/standalone-commit total order (a standalone commit that wins
+the transfer race makes the constructor reject with every claim rolled
+back; a runtime claim that wins first refuses later standalone starts);
+the `DurabilityFailed`-vs-ownership total order for both the subagent and
+background planes (health-first refuses new ownership with conclusive
+rollback and no durable fact or record; ownership-first survives the later
+failure with full settlement authority; both exact races are forced on the
+runtime durability frontier); durable exactly-once and ownership-provenance
+tests, including the canonical `EventId <-> SubagentId` binding rejected at
+write time and revalidated at terminal-validation time; UTF-8 byte-bound
+tests; recovery interrupted-only classification tests; and real-binary
+scenarios for ordinary execution and hard parent `SIGKILL` with child EOF
+containment and repeated idempotent restart. No durable workflow, no
+subagent profile configuration surface, cross-conversation children, or
+recursion were added.
+
 ## Milestone 10 — Local runtime product
 
 The spawnable local runtime *process* and its composition ownership already

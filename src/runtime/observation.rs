@@ -101,6 +101,8 @@ pub(crate) enum ConversationObservation {
     InboundDrained(InboundBatch),
     /// One background registry transition snapshot.
     Background(BackgroundExecutionSnapshot),
+    /// One subagent registry transition snapshot (Issue #60).
+    Subagent(crate::runtime::subagent::SubagentSnapshot),
     /// One activated authoritative capability snapshot.
     Capability(Arc<CapabilitySnapshot>),
     /// The coordinator admitted an attempt (before the loop started).

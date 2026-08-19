@@ -83,6 +83,18 @@ id_type! {
 }
 
 id_type! {
+    /// Identifies one conversation-owned asynchronous one-shot subagent
+    /// (Issue #60).
+    ///
+    /// `SubagentId` is the logical lifecycle/delegation identity of a child
+    /// rustX runtime. It is deliberately not an OS pid: a pid is ephemeral
+    /// process state and is never durable identity, and pid reuse after a
+    /// restart can never prove that a surviving process is the previously
+    /// owned child.
+    SubagentId
+}
+
+id_type! {
     /// Identifies one attempt to execute an agent manifest.
     AttemptId
 }
@@ -97,6 +109,28 @@ id_type! {
     /// crashed process can therefore never name a different interaction in a
     /// restarted runtime.
     InteractionId
+}
+
+impl SubagentId {
+    /// The separator between the conversation identity and the ordinal.
+    const SUBAGENT_INFIX: &'static str = "-subagent-";
+
+    /// Allocates the subagent identity of `ordinal` within `conversation`.
+    #[must_use]
+    pub fn for_conversation(conversation: &ConversationId, ordinal: u64) -> Self {
+        Self::new(format!("{conversation}{}{ordinal}", Self::SUBAGENT_INFIX))
+    }
+
+    /// The conversation-scoped ordinal of this identity, when it belongs to
+    /// `conversation`'s subagent domain.
+    ///
+    /// Returns `None` for an identity minted outside that domain; such
+    /// identities never contribute to the allocator watermark.
+    #[must_use]
+    pub fn conversation_ordinal(&self, conversation: &ConversationId) -> Option<u64> {
+        let prefix = format!("{conversation}{}", Self::SUBAGENT_INFIX);
+        self.as_str().strip_prefix(&prefix)?.parse().ok()
+    }
 }
 
 id_type! {
@@ -450,8 +484,8 @@ mod tests {
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId,
         EventId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
-        PythonToolEnvironmentDigest, SkillId, SkillVersionId, ToolCallId, ToolExecutionId, ToolId,
-        ToolVersionId, TurnId,
+        PythonToolEnvironmentDigest, SkillId, SkillVersionId, SubagentId, ToolCallId,
+        ToolExecutionId, ToolId, ToolVersionId, TurnId,
     };
 
     /// Strong identifiers serialize as plain strings, not as structs.
@@ -480,6 +514,7 @@ mod tests {
         let _ = round_trip(&MessageId::new("msg-1"));
         let _ = round_trip(&AgentId::new("agent-a"));
         let _ = round_trip(&AgentVersionId::new("agent-v1"));
+        let _ = round_trip(&SubagentId::new("conv-1-subagent-1"));
         let _ = round_trip(&AttemptId::new("attempt-1"));
         let _ = round_trip(&TurnId::new("turn-1"));
         let _ = round_trip(&EventId::new("evt-1"));

@@ -42,6 +42,44 @@ use rustx::events::types::RuntimeEvent;
 use rustx::runtime::identity::AttemptId;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
+
+/// A deterministic gate for a provider response's status line and headers.
+/// The server announces that a matching request reached the response boundary
+/// and then waits until the test explicitly releases it.
+pub struct HeaderGate {
+    entered: watch::Sender<bool>,
+    release: watch::Sender<bool>,
+}
+
+impl HeaderGate {
+    /// Creates a gate that starts closed.
+    pub fn new() -> Arc<Self> {
+        let (entered, _) = watch::channel(false);
+        let (release, _) = watch::channel(false);
+        Arc::new(Self { entered, release })
+    }
+
+    /// Waits until the provider handler has reached the gated response.
+    pub async fn wait_entered(&self) {
+        let mut receiver = self.entered.subscribe();
+        let _ = receiver.wait_for(|entered| *entered).await;
+    }
+
+    /// Releases the gated response.
+    pub fn release(&self) {
+        self.release.send_replace(true);
+    }
+
+    async fn wait_release(&self) {
+        let mut receiver = self.release.subscribe();
+        let _ = receiver.wait_for(|released| *released).await;
+    }
+
+    fn mark_entered(&self) {
+        self.entered.send_replace(true);
+    }
+}
 
 /// One response to serve, described as a sequence of body chunks. A chunk
 /// with a delay lets tests hold a connection open (cancellation tests) or
@@ -53,6 +91,7 @@ pub struct FixtureReply {
     pub reason: &'static str,
     pub headers: Vec<(String, String)>,
     pub header_delay_ms: u64,
+    header_gate: Option<Arc<HeaderGate>>,
     pub chunks: Vec<FixtureChunk>,
 }
 
@@ -85,6 +124,7 @@ impl FixtureReply {
             reason,
             headers: vec![("Content-Type".to_owned(), content_type.to_owned())],
             header_delay_ms: 0,
+            header_gate: None,
             chunks: chunks
                 .into_iter()
                 .map(|(delay_ms, bytes)| FixtureChunk { delay_ms, bytes })
@@ -97,6 +137,13 @@ impl FixtureReply {
     #[must_use]
     pub fn with_header_delay(mut self, delay_ms: u64) -> Self {
         self.header_delay_ms = delay_ms;
+        self
+    }
+
+    /// Holds response headers until the gate is explicitly released.
+    #[must_use]
+    pub fn with_header_gate(mut self, gate: Arc<HeaderGate>) -> Self {
+        self.header_gate = Some(gate);
         self
     }
 
@@ -125,6 +172,17 @@ impl FixtureServer {
     pub async fn start<F>(responder: F) -> Self
     where
         F: Fn(u64, &str) -> FixtureReply + Send + Sync + 'static,
+    {
+        Self::start_with_body(move |attempt, head, _body| responder(attempt, head)).await
+    }
+
+    /// Starts a server whose responder also sees the request body, for
+    /// conversations whose request ordering is nondeterministic (Issue #60:
+    /// a subagent child runtime calls the same provider concurrently with
+    /// its parent).
+    pub async fn start_with_body<F>(responder: F) -> Self
+    where
+        F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -185,7 +243,7 @@ async fn serve_connection<F>(
     responder: &Arc<F>,
 ) -> std::io::Result<()>
 where
-    F: Fn(u64, &str) -> FixtureReply + Send + Sync,
+    F: Fn(u64, &str, &str) -> FixtureReply + Send + Sync,
 {
     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
     let (mut read_half, mut write_half) = tokio::io::split(socket);
@@ -206,13 +264,18 @@ where
     if content_length > 0 {
         reader.read_exact(&mut body).await?;
     }
+    let body_text = String::from_utf8_lossy(&body).into_owned();
     request_bodies
         .lock()
         .expect("request bodies lock")
-        .push(String::from_utf8_lossy(&body).into_owned());
+        .push(body_text.clone());
     drop(reader);
 
-    let reply = responder(attempt, &head_text);
+    let reply = responder(attempt, &head_text, &body_text);
+    if let Some(gate) = &reply.header_gate {
+        gate.mark_entered();
+        gate.wait_release().await;
+    }
     if reply.header_delay_ms > 0 {
         tokio::time::sleep(Duration::from_millis(reply.header_delay_ms)).await;
     }
@@ -634,6 +697,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         &mut registry,
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
+            subagents: None,
         },
         rustx::tools::native::NativeToolPolicies::default(),
     )

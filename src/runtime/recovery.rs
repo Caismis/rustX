@@ -110,7 +110,8 @@ use crate::durable::{ConversationStore, ConversationStoreError, PendingInboundIt
 use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, InboundKind, MessageBlock, ToolMessageBlock};
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, RequestId, ToolCallId, ToolExecutionId, ToolId,
+    AttemptId, ConversationId, EventId, MessageId, RequestId, SubagentId, ToolCallId,
+    ToolExecutionId, ToolId,
 };
 use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
@@ -307,6 +308,27 @@ pub struct BackgroundEvidence {
     pub tool_name: String,
 }
 
+/// What durable evidence says about one owned subagent child whose
+/// terminal publication is not committed (Issue #60).
+///
+/// A v1 child is one-shot process-local work: the evidence exists so a
+/// restart can settle the ownership honestly as interrupted, never to
+/// reattach to or replay the old child process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentEvidence {
+    /// The owned subagent identity.
+    pub subagent_id: SubagentId,
+    /// The child agent identity (the provenance its successful result
+    /// would have carried).
+    pub child_agent_id: crate::runtime::identity::AgentId,
+    /// The child's own durable conversation identity.
+    pub child_conversation_id: ConversationId,
+    /// The model-issued tool call that delegated the work.
+    pub tool_call_id: ToolCallId,
+    /// The frozen child profile identity.
+    pub profile: String,
+}
+
 /// The complete durable evidence of one conversation at process startup.
 ///
 /// Every field comes from the durable authority alone. Nothing is derived from
@@ -352,12 +374,17 @@ pub struct RecoveryEvidence {
     active_ids: std::collections::BTreeSet<MessageId>,
     /// Background executions durably owned and not durably published.
     unsettled_background: Vec<BackgroundEvidence>,
+    /// Subagent children durably owned and not durably published (Issue #60).
+    unsettled_subagents: Vec<SubagentEvidence>,
     /// The highest conversation-scoped attempt ordinal that entered durable
     /// authority, terminal or not.
     highest_attempt_ordinal: Option<u64>,
     /// The highest background execution ordinal that entered durable
     /// authority, published or not.
     highest_background_ordinal: u64,
+    /// The highest subagent ordinal that entered durable authority,
+    /// published or not.
+    highest_subagent_ordinal: u64,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
 }
@@ -386,10 +413,12 @@ impl RecoveryEvidence {
             unsettled_attempts: BTreeMap::new(),
             tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
+            unsettled_subagents: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
             highest_background_ordinal: 0,
+            highest_subagent_ordinal: 0,
             saw_any_attempt: false,
         };
         evidence.active_ids = evidence
@@ -402,13 +431,14 @@ impl RecoveryEvidence {
         // the unresolved working set survives a page boundary.
         let mut cursor = None;
         let mut background: BTreeMap<ToolExecutionId, BackgroundEvidence> = BTreeMap::new();
+        let mut subagents: BTreeMap<SubagentId, SubagentEvidence> = BTreeMap::new();
         loop {
             let page = store.read_events(cursor, RECOVERY_PAGE)?;
             if page.events.is_empty() {
                 break;
             }
             for envelope in &page.events {
-                evidence.fold(envelope, &mut background);
+                evidence.fold(envelope, &mut background, &mut subagents);
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
@@ -416,6 +446,7 @@ impl RecoveryEvidence {
             }
         }
         evidence.unsettled_background = background.into_values().collect();
+        evidence.unsettled_subagents = subagents.into_values().collect();
         Ok(evidence)
     }
 
@@ -425,6 +456,7 @@ impl RecoveryEvidence {
         &mut self,
         envelope: &RuntimeEventEnvelope,
         background: &mut BTreeMap<ToolExecutionId, BackgroundEvidence>,
+        subagents: &mut BTreeMap<SubagentId, SubagentEvidence>,
     ) {
         match &envelope.event {
             RuntimeEvent::AttemptStarted { attempt_id } => {
@@ -669,6 +701,34 @@ impl RecoveryEvidence {
                 // The terminal publication is absorbing.
                 background.remove(execution_id);
             }
+            RuntimeEvent::SubagentOwnershipCommitted {
+                subagent_id,
+                child_agent_id,
+                child_conversation_id,
+                tool_call_id,
+                profile,
+            } => {
+                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
+                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
+                }
+                subagents.insert(
+                    subagent_id.clone(),
+                    SubagentEvidence {
+                        subagent_id: subagent_id.clone(),
+                        child_agent_id: child_agent_id.clone(),
+                        child_conversation_id: child_conversation_id.clone(),
+                        tool_call_id: tool_call_id.clone(),
+                        profile: profile.clone(),
+                    },
+                );
+            }
+            RuntimeEvent::SubagentTerminalPublished { subagent_id, .. } => {
+                if let Some(ordinal) = subagent_id.conversation_ordinal(&self.conversation_id) {
+                    self.highest_subagent_ordinal = self.highest_subagent_ordinal.max(ordinal);
+                }
+                // The terminal publication is absorbing.
+                subagents.remove(subagent_id);
+            }
             _ => {
                 if let Some(attempt_id) = envelope.attempt_id.as_ref() {
                     self.note_attempt(attempt_id);
@@ -876,6 +936,17 @@ pub struct BackgroundRecoveryClass {
     pub evidence: BackgroundEvidence,
 }
 
+/// The recovery classification of one owned subagent child (Issue #60).
+///
+/// A v1 child is one-shot and process-local: the only honest nonterminal
+/// recovery outcome is interruption. There is no reattach and no replay
+/// classification by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentRecoveryClass {
+    /// The durably owned child.
+    pub evidence: SubagentEvidence,
+}
+
 /// What the recovered runtime is permitted to continue.
 ///
 /// A permission, never an obligation to replay: the conversation runtime
@@ -901,12 +972,14 @@ pub struct RecoveryPlan {
     conversation_id: ConversationId,
     attempt: AttemptRecoveryClass,
     background: Vec<BackgroundRecoveryClass>,
+    subagents: Vec<SubagentRecoveryClass>,
     /// The missing canonical `ToolResult` siblings, grouped by their owning
     /// Assistant message, in canonical model-call order.
     tool_repairs: Vec<ToolTurnRepair>,
     resume: ResumeDisposition,
     next_attempt_ordinal: u64,
     highest_background_ordinal: u64,
+    highest_subagent_ordinal: u64,
     pending_inbound: usize,
     /// Every durably non-terminal attempt the fold observed.
     ///
@@ -970,10 +1043,18 @@ impl RecoveryPlan {
                     evidence: evidence.clone(),
                 })
                 .collect(),
+            subagents: evidence
+                .unsettled_subagents
+                .iter()
+                .map(|evidence| SubagentRecoveryClass {
+                    evidence: evidence.clone(),
+                })
+                .collect(),
             tool_repairs,
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
             highest_background_ordinal: evidence.highest_background_ordinal,
+            highest_subagent_ordinal: evidence.highest_subagent_ordinal,
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
             tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
@@ -1189,6 +1270,12 @@ impl RecoveryPlan {
         &self.background
     }
 
+    /// The classified subagent plane (Issue #60).
+    #[must_use]
+    pub fn subagent_classes(&self) -> &[SubagentRecoveryClass] {
+        &self.subagents
+    }
+
     /// What the recovered runtime is permitted to continue.
     #[must_use]
     pub fn resume(&self) -> ResumeDisposition {
@@ -1247,13 +1334,16 @@ impl RecoveryPlan {
         self.repair_tool_turns(store, clock, &mut committed)?;
         self.settle_interrupted_attempt(store, clock, &mut committed)?;
         self.publish_background_terminals(store, clock, &mut committed)?;
+        self.publish_subagent_terminals(store, clock, &mut committed)?;
         Ok(RecoveryReport {
             attempt: self.attempt,
             background: self.background,
+            subagents: self.subagents,
             resume: self.resume,
             reconciliation: committed,
             next_attempt_ordinal: self.next_attempt_ordinal,
             highest_background_ordinal: self.highest_background_ordinal,
+            highest_subagent_ordinal: self.highest_subagent_ordinal,
             pending_inbound: self.pending_inbound,
         })
     }
@@ -1469,6 +1559,36 @@ impl RecoveryPlan {
         Ok(())
     }
 
+    /// **Reconciliation 4.** Publishes the terminal notice of every durably
+    /// owned subagent child that never settled (Issue #60).
+    ///
+    /// A v1 child does not survive its owning process: the notice states the
+    /// honest interrupted outcome, and the durable `subagent:{subagent_id}`
+    /// lifecycle plus the stable producer correlation make the publication
+    /// exactly-once across any number of restarts. Nothing is reattached,
+    /// relaunched, or replayed.
+    fn publish_subagent_terminals(
+        &self,
+        store: &dyn ConversationStore,
+        clock: &dyn RuntimeClock,
+        committed: &mut RecoveryReconciliation,
+    ) -> Result<(), RecoveryError> {
+        for class in &self.subagents {
+            let (draft, event) = crate::runtime::subagent::recovery_terminal_publication(
+                &self.conversation_id,
+                &class.evidence.subagent_id,
+                &class.evidence.child_agent_id,
+                &class.evidence.profile,
+                clock.now(),
+            );
+            store.accept_inbound_with_event(draft, event)?;
+            committed
+                .subagent_terminals
+                .push(class.evidence.subagent_id.clone());
+        }
+        Ok(())
+    }
+
     fn terminalize(
         &self,
         store: &dyn ConversationStore,
@@ -1540,6 +1660,9 @@ pub struct RecoveryReconciliation {
     pub attempt_terminal: Option<AttemptId>,
     /// Background executions whose terminal notification was published.
     pub background_terminals: Vec<ToolExecutionId>,
+    /// Subagent children whose interrupted terminal notice was published
+    /// (Issue #60).
+    pub subagent_terminals: Vec<SubagentId>,
 }
 
 impl RecoveryReconciliation {
@@ -1552,6 +1675,7 @@ impl RecoveryReconciliation {
         self.repaired_tool_results.is_empty()
             && self.attempt_terminal.is_none()
             && self.background_terminals.is_empty()
+            && self.subagent_terminals.is_empty()
     }
 }
 
@@ -1560,10 +1684,12 @@ impl RecoveryReconciliation {
 pub struct RecoveryReport {
     attempt: AttemptRecoveryClass,
     background: Vec<BackgroundRecoveryClass>,
+    subagents: Vec<SubagentRecoveryClass>,
     resume: ResumeDisposition,
     reconciliation: RecoveryReconciliation,
     next_attempt_ordinal: u64,
     highest_background_ordinal: u64,
+    highest_subagent_ordinal: u64,
     pending_inbound: usize,
 }
 
@@ -1578,6 +1704,12 @@ impl RecoveryReport {
     #[must_use]
     pub fn background_classes(&self) -> &[BackgroundRecoveryClass] {
         &self.background
+    }
+
+    /// The deterministic subagent-plane classification (Issue #60).
+    #[must_use]
+    pub fn subagent_classes(&self) -> &[SubagentRecoveryClass] {
+        &self.subagents
     }
 
     /// What the recovered runtime is permitted to continue.
@@ -1602,6 +1734,12 @@ impl RecoveryReport {
     #[must_use]
     pub fn highest_background_ordinal(&self) -> u64 {
         self.highest_background_ordinal
+    }
+
+    /// The highest subagent ordinal already in durable authority (Issue #60).
+    #[must_use]
+    pub fn highest_subagent_ordinal(&self) -> u64 {
+        self.highest_subagent_ordinal
     }
 
     /// How many accepted-but-not-yet-adopted inbound items were recovered.
@@ -1728,20 +1866,24 @@ mod tests {
             unsettled_attempts: BTreeMap::new(),
             tool_repairs: BTreeMap::new(),
             unsettled_background: Vec::new(),
+            unsettled_subagents: Vec::new(),
             assistant_attempts: BTreeMap::new(),
             active_ids: std::collections::BTreeSet::new(),
             highest_attempt_ordinal: None,
             highest_background_ordinal: 0,
+            highest_subagent_ordinal: 0,
             saw_any_attempt: false,
         }
     }
 
     fn fold_all(evidence: &mut RecoveryEvidence, events: &[RuntimeEventEnvelope]) {
         let mut background = BTreeMap::new();
+        let mut subagents = BTreeMap::new();
         for envelope in events {
-            evidence.fold(envelope, &mut background);
+            evidence.fold(envelope, &mut background, &mut subagents);
         }
         evidence.unsettled_background = background.into_values().collect();
+        evidence.unsettled_subagents = subagents.into_values().collect();
     }
 
     fn started(attempt_id: AttemptId) -> RuntimeEventEnvelope {

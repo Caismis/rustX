@@ -110,6 +110,7 @@ fn try_config(
         capability: coordinator,
         clock: None,
         initial_messages: Vec::new(),
+        subagents: None,
     })?;
     Ok((
         conversation_runtime.clone(),

@@ -6,7 +6,7 @@
 //! types.
 
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -380,6 +380,227 @@ impl ConversationLifecycle {
     }
 }
 
+/// The durable-operation vocabulary of a conversation runtime's durability
+/// health (Issue #63): the finite set of conversation-owned durable
+/// transitions whose failure can degrade the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DurableOperation {
+    /// Selecting the finite pending batch from the durable inbox.
+    SelectPendingBatch,
+    /// Adopting the selected batch into the durable canonical ledger.
+    AdoptPendingBatch,
+    /// Preparing the canonical adoption transition (in-memory validation):
+    /// a semantic contract failure, not a transient storage failure.
+    PrepareAdoption,
+    /// The live admission safety guard observed an incomplete tool turn.
+    IncompleteToolTurn,
+    /// An active attempt hit a durable canonical-write failure.
+    CanonicalCommit,
+    /// An active attempt could not commit its fused durable model-turn start
+    /// transition (request-scoped context + Surface advancement +
+    /// `RequestSnapshot` + `ModelRequestStarted` + start sequence binding).
+    RequestStart,
+    /// An active attempt could not append a required Event Journal fact.
+    EventJournal,
+    /// The background settlement owner exhausted its bounded terminal
+    /// publication budget.
+    BackgroundTerminalPublication,
+    /// The conversation-owned subagent settlement owner exhausted its
+    /// bounded terminal publication budget.
+    SubagentTerminalPublication,
+}
+
+impl DurableOperation {
+    /// Whether a failure of this operation is a transient storage failure
+    /// that earns one bounded retry.
+    pub(crate) fn is_transient(self) -> bool {
+        matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
+    }
+
+    /// The stable diagnostic name of the operation.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SelectPendingBatch => "select_pending_batch",
+            Self::AdoptPendingBatch => "adopt_pending_batch",
+            Self::PrepareAdoption => "prepare_adoption",
+            Self::IncompleteToolTurn => "incomplete_tool_turn",
+            Self::CanonicalCommit => "canonical_commit",
+            Self::RequestStart => "request_start",
+            Self::EventJournal => "event_journal",
+            Self::BackgroundTerminalPublication => "background_terminal_publication",
+            Self::SubagentTerminalPublication => "subagent_terminal_publication",
+        }
+    }
+}
+
+/// The one authoritative absorbing durability-failure fact of one
+/// conversation runtime (Issue #63 / Issue #60).
+///
+/// Exactly one such fact ever exists per runtime: the first commit is
+/// absorbing and later failures never replace it. It answers the only three
+/// questions a durability-failure reader may ask — has the runtime entered
+/// `DurabilityFailed`, which durable operation caused it, and what
+/// diagnostic belongs to it — and it is stored in exactly one place: the
+/// runtime-owned [`DurabilityGate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurabilityFailure {
+    /// The durable operation that failed persistently.
+    pub(crate) operation: DurableOperation,
+    /// The bounded failure diagnostic.
+    pub(crate) diagnostic: String,
+}
+
+/// The runtime-owned durability frontier of one conversation (Issue #60).
+///
+/// This object is both **the single authoritative storage of the absorbing
+/// `DurabilityFailed` fact** and **the synchronization frontier that
+/// serializes new conversation-owned durable ownership commits** (subagent
+/// and background) against that fact:
+///
+/// - `ConversationRuntime` owns the durability *policy*: under the
+///   coordinator lock it decides when a transient admission-cycle failure
+///   upgrades to the absorbing failure, and commits the fact here through
+///   [`DurabilityGate::commit_failure`] — the one mutation API. There is no
+///   second failed-state authority anywhere: the coordinator keeps only
+///   transient admission-cycle retry bookkeeping, and every reader
+///   (`submit_inbound`, `model_set`, attempt admission, the registries, the
+///   shutdown diagnostic, the observation) reads this one fact.
+/// - a new ownership commit holds the gate **across** its durable
+///   ownership write and record publication — a failure that wins the gate
+///   first makes the commit refuse (and its staged child roll back), while
+///   an ownership that wins first is already durably owned before the
+///   failure can be published;
+/// - settlement of already-owned work never acquires the gate: `DurabilityFailed`
+///   closes **new** semantic mutation only, never settlement.
+///
+/// `DurabilityFailed` is deliberately not a lifecycle state: a degraded
+/// durable authority and a shutting-down runtime are different dimensions,
+/// and this gate keeps them separate.
+#[derive(Debug, Default)]
+pub(crate) struct DurabilityGate {
+    state: Mutex<DurabilityGateState>,
+}
+
+#[derive(Debug, Default)]
+struct DurabilityGateState {
+    /// The one absorbing durability-failure fact, once committed.
+    failure: Option<DurabilityFailure>,
+}
+
+impl DurabilityGate {
+    /// Creates a fresh frontier with no committed failure.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Commits the absorbing `DurabilityFailed` fact — the **only** mutation
+    /// API of the failure authority.
+    ///
+    /// The first commit is absorbing: a later call never replaces the stored
+    /// operation/diagnostic and never publishes a second fact. The returned
+    /// [`DurabilityFailureCommit`] tells the caller mechanically whether
+    /// THIS call installed the absorbing winner and carries the
+    /// authoritative [`DurabilityFailure`] either way. Called by the owning
+    /// runtime's durability-failure commit under the coordinator lock. New
+    /// ownership commits serialize on this same gate, so this acquisition is
+    /// the linearization point against any new conversation-owned durable
+    /// ownership commit.
+    pub(crate) fn commit_failure(
+        &self,
+        operation: DurableOperation,
+        diagnostic: String,
+    ) -> DurabilityFailureCommit {
+        let mut state = self.state.lock().expect("durability gate lock poisoned");
+        if let Some(failure) = &state.failure {
+            // Absorbing winner: the first authoritative failure never gets
+            // rewritten by a later one.
+            return DurabilityFailureCommit::AlreadyFailed(failure.clone());
+        }
+        let failure = DurabilityFailure {
+            operation,
+            diagnostic,
+        };
+        state.failure = Some(failure.clone());
+        DurabilityFailureCommit::Committed(failure)
+    }
+
+    /// The one authoritative absorbing failure fact, if the runtime entered
+    /// `DurabilityFailed`.
+    pub(crate) fn failure(&self) -> Option<DurabilityFailure> {
+        self.state
+            .lock()
+            .expect("durability gate lock poisoned")
+            .failure
+            .clone()
+    }
+
+    /// Whether the runtime committed the absorbing `DurabilityFailed` fact.
+    pub(crate) fn is_failed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("durability gate lock poisoned")
+            .failure
+            .is_some()
+    }
+
+    /// Acquires the ownership-commit permission for one new
+    /// conversation-owned durable ownership commit.
+    ///
+    /// The returned guard must be held across the ownership durable write
+    /// and (for the registries) the record publication: while it is held,
+    /// the `DurabilityFailed` commit blocks on the same gate, so the two
+    /// operations have one total order and no check-then-write window
+    /// exists. Returns [`OwnershipCommitRefused`] when the owning runtime
+    /// already committed `DurabilityFailed`.
+    pub(crate) fn enter_ownership_commit(
+        &self,
+    ) -> Result<OwnershipCommitGuard<'_>, OwnershipCommitRefused> {
+        let state = self.state.lock().expect("durability gate lock poisoned");
+        if let Some(failure) = &state.failure {
+            return Err(OwnershipCommitRefused {
+                diagnostic: failure.diagnostic.clone(),
+            });
+        }
+        Ok(OwnershipCommitGuard { _gate: state })
+    }
+}
+
+/// The outcome of one [`DurabilityGate::commit_failure`] call.
+///
+/// Both variants carry the one authoritative [`DurabilityFailure`]: the
+/// absorbing stored fact. The caller learns mechanically whether THIS call
+/// installed the fact ([`Self::Committed`]) or arrived after an earlier
+/// winner ([`Self::AlreadyFailed`]) and must not publish a second
+/// observation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DurabilityFailureCommit {
+    /// This call installed the first (absorbing) failure fact.
+    Committed(DurabilityFailure),
+    /// The runtime had already committed its absorbing failure fact; the
+    /// carried fact is the authoritative first one.
+    AlreadyFailed(DurabilityFailure),
+}
+
+/// The short-lived permission of one new conversation-owned durable
+/// ownership commit.
+///
+/// Held across the ownership durable write and record publication, it is
+/// what gives the `DurabilityFailed` commit and the ownership commit one
+/// deterministic total order on the [`DurabilityGate`].
+pub(crate) struct OwnershipCommitGuard<'a> {
+    _gate: MutexGuard<'a, DurabilityGateState>,
+}
+
+/// A new conversation-owned durable ownership commit refused because the
+/// owning runtime's durable authority is in the explicit failed state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnershipCommitRefused {
+    /// The owning runtime's bounded failure diagnostic (the authoritative
+    /// fact's diagnostic).
+    pub(crate) diagnostic: String,
+}
+
 /// A token measurement of a model input, with explicit provenance.
 ///
 /// This is a Layer 0 value contract. The Context Engine owns the accounting
@@ -566,8 +787,9 @@ impl RuntimeClock for SystemClock {
 #[cfg(test)]
 mod tests {
     use super::{
-        CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
-        RuntimeError, SystemClock,
+        CancellationReason, ConversationLifecycle, ConversationLifecycleState,
+        DurabilityFailureCommit, DurabilityGate, DurableOperation, RuntimeClock, RuntimeError,
+        SystemClock,
     };
 
     /// The shared lifecycle has one monotonic activation/drain path, normal
@@ -679,5 +901,57 @@ mod tests {
             let decoded: RuntimeError = serde_json::from_value(value).expect("deserialize error");
             assert_eq!(decoded, error);
         }
+    }
+
+    /// The commit contract of the absorbing durability-failure authority
+    /// (Issue #60): the first `commit_failure` installs the fact and reports
+    /// `Committed` carrying exactly the authoritative operation and
+    /// diagnostic; a later commit with a different operation and diagnostic
+    /// reports `AlreadyFailed`, returns the still-first authoritative fact,
+    /// and never rewrites the stored one.
+    #[test]
+    fn durability_failure_commit_first_wins_and_never_rewrites() {
+        let gate = DurabilityGate::new();
+        assert!(!gate.is_failed(), "a fresh gate is healthy");
+
+        let first = gate.commit_failure(
+            DurableOperation::EventJournal,
+            "first absorbing failure".to_owned(),
+        );
+        let DurabilityFailureCommit::Committed(committed) = first else {
+            panic!("the first commit must report Committed, got {first:?}");
+        };
+        assert_eq!(
+            committed.operation,
+            DurableOperation::EventJournal,
+            "the committed fact carries the first operation"
+        );
+        assert_eq!(
+            committed.diagnostic, "first absorbing failure",
+            "the committed fact carries the first diagnostic"
+        );
+        assert_eq!(
+            gate.failure().as_ref(),
+            Some(&committed),
+            "the authoritative stored fact equals the returned fact"
+        );
+        assert!(gate.is_failed());
+
+        let second = gate.commit_failure(
+            DurableOperation::SubagentTerminalPublication,
+            "a later failure must not win".to_owned(),
+        );
+        let DurabilityFailureCommit::AlreadyFailed(existing) = second else {
+            panic!("a later commit must report AlreadyFailed, got {second:?}");
+        };
+        assert_eq!(
+            existing, committed,
+            "the returned fact is still the first absorbing one"
+        );
+        assert_eq!(
+            gate.failure().as_ref(),
+            Some(&committed),
+            "the stored fact is still the first absorbing one"
+        );
     }
 }
