@@ -495,6 +495,11 @@ tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            dispatch ownership commit, cancel-vs-complete
                            linearization, terminal inbound publication,
                            bounded progress snapshots)
+runtime/subagent/          SubagentRegistry (conversation-owned one-shot
+                           child runtimes: two-stage prepare/commit, driver
+                           task as sole process owner, cancel/escalation,
+                           exactly-once terminal publication), the bounded
+                           framed control IPC, and process supervision
 tools/runtime.rs           ConversationToolRuntime: the per-conversation
                            bundle of workspace, artifacts, environment, and
                            background registry handed to AgentExecution

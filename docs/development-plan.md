@@ -1087,6 +1087,59 @@ waiter-settlement tests; and TUI projection/render/typed-response tests.
 No permission framework, durable human workflow, provider-specific payload,
 generic runtime participant abstraction, or ask-user forms were added.
 
+### M9.25 — Native async one-shot subagents (Issue #60, delivered)
+
+M9.25 adds conversation-owned, asynchronous, one-shot child rustX runtimes.
+The `subagent` native tool delegates a bounded task; the child is a real
+separate OS process running the same `ConversationRuntime`/Agent
+Loop/Context/Tool/Model stack headlessly, composed from the typed
+`SubagentChildSpec` that arrives over the control channel — never from a
+temporary configuration file.
+
+The parent side is one `SubagentRegistry` per conversation, the logical
+owner of every child. `prepare` validates bounds and stages the child
+privately behind a start gate; `commit` is the one linearization point —
+under the mailbox's running-commit section it writes the durable
+`SubagentOwnershipCommitted` fact, creates the record, releases the start
+gate, and moves the staged process into the registry-owned driver task, the
+sole OS-handle owner. Capacity is enforced at commit, not at prepare. A
+lost cancellation race or durable failure rolls the staged child back
+completely before returning.
+
+The control plane is bounded and typed: one `UnixStream` pair on the
+child's fd 0, length-prefixed frames capped at 1 MiB, versioned Hello
+handshake, Delegate start gate, Cancel request, and Ready/StartupError/
+Result/Diagnostic replies. IPC is transport only; every model-visible
+message crosses through the destination conversation's ordinary durable
+inbound path. The child's answer arrives as a `UserSource::Agent` message;
+failure, cancellation, and interruption are Runtime-authored notices. The
+durable authority enforces that provenance at the terminal fact's commit.
+
+The driver owns physical supervision: reap-before-settle, Cancel → SIGTERM
+→ SIGKILL escalation on the child's process group, and no PID identity.
+Parent death closes the child's stdin; the child drains and exits. Recovery
+classifies a durably owned, never-settled child as interrupted and
+terminalizes it exactly once through the same identity contract as the live
+path — nothing is relaunched, replayed, or reattached.
+
+Capabilities are deny-by-construction: the child composes the base tool
+plane only (v1 profile `explore`: Read/Glob/Grep) and has no `subagent`
+tool, so recursion is impossible by construction. Runtime Client v1 carries
+`subagent_status`, `subagent_cancel`, the `SubagentUpdated` event, and
+`snapshot.subagents`; the TUI renders the same projection.
+
+Exit criteria (met): deterministic registry tests over scripted staged
+children (capacity at commit, the cancellation race through the
+commit-boundary hook, canonical cancellation over late results,
+escalation-after-cancel, bounded publication retry then abandonment, the
+idempotent correlated retry, ordinal watermark reseed — no sleeps); durable
+exactly-once and provenance tests; recovery interrupted-only classification
+tests; and an end-to-end scenario through the real binary in which a real
+second rustX process answers the provider and the parent consumes the
+child-authored message. No durable workflow, no subagent profile
+configuration surface, no cross-conversation children, and no recursion
+were added.
+
 ## Milestone 10 — Local runtime product
 
 The spawnable local runtime *process* and its composition ownership already

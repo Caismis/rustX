@@ -492,6 +492,65 @@ Message Ledger          = adopted canonical conversational facts
   observable terminal settlement always implies the terminal inbound already
   obtained durable ownership.
 
+## Subagent ownership (Issue #60)
+
+A subagent is a conversation-owned, one-shot child runtime: a separate OS
+process running the real rustX semantic stack headlessly, supervised by the
+owning conversation's `SubagentRegistry`. The plane composes the durable,
+process, and message contracts above; it does not invent new ones.
+
+- **Identity is logical, never physical.** `SubagentId` is a
+  conversation-scoped ordinal (`{conversation}-subagent-{n}`) allocated by
+  the registry and reseeded above the durable watermark at recovery. A PID
+  is never identity: process reattachment across restarts is impossible by
+  construction, and the ordinal watermark never reissues an id.
+- **The commit linearizes ownership.** `prepare` stages the child privately
+  (spawned, composed, parked behind the start gate); exactly one `commit`
+  linearization point — under the mailbox's running-commit section — writes
+  the durable `SubagentOwnershipCommitted` fact, opens the
+  `subagent:{id}` lifecycle, and only then releases the start gate. A
+  durable failure or a lost cancellation race rolls the staged child back
+  completely (killed, reaped, runtime root removed) before returning, so no
+  unrecorded side effect can exist.
+- **Cancellation intent is canonical.** Once the intent commits, the child
+  settles as cancelled no matter what the physical outcome later reports;
+  a result frame that arrives after the intent is absorbed, never
+  canonicalized as success. Driver escalation after intent (Cancel frame →
+  SIGTERM → SIGKILL on the child's process group) settles cancelled; an
+  explicit process-control failure settles failed.
+- **All model-visible communication is the message bus.** The child's
+  answer reaches the parent through the parent's ordinary durable inbound
+  path as a `UserSource::Agent` message with the deterministic message id
+  `subagent-{id}-terminal` and the exactly-once producer correlation
+  `subagent-terminal:{id}`. A success is authored by the child agent; a
+  failure, cancellation, or interruption is a Runtime-authored notice —
+  the durable authority enforces this provenance when the terminal fact
+  commits. The control channel (one `UnixStream` pair on the child's fd 0)
+  carries only the bounded typed control plane — Hello/Delegate/Cancel in,
+  Ready/StartupError/Result/Diagnostic out, length-prefixed frames bounded
+  at 1 MiB — and never appends to any conversation.
+- **The terminal publication is exactly once.** The frozen terminal
+  candidate (state, bounded content, frozen timestamp) is computed at
+  canonicalization, so every bounded retry rebuilds the byte-identical
+  draft and an ambiguous commit resolves as the idempotent correlation
+  retry, never a duplicate or a conflict. The lifecycle key closes exactly
+  once: a second terminal for the same child is a `TerminalViolation`.
+- **Parent death is contained.** The parent holds the control channel; its
+  death closes the child's stdin, and the child drains and exits without a
+  result. Nothing polls PIDs. At recovery, a durably owned, never-settled
+  child is classified interrupted — the honest unknown — and terminalized
+  exactly once through the same identity contract as the live path
+  (`recovery_terminal_publication` reuses the live message id and
+  correlation, so a live publication and a recovery publication are
+  mutually exclusive by construction). Nothing is relaunched, replayed, or
+  reattached.
+- **Capabilities are deny-by-construction.** The child composes the base
+  tool plane only (v1 profile `explore`: Read/Glob/Grep) with no `subagent`
+  tool — recursion is impossible by construction, not by policy. The
+  startup input is the typed `SubagentChildSpec` (resolved
+  `SessionContextPolicy`, model binding, workspace, child-private runtime
+  root); no temporary configuration file is ever written.
+
 ## Capability immutability
 
 An attempt sees one immutable capability revision for its entire lifetime.
