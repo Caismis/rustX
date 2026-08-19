@@ -20,7 +20,12 @@ import {
 } from "../src/ui/components/activity.ts";
 import { renderFooter, workingStatus } from "../src/ui/components/status.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
-import { withToggledToolCall } from "../src/ui/preferences.ts";
+import {
+  withExpandedBackgroundExecutions,
+  withExpandedInteractions,
+  withExpandedToolCalls,
+  withToggledToolCall,
+} from "../src/ui/preferences.ts";
 import { plainText } from "../src/ui/theme.ts";
 import type { RuntimeClientSnapshot } from "../src/protocol/types.ts";
 import {
@@ -122,15 +127,17 @@ function representative(): RuntimeClientSnapshot {
 }
 
 /** Everything the screen shows, as plain text, from one state. */
-function visible(state: ReturnType<typeof replaceFromSnapshot>): string {
-  const preferences = prefs();
+function visible(
+  state: ReturnType<typeof replaceFromSnapshot>,
+  preferences = prefs(),
+): string {
   const correlation = correlateTools(state);
   return plainText(
     [
       ...renderTranscript(state, preferences).map(blockText),
       renderOrphanExecutions(correlation, preferences),
       renderBackgroundSection(state, preferences),
-      renderInteractionSection(state),
+      renderInteractionSection(state, preferences),
       workingStatus(state) ?? "",
       renderFooter(state, "connected", 120),
     ].join("\n"),
@@ -179,6 +186,32 @@ describe("snapshot reconstruction", () => {
     const first = visible(replaceFromSnapshot(representative(), 42));
     const second = visible(replaceFromSnapshot(representative(), 99));
     assert.equal(first, second);
+  });
+
+  it("reconstructs the same screen with every domain expanded", () => {
+    // Expansion is client state, so it is not in the snapshot — but the facts
+    // it reveals are, and two independent rebuilds must reveal the same ones.
+    const state = replaceFromSnapshot(representative(), 42);
+    const preferences = withExpandedInteractions(
+      withExpandedBackgroundExecutions(
+        withExpandedToolCalls(prefs(), ["call-1", "call-2"]),
+        ["exec-1"],
+      ),
+      ["attempt-1-interaction-1"],
+    );
+    const first = visible(state, preferences);
+    const second = visible(replaceFromSnapshot(representative(), 99), preferences);
+    assert.equal(first, second);
+
+    // The expanded approval shows the complete published request, and nothing
+    // was written back into the projection to produce it.
+    assert.match(first, /native policy requires approval/);
+    assert.match(first, /printf original/);
+    assert.deepEqual(
+      state,
+      replaceFromSnapshot(representative(), 42),
+      "expanding never writes back into runtime state",
+    );
   });
 
   it("carries no semantic state in a display preference", () => {

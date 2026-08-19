@@ -38,6 +38,7 @@ import { COMMANDS, parseCommandLine } from "./registry.ts";
 import type {
   ApprovalDecision,
   CatalogModelView,
+  InteractionId,
   InteractionResponse,
   ToolCallId,
   ToolExecutionId,
@@ -68,13 +69,19 @@ export type PreferenceChange =
   /** One foreground card, addressed by its `ToolCallId`. */
   | { type: "expand_call"; callId: ToolCallId }
   /** One background card, addressed by its `ToolExecutionId`. */
-  | { type: "expand_background"; executionId: ToolExecutionId };
+  | { type: "expand_background"; executionId: ToolExecutionId }
+  /** One pending approval card, addressed by its `InteractionId`. */
+  | { type: "expand_interaction"; interactionId: InteractionId };
 
 /**
  * A bulk expansion target.
  *
- * `all` and `none` mean both identity domains — every renderable tool card and
- * every renderable background card — because that is what the words say.
+ * `all` and `none` mean every identity domain — every renderable tool card,
+ * every renderable background card, and every pending interaction card —
+ * because that is what the words say. `latest` deliberately does not: it stays
+ * the latest *tool call*, because "the latest" across three unrelated identity
+ * domains would name whichever entity a rule picked rather than the one the
+ * reader is looking at.
  */
 export type ExpandTarget = "all" | "none" | "latest";
 
@@ -328,22 +335,25 @@ function reasoningPreference(argument: string): CommandOutcome {
  * `/expand` — a visual collapse preference over both identity domains.
  *
  * ```text
- * /expand                       toggle the latest tool call
- * /expand latest                the same
- * /expand all                   expand every tool card and every background card
- * /expand none                  collapse both domains
- * /expand <tool-call-id>        toggle one foreground card
- * /expand background <exec-id>  toggle one background card
+ * /expand                          toggle the latest tool call
+ * /expand latest                   the same
+ * /expand all                      expand every tool, background, and
+ *                                  interaction card
+ * /expand none                     collapse all three domains
+ * /expand <tool-call-id>           toggle one foreground card
+ * /expand background <exec-id>     toggle one background card
+ * /expand interaction <interaction-id>  toggle one pending approval card
  * ```
  *
  * A bare id addresses the `ToolCallId` domain, always. There is no search
- * across both namespaces and no "first match wins": the two domains are
- * distinct rustX identities, so addressing a background execution says so.
+ * across the namespaces and no "first match wins": the three domains are
+ * distinct rustX identities, so addressing a background execution or a pending
+ * interaction says so.
  *
- * Expanding shows more of a *call* or a *result* the client already holds. It
- * never re-executes a tool, never re-reads anything, and never undoes the
- * runtime's own result truncation, which is a separate fact the card always
- * reports.
+ * Expanding shows more of a call, a result, or a pending approval request the
+ * client already holds. It never re-executes a tool, never re-reads anything,
+ * never re-queries the runtime, and never undoes the runtime's own result
+ * truncation, which is a separate fact the card always reports.
  */
 function expandPreference(argument: string): CommandOutcome {
   if (argument === "" || argument === "latest") {
@@ -356,18 +366,28 @@ function expandPreference(argument: string): CommandOutcome {
   if (head === "background" || head === "bg") {
     const executionId = rest.join(" ");
     if (executionId.length === 0) {
-      return {
-        kind: "message",
-        level: "error",
-        text: "usage: /expand background <execution-id>",
-      };
+      return usage("/expand background <execution-id>");
     }
     return {
       kind: "preference",
       preference: { type: "expand_background", executionId },
     };
   }
+  if (head === "interaction") {
+    const interactionId = rest.join(" ");
+    if (interactionId.length === 0) {
+      return usage("/expand interaction <interaction-id>");
+    }
+    return {
+      kind: "preference",
+      preference: { type: "expand_interaction", interactionId },
+    };
+  }
   return { kind: "preference", preference: { type: "expand_call", callId: argument } };
+}
+
+function usage(spelling: string): CommandOutcome {
+  return { kind: "message", level: "error", text: `usage: ${spelling}` };
 }
 
 function info(text: string): CommandOutcome {

@@ -427,15 +427,26 @@ export function describeProgress(
   return pieces.length === 0 ? undefined : pieces.join(" · ");
 }
 
-/** A compact duration from the runtime's own millisecond measurement. */
+/**
+ * A compact duration from the runtime's own millisecond measurement.
+ *
+ * The unit is chosen from the *rounded* value, not the raw one. Choosing the
+ * bucket first and rounding inside it lets a value round out of its own
+ * bucket: 59,999 ms rendered as `60.0s`, and 119,999 ms as `1m60s`, because
+ * `floor(ms / 60000)` and `round(ms % 60000 / 1000)` were rounded
+ * independently. Rounding once and deriving both components from that single
+ * value makes the seconds component 0–59 by construction.
+ */
 export function formatDuration(durationMs: number): string {
   if (durationMs < 1_000) {
     return `${durationMs}ms`;
   }
-  if (durationMs < 60_000) {
-    return `${(durationMs / 1_000).toFixed(1)}s`;
+  const tenths = Math.round(durationMs / 100);
+  if (tenths < 600) {
+    return `${(tenths / 10).toFixed(1)}s`;
   }
-  const minutes = Math.floor(durationMs / 60_000);
-  const seconds = Math.round((durationMs % 60_000) / 1_000);
+  const totalSeconds = Math.round(durationMs / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
   return `${minutes}m${String(seconds).padStart(2, "0")}s`;
 }

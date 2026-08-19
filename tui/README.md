@@ -142,9 +142,9 @@ never a credential; `/approve` sends a finite typed response to one
 runtime-owned Approval interaction. The TUI never edits the displayed tool
 arguments or keeps a local approval outcome.
 
-`/reasoning [on|off]` and `/expand [<tool-call-id>|all|none]` are the two
-commands that touch nothing but the screen. They send no request, and they are
-also bound to keys:
+`/reasoning [on|off]` and `/expand [latest|all|none|<tool-call-id>|background
+<exec-id>|interaction <interaction-id>]` are the two commands that touch
+nothing but the screen. They send no request, and they are also bound to keys:
 
 | Key | Effect |
 | --- | --- |
@@ -347,33 +347,69 @@ keeps its reason: a `CancellationReason` is a small typed enum, not prose.
 
 Expanding re-renders facts the client already holds: no re-execution, no
 filesystem access, no network, no runtime request. The subject stays one line
-either way; expanded, it is the complete published value. The runtime's own
-`TruncationState` is a different fact, reported separately and always —
-expanding never undoes it.
+either way; expanded, it is the complete published value.
 
-### Two identity domains, two preference sets
+### Collapse is finite *and* reversible
+
+```text
+client collapse    finite, and reversible from facts already held
+runtime truncation authoritative, and irreversible
+```
+
+Every band the client bounds is a band the client can restore, because
+restoring it spends nothing but `PresentationState`. That is what makes a
+bound safe to apply to text a decision is made from. **One expansion state per
+entity governs every expandable band of that entity** — a background card
+never expands its result body while leaving its failure reason permanently
+clipped, and a pending approval's runtime-published reason and validated
+arguments are both revealed together.
+
+The runtime's own `TruncationState` is the opposite kind of fact: those bytes
+never reached the client. It is reported separately and always, and expanding
+never undoes it.
+
+### Pending approvals are bounded but never hidden
+
+A 50 kB approval reason or a `Write` request carrying 50 kB of content is
+collapsed by default, because an approval prompt that scrolls its own question
+off the screen is one nobody can answer. `/expand interaction <id>` reveals
+the complete reason and the complete validated arguments, rendered from the
+interaction the client already holds — no runtime request, no re-execution, no
+read.
+
+This is disclosure, not a second approval gate. Nothing requires the card to
+be opened before `/approve`, and expanding cannot edit what is being approved:
+the arguments are drawn exactly as the runtime validated them, and the runtime
+resumes the operation it already holds.
+
+### Three identity domains, three preference sets
 
 ```text
 ToolCallId       a logical model-issued tool call    foreground cards
 ToolExecutionId  a detached background execution     background cards
+InteractionId    one runtime-owned pending approval  interaction cards
 ```
 
-Both serialize as transparent strings and nothing forbids the same string
-appearing in both, so expansion state is kept in **two** sets rather than one
-string-keyed set. No naming convention (`call_*`, `exec_*`) is relied on
-anywhere — a wire spelling is not a type.
+All three serialize as transparent strings and nothing forbids the same string
+appearing in all three, so expansion state is kept in **three** sets rather
+than one string-keyed set. No naming convention (`call_*`, `exec_*`) is relied
+on anywhere — a wire spelling is not a type.
 
 ```text
-/expand                       toggle the latest tool call
-/expand latest                the same
-/expand all                   expand every tool card and every background card
-/expand none                  collapse both domains
-/expand <tool-call-id>        toggle one foreground card
-/expand background <exec-id>  toggle one background card
+/expand                               toggle the latest tool call
+/expand latest                        the same
+/expand all                           expand every tool, background, and
+                                      interaction card
+/expand none                          collapse all three domains
+/expand <tool-call-id>                toggle one foreground card
+/expand background <exec-id>          toggle one background card
+/expand interaction <interaction-id>  toggle one pending approval card
 ```
 
 A bare id addresses the `ToolCallId` domain, always: there is no search across
-both namespaces and no "first match wins".
+the namespaces and no "first match wins". `latest` stays scoped to the
+`ToolCallId` domain too — "the latest" across three unrelated identity domains
+would name whichever entity a tie-break rule picked, not the one on screen.
 
 ### Configured, effective, and attempt-frozen are three model facts
 

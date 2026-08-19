@@ -3495,11 +3495,25 @@ renderer can forget it or bypass it through `summary`. The status header names
 the settlement (`failed`, `denied`) while the runtime's prose explaining it
 lives once in the bounded reason band; only the runtime's own
 `TruncationState` and the typed `CancellationReason` are unbounded header
-facts. Expanding a card re-renders facts the client already holds — it never re-executes a tool or fetches anything — and it
-is unrelated to the runtime's own `TruncationState`, which is always reported.
-Expansion state is kept in two sets, one per runtime identity domain
-(`ToolCallId` for foreground cards, `ToolExecutionId` for background ones), so
-equal wire strings in different domains cannot alias. Reasoning *visibility* is
+facts. Expanding a card re-renders facts the client already holds — it never
+re-executes a tool or fetches anything — and it is unrelated to the runtime's
+own `TruncationState`, which is always reported.
+
+Client collapse is therefore **finite and reversible**, while runtime
+truncation is authoritative and irreversible. One expansion state per entity
+governs every expandable band of that entity, so a background settlement never
+expands its body while leaving its failure reason clipped, and a pending
+approval's runtime-published reason and validated arguments are inspectable in
+full — from already-held state, before the user answers allow or deny. That is
+disclosure, not a second approval gate: nothing requires a card to be opened
+before it can be answered, and expanding never edits the arguments the runtime
+validated.
+
+Expansion state is kept in three sets, one per runtime identity domain
+(`ToolCallId` for foreground cards, `ToolExecutionId` for background ones,
+`InteractionId` for pending approvals), so equal wire strings in different
+domains cannot alias. `/expand all` and `/expand none` cover all three;
+`latest` stays scoped to the `ToolCallId` domain. Reasoning *visibility* is
 likewise unrelated to the `reasoningProfile` / `reasoningEnabled` request
 configuration, which only `model_set` changes — and neither is the catalog's
 `defaultReasoningProfile`, which describes what a model offers rather than what

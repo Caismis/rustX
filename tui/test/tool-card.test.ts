@@ -12,7 +12,10 @@ import { describe, it } from "node:test";
 
 import type { CorrelatedTool } from "../src/presentation/tools.ts";
 import type { ToolExecutionResult } from "../src/protocol/types.ts";
-import { renderToolCard } from "../src/ui/components/tool-card.ts";
+import {
+  formatDuration,
+  renderToolCard,
+} from "../src/ui/components/tool-card.ts";
 import { hasSpecializedRenderer } from "../src/ui/components/tool-renderers.ts";
 import {
   DEFAULT_PREVIEW_CHARS,
@@ -824,5 +827,70 @@ describe("boundedness in both dimensions", () => {
       2,
       "each band reports its own elision",
     );
+  });
+});
+
+describe("duration formatting", () => {
+  /**
+   * The unit is chosen from the *rounded* value, not the raw one.
+   *
+   * Choosing the bucket first and rounding inside it let a value round out of
+   * its own bucket: `floor(ms / 60000)` with `round(ms % 60000 / 1000)` printed
+   * 119,999 ms as `1m60s`, and the sub-minute branch printed 59,999 ms as
+   * `60.0s`. Both are durations rendered in the wrong unit's terms.
+   */
+  it("never rolls a component past its own unit", () => {
+    const cases: Array<[number, string]> = [
+      [0, "0ms"],
+      [12, "12ms"],
+      [999, "999ms"],
+      [1_000, "1.0s"],
+      [2_800, "2.8s"],
+      [59_499, "59.5s"],
+      [59_949, "59.9s"],
+      // Rounds to a full minute, so it is rendered as one rather than 60.0s.
+      [59_950, "1m00s"],
+      [59_999, "1m00s"],
+      [60_000, "1m00s"],
+      [119_499, "1m59s"],
+      [119_500, "2m00s"],
+      [119_999, "2m00s"],
+      [120_000, "2m00s"],
+      [3_599_999, "60m00s"],
+    ];
+    for (const [durationMs, expected] of cases) {
+      assert.equal(formatDuration(durationMs), expected, `${durationMs} ms`);
+    }
+  });
+
+  it("keeps the seconds component in 00-59 across every boundary", () => {
+    // The invariant, swept rather than sampled: no input may produce a
+    // seconds component of 60, and no sub-minute rendering may reach 60.0s.
+    for (let durationMs = 0; durationMs <= 300_000; durationMs += 1) {
+      const rendered = formatDuration(durationMs);
+      const minutes = /^(\d+)m(\d{2})s$/.exec(rendered);
+      if (minutes !== null) {
+        const seconds = Number(minutes[2]);
+        assert.ok(
+          seconds >= 0 && seconds <= 59,
+          `${durationMs} ms rendered ${rendered}`,
+        );
+        continue;
+      }
+      const fractional = /^(\d+(?:\.\d)?)s$/.exec(rendered);
+      if (fractional !== null) {
+        assert.ok(
+          Number(fractional[1]) < 60,
+          `${durationMs} ms rendered ${rendered}`,
+        );
+        continue;
+      }
+      assert.match(rendered, /^\d+ms$/, `${durationMs} ms rendered ${rendered}`);
+    }
+  });
+
+  it("reports the runtime's measurement on the card, unaltered", () => {
+    assert.match(card({ lifecycle: settled({ duration_ms: 119_999 }) }), /2m00s/);
+    assert.match(card({ lifecycle: settled({ duration_ms: 12 }) }), /12ms/);
   });
 });

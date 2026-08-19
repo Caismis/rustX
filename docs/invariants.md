@@ -2917,15 +2917,45 @@ contracts and provider protocols. These invariants are frozen by M2:
   request, and it does not undo the runtime's own truncation, which is
   reported separately and unconditionally.
 
+- **Client collapse is finite *and* reversible; runtime truncation is
+  authoritative and irreversible.** Every band the client bounds is a band the
+  client can restore, because restoring it spends nothing but
+  `PresentationState`. This holds for foreground tool cards, for background
+  execution settlements, and for pending interactions alike: one expansion
+  state per entity governs *every* expandable band of that entity, so a card
+  can never expand its body while leaving its failure or denial reason
+  permanently clipped. The runtime's own `TruncationState` is the opposite kind
+  of fact — those bytes never reached the client — and no preference undoes it.
+
+- **A pending interaction's decision-relevant facts stay inspectable.** The
+  runtime publishes an approval's reason and its validated arguments in full.
+  The client may collapse both for default presentation, and must be able to
+  reveal both, completely, from already-held state before the user responds —
+  a reader must never have to answer allow or deny about arguments the client
+  holds but will not show. Revealing them performs no runtime request, no
+  re-execution, and no read, and it neither edits the arguments nor
+  reconstructs a `ToolCall`: the runtime resumes the operation it already
+  validated. This is disclosure, not a second approval gate; nothing requires
+  a card to be expanded before it can be answered.
+
 - **Presentation identity preserves runtime identity domains.** `ToolCallId`
-  (a logical model-issued call) and `ToolExecutionId` (a detached background
-  execution) are distinct rustX identities that both happen to serialize as
-  transparent strings. Client expansion state keeps them in two separate sets,
-  so equal wire strings in different domains can never alias or cross-toggle.
-  No naming convention (`call_*`, `exec_*`) is relied on anywhere. `/expand
-  all` and `/expand none` mean both domains; a bare id addresses the
-  `ToolCallId` domain and a background execution is addressed explicitly, so
-  no parser searches one string across both namespaces.
+  (a logical model-issued call), `ToolExecutionId` (a detached background
+  execution), and `InteractionId` (one runtime-owned pending interaction) are
+  distinct rustX identities that all happen to serialize as transparent
+  strings. Client expansion state keeps them in three separate sets, so equal
+  wire strings in different domains can never alias or cross-toggle. No naming
+  convention (`call_*`, `exec_*`) is relied on anywhere. `/expand all` and
+  `/expand none` mean all three domains; `latest` stays scoped to the
+  `ToolCallId` domain, because "the latest" across three unrelated identity
+  domains would name whichever entity a tie-break rule picked rather than the
+  one on screen. A bare id addresses the `ToolCallId` domain, and a background
+  execution or a pending interaction is addressed explicitly, so no parser
+  searches one string across the namespaces.
+
+- **A displayed duration never rolls past its own unit.** The unit is chosen
+  from the rounded value, not the raw one, so a seconds component is always
+  0–59 and a sub-minute rendering never reaches `60.0s`. Choosing the bucket
+  first and rounding independently inside it printed 119,999 ms as `1m60s`.
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider

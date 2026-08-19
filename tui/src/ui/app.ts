@@ -28,10 +28,11 @@
  *
  * The one thing the app owns that the projection does not is
  * {@link PresentationPreferences} — reasoning visibility, and which cards are
- * expanded in each of the two runtime identity domains (`ToolCallId` for
- * foreground tool cards, `ToolExecutionId` for background ones). Those are
- * display choices, they are deliberately not written into runtime state, and
- * losing them on a rebuild costs nothing semantic.
+ * expanded in each of the three runtime identity domains (`ToolCallId` for
+ * foreground tool cards, `ToolExecutionId` for background ones, `InteractionId`
+ * for pending approvals). Those are display choices, they are deliberately not
+ * written into runtime state, and losing them on a rebuild costs nothing
+ * semantic: every collapsed band is restored from `PresentationState` alone.
  */
 
 import {
@@ -77,9 +78,11 @@ import {
   defaultPreferences,
   withAllCollapsed,
   withExpandedBackgroundExecutions,
+  withExpandedInteractions,
   withExpandedToolCalls,
   withReasoningVisible,
   withToggledBackgroundExecution,
+  withToggledInteraction,
   withToggledToolCall,
 } from "./preferences.ts";
 import { editorTheme, markdownTheme, style } from "./theme.ts";
@@ -371,6 +374,12 @@ export class RustxTuiApp {
           change.executionId,
         );
         break;
+      case "expand_interaction":
+        this.#preferences = withToggledInteraction(
+          this.#preferences,
+          change.interactionId,
+        );
+        break;
       case "expand":
         this.#preferences = this.#expandTarget(change.target);
         break;
@@ -386,10 +395,14 @@ export class RustxTuiApp {
   /**
    * The bulk expansion targets.
    *
-   * `all` and `none` cover *both* identity domains — every renderable tool
-   * card keyed by `ToolCallId` and every renderable background card keyed by
-   * `ToolExecutionId`. Those sets are kept separate so a call id and an
-   * execution id that happen to serialize alike never cross-toggle.
+   * `all` and `none` cover *every* identity domain — each renderable tool card
+   * keyed by `ToolCallId`, each renderable background card keyed by
+   * `ToolExecutionId`, and each pending approval keyed by `InteractionId`.
+   * The three sets are kept separate so ids that happen to serialize alike
+   * never cross-toggle.
+   *
+   * `all` names only entities the projection currently renders, so it never
+   * seeds a preference for something already settled.
    */
   #expandTarget(target: ExpandTarget): PresentationPreferences {
     const state = this.#session.state;
@@ -401,14 +414,22 @@ export class RustxTuiApp {
       const executions = state.background.map(
         (execution) => execution.execution_id,
       );
-      return withExpandedBackgroundExecutions(
-        withExpandedToolCalls(this.#preferences, calls),
-        executions,
+      const interactions = state.pendingInteractions.map(
+        (interaction) => interaction.id,
+      );
+      return withExpandedInteractions(
+        withExpandedBackgroundExecutions(
+          withExpandedToolCalls(this.#preferences, calls),
+          executions,
+        ),
+        interactions,
       );
     }
-    // "latest" is the most recently correlated call, which is the one a user
-    // pressing ctrl+o is looking at. Correlation order follows the transcript,
-    // never screen position.
+    // "latest" is the most recently correlated *tool call*, which is the one a
+    // user pressing ctrl+o is looking at. Correlation order follows the
+    // transcript, never screen position. It deliberately stays scoped to one
+    // domain: "the latest" across three unrelated identity domains would name
+    // whichever entity a tie-break rule picked, not the one on screen.
     const latest: ToolCallId | undefined = calls[calls.length - 1];
     return latest === undefined
       ? this.#preferences
@@ -456,7 +477,7 @@ export class RustxTuiApp {
     for (const section of [
       renderOrphanExecutions(correlation, this.#preferences),
       renderBackgroundSection(state, this.#preferences),
-      renderInteractionSection(state),
+      renderInteractionSection(state, this.#preferences),
     ]) {
       if (section.length > 0) {
         this.#activity.addChild(new Text(section, 1, 0));

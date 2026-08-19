@@ -33,22 +33,43 @@
  * is one line. {@link PreviewBudget} carries both, the card shell applies it
  * to every externally-derived band, and no renderer is asked to remember.
  *
- * ## Two identity domains, never one
+ * ## Collapse is finite *and* reversible
+ *
+ * ```text
+ * client collapse    finite, and reversible from facts already held
+ * runtime truncation authoritative, and irreversible
+ * ```
+ *
+ * Every band the client collapses is a band the client can restore, because
+ * restoring it spends nothing but `PresentationState`. That is what makes a
+ * bound safe to apply to decision-relevant text: a reader who needs the whole
+ * runtime-published approval reason, the whole validated argument object, or
+ * the whole failure explanation can always ask for it, and asking costs no
+ * runtime request, no re-execution, and no read. The runtime's own
+ * `TruncationState` is the opposite kind of fact — the bytes are gone before
+ * the client ever saw them — and no preference here undoes it.
+ *
+ * ## Three identity domains, never one
  *
  * ```text
  * ToolCallId       a logical model-issued tool call
  * ToolExecutionId  a detached background execution instance
+ * InteractionId    one runtime-owned pending interaction
  * ```
  *
  * rustX models those as separate identity domains and this file preserves the
- * separation. They both happen to serialize as strings, and nothing forbids
- * the same string appearing in both, so a single set keyed by a naked string
- * would let one card's expansion silently toggle an unrelated one. Two sets
- * make that unrepresentable — no naming convention (`call_*`, `exec_*`) is
- * relied on anywhere, because a wire spelling is not a type.
+ * separation. They all happen to serialize as strings, and nothing forbids the
+ * same string appearing in all three, so a single set keyed by a naked string
+ * would let one card's expansion silently toggle two unrelated ones. Three
+ * sets make that unrepresentable — no naming convention (`call_*`, `exec_*`)
+ * is relied on anywhere, because a wire spelling is not a type.
  */
 
-import type { ToolCallId, ToolExecutionId } from "../protocol/types.ts";
+import type {
+  InteractionId,
+  ToolCallId,
+  ToolExecutionId,
+} from "../protocol/types.ts";
 
 /**
  * The finite budget of one collapsed presentation band.
@@ -107,6 +128,8 @@ export interface PresentationPreferences {
   expandedToolCalls: ReadonlySet<ToolCallId>;
   /** Expanded background cards, keyed by the runtime's `ToolExecutionId`. */
   expandedBackgroundExecutions: ReadonlySet<ToolExecutionId>;
+  /** Expanded interaction cards, keyed by the runtime's `InteractionId`. */
+  expandedInteractions: ReadonlySet<InteractionId>;
   /** The collapsed budget of one verbose detail section. */
   previewBudget: PreviewBudget;
 }
@@ -116,6 +139,7 @@ export function defaultPreferences(): PresentationPreferences {
     reasoningVisible: true,
     expandedToolCalls: new Set(),
     expandedBackgroundExecutions: new Set(),
+    expandedInteractions: new Set(),
     previewBudget: {
       maxLines: DEFAULT_PREVIEW_LINES,
       maxChars: DEFAULT_PREVIEW_CHARS,
@@ -192,10 +216,57 @@ export function isBackgroundExecutionExpanded(
 }
 
 // ---------------------------------------------------------------------------
-// Both domains
+// Interaction domain
 // ---------------------------------------------------------------------------
 
-/** Collapses everything, in both identity domains. */
+/**
+ * Toggles one interaction card's expansion.
+ *
+ * Purely visual, and in particular *not* a second approval gate: it reveals
+ * the runtime's own published reason and validated arguments so a reader can
+ * decide from complete facts, and it neither answers the interaction nor
+ * changes what answering it will do.
+ */
+export function withToggledInteraction(
+  preferences: PresentationPreferences,
+  interactionId: InteractionId,
+): PresentationPreferences {
+  return {
+    ...preferences,
+    expandedInteractions: toggled(
+      preferences.expandedInteractions,
+      interactionId,
+    ),
+  };
+}
+
+export function withExpandedInteractions(
+  preferences: PresentationPreferences,
+  interactionIds: Iterable<InteractionId>,
+): PresentationPreferences {
+  return { ...preferences, expandedInteractions: new Set(interactionIds) };
+}
+
+export function isInteractionExpanded(
+  preferences: PresentationPreferences,
+  interactionId: InteractionId,
+): boolean {
+  return preferences.expandedInteractions.has(interactionId);
+}
+
+// ---------------------------------------------------------------------------
+// All domains
+// ---------------------------------------------------------------------------
+
+/**
+ * Collapses everything, in every identity domain.
+ *
+ * An expanded set may still name an interaction the runtime has since
+ * settled, or an execution it has since forgotten. That is harmless — a
+ * preference for an entity nothing renders changes nothing — and eagerly
+ * pruning it would couple local view state to runtime lifecycle for no
+ * semantic gain. Stale entries are never meaningful.
+ */
 export function withAllCollapsed(
   preferences: PresentationPreferences,
 ): PresentationPreferences {
@@ -203,6 +274,7 @@ export function withAllCollapsed(
     ...preferences,
     expandedToolCalls: new Set(),
     expandedBackgroundExecutions: new Set(),
+    expandedInteractions: new Set(),
   };
 }
 

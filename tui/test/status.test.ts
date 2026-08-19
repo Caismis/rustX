@@ -12,12 +12,18 @@ import { describe, it } from "node:test";
 import { reduce } from "../src/presentation/projection.ts";
 import { correlateTools } from "../src/presentation/tools.ts";
 import {
+  renderBackground,
   renderBackgroundSection,
   renderInteractionSection,
   renderOrphanExecutions,
 } from "../src/ui/components/activity.ts";
 import { renderFooter, workingStatus } from "../src/ui/components/status.ts";
 import { plainText } from "../src/ui/theme.ts";
+import {
+  DEFAULT_PREVIEW_CHARS,
+  withExpandedBackgroundExecutions,
+  withExpandedInteractions,
+} from "../src/ui/preferences.ts";
 import {
   approvalInteraction,
   attemptModel,
@@ -334,7 +340,7 @@ describe("footer", () => {
 describe("activity area", () => {
   it("renders nothing when the runtime knows of no background work", () => {
     assert.equal(renderBackgroundSection(stateOf(), prefs()), "");
-    assert.equal(renderInteractionSection(stateOf()), "");
+    assert.equal(renderInteractionSection(stateOf(), prefs()), "");
   });
 
   it("shows active and terminal background executions with runtime state", () => {
@@ -361,6 +367,7 @@ describe("activity area", () => {
     const rendered = plainText(
       renderInteractionSection(
         stateOf({ pending_interactions: [approvalInteraction()] }),
+        prefs(),
       ),
     );
     assert.match(rendered, /Approval required · 1 pending/);
@@ -419,5 +426,179 @@ describe("activity area", () => {
       }),
     });
     assert.equal(renderOrphanExecutions(correlateTools(state), prefs()), "");
+  });
+});
+
+describe("client collapse is finite and reversible", () => {
+  /**
+   * The final disclosure contract, at the two places it was not yet held.
+   *
+   * ```text
+   * client collapse    finite, and reversible from facts already held
+   * runtime truncation authoritative, and irreversible
+   * ```
+   *
+   * A background settlement and a pending approval both carry runtime prose
+   * that can be arbitrarily long, and both are decision-relevant: one explains
+   * why work failed, the other is what a reader says allow or deny to. Bounding
+   * them is right; bounding them *irreversibly* is not, because the hidden
+   * remainder is already in `PresentationState` and can be shown for free.
+   *
+   * Every case below asserts both halves. A test that only proved the last
+   * token was absent when collapsed would pass on a card that could never be
+   * opened again.
+   */
+  const HUGE = "x".repeat(50_000);
+  /** Comfortably above one collapsed band, three orders below the input. */
+  const CEILING = 4_000;
+
+  function background(
+    result: Parameters<typeof toolResult>[0],
+    expanded: boolean,
+  ): string {
+    const preferences = expanded
+      ? withExpandedBackgroundExecutions(prefs(), ["exec-1"])
+      : prefs();
+    return plainText(
+      renderBackground(
+        backgroundExecution("exec-1", "failed", { result: toolResult(result) }),
+        preferences,
+      ),
+    );
+  }
+
+  function interaction(
+    kind: Partial<ReturnType<typeof approvalInteraction>["kind"]>,
+    expanded: boolean,
+  ): string {
+    const request = approvalInteraction();
+    const preferences = expanded
+      ? withExpandedInteractions(prefs(), [request.id])
+      : prefs();
+    return plainText(
+      renderInteractionSection(
+        stateOf({
+          pending_interactions: [
+            { ...request, kind: { ...request.kind, ...kind } },
+          ],
+        }),
+        preferences,
+      ),
+    );
+  }
+
+  it("bounds a background failure reason and restores it on expansion", () => {
+    const collapsed = background({ status: { type: "failed", error: HUGE } }, false);
+    assert.ok(
+      collapsed.length < CEILING,
+      `collapsed background card was ${collapsed.length} characters`,
+    );
+    assert.match(collapsed, /failed/, "the runtime settlement stays visible");
+    assert.match(collapsed, /exec-1/, "the identity stays visible");
+    assert.ok(!collapsed.includes(HUGE));
+
+    // The whole explanation, from the same already-held result.
+    assert.ok(background({ status: { type: "failed", error: HUGE } }, true).includes(HUGE));
+  });
+
+  it("bounds a background denial reason and restores it on expansion", () => {
+    const status = { type: "denied" as const, reason: HUGE };
+    const collapsed = background({ status }, false);
+    assert.ok(collapsed.length < CEILING);
+    assert.match(collapsed, /denied/);
+    assert.ok(
+      !(collapsed.split("\n")[0] ?? "").includes("xx"),
+      "prose never reaches the header",
+    );
+    assert.ok(!collapsed.includes(HUGE));
+
+    assert.ok(background({ status }, true).includes(HUGE));
+  });
+
+  it("expands a background reason and body under one expansion state", () => {
+    // The bug this replaces: the body honoured the execution's expansion
+    // preference while the reason was rendered through a permanently
+    // collapsed context, so `/expand background <id>` revealed half the card.
+    const result = {
+      status: { type: "failed" as const, error: HUGE },
+      content: [{ type: "text" as const, text: `${HUGE}TAIL` }],
+    };
+    const collapsed = background(result, false);
+    assert.ok(collapsed.length < CEILING);
+    assert.ok(!collapsed.includes("TAIL"));
+
+    const expanded = background(result, true);
+    assert.ok(expanded.includes(HUGE), "the reason is complete");
+    assert.ok(expanded.includes("TAIL"), "the body is complete");
+  });
+
+  it("keeps the runtime's own truncation irreversible", () => {
+    // Expanding restores what the client hid. It cannot restore bytes the
+    // runtime never sent, and it must not pretend otherwise.
+    const result = {
+      status: { type: "failed" as const, error: "boom" },
+      truncation: { truncated: true, original_bytes: 9_001 },
+    };
+    for (const rendered of [background(result, false), background(result, true)]) {
+      assert.match(rendered, /runtime-truncated result \(from 9001 bytes\)/);
+    }
+  });
+
+  it("bounds a pending approval reason and restores it on expansion", () => {
+    const collapsed = interaction({ reason: HUGE }, false);
+    assert.ok(
+      collapsed.length < CEILING,
+      `collapsed approval card was ${collapsed.length} characters`,
+    );
+    assert.match(collapsed, /bash/, "the tool identity stays visible");
+    assert.match(collapsed, /attempt-1-interaction-1/, "the id stays visible");
+    assert.match(collapsed, /^\s*x+/m, "the beginning of the reason is on screen");
+    assert.ok(!collapsed.includes(HUGE));
+
+    assert.ok(interaction({ reason: HUGE }, true).includes(HUGE));
+  });
+
+  it("bounds pending approval arguments and restores them on expansion", () => {
+    // A `Write` approval carrying 50 kB of content is exactly the case a
+    // reader must be able to inspect *before* answering allow or deny.
+    const args = { path: "large.txt", content: HUGE };
+    const collapsed = interaction({ arguments: args }, false);
+    assert.ok(collapsed.length < CEILING);
+    assert.match(collapsed, /large\.txt/, "the identifying argument survives");
+    assert.ok(!collapsed.includes(HUGE));
+
+    const expanded = interaction({ arguments: args }, true);
+    assert.ok(expanded.includes(HUGE), "the validated arguments are complete");
+    // Exactly what the runtime published, never a client-normalized rewrite.
+    assert.ok(expanded.includes(JSON.stringify(args, null, 2).split("\n")[1] ?? ""));
+  });
+
+  it("bounds a huge reason and huge arguments independently", () => {
+    const fields = { reason: `${HUGE}REASONTAIL`, arguments: { content: `${HUGE}ARGTAIL` } };
+    const collapsed = interaction(fields, false);
+    assert.ok(
+      collapsed.length < CEILING,
+      `collapsed approval card was ${collapsed.length} characters`,
+    );
+    assert.ok(!collapsed.includes("REASONTAIL"));
+    assert.ok(!collapsed.includes("ARGTAIL"));
+    // Neither band starved the other: both reported their own elision.
+    assert.equal(
+      collapsed.split("\n").filter((line) => line.includes("more characters")).length,
+      2,
+    );
+    assert.ok(
+      collapsed.split("\n").every((line) => line.length < DEFAULT_PREVIEW_CHARS + 200),
+    );
+
+    const expanded = interaction(fields, true);
+    assert.ok(expanded.includes("REASONTAIL"));
+    assert.ok(expanded.includes("ARGTAIL"));
+  });
+
+  it("tells the reader how to see the rest", () => {
+    const collapsed = interaction({ reason: HUGE }, false);
+    assert.match(collapsed, /\/expand interaction <interaction-id>/);
+    assert.match(collapsed, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
   });
 });
