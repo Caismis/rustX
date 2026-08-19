@@ -1154,7 +1154,18 @@ candidate and durably accepts the parent terminal inbound plus
 The first publication error receives the bounded retry; only exhausted retry
 invokes the sink owned by `ConversationRuntime`, which enters
 `DurabilityFailed` and leaves the candidate observable rather than claiming
-healthy or successful settlement. Terminal provenance is checked against the
+healthy or successful settlement. `DurabilityFailed` is the fail-closed
+frontier for **new** conversation-owned durable ownership: the runtime
+carries the failed fact to both the subagent and background registries
+through one runtime-owned `DurabilityGate`, and every new ownership commit
+holds that gate across its durable write and record publication, giving the
+failure commit and ownership commits one deterministic total order. A
+failure that wins first refuses new subagent/background ownership (staged
+child/runner rolled back conclusively, no durable fact, no record, no
+Delegate); an ownership that wins first is already durably owned and keeps
+its settlement authority. `DurabilityFailed` is deliberately distinct from
+`Draining` — it closes new semantic mutation only, never the settlement of
+already-owned work. Terminal provenance is checked against the
 durable `SubagentOwnershipCommitted.child_agent_id` — resolved through the
 ownership fact's canonical event identity (`subagent-committed-event:{id}`,
 derived from the embedded `SubagentId` and enforced by the durable
@@ -1183,14 +1194,18 @@ subagent-registry ownership-domain validation plus both directions of the
 runtime-claim/standalone-commit total order (a standalone commit that wins
 the transfer race makes the constructor reject with every claim rolled
 back; a runtime claim that wins first refuses later standalone starts);
-durable exactly-once and ownership-provenance tests, including the
-canonical `EventId <-> SubagentId` binding rejected at write time and
-revalidated at terminal-validation time; UTF-8 byte-bound tests; recovery
-interrupted-only classification tests; and real-binary scenarios for
-ordinary execution and hard parent `SIGKILL` with child EOF containment and
-repeated idempotent restart. No durable workflow, no subagent profile
-configuration surface, cross-conversation children, or recursion were
-added.
+the `DurabilityFailed`-vs-ownership total order for both the subagent and
+background planes (health-first refuses new ownership with conclusive
+rollback and no durable fact or record; ownership-first survives the later
+failure with full settlement authority; both exact races are forced on the
+runtime durability frontier); durable exactly-once and ownership-provenance
+tests, including the canonical `EventId <-> SubagentId` binding rejected at
+write time and revalidated at terminal-validation time; UTF-8 byte-bound
+tests; recovery interrupted-only classification tests; and real-binary
+scenarios for ordinary execution and hard parent `SIGKILL` with child EOF
+containment and repeated idempotent restart. No durable workflow, no
+subagent profile configuration surface, cross-conversation children, or
+recursion were added.
 
 ## Milestone 10 — Local runtime product
 

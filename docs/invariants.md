@@ -580,6 +580,21 @@ that a live child produced an Interrupted physical result.
   candidate remains observable as unresolved. The sink is copied while the
   registry state is protected but invoked after that mutex is released, so
   the lock graph never contains `SubagentRegistry -> ConversationRuntime`.
+- **DurabilityFailed is the fail-closed frontier for new ownership, not for
+  settlement.** Once `ConversationRuntime` commits `DurabilityFailed`, no
+  later conversation-owned durable semantic ownership commit may linearize:
+  new subagent ownership and new background ownership are refused at the
+  runtime-owned `DurabilityGate`, which the failure commit and every new
+  ownership commit serialize on, so the two have one deterministic total
+  order. An ownership commit holds the gate across its durable write and
+  record publication — a failure that wins first makes the commit refuse
+  (the staged child/runner rolls back conclusively), an ownership that
+  wins first is already durably owned before the failure can be published,
+  and already-owned work (cancel, escalation, reap, terminal publication,
+  drain, failure reporting) never acquires the gate and retains its full
+  settlement authority. `DurabilityFailed` is a different dimension from
+  `Draining`: a degraded durable authority and a shutting-down runtime stay
+  separate, with separate permission sets.
 - **Terminal provenance is durable authority, not caller repetition.** A
   `SubagentTerminalPublished` fact may claim only the exact
   `child_agent_id` in the earlier `SubagentOwnershipCommitted` fact for that

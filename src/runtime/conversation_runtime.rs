@@ -298,8 +298,8 @@ use crate::runtime::interaction::{
 use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{
-    CancellationReason, ConversationLifecycle, ConversationLifecycleState, RuntimeClock,
-    SystemClock,
+    CancellationReason, ConversationLifecycle, ConversationLifecycleState, DurabilityGate,
+    RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -1018,6 +1018,13 @@ pub(crate) struct RuntimeInner {
     /// of its own.
     lifecycle: ConversationLifecycle,
     clock: Arc<dyn RuntimeClock>,
+    /// The shared durability frontier (Issue #60): the same failed fact the
+    /// coordinator commits as `DurabilityFailed`, carried to the
+    /// conversation-owned registries so their new durable ownership commits
+    /// linearize against it. Updated under the coordinator lock in
+    /// [`RuntimeInner::record_durability_failure`]; the registries hold it
+    /// across their ownership durable writes.
+    durability_gate: Arc<DurabilityGate>,
     /// The immutable result of this runtime's startup recovery (Issue #12,
     /// M9a): the deterministic classification, exactly which recovery facts
     /// were committed, and what continuation is permitted.
@@ -1423,6 +1430,10 @@ impl RuntimeInner {
                 operation,
                 diagnostic: diagnostic.clone(),
             };
+            // The shared frontier is updated at the same commit point, so
+            // the registries' new ownership commits observe the failed fact
+            // with one total order against this commit.
+            self.durability_gate.mark_failed(diagnostic.clone());
             self.observe(ConversationObservation::DurabilityFailed {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
@@ -1459,6 +1470,10 @@ impl RuntimeInner {
                 operation,
                 diagnostic: diagnostic.clone(),
             };
+            // The shared frontier is updated at the same commit point, so
+            // the registries' new ownership commits observe the failed fact
+            // with one total order against this commit.
+            self.durability_gate.mark_failed(diagnostic.clone());
             self.observe(ConversationObservation::DurabilityFailed {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
@@ -2516,6 +2531,14 @@ impl ConversationRuntime {
             conversation_id.clone(),
             lifecycle.clone(),
         ));
+        // The shared durability frontier: one gate carries the
+        // `DurabilityFailed` fact to the conversation-owned registries so
+        // their new durable ownership commits linearize against it (Issue
+        // #60). It is created here and installed on the registries below,
+        // after the ownership transfer and the pristine arbitration, while
+        // the runtime is still inactive — no ownership commit can race the
+        // installation.
+        let durability_gate = Arc::new(DurabilityGate::new());
         let inner = Arc::new(RuntimeInner {
             conversation_id,
             agent_id: config.agent_id,
@@ -2529,6 +2552,7 @@ impl ConversationRuntime {
             interaction,
             lifecycle,
             clock,
+            durability_gate: durability_gate.clone(),
             recovery,
             executor,
             state: Mutex::new(CoordinatorState {
@@ -2575,6 +2599,14 @@ impl ConversationRuntime {
             .install_failure_sink(Arc::new(BackgroundFailureSink {
                 inner: Arc::downgrade(&inner),
             }));
+        // The runtime durability frontier is shared with both
+        // conversation-owned durable ownership planes: a new subagent or
+        // background ownership commit must linearize against the runtime's
+        // `DurabilityFailed` commit on the one gate.
+        inner
+            .tool_runtime
+            .background()
+            .install_durability_gate(durability_gate.clone());
         // The conversation runtime is also the durability-health owner of
         // its subagent plane. The registry calls this seam only after its
         // bounded terminal-publication retry budget is exhausted, and never
@@ -2583,6 +2615,7 @@ impl ConversationRuntime {
             subagents.install_failure_sink(Arc::new(SubagentFailureSink {
                 inner: Arc::downgrade(&inner),
             }));
+            subagents.install_durability_gate(durability_gate.clone());
         }
         Ok(Self { inner })
     }
@@ -3684,6 +3717,26 @@ impl InteractionObserver for RuntimeObserver {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    /// Commits a synthetic durable-authority failure through the exact
+    /// production `record_durability_failure` path (Issue #60 regression
+    /// seam).
+    ///
+    /// The operation is a non-transient event-journal failure, so the
+    /// runtime enters `DurabilityFailed` immediately and the shared
+    /// durability frontier (`DurabilityGate`) is marked failed under the
+    /// same commit — exactly what a real exhaustion (subagent or
+    /// background terminal publication) performs. Tests use it to force the
+    /// health-failure side of the ownership-vs-failure total order
+    /// deterministically.
+    pub(crate) fn force_durability_failure_for_test(&self, diagnostic: &str) {
+        let mut state = self.inner.lock_state();
+        self.inner.record_durability_failure(
+            &mut state,
+            DurableOperation::EventJournal,
+            diagnostic.to_owned(),
+        );
+    }
+
     /// The settled canonical ledger of this conversation, or `None` while
     /// an attempt owns the in-memory conversation state.
     pub(crate) fn settled_ledger(&self) -> Option<Vec<MessageBlock>> {
@@ -3770,7 +3823,9 @@ mod tests {
     use crate::message::content::TextBlock;
     use crate::message::types::{InboundKind, MessageBlock, UserContentBlock, UserSource};
     use crate::model::adapter::ModelAdapter;
-    use crate::runtime::identity::{AgentId, AttemptId, ConversationId, ToolCallId, ToolId};
+    use crate::runtime::identity::{
+        AgentId, AttemptId, ConversationId, SubagentId, ToolCallId, ToolId,
+    };
     use crate::runtime::interaction::{
         ApprovalDecision, ApprovalFacts, InteractionOutcome, InteractionResponse,
         InteractionSettleGate, InteractionWaitCancellationGate,
@@ -6888,6 +6943,747 @@ mod tests {
             Err(super::ShutdownError::RuntimeOwnedSettlement { detail })
                 if detail.contains("subagent")
         ));
+    }
+
+    /// DurabilityFailed-first for subagents (Issue #60): once the owning
+    /// runtime commits `DurabilityFailed` through the real subagent
+    /// terminal-publication exhaustion path, a new subagent start is
+    /// refused at the runtime durability frontier — the commit rejects
+    /// typed, the staged child is torn down conclusively, no
+    /// `SubagentOwnershipCommitted` fact and no Running record exist, no
+    /// Delegate is ever sent, and the existing unresolved candidate stays
+    /// unchanged.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn a_durability_failed_runtime_rejects_new_subagent_ownership() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-failclosed",
+            ))
+            .expect("in-memory store"),
+        );
+        let admission_gate = Arc::new(super::Gate::default());
+        let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            "conv-subagent-failclosed",
+            store.clone(),
+            Some(admission_gate.clone()),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        admission_gate.arm();
+        runtime
+            .submit_inbound(text_content("hold admission worker"))
+            .expect("hold inbound");
+        within_liveness_guard(
+            "subagent runtime admission worker gate",
+            tokio::task::spawn_blocking({
+                let admission_gate = admission_gate.clone();
+                move || admission_gate.wait_entered()
+            }),
+        )
+        .await
+        .expect("admission gate task");
+
+        // One owned child exhausts its bounded terminal-publication budget
+        // and degrades the owning runtime through the real sink path.
+        let (staged, mut peer) = stage_runtime_test_child(&dir.path().join("owned-child"));
+        subagents.push_staged_override(staged);
+        let owned = match subagents
+            .commit(
+                subagents
+                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        task: "owned child".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-owned"),
+                    })
+                    .await
+                    .expect("prepare owned"),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("commit owned")
+        {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => {
+                panic!("unexpected rollback")
+            }
+        };
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("delegate frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+        store.arm_fail_accept_times(3);
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut peer,
+            &crate::runtime::subagent::ipc::ChildFrame::Result(
+                crate::runtime::subagent::ipc::ResultFrame {
+                    status: crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                    content: Some("owned answer".to_owned()),
+                    diagnostic: None,
+                },
+            ),
+        )
+        .await
+        .expect("owned result");
+        let observations = await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { operation, .. }
+                    if operation == "subagent_terminal_publication"
+            )
+        })
+        .await;
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                ))
+                .count(),
+            1,
+            "the exhausted budget degraded the runtime exactly once"
+        );
+        assert!(
+            runtime.inner.durability_failure_diagnostic().is_some(),
+            "the runtime committed DurabilityFailed"
+        );
+
+        // A new subagent start after the failure is refused at the runtime
+        // durability frontier: `prepare` still stages privately, `commit`
+        // rejects typed at the gate, and the staged child is rolled back
+        // conclusively (the returned error is the typed rejection, never a
+        // rollback failure).
+        let (staged, _rejected_peer) = stage_runtime_test_child(&dir.path().join("rejected-child"));
+        subagents.push_staged_override(staged);
+        let prepared = subagents
+            .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                task: "rejected after failure".to_owned(),
+                context: None,
+                tool_call_id: ToolCallId::new("call-rejected"),
+            })
+            .await
+            .expect("prepare rejected");
+        let error = subagents
+            .commit(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect_err("ownership refused after DurabilityFailed");
+        assert!(
+            matches!(
+                error,
+                crate::runtime::subagent::SubagentStartError::DurabilityFailed { .. }
+            ),
+            "the typed rejection names the runtime durability failure: {error}"
+        );
+
+        // No new durable ownership fact, no new Running record, no
+        // Delegate: exactly the one owned child remains, its unresolved
+        // candidate unchanged.
+        let rejected_id =
+            SubagentId::for_conversation(&ConversationId::new("conv-subagent-failclosed"), 2);
+        let journal = store.read_events(None, 128).expect("events").events;
+        assert!(
+            !journal.iter().any(|envelope| matches!(
+                &envelope.event,
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id,
+                    ..
+                } if *subagent_id == rejected_id
+            )),
+            "no ownership fact for the rejected child"
+        );
+        let snapshots = subagents.all_snapshots();
+        assert_eq!(snapshots.len(), 1, "only the owned child remains");
+        assert_eq!(snapshots[0].subagent_id, owned.subagent_id);
+        let unresolved = subagents
+            .snapshot(&owned.subagent_id)
+            .expect("owned snapshot");
+        assert_eq!(
+            unresolved.state,
+            crate::runtime::subagent::SubagentState::PublishingTerminal
+        );
+        assert!(unresolved.publication_abandoned);
+        assert!(
+            unresolved.detail.is_some(),
+            "the unresolved candidate is unchanged"
+        );
+
+        admission_gate.release();
+    }
+
+    /// Ownership-first for subagents (Issue #60): a child whose ownership
+    /// committed while the runtime was healthy survives a later
+    /// `DurabilityFailed` commit — it is not retroactively reclaimed, and
+    /// it keeps its full settlement authority (cancel, escalate, reap,
+    /// durable terminal publication).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_owned_subagent_survives_a_later_durability_failure() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-owned-survives",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            "conv-subagent-owned-survives",
+            store.clone(),
+            None,
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Ownership commits first, while the runtime is healthy.
+        let (staged, mut peer) = stage_runtime_test_child(&dir.path().join("owned-child"));
+        subagents.push_staged_override(staged);
+        let accepted = match subagents
+            .commit(
+                subagents
+                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        task: "owned".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-owned"),
+                    })
+                    .await
+                    .expect("prepare"),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("commit")
+        {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => panic!("accepted"),
+        };
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("delegate frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+
+        // The runtime then commits DurabilityFailed; the already-owned
+        // child is not retroactively reclaimed.
+        runtime.force_durability_failure_for_test("synthetic durability failure");
+        await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+        let snapshot = subagents
+            .snapshot(&accepted.subagent_id)
+            .expect("owned snapshot");
+        assert_eq!(
+            snapshot.state,
+            crate::runtime::subagent::SubagentState::Running,
+            "ownership survives the later failure"
+        );
+
+        // The owned child keeps its settlement authority: cancel reaches
+        // the driver, the process is escalated and reaped, and the durable
+        // terminal publication still succeeds (settlement is not
+        // new-mutation authority).
+        let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
+        let settled = subagents
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(
+            settled.state,
+            crate::runtime::subagent::SubagentState::Cancelled
+        );
+    }
+
+    /// The exact ownership-vs-health race for subagents (Issue #60): the
+    /// ownership commit is parked inside its authoritative critical section
+    /// (holding the runtime durability frontier across its durable write
+    /// and record publication) while the `DurabilityFailed` commit is
+    /// invoked concurrently; the failure provably blocks on the frontier,
+    /// the ownership completes first, and only then does the failure
+    /// linearize. The owned child survives with its settlement authority.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn subagent_ownership_racing_a_durability_failure_linearizes_on_the_runtime_frontier() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-race-frontier",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            "conv-subagent-race-frontier",
+            store.clone(),
+            None,
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // The ownership commit is parked inside its authoritative critical
+        // section (the CommitBoundaryHook), provably holding the runtime
+        // durability frontier across the durable write and record
+        // publication.
+        let hook = Arc::new(crate::runtime::subagent::CommitBoundaryHook::default());
+        subagents.install_commit_boundary_hook(hook.clone());
+        let (staged, mut peer) = stage_runtime_test_child(&dir.path().join("racing-child"));
+        subagents.push_staged_override(staged);
+        let commit_registry = subagents.clone();
+        let committer = tokio::spawn(async move {
+            let prepared = commit_registry
+                .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                    profile: crate::runtime::subagent::SubagentProfile::Explore,
+                    task: "racing".to_owned(),
+                    context: None,
+                    tool_call_id: ToolCallId::new("call-racing"),
+                })
+                .await
+                .expect("prepare");
+            commit_registry
+                .commit(
+                    prepared,
+                    &crate::runtime::cancellation::CancellationSignal::new(),
+                )
+                .await
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::task::spawn_blocking({
+                let hook = hook.clone();
+                move || hook.wait_until_entered()
+            }),
+        )
+        .await
+        .expect("commit-boundary liveness")
+        .expect("commit-boundary entered");
+
+        // The DurabilityFailed commit is now invoked concurrently: it takes
+        // the coordinator lock and blocks on the runtime frontier held by
+        // the parked ownership commit.
+        let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
+        let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
+        let failing_runtime = runtime.clone();
+        let failure_thread = std::thread::spawn(move || {
+            failed_started_tx.send(()).expect("failure-started channel");
+            failing_runtime.force_durability_failure_for_test("synthetic durability failure");
+            failed_done_tx.send(()).expect("failure-done channel");
+        });
+        failed_started_rx
+            .recv()
+            .expect("failure is invoked while the ownership is parked");
+        assert!(
+            failed_done_rx.try_recv().is_err(),
+            "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+        );
+        assert!(
+            !pending.drain().iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )),
+            "the health failure has not linearized while the ownership commit holds the frontier"
+        );
+
+        // Release the ownership commit: it completes its durable write and
+        // record publication first, then the failure commit linearizes.
+        hook.release();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)
+            .await
+            .expect("commit liveness")
+            .expect("committer")
+            .expect("ownership wins the frontier");
+        let accepted = match outcome {
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(accepted) => accepted,
+            crate::runtime::subagent::SubagentStartOutcome::RolledBack => panic!("accepted"),
+        };
+        await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+        failure_thread.join().expect("failure thread joins");
+
+        // The owned child exists with a durable ownership fact and keeps
+        // its settlement authority.
+        let snapshot = subagents
+            .snapshot(&accepted.subagent_id)
+            .expect("owned snapshot");
+        assert_eq!(
+            snapshot.state,
+            crate::runtime::subagent::SubagentState::Running
+        );
+        let journal = store.read_events(None, 128).expect("events").events;
+        assert!(
+            journal.iter().any(|envelope| matches!(
+                &envelope.event,
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    subagent_id,
+                    ..
+                } if *subagent_id == accepted.subagent_id
+            )),
+            "the ownership durable fact committed before the failure"
+        );
+        let _ = subagents.cancel(&accepted.subagent_id, CancellationReason::UserRequested);
+        let settled = subagents
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .expect("settled");
+        assert_eq!(
+            settled.state,
+            crate::runtime::subagent::SubagentState::Cancelled
+        );
+        // The wire carried Delegate first, then the in-flight Cancel.
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("driver frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("driver frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Cancel)
+        ));
+    }
+
+    /// DurabilityFailed-first for background (Issue #60): once the owning
+    /// runtime commits `DurabilityFailed`, a new background ownership
+    /// commit is refused at the runtime durability frontier — the prepared
+    /// runner is aborted, no record and no durable fact exist.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_durability_failed_runtime_rejects_new_background_ownership() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-bg-failclosed",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model) =
+            headless_runtime_over_store(&dir, "conv-bg-failclosed", store.clone()).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // The runtime commits DurabilityFailed first.
+        runtime.force_durability_failure_for_test("synthetic durability failure");
+        await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+
+        // A new background ownership commit is refused at the runtime
+        // frontier: the prepared runner is aborted, no committed record and
+        // no durable ownership fact exist.
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> =
+            Arc::new(GatedBackgroundExecutor::new().0);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: ToolCallId::new("call-rejected-bg"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let error = runtime
+            .tool_runtime()
+            .background()
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect_err("background ownership refused after DurabilityFailed");
+        assert!(
+            matches!(
+                error,
+                crate::tools::background::BackgroundDispatchError::DurabilityFailed { .. }
+            ),
+            "the typed rejection names the runtime durability failure: {error}"
+        );
+        assert!(
+            runtime
+                .tool_runtime()
+                .background()
+                .all_snapshots()
+                .is_empty(),
+            "no committed background record"
+        );
+        assert!(
+            store
+                .read_events(None, 128)
+                .expect("events")
+                .events
+                .iter()
+                .all(|envelope| !matches!(
+                    envelope.event,
+                    crate::events::types::RuntimeEvent::BackgroundExecutionCommitted { .. }
+                )),
+            "no background ownership durable fact"
+        );
+    }
+
+    /// Ownership-first for background (Issue #60): an execution whose
+    /// ownership committed while the runtime was healthy survives a later
+    /// `DurabilityFailed` commit and keeps its settlement authority.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_owned_background_execution_survives_a_later_durability_failure() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-bg-owned-survives",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model) =
+            headless_runtime_over_store(&dir, "conv-bg-owned-survives", store.clone()).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Ownership commits first while the runtime is healthy.
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let execution_id = commit_background(&runtime, &executor, "call-owned-bg");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("runner start wait exceeded liveness guard")
+        .expect("start channel stays open");
+
+        // The runtime then commits DurabilityFailed; the already-owned
+        // execution is not reclaimed.
+        runtime.force_durability_failure_for_test("synthetic durability failure");
+        await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+        let snapshot = runtime
+            .background_status(&execution_id)
+            .expect("owned execution");
+        assert_eq!(
+            snapshot.state,
+            crate::tools::background::BackgroundLifecycle::Running,
+            "ownership survives the later failure"
+        );
+
+        // Settlement still works: the runner completes and its terminal
+        // publication is durably accepted (settlement is not new-mutation
+        // authority).
+        release.send_replace(true);
+        runtime
+            .tool_runtime()
+            .background()
+            .wait_until_settled(&execution_id)
+            .await;
+        let terminal = runtime
+            .background_status(&execution_id)
+            .expect("settled execution");
+        assert_eq!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Succeeded
+        );
+    }
+
+    /// The exact ownership-vs-health race for background (Issue #60): the
+    /// background ownership commit is parked inside its authoritative
+    /// critical section (holding the runtime durability frontier) while the
+    /// `DurabilityFailed` commit is invoked concurrently; the failure
+    /// provably blocks on the frontier, the ownership completes first, and
+    /// only then does the failure linearize. The owned execution survives
+    /// and settles normally.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn background_ownership_racing_a_durability_failure_linearizes_on_the_runtime_frontier() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-bg-race-frontier",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model) =
+            headless_runtime_over_store(&dir, "conv-bg-race-frontier", store.clone()).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // The background ownership commit is parked inside its
+        // authoritative critical section (the dispatch CommitBoundaryHook),
+        // provably holding the runtime durability frontier across the
+        // durable write and record publication.
+        let background = runtime.tool_runtime().background().clone();
+        let hook = Arc::new(crate::tools::background::test_sync::CommitBoundaryHook::default());
+        background.install_commit_boundary_hook(hook.clone());
+        let (executor, mut started, release) = GatedBackgroundExecutor::new();
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> = Arc::new(executor);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: ToolCallId::new("call-racing-bg"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = background
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        let commit_background_registry = background.clone();
+        let committer = tokio::task::spawn_blocking(move || {
+            commit_background_registry.commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+        });
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.wait_entered())
+                .await
+                .expect("the background commit entered its ownership boundary");
+        }
+
+        // The DurabilityFailed commit is now invoked concurrently: it takes
+        // the coordinator lock and blocks on the runtime frontier held by
+        // the parked ownership commit.
+        let (failed_started_tx, failed_started_rx) = std::sync::mpsc::channel();
+        let (failed_done_tx, failed_done_rx) = std::sync::mpsc::channel();
+        let failing_runtime = runtime.clone();
+        let failure_thread = std::thread::spawn(move || {
+            failed_started_tx.send(()).expect("failure-started channel");
+            failing_runtime.force_durability_failure_for_test("synthetic durability failure");
+            failed_done_tx.send(()).expect("failure-done channel");
+        });
+        failed_started_rx
+            .recv()
+            .expect("failure is invoked while the ownership is parked");
+        assert!(
+            failed_done_rx.try_recv().is_err(),
+            "the DurabilityFailed commit is provably blocked on the runtime frontier held by the parked ownership commit"
+        );
+        assert!(
+            !pending.drain().iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )),
+            "the health failure has not linearized while the ownership commit holds the frontier"
+        );
+
+        // Release the ownership commit: it completes its durable write and
+        // record publication first, then the failure commit linearizes.
+        {
+            let hook = hook.clone();
+            tokio::task::spawn_blocking(move || hook.proceed())
+                .await
+                .expect("the commit boundary was released");
+        }
+        let outcome = committer
+            .await
+            .expect("commit outcome")
+            .expect("ownership wins the frontier");
+        let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
+            outcome
+        else {
+            panic!("accepted");
+        };
+        await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+        failure_thread.join().expect("failure thread joins");
+
+        // The owned execution exists with a durable ownership fact and
+        // keeps its settlement authority.
+        let snapshot = runtime
+            .background_status(&execution_id)
+            .expect("owned execution");
+        assert_eq!(
+            snapshot.state,
+            crate::tools::background::BackgroundLifecycle::Running
+        );
+        let journal = store.read_events(None, 128).expect("events").events;
+        assert!(
+            journal.iter().any(|envelope| matches!(
+                &envelope.event,
+                crate::events::types::RuntimeEvent::BackgroundExecutionCommitted {
+                    execution_id: committed_id,
+                    ..
+                } if *committed_id == execution_id
+            )),
+            "the ownership durable fact committed before the failure"
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            started.wait_for(|is_started| *is_started),
+        )
+        .await
+        .expect("runner start wait exceeded liveness guard")
+        .expect("start channel stays open");
+        release.send_replace(true);
+        runtime
+            .tool_runtime()
+            .background()
+            .wait_until_settled(&execution_id)
+            .await;
+        let terminal = runtime
+            .background_status(&execution_id)
+            .expect("settled execution");
+        assert_eq!(
+            terminal.state,
+            crate::tools::background::BackgroundLifecycle::Succeeded
+        );
     }
 
     /// Issue #63 (Blocker 2, owning-runtime level): when the background

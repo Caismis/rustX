@@ -3153,6 +3153,21 @@ exhaustion, the failure sink (called outside the registry mutex) places the
 owning `ConversationRuntime` in `DurabilityFailed`; no false terminal success
 or healthy state is reported.
 
+`DurabilityFailed` is the **fail-closed frontier for new ownership**, shared
+with the background plane: `ConversationRuntime` owns the durability health
+and carries the failed fact to both conversation-owned registries through one
+runtime-owned `DurabilityGate`. Every new subagent or background ownership
+commit holds that gate across its durable ownership write and record
+publication, and the `DurabilityFailed` commit acquires the same gate, so
+the two have one deterministic total order — a failure that wins first makes
+the new ownership commit refuse (the staged child/runner rolls back
+conclusively, no durable fact, no record, no Delegate), and an ownership
+that wins first is already durably owned before the failure can be
+published. `DurabilityFailed` is deliberately distinct from `Draining`: it
+closes new semantic mutation only, while already-owned work (cancel,
+escalation, reap, terminal publication, drain, failure reporting) retains its
+settlement authority and never acquires the gate.
+
 Terminal validation resolves the child identity from the durable
 `SubagentOwnershipCommitted` fact — through its canonical event identity
 (`subagent-committed-event:{id}`, derived from the embedded `SubagentId`,

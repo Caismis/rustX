@@ -49,7 +49,7 @@ use crate::runtime::RuntimeClock;
 use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AgentId, ConversationId, SubagentId, ToolCallId};
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::types::CancellationReason;
+use crate::runtime::types::{CancellationReason, DurabilityGate};
 
 use super::ipc::DelegationFrame;
 use super::process::{PhysicalOutcome, StagedChild, SubagentSpawnPlan};
@@ -182,6 +182,13 @@ struct RegistryState {
     index: HashMap<SubagentId, usize>,
     observer: Option<Arc<dyn SubagentObserver>>,
     failure_sink: Option<Arc<dyn SubagentDurabilityFailureSink>>,
+    /// The owning `ConversationRuntime`'s durability frontier (Issue #60):
+    /// a new conversation-owned durable ownership commit must linearize
+    /// against the runtime's `DurabilityFailed` commit on this shared gate.
+    /// Installed by `ConversationRuntime::new` after the ownership
+    /// transfer; a standalone registry has none and commits through the
+    /// unbound-mailbox path.
+    durability_gate: Option<Arc<DurabilityGate>>,
     #[cfg(test)]
     commit_hook: Option<Arc<CommitBoundaryHook>>,
     #[cfg(test)]
@@ -326,6 +333,15 @@ pub enum SubagentStartError {
         /// The failure detail.
         detail: String,
     },
+    /// The owning conversation runtime's durable authority is in the
+    /// explicit `DurabilityFailed` state (Issue #63): no new
+    /// conversation-owned durable semantic ownership commit may begin until
+    /// the runtime is reconstructed. The staged child is torn down
+    /// conclusively and no ownership fact, record, or Delegate exists.
+    DurabilityFailed {
+        /// The owning runtime's bounded failure diagnostic.
+        detail: String,
+    },
     /// The ownership decision could not return while rollback was proven
     /// complete.
     Rollback {
@@ -357,6 +373,10 @@ impl core::fmt::Display for SubagentStartError {
             Self::Durability { detail } => {
                 write!(f, "the durable ownership commit failed: {detail}")
             }
+            Self::DurabilityFailed { detail } => write!(
+                f,
+                "the conversation runtime's durable authority has failed; no new subagent ownership may begin: {detail}"
+            ),
             Self::Rollback { detail } => {
                 write!(f, "the child rollback was not proven complete: {detail}")
             }
@@ -425,6 +445,7 @@ impl SubagentRegistry {
                 index: HashMap::new(),
                 observer: None,
                 failure_sink: None,
+                durability_gate: None,
                 #[cfg(test)]
                 commit_hook: None,
                 #[cfg(test)]
@@ -436,6 +457,17 @@ impl SubagentRegistry {
             })),
             state_version: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// Installs the owning runtime's durability frontier (Issue #60).
+    ///
+    /// `ConversationRuntime::new` installs it after the ownership transfer;
+    /// the runtime remains inactive until activation, so no ownership
+    /// commit can race the installation. A standalone registry never has
+    /// one.
+    pub(crate) fn install_durability_gate(&self, gate: Arc<DurabilityGate>) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.durability_gate = Some(gate);
     }
 
     /// The conversation this registry belongs to (construction ownership
@@ -643,72 +675,97 @@ impl SubagentRegistry {
             let mailbox = self.config.mailbox.clone();
             let clock = self.config.clock.clone();
             let config = &self.config;
-            let decision = match mailbox.with_running_commit(|| {
-                if mailbox.is_bound_inactive() {
-                    return Decision::Failed(SubagentStartError::ConversationInactive);
-                }
-                #[cfg(test)]
-                if let Some(hook) = &state.commit_hook {
-                    hook.wait();
-                }
-                let active = state
-                    .records
-                    .iter()
-                    // PublishingTerminal remains an owned, unresolved
-                    // settlement and therefore still consumes capacity. A
-                    // durability-failed runtime separately rejects new
-                    // mutations, but capacity must not silently reopen.
-                    .filter(|record| record.lifecycle.is_active())
-                    .count();
-                if active >= config.max_active {
-                    return Decision::Failed(SubagentStartError::CapacityExceeded {
-                        max: config.max_active,
-                    });
-                }
-                if attempt_cancellation.is_cancelled() {
-                    return Decision::RolledBack;
-                }
-                let started_at = clock.now();
-                if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
-                    &config.conversation_id,
-                    &subagent_id,
-                    &child_agent_id,
-                    &child_conversation_id,
-                    &tool_call_id,
-                    profile,
-                    started_at,
-                )) {
-                    return Decision::Failed(SubagentStartError::Durability {
-                        detail: error.to_string(),
-                    });
-                }
-                Decision::Accepted { started_at }
-            }) {
-                Ok(decision) => decision,
-                Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
-            };
-            if let Decision::Accepted { started_at } = &decision {
-                let record = SubagentRecord {
-                    subagent_id: subagent_id.clone(),
-                    child_agent_id: child_agent_id.clone(),
-                    child_conversation_id: child_conversation_id.clone(),
-                    tool_call_id,
-                    profile,
-                    lifecycle: SubagentLifecycle::Running,
-                    cancel_reason: None,
-                    control: None,
-                    detail: None,
-                    pending_terminal: None,
-                    publication_abandoned: false,
-                    notification: NotificationState::None,
-                    started_at: *started_at,
+            // Runtime durability frontier (Issue #60): a new
+            // conversation-owned durable ownership commit must linearize
+            // against the owning runtime's `DurabilityFailed` commit on one
+            // synchronization boundary. The permission guard is held across
+            // the durable ownership write and the record publication below,
+            // so a failure that wins the gate first rejects this start (and
+            // the staged child rolls back conclusively), and an ownership
+            // that wins first is already durably owned before the failure
+            // can be published. A standalone registry has no runtime gate
+            // and commits through the unbound-mailbox path. The gate handle
+            // is copied out of the registry state first: the guard borrows
+            // the gate, never the registry state, so the ownership commit
+            // below may still mutate the state while the guard is held.
+            let durability_gate = state.durability_gate.clone();
+            let ownership_permission = durability_gate
+                .as_ref()
+                .map(|gate| gate.enter_ownership_commit());
+            if let Some(Err(refused)) = &ownership_permission {
+                Decision::Failed(SubagentStartError::DurabilityFailed {
+                    detail: refused.diagnostic.clone(),
+                })
+            } else {
+                // `ownership_permission` stays alive to the end of this
+                // block: the gate guard spans the whole ownership commit.
+                let decision = match mailbox.with_running_commit(|| {
+                    if mailbox.is_bound_inactive() {
+                        return Decision::Failed(SubagentStartError::ConversationInactive);
+                    }
+                    #[cfg(test)]
+                    if let Some(hook) = &state.commit_hook {
+                        hook.wait();
+                    }
+                    let active = state
+                        .records
+                        .iter()
+                        // PublishingTerminal remains an owned, unresolved
+                        // settlement and therefore still consumes capacity. A
+                        // durability-failed runtime separately rejects new
+                        // mutations, but capacity must not silently reopen.
+                        .filter(|record| record.lifecycle.is_active())
+                        .count();
+                    if active >= config.max_active {
+                        return Decision::Failed(SubagentStartError::CapacityExceeded {
+                            max: config.max_active,
+                        });
+                    }
+                    if attempt_cancellation.is_cancelled() {
+                        return Decision::RolledBack;
+                    }
+                    let started_at = clock.now();
+                    if let Err(error) = mailbox.commit_subagent_ownership(ownership_event(
+                        &config.conversation_id,
+                        &subagent_id,
+                        &child_agent_id,
+                        &child_conversation_id,
+                        &tool_call_id,
+                        profile,
+                        started_at,
+                    )) {
+                        return Decision::Failed(SubagentStartError::Durability {
+                            detail: error.to_string(),
+                        });
+                    }
+                    Decision::Accepted { started_at }
+                }) {
+                    Ok(decision) => decision,
+                    Err(_) => Decision::Failed(SubagentStartError::ConversationInactive),
                 };
-                let index = state.records.len();
-                state.index.insert(subagent_id.clone(), index);
-                state.records.push(record);
-                publish_snapshot(&mut state, &self.state_version, index);
+                if let Decision::Accepted { started_at } = &decision {
+                    let record = SubagentRecord {
+                        subagent_id: subagent_id.clone(),
+                        child_agent_id: child_agent_id.clone(),
+                        child_conversation_id: child_conversation_id.clone(),
+                        tool_call_id,
+                        profile,
+                        lifecycle: SubagentLifecycle::Running,
+                        cancel_reason: None,
+                        control: None,
+                        detail: None,
+                        pending_terminal: None,
+                        publication_abandoned: false,
+                        notification: NotificationState::None,
+                        started_at: *started_at,
+                    };
+                    let index = state.records.len();
+                    state.index.insert(subagent_id.clone(), index);
+                    state.records.push(record);
+                    publish_snapshot(&mut state, &self.state_version, index);
+                }
+                decision
             }
-            decision
         };
         match decision {
             Decision::RolledBack => match staged.rollback().await {

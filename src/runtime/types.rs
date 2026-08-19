@@ -6,7 +6,7 @@
 //! types.
 
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -378,6 +378,104 @@ impl ConversationLifecycle {
             notified.await;
         }
     }
+}
+
+/// The runtime-owned durability frontier shared with conversation-owned
+/// durable semantic ownership commits (Issue #60).
+///
+/// `ConversationRuntime` owns the authoritative durable-health state
+/// (`DurabilityHealth` under the coordinator lock). This gate is the single
+/// synchronization frontier through which that fact reaches the
+/// conversation-owned registries: it carries the same failed fact at the
+/// same commit point (updated by the coordinator's durability-failure
+/// commit) and serializes new conversation-owned durable ownership commits
+/// (subagent and background) against the `DurabilityFailed` commit, so the
+/// two have one deterministic total order:
+///
+/// - a new ownership commit holds the gate **across** its durable
+///   ownership write and record publication — a failure that wins the gate
+///   first makes the commit refuse (and its staged child roll back), while
+///   an ownership that wins first is already durably owned before the
+///   failure can be published;
+/// - settlement of already-owned work never acquires the gate: `DurabilityFailed`
+///   closes **new** semantic mutation only, never settlement.
+///
+/// `DurabilityFailed` is deliberately not a lifecycle state: a degraded
+/// durable authority and a shutting-down runtime are different dimensions,
+/// and this gate keeps them separate.
+#[derive(Debug, Default)]
+pub(crate) struct DurabilityGate {
+    state: Mutex<DurabilityGateState>,
+}
+
+#[derive(Debug, Default)]
+struct DurabilityGateState {
+    /// Whether the owning runtime committed `DurabilityFailed`.
+    failed: bool,
+    /// The bounded failure diagnostic of that commit.
+    diagnostic: Option<String>,
+}
+
+impl DurabilityGate {
+    /// Creates a fresh, healthy frontier.
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Commits the `DurabilityFailed` fact into the shared frontier.
+    ///
+    /// Called by the owning runtime's durability-failure commit under the
+    /// coordinator lock. New ownership commits serialize on this same gate,
+    /// so this acquisition is the linearization point against any new
+    /// conversation-owned durable ownership commit.
+    pub(crate) fn mark_failed(&self, diagnostic: String) {
+        let mut state = self.state.lock().expect("durability gate lock poisoned");
+        state.failed = true;
+        state.diagnostic = Some(diagnostic);
+    }
+
+    /// Acquires the ownership-commit permission for one new
+    /// conversation-owned durable ownership commit.
+    ///
+    /// The returned guard must be held across the ownership durable write
+    /// and (for the registries) the record publication: while it is held,
+    /// the `DurabilityFailed` commit blocks on the same gate, so the two
+    /// operations have one total order and no check-then-write window
+    /// exists. Returns [`OwnershipCommitRefused`] when the owning runtime
+    /// already committed `DurabilityFailed`.
+    pub(crate) fn enter_ownership_commit(
+        &self,
+    ) -> Result<OwnershipCommitGuard<'_>, OwnershipCommitRefused> {
+        let state = self.state.lock().expect("durability gate lock poisoned");
+        if state.failed {
+            return Err(OwnershipCommitRefused {
+                diagnostic: state
+                    .diagnostic
+                    .clone()
+                    .unwrap_or_else(|| "the conversation durable authority failed".to_owned()),
+            });
+        }
+        Ok(OwnershipCommitGuard { _gate: state })
+    }
+}
+
+/// The short-lived permission of one new conversation-owned durable
+/// ownership commit.
+///
+/// Held across the ownership durable write and record publication, it is
+/// what gives the `DurabilityFailed` commit and the ownership commit one
+/// deterministic total order on the [`DurabilityGate`].
+pub(crate) struct OwnershipCommitGuard<'a> {
+    _gate: MutexGuard<'a, DurabilityGateState>,
+}
+
+/// A new conversation-owned durable ownership commit refused because the
+/// owning runtime's durable authority is in the explicit failed state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnershipCommitRefused {
+    /// The owning runtime's bounded failure diagnostic.
+    pub(crate) diagnostic: String,
 }
 
 /// A token measurement of a model input, with explicit provenance.

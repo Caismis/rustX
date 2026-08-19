@@ -152,7 +152,7 @@ use crate::runtime::identity::{
     ConversationId, EventId, MessageId, ToolCallId, ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::ConversationInboundMailbox;
-use crate::runtime::types::{CancellationReason, ConversationLifecycle};
+use crate::runtime::types::{CancellationReason, ConversationLifecycle, DurabilityGate};
 use serde::{Deserialize, Serialize};
 
 use crate::tools::artifacts::ArtifactStore;
@@ -379,6 +379,15 @@ pub enum BackgroundDispatchError {
         /// The bounded durable failure diagnostic.
         detail: String,
     },
+    /// The owning conversation runtime's durable authority is in the
+    /// explicit `DurabilityFailed` state (Issue #63): no new
+    /// conversation-owned durable semantic ownership commit may begin until
+    /// the runtime is reconstructed. The prepared dispatch rolls back
+    /// completely — no record, no runner start, no durable fact.
+    DurabilityFailed {
+        /// The owning runtime's bounded failure diagnostic.
+        detail: String,
+    },
     /// An internal dispatch failure.
     Internal(String),
 }
@@ -398,6 +407,10 @@ impl core::fmt::Display for BackgroundDispatchError {
             Self::Durable { detail } => write!(
                 f,
                 "the durable background ownership fact could not be committed, so no detached execution was started: {detail}"
+            ),
+            Self::DurabilityFailed { detail } => write!(
+                f,
+                "the conversation runtime's durable authority has failed; no new background ownership may begin: {detail}"
             ),
             Self::Internal(message) => write!(f, "background dispatch failed: {message}"),
         }
@@ -536,6 +549,13 @@ struct BackgroundRegistryState {
     /// It is invoked by the runner after the bounded terminal-publication
     /// budget is exhausted, never while the registry lock is held.
     failure_sink: Option<Arc<dyn BackgroundDurabilityFailureSink>>,
+    /// The owning `ConversationRuntime`'s durability frontier (Issue #60):
+    /// a new conversation-owned durable ownership commit must linearize
+    /// against the runtime's `DurabilityFailed` commit on this shared gate.
+    /// Installed by `ConversationRuntime::new` after the ownership
+    /// transfer; a standalone registry has none and commits through the
+    /// unbound-mailbox path.
+    durability_gate: Option<Arc<DurabilityGate>>,
     /// Test-only synchronization hook at the dispatch ownership commit
     /// boundary; never present outside `#[cfg(test)]`.
     #[cfg(test)]
@@ -588,6 +608,7 @@ impl ConversationBackgroundRegistry {
                 index: HashMap::new(),
                 observer: None,
                 failure_sink: None,
+                durability_gate: None,
                 #[cfg(test)]
                 commit_hook: None,
             })),
@@ -620,6 +641,17 @@ impl ConversationBackgroundRegistry {
     /// installation can never race a settlement.
     pub(crate) fn install_failure_sink(&self, sink: Arc<dyn BackgroundDurabilityFailureSink>) {
         self.state().failure_sink = Some(sink);
+    }
+
+    /// Installs the owning runtime's durability frontier (Issue #60).
+    ///
+    /// A new conversation-owned background ownership commit must linearize
+    /// against the runtime's `DurabilityFailed` commit on this shared gate.
+    /// `ConversationRuntime::new` installs it after the ownership transfer;
+    /// the runtime remains inactive until activation, so no dispatch commit
+    /// can race the installation. A standalone registry never has one.
+    pub(crate) fn install_durability_gate(&self, gate: Arc<DurabilityGate>) {
+        self.state().durability_gate = Some(gate);
     }
 
     /// Installs the observer and captures every retained record snapshot
@@ -892,6 +924,37 @@ impl ConversationBackgroundRegistry {
                 conversation_id: self.conversation_id.clone(),
             })?;
         let mut state = self.state();
+        // Runtime durability frontier (Issue #60): a new conversation-owned
+        // durable ownership commit must linearize against the owning
+        // runtime's `DurabilityFailed` commit on one synchronization
+        // boundary. The permission guard is held across the durable
+        // ownership write and the record publication below, so a failure
+        // that wins the gate first rejects this dispatch (the prepared
+        // runner is aborted while still parked behind its gate), and an
+        // ownership that wins first is already durably owned before the
+        // failure can be published. A standalone registry has no runtime
+        // gate and commits through the unbound-mailbox path. The gate
+        // handle is copied out of the registry state first: the guard
+        // borrows the gate, never the registry state, so the ownership
+        // commit below may still mutate the state while the guard is held.
+        let durability_gate = state.durability_gate.clone();
+        let ownership_permission = durability_gate
+            .as_ref()
+            .map(|gate| gate.enter_ownership_commit());
+        if let Some(Err(refused)) = &ownership_permission {
+            // Reject: roll the prepared dispatch back completely — the
+            // runner is aborted while still parked behind its start gate —
+            // and report the runtime-owned health diagnostic.
+            if let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) {
+                prepared_record.runner.abort();
+            }
+            prepared.committed = true;
+            drop(state);
+            self.notify_state_change();
+            return Err(BackgroundDispatchError::DurabilityFailed {
+                detail: refused.diagnostic.clone(),
+            });
+        }
         // The activation gate: observed under this registry critical
         // section, so the commit linearizes cleanly against
         // `ConversationRuntime::activate` — a commit that observes the
@@ -990,6 +1053,9 @@ impl ConversationBackgroundRegistry {
             }
             prepared.committed = true;
         }
+        // `ownership_permission` (the gate guard) drops with this scope,
+        // after the record publication above: the DurabilityFailed commit
+        // and this ownership commit have one total order on the gate.
         drop(state);
         self.notify_state_change();
         match commit_result {
