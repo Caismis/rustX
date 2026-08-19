@@ -48,15 +48,16 @@ rustX Runtime semantics
 > presentation reduction, model state, tool state, background state, and
 > command semantics remain valid?
 
-Yes. Pi is imported by exactly two files: `src/ui/app.ts`, and
-`src/commands/autocomplete.ts` for the `AutocompleteProvider` interface it
-implements. Everything below that is plain TypeScript over protocol values.
+Yes. Pi is imported by four files, all of them presentation: `src/ui/app.ts`,
+`src/ui/components/model-selector.ts` (a `Component`), `src/ui/components/
+transcript.ts` (one type import), and `src/commands/autocomplete.ts` for the
+`AutocompleteProvider` interface it implements. Everything below `src/ui/` is
+plain TypeScript over protocol values.
 
-Eight of the nine test suites — framing, RPC, presentation projection, session
-lifecycle, the model invariant, rendering, the process owner, and the real
-`rustx` integration — do not reach `@earendil-works/pi-tui` at all, directly or
-transitively. The ninth (`commands.test.ts`) touches it only through the
-autocomplete interface and `fuzzyFilter`. No suite needs a terminal.
+No suite needs a terminal. Framing, RPC, presentation projection, session
+lifecycle, the model invariant, tool correlation, the process owner, and the
+real `rustx` integration never reach `@earendil-works/pi-tui` at all, directly
+or transitively; the presentation suites reach it only to render strings.
 
 ## Requirements
 
@@ -120,20 +121,36 @@ spawn rustx
 | `runtime/connection.ts` | request ids, the pending RPC map, correlation, event delivery, ordered writes, terminal settlement | conversation state |
 | `runtime/session.ts` | attach, snapshot install, subscribe, resync repair, shutdown | agent semantics |
 | `presentation/projection.ts` | the ephemeral render cache | canonical history, authority of any kind |
+| `presentation/tools.ts` | the `ToolCallId` correlation used for display | tool lifecycle, which it only reads |
 | `commands/` | slash-command parsing, dispatch to canonical operations | parallel runtime semantics |
+| `ui/components/` | the semantic presentation grammar | every fact it displays |
+| `ui/preferences.ts` | reasoning visibility and expanded cards | anything the runtime owns |
 | `ui/` | Pi components and rendering | every fact it displays |
 
 ## Commands
 
-`/help` `/model` `/tools` `/skills` `/status` `/debug` `/cancel` `/approve` `/quit`
+`/help` `/model` `/tools` `/skills` `/status` `/debug` `/reasoning` `/expand`
+`/cancel` `/approve` `/quit`
 
-Each either renders projection state or invokes exactly one canonical Runtime
-Client operation. `/model` goes through `model_catalog_get` and `model_set`;
+Each either renders projection state, changes a client display preference, or
+invokes exactly one canonical Runtime Client operation. `/model` opens the
+searchable selector over `model_catalog_get` and applies a choice through
+`model_set`, while `/model show` renders the projection's own model view;
 `/tools` and `/skills` read the capability projection; `/status` prints the
 runtime's own Agent Status rendering; `/debug` shows bounded diagnostics and
 never a credential; `/approve` sends a finite typed response to one
 runtime-owned Approval interaction. The TUI never edits the displayed tool
 arguments or keeps a local approval outcome.
+
+`/reasoning [on|off]` and `/expand [<tool-call-id>|all|none]` are the two
+commands that touch nothing but the screen. They send no request, and they are
+also bound to keys:
+
+| Key | Effect |
+| --- | --- |
+| `ctrl+c` | cancellation intent for the active attempt, or quit when idle |
+| `ctrl+o` | expand or collapse the most recent tool card |
+| `ctrl+t` | show or hide model reasoning |
 
 There is deliberately **no** `!bash`, no `@file` attachment, no client-side
 file read, and no client-side Skill execution. Shell, file, and Skill behaviour
@@ -152,6 +169,18 @@ validated arguments. `/approve <interaction-id> allow` or
 `interaction_respond` request. It never invokes a tool, mutates arguments,
 infers an outcome from detach/EOF, or callbacks into the Agent Loop.
 
+## The model selector
+
+`/model` opens a searchable overlay over the catalog `model_catalog_get`
+published. It fuzzy-filters on the model reference, marks the configured model
+as current, and shows the highlighted entry's effective capability, context
+window, output limit, and reasoning profiles — each exactly as the catalog
+published it. A reasoning-capable model that declares no profiles is shown as
+exactly that: there is no universal off/low/medium/high, and inventing one
+would make this client a second model-configuration authority. The overlay also
+states the configured/effective pair and, while an attempt is running, that the
+running attempt keeps the model it froze.
+
 ## The model invariant
 
 `snapshot.model` is the session's *desired* configuration.
@@ -164,14 +193,83 @@ This is proven in `test/model-invariant.test.ts` through the pure reducer and
 end to end over the transport, and again against the real binary in
 `test/integration.test.ts`.
 
-## Reasoning presentation
+## The semantic presentation model
+
+The transcript is a grammar of semantic components, not a log of protocol
+records:
+
+```text
+user            ▌ the question, verbatim
+assistant text  ordinary Markdown, no banner
+reasoning       dimmed, or one `Thinking…` marker when hidden
+refusal         explicitly a refusal, never an answer
+tool_call       one correlated tool card
+tool result     folded into that card, not repeated
+```
+
+Canonical block order is preserved exactly: `reasoning, text, tool_call, text`
+renders in that sequence, streaming and committed alike, and streaming text
+renders identically to the committed text so nothing reflows on commit.
+
+### One tool call is one visual entity
+
+rustX publishes three different facts about one logical call:
+
+```text
+assistant tool_call block   committed conversation content
+foreground execution        attempt-scoped execution lifecycle
+tool result message         committed conversation content
+```
+
+Their semantic ownership stays separate. `presentation/tools.ts` joins them for
+*display*, keyed by the runtime's own `ToolCallId` — never by tool name,
+argument equality, list position, timing, or adjacency, so two concurrent calls
+of the same tool with the same arguments stay two cards. The card renders at
+the assistant block that asked for the call and evolves in place:
+
+```text
+◇ Bash · preparing        ->  ◐ Bash · running · 40/900  ->  ✓ Bash · ok · 2.8s · exit 0
+```
+
+### Renderers may format, never decide
+
+> **Tool identity may select a presentation renderer.
+> Tool identity may never select or infer execution semantics.**
+
+A stable `ToolId` picks a specialized renderer — Bash, Read, Grep, Glob, Edit,
+Write — so a shell call reads as `$ cargo test --all` instead of argument JSON.
+A renderer formats already-authoritative facts and is never handed the
+lifecycle, so it cannot express an opinion about it: running, success, failure,
+denial, cancellation, timeout, interruption, progress, duration, exit code, and
+truncation all come from the Runtime Client. Nothing reads a status out of
+output text, infers running from an absent result, or infers cancellation from
+missing output. A renderer that does not recognise a shape returns nothing and
+the generic renderer takes over, so unknown, MCP, and Python tools stay fully
+usable.
+
+### Visual collapse is not runtime truncation
+
+A collapsed card shows a bounded preview and says how many lines are hidden.
+Expanding re-renders facts the client already holds: no re-execution, no
+filesystem access, no network. The runtime's own `TruncationState` is a
+different fact, reported separately and always — expanding never undoes it.
+
+### Reasoning visibility is not reasoning configuration
 
 The TUI consumes only canonical Runtime Client reasoning blocks. Provider
 spellings such as `reasoning` and `reasoning_content` never enter the
-TypeScript protocol or presentation layer. Reasoning, visible answer,
-refusal, and tool blocks remain distinct presentation blocks in both
-streaming and committed rendering; the TUI is a downstream projection, not a
-second runtime state machine.
+TypeScript protocol or presentation layer. Whether reasoning is *drawn* is a
+client preference (`/reasoning`, `ctrl+t`); when hidden it collapses to a
+`Thinking…` marker rather than becoming assistant text. What rustX *asks a
+provider for* is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`,
+which only `model_set` changes.
+
+### Working status is proven, never timed
+
+The spinner names a phase only when a projection fact proves it — a pending
+interaction, a running or assembled foreground execution, the kind of the
+latest streamed block, the attempt phase. There is no timer and no inactivity
+threshold, and no state is invented for a lifecycle rustX does not publish.
 
 ## Testing
 
@@ -182,7 +280,11 @@ pnpm --dir tui test
 
 Everything is deterministic: scripted byte and record sequences, a data
 barrier rather than a delay for readiness, and no `setTimeout` used to
-establish an ordering.
+establish an ordering. The presentation suites drive projection facts directly
+and assert on normalized strings — `transcript.test.ts`,
+`tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
+`status.test.ts`, and `reconstruction.test.ts`, which rebuilds the whole
+visible UI from one fresh snapshot.
 
 `test/integration.test.ts` drives the **real** `rustx` binary over the real
 stdio/JSONL transport against a local SSE provider fixture (no credentials, no

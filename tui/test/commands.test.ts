@@ -71,6 +71,8 @@ describe("command registry", () => {
         "/skills",
         "/status",
         "/debug",
+        "/reasoning",
+        "/expand",
         "/cancel",
         "/approve",
         "/quit",
@@ -180,11 +182,11 @@ describe("CommandDispatcher", () => {
     }
   });
 
-  it("renders /model from the runtime-owned session state", async () => {
+  it("renders /model show from the runtime-owned session state", async () => {
     const { dispatcher } = await harness(
       snapshot({ model: sessionModel("alpha/model-a") }),
     );
-    const outcome = await dispatcher.submit("/model");
+    const outcome = await dispatcher.submit("/model show");
     assert.equal(outcome.kind, "message");
     if (outcome.kind !== "message") {
       return;
@@ -209,7 +211,7 @@ describe("CommandDispatcher", () => {
     );
     assert.equal(session.state?.attempt?.model.primary.model, "alpha/model-a");
 
-    const outcome = await dispatcher.submit("/model");
+    const outcome = await dispatcher.submit("/model show");
     assert.equal(outcome.kind, "message");
     if (outcome.kind !== "message") {
       return;
@@ -312,6 +314,100 @@ describe("CommandDispatcher", () => {
     }
     // No model_set was attempted for an unknown reference.
     assert.equal(peer.requests.length, 3);
+  });
+
+  it("opens the model selector from the runtime catalog", async () => {
+    const { peer, dispatcher } = await harness();
+    const choosing = dispatcher.submit("/model");
+    await peer.awaitRequests(3);
+    assert.equal(
+      peer.requests[2]?.method,
+      "model_catalog_get",
+      "the selector reads the runtime catalog, never models.json",
+    );
+    peer.respond(3, {
+      type: "model_catalog",
+      catalog: {
+        models: [
+          {
+            model: "beta/model-b",
+            protocol: "openai_chat_completions",
+            contextWindow: 32_000,
+            maxOutputTokens: 2_048,
+            declaredCapabilities: {
+              inputModalities: ["text"],
+              outputModalities: ["text"],
+              toolCalls: true,
+              reasoning: false,
+            },
+            effectiveCapabilities: {
+              inputModalities: ["text"],
+              outputModalities: ["text"],
+              toolCalls: true,
+              reasoning: false,
+            },
+            credentialSource: { type: "environment", variable: "RUSTX_KEY" },
+          },
+        ],
+      },
+    });
+
+    const outcome = await choosing;
+    assert.equal(outcome.kind, "choose_model");
+    if (outcome.kind === "choose_model") {
+      assert.deepEqual(
+        outcome.models.map((model) => model.model),
+        ["beta/model-b"],
+      );
+    }
+    // Opening the selector sends no model_set.
+    assert.equal(peer.requests.length, 3);
+  });
+
+  it("treats /reasoning and /expand as client display preferences", async () => {
+    const { peer, dispatcher } = await harness();
+
+    assert.deepEqual(await dispatcher.submit("/reasoning"), {
+      kind: "preference",
+      preference: { type: "reasoning" },
+    });
+    assert.deepEqual(await dispatcher.submit("/reasoning off"), {
+      kind: "preference",
+      preference: { type: "reasoning", visible: false },
+    });
+    assert.deepEqual(await dispatcher.submit("/reasoning on"), {
+      kind: "preference",
+      preference: { type: "reasoning", visible: true },
+    });
+    assert.deepEqual(await dispatcher.submit("/expand"), {
+      kind: "preference",
+      preference: { type: "expand", target: "latest" },
+    });
+    assert.deepEqual(await dispatcher.submit("/expand all"), {
+      kind: "preference",
+      preference: { type: "expand", target: "all" },
+    });
+    assert.deepEqual(await dispatcher.submit("/expand none"), {
+      kind: "preference",
+      preference: { type: "expand", target: "none" },
+    });
+    assert.deepEqual(await dispatcher.submit("/expand call-7"), {
+      kind: "preference",
+      preference: { type: "expand_call", callId: "call-7" },
+    });
+
+    // Not one of them reached the runtime: display is not a request.
+    assert.equal(peer.requests.length, 2);
+  });
+
+  it("rejects an unusable /reasoning argument instead of guessing", async () => {
+    const { dispatcher } = await harness();
+    const outcome = await dispatcher.submit("/reasoning maybe");
+    assert.equal(outcome.kind, "message");
+    if (outcome.kind === "message") {
+      assert.equal(outcome.level, "error");
+      assert.match(outcome.text, /usage: \/reasoning \[on\|off\]/);
+    }
   });
 
   it("renders /tools generically from the capability projection", async () => {

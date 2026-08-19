@@ -7,13 +7,17 @@
  * below this file.
  *
  * Selectors are pure derivations. They label and group; they never decide a
- * semantic fact. In particular a tool's origin or name may pick an icon and
- * nothing else — execution semantics stay Rust-owned.
+ * semantic fact. A tool's origin or name may pick a label, a grouping, or a
+ * presentation renderer; it may never pick an execution semantic, because
+ * those are Rust-owned.
+ *
+ * The working indicator and the footer live in `ui/components/status.ts`
+ * because they are presentation compositions rather than derivations, and the
+ * model selector reads the catalog directly.
  */
 
 import type {
   BackgroundLifecycle,
-  CatalogModelView,
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
   RuntimeClientOutcome,
@@ -55,28 +59,6 @@ export function outcomeLabel(outcome: RuntimeClientOutcome): string {
     default:
       return "settled";
   }
-}
-
-/** The one-line working indicator, or undefined when idle. */
-export function workingLabel(state: PresentationState): string | undefined {
-  const attempt = state.attempt;
-  if (attempt === undefined) {
-    return undefined;
-  }
-  if (attempt.phase.type === "admitted") {
-    return "admitted";
-  }
-  if (attempt.phase.type !== "running") {
-    return undefined;
-  }
-  const running = attempt.foreground.filter(
-    (execution) => execution.state.type === "running",
-  );
-  if (running.length > 0) {
-    const names = running.map((execution) => execution.name || execution.tool_id);
-    return `running ${names.join(", ")}`;
-  }
-  return `turn ${attempt.turn}`;
 }
 
 /** Background executions the runtime still considers active. */
@@ -162,24 +144,4 @@ export function unavailableInputModalities(
   return invocation.declaredCapabilities.inputModalities.filter(
     (modality) => !effective.has(modality),
   );
-}
-
-/** Catalog entries as select-list rows: reference plus effective capability. */
-export function catalogRows(
-  models: CatalogModelView[],
-): Array<{ value: string; label: string; description: string }> {
-  return models.map((model) => ({
-    value: model.model,
-    label: model.model,
-    description: [
-      model.protocol,
-      `${model.contextWindow} ctx`,
-      `${model.maxOutputTokens} out`,
-      model.effectiveCapabilities.toolCalls ? "tools" : "no tools",
-      model.effectiveCapabilities.reasoning ? "reasoning" : "no reasoning",
-      (model.reasoningProfiles ?? []).length > 0
-        ? `profiles: ${(model.reasoningProfiles ?? []).map((profile) => profile.id).join(",")}`
-        : "no profiles",
-    ].join(" · "),
-  }));
 }

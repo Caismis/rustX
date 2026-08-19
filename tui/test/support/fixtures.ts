@@ -8,8 +8,13 @@
  */
 
 import type {
+  AssistantContentBlock,
   AttemptModelView,
   CapabilityView,
+  CatalogModelView,
+  ForegroundToolExecution,
+  MessageBlock,
+  RuntimeClientAttempt,
   InteractionRequest,
   ModelInvocationView,
   RuntimeClientBackgroundExecution,
@@ -198,6 +203,97 @@ export function backgroundExecution(
     tool_id: "tool-background",
     tool_name: "background_task",
     state,
+    ...overrides,
+  };
+}
+
+/** One canonical assistant tool-call block. */
+export function toolCallBlock(
+  callId: string,
+  toolId: string,
+  name: string,
+  args: unknown,
+) {
+  return {
+    type: "tool_call" as const,
+    id: callId,
+    tool_id: toolId,
+    name,
+    arguments: args,
+  };
+}
+
+/** One committed assistant message with arbitrary canonical blocks. */
+export function assistantBlocks(
+  id: string,
+  content: AssistantContentBlock[],
+): MessageBlock {
+  return { role: "assistant", id, content };
+}
+
+/** One committed canonical tool result message. */
+export function toolMessage(
+  id: string,
+  callId: string,
+  toolId: string,
+  result: ToolExecutionResult = toolResult(),
+): MessageBlock {
+  return {
+    role: "tool",
+    id,
+    tool_call_id: callId,
+    tool_id: toolId,
+    result,
+  };
+}
+
+/** One attempt view with a foreground execution list. */
+export function attemptView(
+  overrides: Partial<RuntimeClientAttempt> = {},
+): RuntimeClientAttempt {
+  return {
+    attempt_id: "a1",
+    phase: { type: "running" },
+    turn: 1,
+    model: attemptModel("alpha/model-a"),
+    foreground: [],
+    ...overrides,
+  };
+}
+
+/** One foreground execution slot. */
+export function foreground(
+  callId: string,
+  toolId: string,
+  name: string,
+  state: ForegroundToolExecution["state"],
+): ForegroundToolExecution {
+  return { call_id: callId, tool_id: toolId, name, state };
+}
+
+/** One catalog entry. */
+export function catalogModel(
+  model: string,
+  overrides: Partial<CatalogModelView> = {},
+): CatalogModelView {
+  return {
+    model,
+    protocol: "openai_chat_completions",
+    contextWindow: 128_000,
+    maxOutputTokens: 8_192,
+    declaredCapabilities: {
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      toolCalls: true,
+      reasoning: false,
+    },
+    effectiveCapabilities: {
+      inputModalities: ["text"],
+      outputModalities: ["text"],
+      toolCalls: true,
+      reasoning: false,
+    },
+    credentialSource: { type: "environment", variable: "RUSTX_KEY" },
     ...overrides,
   };
 }

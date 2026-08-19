@@ -25,7 +25,6 @@ import { RuntimeRequestError } from "../runtime/connection.ts";
 import {
   activeBackground,
   capabilitySummary,
-  catalogRows,
   describeReasoning,
   originLabel,
   outcomeLabel,
@@ -45,12 +44,25 @@ import type {
 export type CommandOutcome =
   | { kind: "none" }
   | { kind: "message"; level: "info" | "error"; text: string }
+  | { kind: "choose_model"; models: CatalogModelView[] }
   | {
-      kind: "choose_model";
-      models: CatalogModelView[];
-      rows: Array<{ value: string; label: string; description: string }>;
+      /** A client display preference. Never a runtime request. */
+      kind: "preference";
+      preference: PreferenceChange;
     }
   | { kind: "quit" };
+
+/**
+ * One change to a client presentation preference.
+ *
+ * These never reach the runtime. `reasoning` here is *display* of reasoning
+ * content, which is a different thing from the `reasoningProfile` /
+ * `reasoningEnabled` model request configuration `/model` shows.
+ */
+export type PreferenceChange =
+  | { type: "reasoning"; visible?: boolean }
+  | { type: "expand"; target: "all" | "none" | "latest" }
+  | { type: "expand_call"; callId: string };
 
 export interface DispatcherContext {
   session: RuntimeClientSession;
@@ -128,6 +140,10 @@ export class CommandDispatcher {
           return info(renderStatus(state));
         case "/debug":
           return info(renderDebug(state, this.#context.diagnostics()));
+        case "/reasoning":
+          return reasoningPreference(argument);
+        case "/expand":
+          return expandPreference(argument);
         case "/cancel":
           return await this.#cancel(argument);
         case "/approve":
@@ -150,23 +166,26 @@ export class CommandDispatcher {
    * `/model` — a presentation over the runtime's authoritative model
    * operations.
    *
-   * With no argument it renders `model_get`. With one it reads the catalog
-   * through `model_catalog_get`, then replaces the whole session
-   * configuration through `model_set`. It never parses a provider catalog
-   * file, never touches a provider SDK, and never resolves an API key.
+   * With no argument it opens the searchable selector over the runtime's
+   * `model_catalog_get` result. With `show` it renders the projection's own
+   * model view. With a model reference it reads the catalog and replaces the
+   * whole session configuration through `model_set`. It never parses a
+   * provider catalog file, never touches a provider SDK, and never resolves
+   * an API key.
    */
   async #model(
     state: PresentationState,
     argument: string,
   ): Promise<CommandOutcome> {
-    if (argument.length === 0) {
+    // `show` is answered from the projection alone; every other spelling
+    // needs the runtime's authoritative catalog.
+    if (argument === "show") {
       return info(renderModel(state));
     }
-
     const catalog = await this.#context.session.modelCatalog();
     const models = catalog.models ?? [];
-    if (argument === "list") {
-      return { kind: "choose_model", models, rows: catalogRows(models) };
+    if (argument.length === 0 || argument === "list") {
+      return { kind: "choose_model", models };
     }
 
     const chosen = models.find((model) => model.model === argument);
@@ -259,6 +278,53 @@ export class CommandDispatcher {
     await this.#context.session.respondInteraction(interactionId, response);
     return info(`response accepted for interaction ${interactionId}`);
   }
+}
+
+/**
+ * `/reasoning [on|off]` — a display preference, applied by the UI.
+ *
+ * It changes what is drawn and nothing else. The model's reasoning request
+ * configuration lives in `SessionModelConfig.reasoningProfile` and is only
+ * changeable through `model_set`.
+ */
+function reasoningPreference(argument: string): CommandOutcome {
+  switch (argument) {
+    case "":
+      return { kind: "preference", preference: { type: "reasoning" } };
+    case "on":
+      return {
+        kind: "preference",
+        preference: { type: "reasoning", visible: true },
+      };
+    case "off":
+      return {
+        kind: "preference",
+        preference: { type: "reasoning", visible: false },
+      };
+    default:
+      return {
+        kind: "message",
+        level: "error",
+        text: "usage: /reasoning [on|off]",
+      };
+  }
+}
+
+/**
+ * `/expand [<tool-call-id>|all|none]` — a visual collapse preference.
+ *
+ * Expanding shows more of a result the client already holds. It never
+ * re-executes a tool, never re-reads anything, and never undoes the runtime's
+ * own result truncation, which is a separate fact the card always reports.
+ */
+function expandPreference(argument: string): CommandOutcome {
+  if (argument === "") {
+    return { kind: "preference", preference: { type: "expand", target: "latest" } };
+  }
+  if (argument === "all" || argument === "none") {
+    return { kind: "preference", preference: { type: "expand", target: argument } };
+  }
+  return { kind: "preference", preference: { type: "expand_call", callId: argument } };
 }
 
 function info(text: string): CommandOutcome {
@@ -355,7 +421,10 @@ export function renderModel(state: PresentationState): string {
     }
   }
 
-  lines.push("", "Use `/model <provider/model>` or `/model list` to change it.");
+  lines.push(
+    "",
+    "Use `/model` for the searchable selector, or `/model <provider/model>` to select directly.",
+  );
   return lines.join("\n");
 }
 

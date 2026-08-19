@@ -2846,18 +2846,57 @@ contracts and provider protocols. These invariants are frozen by M2:
   and refusal remain distinct presentation types and are never flattened into
   assistant text.
 
-- **Generic tool lifecycle.** Tool presentation consumes call identity, tool
-  identity, arguments, state, progress, and result. A tool's name or origin
-  may affect a label or icon only; there is no semantic branch keyed to
-  either, because execution semantics are Rust-owned.
+- **Tool identity chooses presentation; runtime facts choose semantics.** A
+  stable tool identity may select a specialized presentation renderer, so
+  Bash renders as `$ cargo test --all` rather than as argument JSON. A
+  renderer formats already-authoritative facts and nothing else: running,
+  success, failure, denial, cancellation, timeout, interruption, progress,
+  duration, exit code, and truncation come exclusively from the Runtime
+  Client, and no renderer receives the lifecycle it would need in order to
+  contradict one. Status is never read out of output text, never inferred
+  from an absent result, and never inferred from a missing output. Every
+  tool — native, MCP, Python, or unknown — has a generic fallback renderer,
+  and a specialized renderer that does not recognise a shape degrades to it.
+
+- **One tool call is one visual entity.** The assistant `tool_call` block,
+  the attempt's foreground execution lifecycle, and the committed canonical
+  result message are three different runtime facts about one logical call.
+  Their semantic ownership stays separate; presentation joins them into one
+  card keyed by `ToolCallId`. Correlation never uses a tool name, argument
+  equality, list position, timing, or textual adjacency, so two concurrent
+  identical calls stay two entities.
+
+- **Client visual collapse is not runtime truncation.** Expanding a tool card
+  re-renders facts the client already holds; it never re-executes a tool,
+  re-reads a file, or fetches anything. The runtime's own `TruncationState`
+  is reported separately and unconditionally, and expanding does not undo it.
+
+- **Reasoning visibility is not reasoning configuration.** Whether reasoning
+  content is drawn is a client display preference. What rustX asks a provider
+  for is `SessionModelConfig.reasoningProfile` / `reasoningEnabled`, and it is
+  changeable only through `model_set`. Hidden reasoning collapses to a marker;
+  it never becomes assistant text and never disappears silently.
+
+- **Display preferences stay out of runtime state.** Reasoning visibility,
+  expanded cards, search text, selection, and focus live in the client and may
+  reset on a full rebuild. None is written into `PresentationState`, and none
+  changes a semantic fact.
+
+- **Working status is proven, never timed.** A phase is shown only when a
+  projection fact proves it — a pending interaction, a running or assembled
+  foreground execution, the latest streamed block kind, the attempt phase.
+  There is no timer, no inactivity threshold, and no state invented for a
+  lifecycle rustX does not publish.
 
 - **Background work is runtime-owned.** A background unit is alive because
   the runtime says it exists. Removing or collapsing a UI card cancels
   nothing and is never evidence of settlement. Cancellation is a request:
   acceptance and terminal settlement stay distinct.
 
-- **Model presentation is runtime-published.** `/model` uses
-  `model_catalog_get`, `model_get`, and `model_set` only. The client never
+- **Model presentation is runtime-published.** `/model` opens a searchable
+  selector over `model_catalog_get` and applies a choice through `model_set`;
+  `/model show` renders `model_get`'s projection. The selector filters and
+  formats the published catalog and nothing more. The client never
   reads `models.json`, instantiates a provider SDK, resolves an API key, or
   interprets provider protocol semantics. Only *effective* capability is
   advertised. Reasoning profiles are shown exactly as published: a
