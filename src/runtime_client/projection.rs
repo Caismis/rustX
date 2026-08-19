@@ -67,6 +67,11 @@
 //! Event Journal reads and current Surface bootstrap remain `ConversationStore`
 //! responsibilities.
 //!
+//! Live native interactions follow the same fold. A pending Approval is
+//! snapshot state and a terminal interaction observation removes it; neither
+//! becomes canonical conversation history. The projection never answers an
+//! interaction or infers an outcome from attachment loss.
+//!
 //! # `RuntimeEvent` mapping policy
 //!
 //! Every internal [`RuntimeEvent`] variant is classified explicitly:
@@ -213,6 +218,7 @@ impl RuntimeClientProjection {
                     pending: Vec::new(),
                     last_drain: None,
                 },
+                pending_interactions: Vec::new(),
                 background: Vec::new(),
                 status: None,
                 context: RuntimeClientContextView::default(),
@@ -266,6 +272,9 @@ impl RuntimeClientProjection {
         self.snapshot.shutting_down = seed.shutting_down;
         self.snapshot.inbound.pending =
             seed.inbound_pending.iter().map(inbound_item_view).collect();
+        self.snapshot
+            .pending_interactions
+            .clone_from(&seed.pending_interactions);
         for existing in &seed.background {
             upsert_background(&mut self.snapshot.background, background_view(existing));
         }
@@ -344,6 +353,24 @@ impl RuntimeClientProjection {
                         .iter()
                         .map(|item| item.message().id.clone())
                         .collect(),
+                }]
+            }
+            ConversationObservation::InteractionPending(request) => {
+                upsert_interaction(&mut self.snapshot.pending_interactions, request.clone());
+                vec![RuntimeClientEvent::InteractionPending {
+                    interaction: request,
+                }]
+            }
+            ConversationObservation::InteractionSettled {
+                interaction_id,
+                outcome,
+            } => {
+                self.snapshot
+                    .pending_interactions
+                    .retain(|request| request.id != interaction_id);
+                vec![RuntimeClientEvent::InteractionSettled {
+                    interaction_id,
+                    outcome,
                 }]
             }
             ConversationObservation::Background(snapshot) => {
@@ -1292,6 +1319,23 @@ fn upsert_background(
     }
 }
 
+/// Inserts or replaces one live native interaction projection, preserving
+/// deterministic coordinator identity order.
+fn upsert_interaction(
+    interactions: &mut Vec<crate::runtime::interaction::InteractionRequest>,
+    request: crate::runtime::interaction::InteractionRequest,
+) {
+    if let Some(existing) = interactions
+        .iter_mut()
+        .find(|existing| existing.id == request.id)
+    {
+        *existing = request;
+    } else {
+        interactions.push(request);
+        interactions.sort_by(|left, right| left.id.cmp(&right.id));
+    }
+}
+
 /// Builds the structured external status view from the exact composed
 /// status observation; the rendered representation derives from the same
 /// composition through the one canonical renderer.
@@ -1358,9 +1402,13 @@ mod tests {
     use crate::model::finish::ModelFinishReason;
     use crate::model::types::ModelUsage;
     use crate::runtime::identity::{
-        AgentId, AttemptId, ConversationId, MessageId, RequestId, ToolCallId, ToolId,
+        AgentId, AttemptId, ConversationId, InteractionId, MessageId, RequestId, ToolCallId, ToolId,
     };
     use crate::runtime::inbound::{ConversationInboundMailbox, InitialTurnTrigger};
+    use crate::runtime::interaction::{
+        ApprovalDecision, InteractionKind, InteractionOutcome, InteractionRequest,
+        InteractionResponse,
+    };
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::types::{CancellationReason, TokenMeasurement, TokenMeasurementSource};
     use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
@@ -2579,6 +2627,70 @@ mod tests {
         let last_drain = snapshot.inbound.last_drain.expect("drain recorded");
         assert_eq!(last_drain.watermark.get(), 2);
         assert_eq!(last_drain.count, 2);
+    }
+
+    /// Native interactions are live Runtime Client projection facts: a
+    /// pending event adds exactly one deterministic snapshot entry, and its
+    /// terminal event removes that entry without touching canonical messages.
+    #[test]
+    fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
+        let mut projection = projection();
+        let request = InteractionRequest {
+            id: InteractionId::new("attempt-1-interaction-1"),
+            conversation_id: ConversationId::new("conv-1"),
+            attempt_id: attempt(),
+            turn: 2,
+            kind: InteractionKind::Approval {
+                call_id: ToolCallId::new("call-1"),
+                tool_id: ToolId::new("tool-alpha"),
+                tool_name: "alpha".to_owned(),
+                origin: crate::tools::types::ToolOrigin::Builtin,
+                mode: crate::tools::types::ToolInvocationMode::Foreground,
+                arguments: serde_json::json!({"path": "original"}),
+                reason: "native policy".to_owned(),
+            },
+        };
+        projection.apply(ConversationObservation::InteractionPending(request.clone()));
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
+        assert_eq!(snapshot.pending_interactions, vec![request.clone()]);
+        assert_eq!(cursor, RuntimeClientCursor::new(1));
+        let events = collect(&mut projection, RuntimeClientCursor::new(0));
+        assert!(matches!(
+            events.first().map(|event| &event.event),
+            Some(RuntimeClientEvent::InteractionPending { interaction })
+                if interaction == &request
+        ));
+
+        let outcome = InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        };
+        projection.apply(ConversationObservation::InteractionSettled {
+            interaction_id: request.id.clone(),
+            outcome: outcome.clone(),
+        });
+        let (snapshot, cursor) = projection.snapshot().expect("snapshot");
+        assert!(snapshot.pending_interactions.is_empty());
+        assert_eq!(cursor, RuntimeClientCursor::new(2));
+        let events = collect(&mut projection, RuntimeClientCursor::new(1));
+        assert!(matches!(
+            events.first().map(|event| &event.event),
+            Some(RuntimeClientEvent::InteractionSettled {
+                interaction_id,
+                outcome: event_outcome,
+            }) if interaction_id == &request.id && event_outcome == &outcome
+        ));
+
+        // The projection never turns a live prompt into canonical history.
+        assert!(
+            projection
+                .snapshot()
+                .expect("snapshot")
+                .0
+                .messages
+                .is_empty()
+        );
     }
 
     /// The snapshot and its cursor linearize: the returned cursor is the

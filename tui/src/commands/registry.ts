@@ -54,6 +54,11 @@ export const COMMANDS: readonly CommandSpec[] = [
       "Request cancellation of the current attempt, or of a background execution.",
     argumentHint: "[execution-id]",
   },
+  {
+    name: "/approve",
+    description: "Answer one runtime-owned approval interaction.",
+    argumentHint: "<interaction-id> <allow|deny> [reason]",
+  },
   { name: "/quit", description: "Shut down the runtime and exit cleanly." },
 ];
 

@@ -123,7 +123,8 @@ use crate::runtime::conversation_runtime::{
     CancelAttemptError, ConversationRuntime, InboundAdmissionError, ModelUpdateError,
     RuntimeBootstrapError,
 };
-use crate::runtime::identity::{ConversationId, ToolExecutionId};
+use crate::runtime::identity::{ConversationId, InteractionId, ToolExecutionId};
+use crate::runtime::interaction::{InteractionError, InteractionResponse};
 use crate::runtime::observation::PendingObservations;
 use crate::runtime::request_history::{RequestHistory, RequestHistoryError};
 
@@ -349,6 +350,11 @@ impl ClientInner {
             attachment_id: attachment_id.clone(),
             subscriber_id: None,
         });
+        // Keep provider admission under the same host-state lock as the
+        // attachment identity. A concurrent detach therefore cannot remove
+        // the attachment and then be overwritten by this attach's provider
+        // update after the lock is released.
+        self.runtime.set_interaction_provider_available(true);
         drop(state);
         let attachment =
             super::attachment::RuntimeAttachment::new(attachment_id.clone(), self.clone());
@@ -386,6 +392,10 @@ impl ClientInner {
             if let Some(subscriber_id) = attachment.subscriber_id {
                 state.projection.remove_subscriber(subscriber_id);
             }
+            // Detach is non-semantic: it only closes the provider admission
+            // gate for future interactions. It does not settle any request
+            // already published by the coordinator.
+            self.runtime.set_interaction_provider_available(false);
         }
     }
 
@@ -468,6 +478,33 @@ impl ClientInner {
             Ok(attempt_id) => Ok(RuntimeClientResult::AttemptCancellationAccepted { attempt_id }),
             Err(CancelAttemptError::NoCurrentAttempt) => Err(RuntimeClientError::NoCurrentAttempt),
         }
+    }
+
+    /// Accepts one typed native interaction response through the
+    /// conversation-owned coordinator.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed Runtime Client error when the interaction is stale,
+    /// already settled, or the response fails bounded validation.
+    pub(crate) fn respond_interaction(
+        &self,
+        interaction_id: &InteractionId,
+        response: InteractionResponse,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.runtime
+            .respond_interaction(interaction_id, response)
+            .map(|()| RuntimeClientResult::InteractionResponseAccepted {
+                interaction_id: interaction_id.clone(),
+            })
+            .map_err(|error| match error {
+                InteractionError::NotPending { interaction_id } => {
+                    RuntimeClientError::InteractionNotPending { interaction_id }
+                }
+                InteractionError::InvalidResponse { message } => {
+                    RuntimeClientError::InteractionInvalidResponse { message }
+                }
+            })
     }
 
     /// Reads the authoritative snapshot and its cursor, linearized
@@ -972,6 +1009,22 @@ impl RuntimeClientHost {
     /// is currently cancellable.
     pub fn cancel_current_attempt(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.inner.cancel_current_attempt()
+    }
+
+    /// Responds to one live native interaction through Runtime Client
+    /// semantics. The response is finite and cannot replace tool arguments.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeClientError::InteractionNotPending`] for a stale or
+    /// settled identity, or [`RuntimeClientError::InteractionInvalidResponse`]
+    /// for a response that fails bounded validation.
+    pub fn respond_interaction(
+        &self,
+        interaction_id: &InteractionId,
+        response: InteractionResponse,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.inner.respond_interaction(interaction_id, response)
     }
 
     /// Reads the authoritative snapshot and its cursor, linearized

@@ -209,6 +209,35 @@ impl ConversationLifecycle {
         Ok(result)
     }
 
+    /// Admits one concrete runtime-owned operation and lets that operation
+    /// retain the counted admission guard while it publishes its owned
+    /// state.
+    ///
+    /// The operation runs under the same commit boundary as
+    /// `Running -> Draining`. This is the stronger form needed when a
+    /// publication must be visible to its owner before drain is allowed to
+    /// scan and settle already-admitted work: the interaction coordinator
+    /// inserts its pending entry while this boundary is held, then retains
+    /// the guard until the waiter releases callback authority.
+    pub(crate) fn admit_running_commit<T>(
+        &self,
+        operation: impl FnOnce(LifecycleAdmission) -> T,
+    ) -> Result<T, ConversationLifecycleState> {
+        let _boundary = self
+            .inner
+            .commit_boundary
+            .lock()
+            .expect("lifecycle commit boundary poisoned");
+        if self.state() != ConversationLifecycleState::Running {
+            return Err(self.state());
+        }
+        self.inner.admissions.fetch_add(1, Ordering::AcqRel);
+        let admission = LifecycleAdmission {
+            inner: Arc::clone(&self.inner),
+        };
+        Ok(operation(admission))
+    }
+
     /// Enters a normal semantic commit boundary.
     ///
     /// The state is checked both before and after incrementing the admission

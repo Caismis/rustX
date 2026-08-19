@@ -28,6 +28,7 @@ import type {
 } from "../presentation/state.ts";
 import type {
   ForegroundToolExecution,
+  InteractionRequest,
   RuntimeClientBackgroundExecution,
   ToolExecutionResult,
   ToolProgress,
@@ -230,6 +231,30 @@ export function renderBackgroundSection(state: PresentationState): string {
   ].join("\n");
 }
 
+/** The live runtime-owned approval cards, rendered without local outcome state. */
+export function renderInteractionSection(state: PresentationState): string {
+  if (state.pendingInteractions.length === 0) {
+    return "";
+  }
+  return [
+    style.bold(`Approval required — ${state.pendingInteractions.length} pending`),
+    ...state.pendingInteractions.map(renderInteraction),
+    style.dim("Answer with /approve <interaction-id> <allow|deny> [reason]."),
+  ].join("\n");
+}
+
+function renderInteraction(interaction: InteractionRequest): string {
+  if (interaction.kind.type !== "approval") {
+    return `${style.yellow("? interaction")} ${interaction.id}`;
+  }
+  return [
+    `${style.yellow("? approval")} ${style.bold(interaction.kind.tool_name)} ${style.dim(interaction.id)}`,
+    `${style.dim("call")} ${interaction.kind.call_id} · ${interaction.kind.mode} · ${originLabel(interaction.kind.origin)}`,
+    `${style.dim(interaction.kind.reason)}`,
+    fence(JSON.stringify(interaction.kind.arguments, null, 2), "json"),
+  ].join("\n");
+}
+
 /** The one-line footer, written entirely from rustX presentation data. */
 export function renderFooter(
   state: PresentationState,
@@ -305,6 +330,8 @@ function statusLabel(result: ToolExecutionResult): string {
       return style.green("ok");
     case "failed":
       return style.red("failed");
+    case "denied":
+      return style.yellow(`denied (${result.status.reason})`);
     case "cancelled":
       return style.yellow(`cancelled (${result.status.reason})`);
     case "timed_out":
@@ -321,6 +348,9 @@ function renderResult(result: ToolExecutionResult): string {
   const lines: string[] = [];
   if (result.status.type === "failed") {
     lines.push(style.red(result.status.error));
+  }
+  if (result.status.type === "denied") {
+    lines.push(style.yellow(result.status.reason));
   }
   for (const content of result.content ?? []) {
     switch (content.type) {

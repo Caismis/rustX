@@ -21,6 +21,7 @@ import type {
 } from "../src/protocol/types.ts";
 import {
   assistantMessage,
+  approvalInteraction,
   attemptModel,
   backgroundExecution,
   capabilities,
@@ -72,6 +73,34 @@ describe("presentation projection", () => {
     assert.equal(state.capabilities.revision, 4);
     assert.equal(state.sessionModel.configured.model, "alpha/model-a");
     assert.equal(state.attempt, undefined);
+  });
+
+  it("folds live approvals and repairs them from snapshot/resync state", () => {
+    const interaction = approvalInteraction();
+    const pending = fold(initial(), [
+      { type: "interaction_pending", interaction },
+    ]);
+
+    assert.deepEqual(pending.pendingInteractions, [interaction]);
+
+    const settled = fold(pending, [
+      {
+        type: "interaction_settled",
+        interaction_id: interaction.id,
+        outcome: {
+          type: "answered",
+          response: { type: "approval", decision: { type: "allow" } },
+        },
+      },
+    ]);
+    assert.deepEqual(settled.pendingInteractions, []);
+
+    const repaired = replaceFromSnapshot(
+      snapshot({ pending_interactions: [interaction] }),
+      8,
+    );
+    assert.deepEqual(repaired.pendingInteractions, [interaction]);
+    assert.equal(repaired.cursor, 8);
   });
 
   it("folds committed compaction diagnostics and rebuilds them from a snapshot", () => {

@@ -32,6 +32,7 @@ use crate::model::finish::ModelFinishReason;
 use crate::model::session::{AttemptModelView, SessionModelView};
 use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolExecutionId, ToolId};
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::interaction::{InteractionOutcome, InteractionRequest};
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::types::{ToolCall, ToolCallStart, ToolExecutionResult, ToolProgress};
 
@@ -84,6 +85,19 @@ pub enum RuntimeClientEvent {
         attempt_id: AttemptId,
         /// The exact normalized usage folded into the attempt view.
         usage: crate::model::types::ModelUsage,
+    },
+    /// A native interaction is pending. The request is authoritative runtime
+    /// projection state; it is not a client-owned prompt.
+    InteractionPending {
+        /// The complete bounded interaction request.
+        interaction: InteractionRequest,
+    },
+    /// A native interaction was removed from the live pending projection.
+    InteractionSettled {
+        /// The terminal interaction identity.
+        interaction_id: crate::runtime::identity::InteractionId,
+        /// The exact terminal rendezvous outcome.
+        outcome: InteractionOutcome,
     },
     /// A canonical runtime summary and Surface replacement were committed
     /// after automatic compaction.
@@ -200,9 +214,9 @@ pub enum RuntimeClientEvent {
         /// The bounded structured progress.
         progress: ToolProgress,
     },
-    /// A tool execution settled with its normalized result (success,
-    /// failure, cancellation, timeout, or validation rejection all settle
-    /// through this one shape).
+    /// A tool execution or pre-tool policy settled with its normalized result
+    /// (success, failure, denial, cancellation, timeout, or validation
+    /// rejection all settle through this one shape).
     ToolExecutionSettled {
         /// The attempt executing the call.
         attempt_id: AttemptId,

@@ -172,6 +172,7 @@ export type CancellationReason =
 export type ToolExecutionStatus =
   | { type: "success" }
   | { type: "failed"; error: string }
+  | { type: "denied"; reason: string }
   | { type: "cancelled"; reason: CancellationReason }
   | { type: "timed_out" }
   | { type: "interrupted" };
@@ -209,6 +210,8 @@ export type ToolExecutionPolicy =
 
 export type ToolConcurrencyPolicy = "sequential" | "parallel";
 
+export type ToolInvocationMode = "foreground" | "background";
+
 export type ToolReplayPolicy = "never" | "idempotent";
 
 /**
@@ -233,6 +236,43 @@ export type BackgroundLifecycle =
 
 export const BACKGROUND_TERMINAL_STATES: ReadonlySet<BackgroundLifecycle> =
   new Set<BackgroundLifecycle>(["succeeded", "failed", "cancelled"]);
+
+// ---------------------------------------------------------------------------
+// Native interaction projection
+// ---------------------------------------------------------------------------
+
+export type InteractionId = string;
+
+export type ApprovalDecision =
+  | { type: "allow" }
+  | { type: "deny"; reason: string };
+
+export type InteractionResponse = {
+  type: "approval";
+  decision: ApprovalDecision;
+};
+
+export type InteractionRequest = {
+  id: InteractionId;
+  conversation_id: ConversationId;
+  attempt_id: AttemptId;
+  turn: number;
+  kind: {
+    type: "approval";
+    call_id: ToolCallId;
+    tool_id: ToolId;
+    tool_name: string;
+    origin: ToolOrigin;
+    mode: ToolInvocationMode;
+    arguments: unknown;
+    reason: string;
+  };
+};
+
+export type InteractionOutcome =
+  | { type: "answered"; response: InteractionResponse }
+  | { type: "cancelled"; reason: CancellationReason }
+  | { type: "unavailable" };
 
 // ---------------------------------------------------------------------------
 // Model configuration (camelCase on the wire)
@@ -563,6 +603,8 @@ export interface RuntimeClientSnapshot {
   messages: MessageBlock[];
   attempt?: RuntimeClientAttempt;
   inbound: InboundDiagnostics;
+  /** Live runtime-owned interactions; never client-owned approval truth. */
+  pending_interactions: InteractionRequest[];
   background?: RuntimeClientBackgroundExecution[];
   status?: AgentStatusView;
   context: RuntimeClientContextView;
@@ -600,6 +642,12 @@ export type RuntimeClientEvent =
       type: "attempt_usage_updated";
       attempt_id: AttemptId;
       usage: ModelUsage;
+    }
+  | { type: "interaction_pending"; interaction: InteractionRequest }
+  | {
+      type: "interaction_settled";
+      interaction_id: InteractionId;
+      outcome: InteractionOutcome;
     }
   | {
       type: "context_compacted";
@@ -719,6 +767,12 @@ export type RuntimeClientRequest =
   | { method: "initialize"; id: RequestId; protocol_version: number }
   | { method: "submit_inbound"; id: RequestId; content: UserContentBlock[] }
   | { method: "cancel_current_attempt"; id: RequestId }
+  | {
+      method: "interaction_respond";
+      id: RequestId;
+      interaction_id: InteractionId;
+      response: InteractionResponse;
+    }
   | { method: "snapshot_get"; id: RequestId }
   | {
       method: "subscribe_events";
@@ -752,6 +806,10 @@ export type RuntimeClientRequestBody =
       Extract<RuntimeClientRequest, { method: "cancel_current_attempt" }>,
       "id"
     >
+  | Omit<
+      Extract<RuntimeClientRequest, { method: "interaction_respond" }>,
+      "id"
+    >
   | Omit<Extract<RuntimeClientRequest, { method: "snapshot_get" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "subscribe_events" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "capability_get" }>, "id">
@@ -778,6 +836,7 @@ export type RuntimeClientResult =
       inbound_sequence: InboundSequence;
     }
   | { type: "attempt_cancellation_accepted"; attempt_id: AttemptId }
+  | { type: "interaction_response_accepted"; interaction_id: InteractionId }
   | {
       type: "snapshot";
       snapshot: RuntimeClientSnapshot;
@@ -805,6 +864,8 @@ export type RuntimeClientError =
   | { type: "not_attached" }
   | { type: "invalid_request"; message: string }
   | { type: "no_current_attempt" }
+  | { type: "interaction_not_pending"; interaction_id: InteractionId }
+  | { type: "interaction_invalid_response"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
   | {
       type: "resync_required";
@@ -847,6 +908,8 @@ export function isKnownRuntimeClientEvent(
     case "attempt_settled":
     case "attempt_turn_updated":
     case "attempt_usage_updated":
+    case "interaction_pending":
+    case "interaction_settled":
     case "context_compacted":
     case "assistant_message_started":
     case "assistant_text_delta":
@@ -918,6 +981,10 @@ export function describeProtocolError(error: RuntimeClientError): string {
       return `invalid request: ${error.message}`;
     case "no_current_attempt":
       return "no attempt is currently cancellable";
+    case "interaction_not_pending":
+      return `interaction ${error.interaction_id} is no longer pending`;
+    case "interaction_invalid_response":
+      return `invalid interaction response: ${error.message}`;
     case "unknown_background_execution":
       return `unknown background execution ${error.execution_id}`;
     case "resync_required":

@@ -56,6 +56,7 @@ import {
   renderEntryBlocks,
   renderFooter,
   renderForegroundTool,
+  renderInteractionSection,
 } from "./render.ts";
 import { editorTheme, markdownTheme, selectListTheme, style } from "./theme.ts";
 
@@ -357,6 +358,10 @@ export class RustxTuiApp {
     const background = renderBackgroundSection(state);
     if (background.length > 0) {
       this.#activity.addChild(new Text(background, 1, 0));
+    }
+    const interactions = renderInteractionSection(state);
+    if (interactions.length > 0) {
+      this.#activity.addChild(new Text(interactions, 1, 0));
     }
 
     const working = workingLabel(state);

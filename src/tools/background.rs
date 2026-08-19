@@ -1164,7 +1164,8 @@ impl ConversationBackgroundRegistry {
                         ToolExecutionStatus::Cancelled { .. } => {
                             (BackgroundLifecycle::Cancelled, result.clone())
                         }
-                        ToolExecutionStatus::Failed { .. }
+                        ToolExecutionStatus::Denied { .. }
+                        | ToolExecutionStatus::Failed { .. }
                         | ToolExecutionStatus::TimedOut
                         | ToolExecutionStatus::Interrupted => {
                             (BackgroundLifecycle::Failed, result.clone())
@@ -1176,7 +1177,10 @@ impl ConversationBackgroundRegistry {
                     // executor return must not overwrite the cancellation
                     // winner; only an explicit runtime/process-control failure
                     // is represented as Failed.
-                    if matches!(result.status, ToolExecutionStatus::Failed { .. }) {
+                    if matches!(
+                        result.status,
+                        ToolExecutionStatus::Denied { .. } | ToolExecutionStatus::Failed { .. }
+                    ) {
                         (BackgroundLifecycle::Failed, result.clone())
                     } else {
                         let mut canonical = result.clone();

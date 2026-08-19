@@ -695,11 +695,12 @@ Implemented in the current architecture:
   construction-outside-Tokio rejection — all with gates/barriers/
   Notify/watch, never sleeps.
 
-Intentionally absent (no concrete native owner or consumer):
-`PreToolPolicy`, tool-execution wrappers/middleware, post-tool result
-replacement or retroactive blocking, pre-tool argument or identity
-rewriting, `Ask`/human approval (Issue #64), subagent lifecycle observation
-(Issue #60), and turn-stopping/forced continuation.
+Intentionally absent (no concrete native owner or consumer): tool-execution
+wrappers/middleware, post-tool result replacement or retroactive blocking,
+pre-tool argument or identity rewriting, question/form frameworks,
+generalized permission/risk policy, subagent lifecycle observation (Issue
+#60), and turn-stopping/forced continuation. The bounded native interaction
+and approval seam is delivered in M9.2 below.
 
 Exit criteria:
 
@@ -1028,8 +1029,63 @@ first-winner absorption; the attempt task's exit as part of the quiescence
 proof; and a shutdown that races the background failure sink itself, parked
 inside the runner's last conversation-facing callback, proving the abandoned
 fact and the cached shutdown failure both linearize after it. No SQLite schema change was
-required, and M9c does not implement interaction (#64), subagents (#60), or
-the DSH sidecar (#57).
+required. M9.2 interaction coordination composes with this lifecycle
+contract; subagents (#60) and the DSH sidecar (#57) remain separate work.
+
+### M9.2 — Native human interaction and approval coordination (Issue #64, delivered)
+
+M9.2 adds one provider-independent, conversation-owned interaction plane.
+`InteractionCoordinator` owns non-reused interaction identities, the live
+pending registry, typed Runtime Client projection, and the one response vs
+owner-cancellation terminal transition. It owns rendezvous only; the Agent
+Loop still owns cancellation checks, tool scheduling, tool start, and result
+settlement.
+
+The required `AttemptLifecycle` seam is one `PreToolPolicy` plus one concrete
+native binding to the owning `InteractionCoordinator`; production callers
+cannot replace that rendezvous owner. The policy sees the immutable facts
+already resolved by `ToolRegistry::preflight`, after the Assistant `ToolCall`
+canonical commit, and returns `Allow`, `Deny { reason }`, or `Ask { reason }`.
+An Allow continues
+the exact original `PreparedInvocation`; no response can replace identity or
+arguments. A Deny produces one typed `ToolExecutionStatus::Denied` result
+slot, no executor future, and no `ToolExecutionStarted` event. Parallel
+batches resolve all policy/interaction decisions in canonical call order
+before any executor starts.
+
+After the asynchronous policy future settles, the Agent Loop checks
+cancellation before consuming any Allow, Deny, Ask, or policy error. An Ask
+response is checked again before the start frontier; Answered(Allow) is not a
+tool-start capability. The real ConversationRuntime shutdown path proves that
+pending-map removal is not waiter or attempt settlement: Quiescent waits for
+the waiter handoff, projection callback, AgentExecution, and attempt task.
+
+Runtime Client v1 carries `interaction_respond`, typed acceptance/errors,
+pending/settled events, and `snapshot.pending_interactions`. The TUI remains a
+projection/client: it renders pending Approval facts and sends only the typed
+response. Snapshot/cursor/resubscribe remains the repair authority. A missing
+provider fails closed at publication; detach never answers, denies, or
+cancels an already-published interaction.
+
+Interaction IDs derive from the already non-reused `AttemptId` domain plus a
+per-attempt ordinal. Pending interactions are process-owned observations, not
+durable workflow records. Crash recovery does not replay them or reconstruct
+them from current policy/configuration; delayed old responses are rejected.
+
+Drain closes new interaction admission at the shared lifecycle boundary,
+cancels already-owned interactions through `AgentCancellation`, and waits for
+both waiter callback authority and the interaction observation callback. The
+pending map becoming empty is not sufficient for `Quiescent`.
+
+Exit criteria (met): deterministic coordinator identity/publication and stale
+response tests; both answer/cancel winner orders with explicit parked
+transitions; exact PreparedInvocation identity/argument preservation; denial
+without executor start; preflight-before-policy; parallel start-frontier and
+canonical-order tests; provider detach/unavailable behavior; Runtime Client
+snapshot/event/resync projection; crash/non-reuse tests; lifecycle drain and
+waiter-settlement tests; and TUI projection/render/typed-response tests.
+No permission framework, durable human workflow, provider-specific payload,
+generic runtime participant abstraction, or ask-user forms were added.
 
 ## Milestone 10 — Local runtime product
 

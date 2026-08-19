@@ -35,6 +35,7 @@ use crate::runtime::identity::{
     ToolExecutionId, ToolId,
 };
 use crate::runtime::inbound::InboundSequence;
+use crate::runtime::interaction::InteractionRequest;
 use crate::runtime::types::TokenMeasurement;
 use crate::tools::background::BackgroundLifecycle;
 use crate::tools::types::{
@@ -86,6 +87,10 @@ pub struct RuntimeClientSnapshot {
     /// The inbound mailbox diagnostics (pending items and the latest
     /// finite drain observation).
     pub inbound: InboundDiagnostics,
+    /// Live process-owned native interaction requests. This is projection
+    /// state, never durable recovery input or client-owned truth.
+    #[serde(default)]
+    pub pending_interactions: Vec<InteractionRequest>,
     /// All background executions in execution allocation order, including
     /// terminal records retained by the authoritative registry.
     #[serde(default)]

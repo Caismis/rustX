@@ -60,6 +60,11 @@
 //! - The canonical mailbox, background registry, and capability
 //!   coordinator remain authoritative; the projection observes them
 //!   through narrow read-only seams.
+//! - Native Approval interactions are another runtime-owned observation:
+//!   `InteractionCoordinator` owns the pending rendezvous and this boundary
+//!   carries only typed request/response/projection facts. A client cannot
+//!   rewrite a prepared tool invocation, and detach never settles a pending
+//!   interaction.
 //! - Agent Status is composed exactly once per request preparation; the
 //!   model path and the client projection consume the same composed
 //!   observation.
@@ -68,6 +73,9 @@
 //!
 //! - one active attachment per runtime instance;
 //! - detach is never cancellation;
+//! - no capable attachment at interaction publication fails approval closed;
+//! - live pending interactions are reconstructed from the snapshot/cursor
+//!   projection, never from TUI state or recovery logs;
 //! - bounded in-memory projection replay (the durable Event Journal and
 //!   current Surface bootstrap remain `ConversationStore` authorities; the
 //!   client cursor/cache is never recovery input);

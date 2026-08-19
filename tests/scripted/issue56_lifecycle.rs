@@ -24,12 +24,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
+use crate::runtime::interaction::{
+    ApprovalDecision, ApprovalFacts, InteractionCoordinator, InteractionError, InteractionObserver,
+    InteractionOutcome, InteractionRequest, InteractionResponse, TestInteractionRendezvous,
+};
 use rustx::agent::{
     AgentCancellation, AgentExecution, AgentExecutionRequest, AgentExecutionResult,
     AttemptLifecycle, LifecycleError, ObservedToolInvocation, PreStepBatch, PreStepDecision,
-    PreStepPolicy, ToolResultObservation, ToolResultObserver,
+    PreStepPolicy, PreToolDecision, PreToolPolicy, PreToolView, ToolResultObservation,
+    ToolResultObserver,
 };
 use rustx::context::{
     ContextAssembly, ContextProposal, ContextRuntime, ContributorInputSnapshot,
@@ -48,7 +53,7 @@ use rustx::runtime::identity::{
     AgentId, AttemptId, CertifiedExtensionIdentity, ContextContributorIdentity, ConversationId,
     MessageId, NativeContextContributor, ToolCallId, ToolId,
 };
-use rustx::runtime::types::{CancellationReason, RuntimeError};
+use rustx::runtime::types::{CancellationReason, ConversationLifecycle, RuntimeError};
 use rustx::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use rustx::tools::types::{
     ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
@@ -139,6 +144,189 @@ impl PreStepPolicy for ScriptedPolicy {
             }
             decision
         })
+    }
+}
+
+/// The smallest concrete native policy fixture for Issue #64. It records the
+/// immutable preflight facts it received, then returns one scripted decision;
+/// it has no registry, executor, or canonical mutation authority.
+struct ScriptedPreToolPolicy {
+    decisions: Mutex<std::collections::VecDeque<Result<PreToolDecision, LifecycleError>>>,
+    observed: Arc<Mutex<Vec<ApprovalFacts>>>,
+    gate: Option<(watch::Sender<bool>, watch::Receiver<bool>)>,
+}
+
+impl ScriptedPreToolPolicy {
+    fn new(decisions: Vec<PreToolDecision>) -> Self {
+        Self {
+            decisions: Mutex::new(decisions.into_iter().map(Ok).collect()),
+            observed: Arc::new(Mutex::new(Vec::new())),
+            gate: None,
+        }
+    }
+
+    fn gated(
+        decisions: Vec<Result<PreToolDecision, LifecycleError>>,
+        entered: watch::Sender<bool>,
+        release: watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            decisions: Mutex::new(decisions.into()),
+            observed: Arc::new(Mutex::new(Vec::new())),
+            gate: Some((entered, release)),
+        }
+    }
+
+    fn observed(&self) -> Arc<Mutex<Vec<ApprovalFacts>>> {
+        Arc::clone(&self.observed)
+    }
+}
+
+impl PreToolPolicy for ScriptedPreToolPolicy {
+    fn evaluate<'a>(
+        &'a self,
+        view: &'a PreToolView<'a>,
+    ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
+        self.observed
+            .lock()
+            .expect("pre-tool facts lock")
+            .push(view.approval_facts("recorded pre-tool facts"));
+        let decision = self
+            .decisions
+            .lock()
+            .expect("pre-tool decision lock")
+            .pop_front()
+            .unwrap_or(Ok(PreToolDecision::Allow));
+        let gate = self
+            .gate
+            .as_ref()
+            .map(|(entered, release)| (entered.clone(), release.clone()));
+        Box::pin(async move {
+            if let Some((entered, mut release)) = gate {
+                entered.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("pre-tool policy release channel stays open");
+            }
+            decision
+        })
+    }
+}
+
+/// A deterministic interaction owner fixture. Each request publishes its
+/// owned facts to the test and waits on the next one-shot response. The Agent
+/// Loop still owns the cancellation reference and execution frontier.
+struct ScriptedInteractionRendezvous {
+    requests: Arc<Mutex<Vec<ApprovalFacts>>>,
+    request_count: watch::Sender<usize>,
+    responses: Mutex<std::collections::VecDeque<oneshot::Receiver<InteractionOutcome>>>,
+    response_gate: Mutex<Option<(watch::Sender<bool>, watch::Receiver<bool>)>>,
+}
+
+impl ScriptedInteractionRendezvous {
+    fn new(responses: Vec<oneshot::Receiver<InteractionOutcome>>) -> Arc<Self> {
+        let (request_count, _receiver) = watch::channel(0);
+        Arc::new(Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+            request_count,
+            responses: Mutex::new(responses.into()),
+            response_gate: Mutex::new(None),
+        })
+    }
+
+    fn gate_after_response(&self, entered: watch::Sender<bool>, release: watch::Receiver<bool>) {
+        *self.response_gate.lock().expect("response gate lock") = Some((entered, release));
+    }
+
+    fn requests(&self) -> Arc<Mutex<Vec<ApprovalFacts>>> {
+        Arc::clone(&self.requests)
+    }
+
+    fn subscribe_count(&self) -> watch::Receiver<usize> {
+        self.request_count.subscribe()
+    }
+}
+
+impl TestInteractionRendezvous for ScriptedInteractionRendezvous {
+    fn request_approval<'a>(
+        &'a self,
+        facts: ApprovalFacts,
+        cancellation: &'a AgentCancellation,
+    ) -> BoxFuture<'a, InteractionOutcome> {
+        let count = {
+            let mut requests = self.requests.lock().expect("interaction requests lock");
+            requests.push(facts);
+            requests.len()
+        };
+        self.request_count.send_replace(count);
+        let receiver = self
+            .responses
+            .lock()
+            .expect("interaction response lock")
+            .pop_front()
+            .expect("one scripted response channel per Ask decision");
+        let response_gate = self
+            .response_gate
+            .lock()
+            .expect("response gate lock")
+            .take();
+        Box::pin(async move {
+            let outcome = tokio::select! {
+                biased;
+                response = receiver => response.unwrap_or(InteractionOutcome::Unavailable),
+                () = cancellation.cancelled() => InteractionOutcome::Cancelled {
+                    reason: cancellation.reason(),
+                },
+            };
+            if let Some((entered, mut release)) = response_gate {
+                entered.send_replace(true);
+                release
+                    .wait_for(|released| *released)
+                    .await
+                    .expect("response release channel stays open");
+            }
+            outcome
+        })
+    }
+}
+
+/// A native coordinator observer used by the cancellation regression. It
+/// signals publication through a watch channel, so the test can cancel only
+/// after the real interaction owner has admitted the request.
+struct NativePendingSignal {
+    published: watch::Sender<usize>,
+    requests: Arc<Mutex<Vec<InteractionRequest>>>,
+}
+
+impl NativePendingSignal {
+    fn new() -> (Arc<Self>, watch::Receiver<usize>) {
+        let (published, receiver) = watch::channel(0);
+        (
+            Arc::new(Self {
+                published,
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }),
+            receiver,
+        )
+    }
+}
+
+impl InteractionObserver for NativePendingSignal {
+    fn on_pending(&self, request: &InteractionRequest) {
+        let count = {
+            let mut requests = self.requests.lock().expect("native pending requests lock");
+            requests.push(request.clone());
+            requests.len()
+        };
+        self.published.send_replace(count);
+    }
+
+    fn on_settled(
+        &self,
+        _interaction_id: &rustx::runtime::InteractionId,
+        _outcome: &InteractionOutcome,
+    ) {
     }
 }
 
@@ -341,6 +529,7 @@ struct GatedTool {
     started: watch::Sender<bool>,
     completion_order: Arc<Mutex<Vec<String>>>,
     completed: watch::Sender<bool>,
+    invocations: Arc<Mutex<Vec<ToolInvocation>>>,
 }
 
 impl GatedTool {
@@ -355,7 +544,9 @@ impl GatedTool {
             release: release.clone(),
             started: started.subscribe(),
             completed: completed.subscribe(),
+            invocations: Arc::new(Mutex::new(Vec::new())),
         };
+        let invocations = Arc::clone(&handle.invocations);
         (
             Self {
                 definition,
@@ -363,6 +554,7 @@ impl GatedTool {
                 started,
                 completion_order,
                 completed,
+                invocations,
             },
             handle,
         )
@@ -380,6 +572,7 @@ struct GatedToolHandle {
     release: watch::Sender<bool>,
     started: watch::Receiver<bool>,
     completed: watch::Receiver<bool>,
+    invocations: Arc<Mutex<Vec<ToolInvocation>>>,
 }
 
 const GATED_TOOL_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(120);
@@ -405,6 +598,13 @@ impl GatedToolHandle {
         .expect("gated tool completion wait exceeded liveness guard")
         .expect("gated tool completion channel stays open");
     }
+
+    fn invocations(&self) -> Vec<ToolInvocation> {
+        self.invocations
+            .lock()
+            .expect("gated invocation lock")
+            .clone()
+    }
 }
 
 impl ToolExecutor for GatedTool {
@@ -415,6 +615,10 @@ impl ToolExecutor for GatedTool {
     ) -> BoxFuture<'a, ToolExecutionResult> {
         let started = self.started.clone();
         let mut release = self.release.subscribe();
+        self.invocations
+            .lock()
+            .expect("gated invocation lock")
+            .push(invocation.clone());
         Box::pin(async move {
             started.send_replace(true);
             release
@@ -750,6 +954,328 @@ fn tool_messages(result: &AgentExecutionResult) -> Vec<&rustx::message::types::T
             _ => None,
         })
         .collect()
+}
+
+/// Runs one real `AgentExecution` while its pre-tool policy is parked. The
+/// controller cancels only after the policy reports entry, then releases the
+/// policy with the scripted result. The returned interaction count proves
+/// whether an Ask was consumed after the post-await cancellation checkpoint.
+async fn run_cancelled_after_pending_pre_tool_policy(
+    decision: Result<PreToolDecision, LifecycleError>,
+) -> (common::DurableExecutionAudit, usize, GatedToolHandle) {
+    let (policy_entered, mut policy_entered_rx) = watch::channel(false);
+    let (policy_release, policy_release_rx) = watch::channel(false);
+    let policy = Arc::new(ScriptedPreToolPolicy::gated(
+        vec![decision],
+        policy_entered,
+        policy_release_rx,
+    ));
+    let rendezvous = ScriptedInteractionRendezvous::new(Vec::new());
+    let mut interaction_count = rendezvous.subscribe_count();
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-a",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        policy_entered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("pre-tool policy entered");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        policy_release.send_replace(true);
+    });
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_test_interaction_rendezvous(rendezvous),
+        &cancellation,
+    )
+    .await;
+    controller.await.expect("policy cancellation controller");
+    (result, *interaction_count.borrow_and_update(), tool_handle)
+}
+
+fn assert_cancelled_tool_slot_without_start(
+    result: &common::DurableExecutionAudit,
+    _interaction_count: usize,
+    tool_handle: &GatedToolHandle,
+) {
+    assert!(
+        tool_handle.invocations().is_empty(),
+        "executor was not invoked"
+    );
+    assert!(!*tool_handle.started.borrow(), "executor did not start");
+    let messages = tool_messages(result);
+    assert_eq!(messages.len(), 1, "one structural tool result slot");
+    assert!(matches!(
+        &messages[0].result.status,
+        ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        0,
+        "cancellation before start emits no ToolExecutionStarted"
+    );
+    assert!(
+        !result
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ToolExecutionCompleted { .. }))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_ask_is_cancelled_without_publishing_interaction() {
+    let (result, interaction_count, tool_handle) =
+        run_cancelled_after_pending_pre_tool_policy(Ok(PreToolDecision::Ask {
+            reason: "approval required".to_owned(),
+        }))
+        .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_deny_does_not_consume_deny() {
+    let (result, interaction_count, tool_handle) =
+        run_cancelled_after_pending_pre_tool_policy(Ok(PreToolDecision::Deny {
+            reason: "policy denial".to_owned(),
+        }))
+        .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+    assert!(!result.messages().iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::Tool(tool)
+                if matches!(tool.result.status, ToolExecutionStatus::Denied { .. })
+        )
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_after_pending_pre_tool_error_does_not_fail_closed_as_denied() {
+    let (result, interaction_count, tool_handle) = run_cancelled_after_pending_pre_tool_policy(
+        Err(LifecycleError::new("scripted policy error")),
+    )
+    .await;
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(interaction_count, 0, "no Ask interaction was published");
+    assert_cancelled_tool_slot_without_start(&result, interaction_count, &tool_handle);
+    assert!(!result.messages().iter().any(|message| {
+        matches!(
+            message,
+            MessageBlock::Tool(tool)
+                if matches!(tool.result.status, ToolExecutionStatus::Denied { .. })
+        )
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_ask_cancellation_settles_through_the_real_coordinator() {
+    let lifecycle = ConversationLifecycle::new();
+    assert!(lifecycle.activate());
+    let coordinator = Arc::new(InteractionCoordinator::new(
+        ConversationId::new("conv-issue56"),
+        lifecycle,
+    ));
+    coordinator.set_provider_available(true);
+    let (observer, mut published) = NativePendingSignal::new();
+    coordinator.install_observer(observer.clone());
+
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-native-ask",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Ask {
+        reason: "native approval".to_owned(),
+    }]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let observer_for_controller = observer.clone();
+    let (id_sender, id_receiver) = oneshot::channel();
+    let controller = tokio::spawn(async move {
+        published
+            .wait_for(|count| *count == 1)
+            .await
+            .expect("native interaction publication");
+        let id = observer_for_controller
+            .requests
+            .lock()
+            .expect("native pending requests lock")
+            .first()
+            .expect("one native pending request")
+            .id
+            .clone();
+        id_sender.send(id).expect("send native interaction id");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+    });
+
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_native_interaction(coordinator.clone()),
+        &cancellation,
+    )
+    .await;
+    let interaction_id = id_receiver.await.expect("native interaction id");
+    controller.await.expect("native cancellation controller");
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        observer
+            .requests
+            .lock()
+            .expect("native pending requests lock")
+            .len(),
+        1,
+        "the real coordinator published Ask"
+    );
+    assert_eq!(coordinator.pending_count(), 0);
+    assert_eq!(
+        coordinator.respond(
+            &interaction_id,
+            InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        ),
+        Err(InteractionError::NotPending {
+            interaction_id: interaction_id.clone()
+        })
+    );
+    assert_cancelled_tool_slot_without_start(&result, 1, &tool_handle);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn answered_allow_is_rechecked_against_cancellation_before_tool_start() {
+    let (response_sender, response_receiver) = oneshot::channel();
+    let rendezvous = ScriptedInteractionRendezvous::new(vec![response_receiver]);
+    let (answered, mut answered_rx) = watch::channel(false);
+    let (release, release_rx) = watch::channel(false);
+    rendezvous.gate_after_response(answered, release_rx);
+
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-allow-race",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let controller_cancellation = cancellation.clone();
+    let controller = tokio::spawn(async move {
+        answered_rx
+            .wait_for(|entered| *entered)
+            .await
+            .expect("Answered(Allow) terminal outcome");
+        assert!(controller_cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        release.send_replace(true);
+    });
+    let mut interaction_count = rendezvous.subscribe_count();
+    let run_task = tokio::spawn(async move {
+        run(
+            &model,
+            tools,
+            ContextAssembly::new(),
+            AttemptLifecycle::inert()
+                .with_pre_tool_policy(Arc::new(ScriptedPreToolPolicy::new(vec![
+                    PreToolDecision::Ask {
+                        reason: "allow race".to_owned(),
+                    },
+                ])))
+                .with_test_interaction_rendezvous(rendezvous),
+            &cancellation,
+        )
+        .await
+    });
+
+    interaction_count
+        .wait_for(|count| *count == 1)
+        .await
+        .expect("Ask interaction publication");
+    response_sender
+        .send(InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        })
+        .expect("Answer(Allow) response");
+    let result = run_task.await.expect("Agent Execution task");
+    controller.await.expect("allow cancellation controller");
+
+    assert!(matches!(
+        result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert_eq!(
+        *interaction_count.borrow_and_update(),
+        1,
+        "Answered(Allow) came from one published Ask"
+    );
+    assert_cancelled_tool_slot_without_start(
+        &result,
+        *interaction_count.borrow_and_update(),
+        &tool_handle,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,6 +1705,326 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
         "the rejected second step froze no snapshot"
     );
     assert_single_terminal(&result.event_history);
+}
+
+// ---------------------------------------------------------------------------
+// Native pre-tool interaction and Tool Plane settlement
+// ---------------------------------------------------------------------------
+
+/// An approval response resumes the original Tool Plane invocation. The
+/// recorded facts, executor invocation, Assistant `ToolCall`, and canonical
+/// `ToolMessage` all retain the same identity and validated arguments.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_allow_executes_the_exact_prepared_invocation() {
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Ask {
+        reason: "native approval".to_owned(),
+    }]));
+    let observed_policy = policy.observed();
+    let (response_tx, response_rx) = oneshot::channel();
+    let rendezvous = ScriptedInteractionRendezvous::new(vec![response_rx]);
+    let requests = rendezvous.requests();
+    let mut request_count = rendezvous.subscribe_count();
+
+    let mut tools = ToolRegistry::new();
+    let (tool, mut tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-a",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
+    let task = {
+        let model = Arc::clone(&model);
+        let cancellation = cancellation.clone();
+        let lifecycle = AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_test_interaction_rendezvous(rendezvous);
+        tokio::spawn(async move {
+            run(
+                &model,
+                tools,
+                ContextAssembly::new(),
+                lifecycle,
+                &cancellation,
+            )
+            .await
+        })
+    };
+
+    request_count
+        .wait_for(|count| *count == 1)
+        .await
+        .expect("approval request published");
+    let facts = requests
+        .lock()
+        .expect("interaction requests lock")
+        .first()
+        .cloned()
+        .expect("approval facts");
+    assert_eq!(facts.call_id, ToolCallId::new("call-a"));
+    assert_eq!(facts.tool_id, ToolId::new("tool-alpha"));
+    assert_eq!(facts.tool_name, "alpha");
+    assert_eq!(facts.origin, ToolOrigin::Builtin);
+    assert_eq!(facts.mode, ToolInvocationMode::Foreground);
+    assert_eq!(facts.arguments, serde_json::json!({}));
+    assert_eq!(facts.reason, "native approval");
+    assert_eq!(observed_policy.lock().expect("policy facts lock").len(), 1);
+    assert!(!*tool_handle.started.borrow(), "Allow has not arrived yet");
+
+    response_tx
+        .send(InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        })
+        .expect("approval waiter remains live");
+    tool_handle.await_started().await;
+    assert_eq!(
+        tool_handle.invocations(),
+        vec![ToolInvocation {
+            call_id: ToolCallId::new("call-a"),
+            tool_id: ToolId::new("tool-alpha"),
+            tool_name: "alpha".to_owned(),
+            mode: ToolInvocationMode::Foreground,
+            arguments: serde_json::json!({}),
+        }]
+    );
+    tool_handle.release_and_await_completion().await;
+    let result = task.await.expect("attempt task");
+
+    let calls = result
+        .messages()
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Assistant(assistant) => Some(assistant),
+            _ => None,
+        })
+        .flat_map(|assistant| assistant.content.iter())
+        .filter_map(|block| match block {
+            rustx::message::types::AssistantContentBlock::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, ToolCallId::new("call-a"));
+    assert_eq!(calls[0].tool_id, ToolId::new("tool-alpha"));
+    assert_eq!(calls[0].arguments, serde_json::json!({}));
+    let messages = tool_messages(&result);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].tool_call_id, calls[0].id);
+    assert_eq!(messages[0].tool_id, calls[0].tool_id);
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::Success
+    ));
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        1
+    );
+}
+
+/// Denial is a typed Tool Plane result slot, not executor failure: the
+/// executor and start event are absent while the normal batch still settles.
+#[tokio::test]
+async fn approval_deny_emits_one_denied_result_without_starting_executor() {
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![PreToolDecision::Deny {
+        reason: "human denied".to_owned(),
+    }]));
+    let mut tools = ToolRegistry::new();
+    let (tool, tool_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    tool.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[scripted_call(
+        "call-a",
+        "tool-alpha",
+        "alpha",
+    )]));
+    let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert().with_pre_tool_policy(policy),
+        &cancellation,
+    )
+    .await;
+
+    assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
+    assert!(
+        !*tool_handle.started.borrow(),
+        "denial never starts an executor"
+    );
+    assert!(tool_handle.invocations().is_empty());
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
+            .count(),
+        0
+    );
+    let messages = tool_messages(&result);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].tool_call_id, ToolCallId::new("call-a"));
+    assert_eq!(messages[0].tool_id, ToolId::new("tool-alpha"));
+    assert!(matches!(
+        &messages[0].result.status,
+        ToolExecutionStatus::Denied { reason } if reason == "human denied"
+    ));
+}
+
+/// The strong parallel-batch contract resolves every approval in canonical
+/// call order before any executor start frontier advances. A denied sibling
+/// receives a result slot but never receives an executor future.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_batch_resolves_approvals_before_any_tool_start() {
+    let policy = Arc::new(ScriptedPreToolPolicy::new(vec![
+        PreToolDecision::Ask {
+            reason: "first".to_owned(),
+        },
+        PreToolDecision::Ask {
+            reason: "second".to_owned(),
+        },
+    ]));
+    let (first_tx, first_rx) = oneshot::channel();
+    let (second_tx, second_rx) = oneshot::channel();
+    let rendezvous = ScriptedInteractionRendezvous::new(vec![first_rx, second_rx]);
+    let mut request_count = rendezvous.subscribe_count();
+    let mut tools = ToolRegistry::new();
+    let (alpha, mut alpha_handle) = GatedTool::new(
+        parallel_tool("alpha", "tool-alpha"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let (beta, beta_handle) = GatedTool::new(
+        parallel_tool("beta", "tool-beta"),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    alpha.register(&mut tools);
+    beta.register(&mut tools);
+    let model = fake_model(tool_turn_then_stop(&[
+        scripted_call("call-a", "tool-alpha", "alpha"),
+        scripted_call("call-b", "tool-beta", "beta"),
+    ]));
+    let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
+    let task = {
+        let model = Arc::clone(&model);
+        let cancellation = cancellation.clone();
+        let lifecycle = AttemptLifecycle::inert()
+            .with_pre_tool_policy(policy)
+            .with_test_interaction_rendezvous(rendezvous);
+        tokio::spawn(async move {
+            run(
+                &model,
+                tools,
+                ContextAssembly::new(),
+                lifecycle,
+                &cancellation,
+            )
+            .await
+        })
+    };
+
+    request_count
+        .wait_for(|count| *count == 1)
+        .await
+        .expect("first approval request");
+    first_tx
+        .send(InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Allow,
+            },
+        })
+        .expect("first approval waiter");
+    request_count
+        .wait_for(|count| *count == 2)
+        .await
+        .expect("second approval request");
+    assert!(!*alpha_handle.started.borrow());
+    assert!(!*beta_handle.started.borrow());
+    second_tx
+        .send(InteractionOutcome::Answered {
+            response: InteractionResponse::Approval {
+                decision: ApprovalDecision::Deny {
+                    reason: "second denied".to_owned(),
+                },
+            },
+        })
+        .expect("second approval waiter");
+    alpha_handle.await_started().await;
+    assert!(
+        !*beta_handle.started.borrow(),
+        "denied sibling never starts"
+    );
+    alpha_handle.release_and_await_completion().await;
+    let result = task.await.expect("attempt task");
+
+    let messages = tool_messages(&result);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].tool_call_id, ToolCallId::new("call-a"));
+    assert_eq!(messages[1].tool_call_id, ToolCallId::new("call-b"));
+    assert!(matches!(
+        messages[0].result.status,
+        ToolExecutionStatus::Success
+    ));
+    assert!(matches!(
+        &messages[1].result.status,
+        ToolExecutionStatus::Denied { reason } if reason == "second denied"
+    ));
+}
+
+/// Invalid business arguments are rejected by `ToolRegistry` preflight before
+/// the policy boundary. Approval never becomes a schema-validation bypass.
+#[tokio::test]
+async fn invalid_preflight_never_reaches_pre_tool_policy() {
+    let policy = Arc::new(ScriptedPreToolPolicy::new(Vec::new()));
+    let observed = policy.observed();
+    let mut tools = ToolRegistry::new();
+    let definition = ToolDefinition {
+        id: ToolId::new("tool-alpha"),
+        name: "alpha".to_owned(),
+        description: "requires a path".to_owned(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "required": ["path"],
+            "properties": {"path": {"type": "string"}}
+        }),
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        concurrency_policy: ToolConcurrencyPolicy::Sequential,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
+    };
+    InstantTool::register(definition, &mut tools);
+    let model = fake_model(tool_turn_then_stop(&[ScriptedCall {
+        id: "call-a",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    }]));
+    let cancellation = AgentCancellation::new(CancellationReason::RuntimeShutdown);
+    let result = run(
+        &model,
+        tools,
+        ContextAssembly::new(),
+        AttemptLifecycle::inert().with_pre_tool_policy(policy),
+        &cancellation,
+    )
+    .await;
+
+    assert!(observed.lock().expect("policy facts lock").is_empty());
+    assert!(matches!(
+        tool_messages(&result)[0].result.status,
+        ToolExecutionStatus::Failed { .. }
+    ));
 }
 
 // ---------------------------------------------------------------------------

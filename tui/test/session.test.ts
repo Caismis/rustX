@@ -79,6 +79,36 @@ describe("RuntimeClientSession", () => {
     assert.equal(session.state?.cursor, 12);
   });
 
+  it("answers a native interaction through the typed Runtime Client request", async () => {
+    const { peer, session } = connect();
+    await attach(peer, session);
+
+    const responding = session.respondInteraction("attempt-1-interaction-1", {
+      type: "approval",
+      decision: { type: "allow" },
+    });
+    await peer.awaitRequests(3);
+
+    const request = peer.requests[2];
+    assert.equal(request?.method, "interaction_respond");
+    assert.equal(
+      request?.method === "interaction_respond"
+        ? request.interaction_id
+        : undefined,
+      "attempt-1-interaction-1",
+    );
+    assert.deepEqual(
+      request?.method === "interaction_respond" ? request.response : undefined,
+      { type: "approval", decision: { type: "allow" } },
+    );
+
+    peer.respond(3, {
+      type: "interaction_response_accepted",
+      interaction_id: "attempt-1-interaction-1",
+    });
+    await responding;
+  });
+
   it("ignores an event at or before the installed cursor", async () => {
     const { peer, session } = connect();
     await attach(peer, session, snapshot(), 5);

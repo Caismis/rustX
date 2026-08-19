@@ -96,6 +96,11 @@ impl RuntimeAttachment {
             RuntimeClientRequest::CancelCurrentAttempt { .. } => {
                 self.inner.cancel_current_attempt()
             }
+            RuntimeClientRequest::InteractionRespond {
+                interaction_id,
+                response,
+                ..
+            } => self.inner.respond_interaction(&interaction_id, response),
             RuntimeClientRequest::SnapshotGet { .. } => self
                 .inner
                 .snapshot()

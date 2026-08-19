@@ -17,12 +17,14 @@ import {
   renderEntryBlocks,
   renderFooter,
   renderForegroundTool,
+  renderInteractionSection,
 } from "../src/ui/render.ts";
 import type { PresentationState } from "../src/presentation/state.ts";
 import type { ForegroundToolExecution } from "../src/protocol/types.ts";
 import { markdownTheme } from "../src/ui/theme.ts";
 import {
   assistantMessage,
+  approvalInteraction,
   attemptModel,
   backgroundExecution,
   runtimeInbound,
@@ -248,6 +250,16 @@ describe("tool rendering", () => {
         },
         /interrupted \(outcome unknown\)/,
       ],
+      [
+        {
+          type: "settled",
+          arguments: "{}",
+          result: toolResult({
+            status: { type: "denied", reason: "human denied" },
+          }),
+        },
+        /denied \(human denied\)/,
+      ],
     ];
     for (const [state, expected] of cases) {
       assert.match(plain(renderForegroundTool(execution(state))), expected);
@@ -267,6 +279,24 @@ describe("tool rendering", () => {
       ),
     );
     assert.match(rendered, /truncated from 9001 bytes/);
+  });
+});
+
+describe("interaction rendering", () => {
+  it("renders runtime-owned approval facts and the typed response command", () => {
+    const interaction = approvalInteraction();
+    const rendered = plain(
+      renderInteractionSection(
+        base({ pending_interactions: [interaction] }),
+      ),
+    );
+
+    assert.match(rendered, /Approval required — 1 pending/);
+    assert.match(rendered, /bash/);
+    assert.match(rendered, /attempt-1-interaction-1/);
+    assert.match(rendered, /native policy requires approval/);
+    assert.match(rendered, /printf original/);
+    assert.match(rendered, /\/approve <interaction-id> <allow\|deny> \[reason\]/);
   });
 });
 
