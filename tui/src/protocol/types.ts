@@ -39,6 +39,7 @@ export type AttemptId = string;
 export type MessageId = string;
 export type ToolCallId = string;
 export type ToolExecutionId = string;
+export type SubagentId = string;
 export type ToolId = string;
 export type SkillId = string;
 export type SkillVersionId = string;
@@ -230,6 +231,15 @@ export type BackgroundLifecycle =
   | "starting"
   | "running"
   | "cancelling"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+/** The lifecycle states of a subagent child (Issue #60). */
+export type SubagentState =
+  | "running"
+  | "cancelling"
+  | "publishing_terminal"
   | "succeeded"
   | "failed"
   | "cancelled";
@@ -520,6 +530,16 @@ export interface RuntimeClientBackgroundExecution {
   result?: ToolExecutionResult;
 }
 
+/** The Runtime Client view of one subagent child (Issue #60). */
+export interface RuntimeClientSubagent {
+  subagent_id: SubagentId;
+  child_agent_id: AgentId;
+  child_conversation_id: ConversationId;
+  profile: string;
+  state: SubagentState;
+  detail?: string;
+}
+
 export interface RuntimeClientStatusFact {
   label: string;
   value: string;
@@ -606,6 +626,7 @@ export interface RuntimeClientSnapshot {
   /** Live runtime-owned interactions; never client-owned approval truth. */
   pending_interactions: InteractionRequest[];
   background?: RuntimeClientBackgroundExecution[];
+  subagents?: RuntimeClientSubagent[];
   status?: AgentStatusView;
   context: RuntimeClientContextView;
   capabilities: CapabilityView;
@@ -750,6 +771,10 @@ export type RuntimeClientEvent =
       type: "background_execution_updated";
       execution: RuntimeClientBackgroundExecution;
     }
+  | {
+      type: "subagent_updated";
+      subagent: RuntimeClientSubagent;
+    }
   | { type: "capability_published"; capabilities: CapabilityView }
   | { type: "session_model_changed"; model: SessionModelView }
   | { type: "runtime_shutdown" };
@@ -793,6 +818,16 @@ export type RuntimeClientRequest =
       id: RequestId;
       execution_id: ToolExecutionId;
     }
+  | {
+      method: "subagent_status";
+      id: RequestId;
+      subagent_id: SubagentId;
+    }
+  | {
+      method: "subagent_cancel";
+      id: RequestId;
+      subagent_id: SubagentId;
+    }
   | { method: "detach"; id: RequestId }
   | { method: "shutdown"; id: RequestId };
 
@@ -818,6 +853,8 @@ export type RuntimeClientRequestBody =
   | Omit<Extract<RuntimeClientRequest, { method: "model_set" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "background_status" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "background_cancel" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "subagent_status" }>, "id">
+  | Omit<Extract<RuntimeClientRequest, { method: "subagent_cancel" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "detach" }>, "id">
   | Omit<Extract<RuntimeClientRequest, { method: "shutdown" }>, "id">;
 
@@ -855,6 +892,14 @@ export type RuntimeClientResult =
       type: "background_cancel_accepted";
       execution: RuntimeClientBackgroundExecution;
     }
+  | {
+      type: "subagent_status";
+      subagent: RuntimeClientSubagent;
+    }
+  | {
+      type: "subagent_cancel_accepted";
+      subagent: RuntimeClientSubagent;
+    }
   | { type: "detached" }
   | { type: "shutdown_completed" };
 
@@ -867,6 +912,7 @@ export type RuntimeClientError =
   | { type: "interaction_not_pending"; interaction_id: InteractionId }
   | { type: "interaction_invalid_response"; message: string }
   | { type: "unknown_background_execution"; execution_id: ToolExecutionId }
+  | { type: "unknown_subagent"; subagent_id: SubagentId }
   | {
       type: "resync_required";
       after_cursor: RuntimeClientCursor;
@@ -926,6 +972,7 @@ export function isKnownRuntimeClientEvent(
     case "inbound_enqueued":
     case "inbound_drained":
     case "background_execution_updated":
+    case "subagent_updated":
     case "capability_published":
     case "session_model_changed":
     case "runtime_shutdown":

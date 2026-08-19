@@ -277,6 +277,24 @@ pub enum RuntimeClientRequest {
         /// The detached execution identity.
         execution_id: ToolExecutionId,
     },
+    /// Inspect one subagent child (Issue #60).
+    SubagentStatus {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The subagent identity.
+        subagent_id: crate::runtime::identity::SubagentId,
+    },
+    /// Request cancellation of one subagent child (Issue #60).
+    ///
+    /// Acceptance and eventual settlement remain distinct: the response
+    /// carries the registry snapshot after the intent commit, never the
+    /// terminal result.
+    SubagentCancel {
+        /// Attachment-scoped request id.
+        id: RequestId,
+        /// The subagent identity.
+        subagent_id: crate::runtime::identity::SubagentId,
+    },
     /// Release the attachment.
     Detach {
         /// Attachment-scoped request id.
@@ -310,6 +328,8 @@ impl RuntimeClientRequest {
             | Self::ModelSet { id, .. }
             | Self::BackgroundStatus { id, .. }
             | Self::BackgroundCancel { id, .. }
+            | Self::SubagentStatus { id, .. }
+            | Self::SubagentCancel { id, .. }
             | Self::Detach { id, .. }
             | Self::Shutdown { id, .. } => *id,
         }
@@ -331,6 +351,8 @@ impl RuntimeClientRequest {
             Self::ModelSet { .. } => "model_set",
             Self::BackgroundStatus { .. } => "background_status",
             Self::BackgroundCancel { .. } => "background_cancel",
+            Self::SubagentStatus { .. } => "subagent_status",
+            Self::SubagentCancel { .. } => "subagent_cancel",
             Self::Detach { .. } => "detach",
             Self::Shutdown { .. } => "shutdown",
         }
@@ -438,6 +460,17 @@ pub enum RuntimeClientResult {
         /// The registry snapshot after processing the request.
         execution: RuntimeClientBackgroundExecution,
     },
+    /// `subagent_status` succeeded (Issue #60).
+    SubagentStatus {
+        /// The canonical registry snapshot of the child.
+        subagent: RuntimeClientSubagent,
+    },
+    /// `subagent_cancel` succeeded: the intent was committed by the
+    /// authoritative registry. Acceptance is never terminal settlement.
+    SubagentCancelAccepted {
+        /// The registry snapshot after processing the request.
+        subagent: RuntimeClientSubagent,
+    },
     /// `detach` succeeded.
     Detached,
     /// `shutdown` succeeded: the conversation runtime reached quiescence.
@@ -491,6 +524,12 @@ pub enum RuntimeClientError {
         /// The referenced execution identity.
         execution_id: ToolExecutionId,
     },
+    /// The referenced subagent child does not exist in the authoritative
+    /// conversation registry (Issue #60).
+    UnknownSubagent {
+        /// The referenced subagent identity.
+        subagent_id: crate::runtime::identity::SubagentId,
+    },
     /// The requested cursor is not serviceable by the bounded projection
     /// replay buffer; the client must take a fresh snapshot from the runtime
     /// projection. The durable Event Journal is not represented by this
@@ -543,7 +582,7 @@ pub struct RuntimeClientProtocolEvent {
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::RuntimeClientBackgroundExecution;
+pub use super::snapshot::{RuntimeClientBackgroundExecution, RuntimeClientSubagent};
 
 #[cfg(test)]
 mod tests {

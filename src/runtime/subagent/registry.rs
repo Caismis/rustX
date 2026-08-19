@@ -175,7 +175,8 @@ struct RegistryState {
 }
 
 /// The public lifecycle vocabulary of one subagent snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SubagentState {
     /// Ownership committed; the delegation is in flight or running.
     Running,
@@ -412,12 +413,18 @@ impl SubagentRegistry {
 
     /// Installs the observation seam and immediately emits the current
     /// snapshot of every known record.
-    pub fn install_observer_and_snapshots(&self, observer: Arc<dyn SubagentObserver>) {
+    pub fn install_observer_and_snapshots(
+        &self,
+        observer: Arc<dyn SubagentObserver>,
+    ) -> Vec<SubagentSnapshot> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        for record in &state.records {
-            observer.on_snapshot(&record.snapshot());
+        let snapshots: Vec<SubagentSnapshot> =
+            state.records.iter().map(SubagentRecord::snapshot).collect();
+        for snapshot in &snapshots {
+            observer.on_snapshot(snapshot);
         }
         state.observer = Some(observer);
+        snapshots
     }
 
     /// Installs the durability-failure sink.

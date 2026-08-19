@@ -95,6 +95,10 @@ pub struct RuntimeClientSnapshot {
     /// terminal records retained by the authoritative registry.
     #[serde(default)]
     pub background: Vec<RuntimeClientBackgroundExecution>,
+    /// All subagent children in subagent ordinal order, including terminal
+    /// records retained by the authoritative registry (Issue #60).
+    #[serde(default)]
+    pub subagents: Vec<RuntimeClientSubagent>,
     /// The latest composed Agent Status observation, when one exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatusView>,
@@ -365,6 +369,30 @@ pub struct RuntimeClientBackgroundExecution {
     /// The bounded terminal result, when terminal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<ToolExecutionResult>,
+}
+
+/// The Runtime Client view of one subagent child (Issue #60).
+///
+/// A read-model materialization of the authoritative registry snapshot:
+/// every field is derived, and the durable ownership/terminal events —
+/// never this view — are the recovery authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeClientSubagent {
+    /// The conversation-owned subagent identity.
+    pub subagent_id: crate::runtime::identity::SubagentId,
+    /// The child agent identity (the provenance its answer carries).
+    pub child_agent_id: crate::runtime::identity::AgentId,
+    /// The child's own durable conversation identity.
+    pub child_conversation_id: ConversationId,
+    /// The frozen profile identity.
+    pub profile: String,
+    /// The authoritative lifecycle state.
+    pub state: crate::runtime::subagent::SubagentState,
+    /// The bounded terminal detail (result content, failure diagnostic, or
+    /// cancellation detail), once known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// The structured Agent Status view of one composition.

@@ -1533,6 +1533,13 @@ impl RuntimeInner {
             .tool_runtime
             .background()
             .install_observer_and_snapshots(observer.clone());
+        // ---- T2b: the subagent registry (frozen by the same inactive
+        //           mailbox binding) ----
+        let subagents = self
+            .subagents
+            .as_ref()
+            .map(|subagents| subagents.install_observer_and_snapshots(observer.clone()))
+            .unwrap_or_default();
         // No fallible subsystem has been mutated after the pending read. The
         // pre-check above and the coordinator lock make this set infallible;
         // keep the explicit branch as a defensive invariant assertion.
@@ -1551,6 +1558,7 @@ impl RuntimeInner {
             model,
             inbound_pending,
             background,
+            subagents,
             pending_interactions,
             capabilities,
         })
@@ -2996,6 +3004,33 @@ impl ConversationRuntime {
         RequestHistory::new(self.inner.store.clone()).reconstruct(identity)
     }
 
+    /// Inspects one subagent child through the authoritative registry
+    /// (Issue #60).
+    #[must_use]
+    pub fn subagent_status(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Option<crate::runtime::subagent::SubagentSnapshot> {
+        self.inner
+            .subagents
+            .as_ref()
+            .and_then(|subagents| subagents.snapshot(subagent_id))
+    }
+
+    /// Requests cancellation of one subagent child through the
+    /// authoritative registry. Acceptance and eventual settlement remain
+    /// distinct; the snapshot is the state after the intent commit.
+    #[must_use]
+    pub fn subagent_cancel(
+        &self,
+        subagent_id: &crate::runtime::identity::SubagentId,
+    ) -> Option<crate::runtime::subagent::SubagentSnapshot> {
+        self.inner
+            .subagents
+            .as_ref()
+            .and_then(|subagents| subagents.cancel(subagent_id, CancellationReason::UserRequested))
+    }
+
     /// Inspects one background execution through the authoritative
     /// registry.
     #[must_use]
@@ -3153,6 +3188,13 @@ pub(crate) struct RuntimeBootstrapSnapshot {
     /// observer, so the handshake is one coherent cut for whatever state
     /// exists.
     pub background: Vec<BackgroundExecutionSnapshot>,
+    /// The authoritative subagent child records at the cut (Issue #60).
+    ///
+    /// Provably empty by the same argument as `background`: the registry
+    /// is composed fresh with the runtime and the mailbox is bound
+    /// inactive until activation, so no ownership can commit before the
+    /// bridge exists.
+    pub subagents: Vec<crate::runtime::subagent::SubagentSnapshot>,
     /// The active authoritative capability snapshot.
     pub capabilities: Arc<crate::capabilities::CapabilitySnapshot>,
     /// Live process-owned native interactions at the bootstrap cut.
@@ -3414,6 +3456,14 @@ impl InboundObserver for RuntimeObserver {
 impl BackgroundObserver for RuntimeObserver {
     fn on_snapshot(&self, snapshot: &BackgroundExecutionSnapshot) {
         self.push(ConversationObservation::Background(snapshot.clone()));
+    }
+}
+
+// Same leaf contract as the background observer: the registry fires under
+// its lock, so this only pushes into the queue.
+impl crate::runtime::subagent::SubagentObserver for RuntimeObserver {
+    fn on_snapshot(&self, snapshot: &crate::runtime::subagent::SubagentSnapshot) {
+        self.push(ConversationObservation::Subagent(snapshot.clone()));
     }
 }
 
