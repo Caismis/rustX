@@ -380,18 +380,91 @@ impl ConversationLifecycle {
     }
 }
 
-/// The runtime-owned durability frontier shared with conversation-owned
-/// durable semantic ownership commits (Issue #60).
+/// The durable-operation vocabulary of a conversation runtime's durability
+/// health (Issue #63): the finite set of conversation-owned durable
+/// transitions whose failure can degrade the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DurableOperation {
+    /// Selecting the finite pending batch from the durable inbox.
+    SelectPendingBatch,
+    /// Adopting the selected batch into the durable canonical ledger.
+    AdoptPendingBatch,
+    /// Preparing the canonical adoption transition (in-memory validation):
+    /// a semantic contract failure, not a transient storage failure.
+    PrepareAdoption,
+    /// The live admission safety guard observed an incomplete tool turn.
+    IncompleteToolTurn,
+    /// An active attempt hit a durable canonical-write failure.
+    CanonicalCommit,
+    /// An active attempt could not commit its fused durable model-turn start
+    /// transition (request-scoped context + Surface advancement +
+    /// `RequestSnapshot` + `ModelRequestStarted` + start sequence binding).
+    RequestStart,
+    /// An active attempt could not append a required Event Journal fact.
+    EventJournal,
+    /// The background settlement owner exhausted its bounded terminal
+    /// publication budget.
+    BackgroundTerminalPublication,
+    /// The conversation-owned subagent settlement owner exhausted its
+    /// bounded terminal publication budget.
+    SubagentTerminalPublication,
+}
+
+impl DurableOperation {
+    /// Whether a failure of this operation is a transient storage failure
+    /// that earns one bounded retry.
+    pub(crate) fn is_transient(self) -> bool {
+        matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
+    }
+
+    /// The stable diagnostic name of the operation.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SelectPendingBatch => "select_pending_batch",
+            Self::AdoptPendingBatch => "adopt_pending_batch",
+            Self::PrepareAdoption => "prepare_adoption",
+            Self::IncompleteToolTurn => "incomplete_tool_turn",
+            Self::CanonicalCommit => "canonical_commit",
+            Self::RequestStart => "request_start",
+            Self::EventJournal => "event_journal",
+            Self::BackgroundTerminalPublication => "background_terminal_publication",
+            Self::SubagentTerminalPublication => "subagent_terminal_publication",
+        }
+    }
+}
+
+/// The one authoritative absorbing durability-failure fact of one
+/// conversation runtime (Issue #63 / Issue #60).
 ///
-/// `ConversationRuntime` owns the authoritative durable-health state
-/// (`DurabilityHealth` under the coordinator lock). This gate is the single
-/// synchronization frontier through which that fact reaches the
-/// conversation-owned registries: it carries the same failed fact at the
-/// same commit point (updated by the coordinator's durability-failure
-/// commit) and serializes new conversation-owned durable ownership commits
-/// (subagent and background) against the `DurabilityFailed` commit, so the
-/// two have one deterministic total order:
+/// Exactly one such fact ever exists per runtime: the first commit is
+/// absorbing and later failures never replace it. It answers the only three
+/// questions a durability-failure reader may ask — has the runtime entered
+/// `DurabilityFailed`, which durable operation caused it, and what
+/// diagnostic belongs to it — and it is stored in exactly one place: the
+/// runtime-owned [`DurabilityGate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DurabilityFailure {
+    /// The durable operation that failed persistently.
+    pub(crate) operation: DurableOperation,
+    /// The bounded failure diagnostic.
+    pub(crate) diagnostic: String,
+}
+
+/// The runtime-owned durability frontier of one conversation (Issue #60).
 ///
+/// This object is both **the single authoritative storage of the absorbing
+/// `DurabilityFailed` fact** and **the synchronization frontier that
+/// serializes new conversation-owned durable ownership commits** (subagent
+/// and background) against that fact:
+///
+/// - `ConversationRuntime` owns the durability *policy*: under the
+///   coordinator lock it decides when a transient admission-cycle failure
+///   upgrades to the absorbing failure, and commits the fact here through
+///   [`DurabilityGate::commit_failure`] — the one mutation API. There is no
+///   second failed-state authority anywhere: the coordinator keeps only
+///   transient admission-cycle retry bookkeeping, and every reader
+///   (`submit_inbound`, `model_set`, attempt admission, the registries, the
+///   shutdown diagnostic, the observation) reads this one fact.
 /// - a new ownership commit holds the gate **across** its durable
 ///   ownership write and record publication — a failure that wins the gate
 ///   first makes the commit refuse (and its staged child roll back), while
@@ -410,29 +483,56 @@ pub(crate) struct DurabilityGate {
 
 #[derive(Debug, Default)]
 struct DurabilityGateState {
-    /// Whether the owning runtime committed `DurabilityFailed`.
-    failed: bool,
-    /// The bounded failure diagnostic of that commit.
-    diagnostic: Option<String>,
+    /// The one absorbing durability-failure fact, once committed.
+    failure: Option<DurabilityFailure>,
 }
 
 impl DurabilityGate {
-    /// Creates a fresh, healthy frontier.
+    /// Creates a fresh frontier with no committed failure.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Commits the `DurabilityFailed` fact into the shared frontier.
+    /// Commits the absorbing `DurabilityFailed` fact — the **only** mutation
+    /// API of the failure authority.
     ///
-    /// Called by the owning runtime's durability-failure commit under the
-    /// coordinator lock. New ownership commits serialize on this same gate,
-    /// so this acquisition is the linearization point against any new
+    /// The first commit is absorbing: a later call never replaces the stored
+    /// operation/diagnostic and never publishes a second fact. Called by the
+    /// owning runtime's durability-failure commit under the coordinator
+    /// lock. New ownership commits serialize on this same gate, so this
+    /// acquisition is the linearization point against any new
     /// conversation-owned durable ownership commit.
-    pub(crate) fn mark_failed(&self, diagnostic: String) {
+    pub(crate) fn commit_failure(&self, operation: DurableOperation, diagnostic: String) {
         let mut state = self.state.lock().expect("durability gate lock poisoned");
-        state.failed = true;
-        state.diagnostic = Some(diagnostic);
+        if state.failure.is_some() {
+            // Absorbing winner: the first authoritative failure never gets
+            // rewritten by a later one.
+            return;
+        }
+        state.failure = Some(DurabilityFailure {
+            operation,
+            diagnostic,
+        });
+    }
+
+    /// The one authoritative absorbing failure fact, if the runtime entered
+    /// `DurabilityFailed`.
+    pub(crate) fn failure(&self) -> Option<DurabilityFailure> {
+        self.state
+            .lock()
+            .expect("durability gate lock poisoned")
+            .failure
+            .clone()
+    }
+
+    /// Whether the runtime committed the absorbing `DurabilityFailed` fact.
+    pub(crate) fn is_failed(&self) -> bool {
+        self.state
+            .lock()
+            .expect("durability gate lock poisoned")
+            .failure
+            .is_some()
     }
 
     /// Acquires the ownership-commit permission for one new
@@ -448,12 +548,9 @@ impl DurabilityGate {
         &self,
     ) -> Result<OwnershipCommitGuard<'_>, OwnershipCommitRefused> {
         let state = self.state.lock().expect("durability gate lock poisoned");
-        if state.failed {
+        if let Some(failure) = &state.failure {
             return Err(OwnershipCommitRefused {
-                diagnostic: state
-                    .diagnostic
-                    .clone()
-                    .unwrap_or_else(|| "the conversation durable authority failed".to_owned()),
+                diagnostic: failure.diagnostic.clone(),
             });
         }
         Ok(OwnershipCommitGuard { _gate: state })
@@ -474,7 +571,8 @@ pub(crate) struct OwnershipCommitGuard<'a> {
 /// owning runtime's durable authority is in the explicit failed state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OwnershipCommitRefused {
-    /// The owning runtime's bounded failure diagnostic.
+    /// The owning runtime's bounded failure diagnostic (the authoritative
+    /// fact's diagnostic).
     pub(crate) diagnostic: String,
 }
 

@@ -3154,9 +3154,14 @@ owning `ConversationRuntime` in `DurabilityFailed`; no false terminal success
 or healthy state is reported.
 
 `DurabilityFailed` is the **fail-closed frontier for new ownership**, shared
-with the background plane: `ConversationRuntime` owns the durability health
-and carries the failed fact to both conversation-owned registries through one
-runtime-owned `DurabilityGate`. Every new subagent or background ownership
+with the background plane: `ConversationRuntime` owns the durability
+*policy*, and the runtime-owned `DurabilityGate` is the **single
+authoritative storage of the absorbing durability-failure fact**
+(`DurabilityFailure { operation, diagnostic }`, committed through its one
+mutation API) as well as the synchronization frontier shared with both
+conversation-owned registries. The coordinator keeps only transient
+admission-cycle retry bookkeeping — there is no second failed-state
+authority. Every new subagent or background ownership
 commit holds that gate across its durable ownership write and record
 publication, and the `DurabilityFailed` commit acquires the same gate, so
 the two have one deterministic total order — a failure that wins first makes

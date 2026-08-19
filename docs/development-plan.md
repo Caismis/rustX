@@ -1155,9 +1155,13 @@ The first publication error receives the bounded retry; only exhausted retry
 invokes the sink owned by `ConversationRuntime`, which enters
 `DurabilityFailed` and leaves the candidate observable rather than claiming
 healthy or successful settlement. `DurabilityFailed` is the fail-closed
-frontier for **new** conversation-owned durable ownership: the runtime
-carries the failed fact to both the subagent and background registries
-through one runtime-owned `DurabilityGate`, and every new ownership commit
+frontier for **new** conversation-owned durable ownership: the runtime-owned
+`DurabilityGate` is the **single authoritative storage of the absorbing
+failure fact** (committed through its one mutation API) and the
+synchronization frontier shared with both the subagent and background
+registries; `ConversationRuntime` owns the durability policy and the
+coordinator keeps only transient admission-cycle retry bookkeeping, never a
+second failed-state authority. Every new ownership commit
 holds that gate across its durable write and record publication, giving the
 failure commit and ownership commits one deterministic total order. A
 failure that wins first refuses new subagent/background ownership (staged

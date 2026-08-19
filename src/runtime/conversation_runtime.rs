@@ -299,7 +299,7 @@ use crate::runtime::observation::{ConversationObservation, PendingObservations};
 use crate::runtime::request_history::RequestHistory;
 use crate::runtime::types::{
     CancellationReason, ConversationLifecycle, ConversationLifecycleState, DurabilityGate,
-    RuntimeClock, SystemClock,
+    DurableOperation, RuntimeClock, SystemClock,
 };
 use crate::tools::background::{BackgroundExecutionSnapshot, BackgroundObserver};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -543,56 +543,7 @@ struct CurrentAttempt {
 /// an already-terminal durable failure (an active attempt's canonical-write
 /// failure, an exhausted background publication budget) has already consumed
 /// its settlement; all of these fail closed immediately.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DurableOperation {
-    /// Selecting the finite pending batch from the durable inbox.
-    SelectPendingBatch,
-    /// Adopting the selected batch into the durable canonical ledger.
-    AdoptPendingBatch,
-    /// Preparing the canonical adoption transition (in-memory validation):
-    /// a semantic contract failure, not a transient storage failure.
-    PrepareAdoption,
-    /// The live admission safety guard observed an incomplete tool turn.
-    IncompleteToolTurn,
-    /// An active attempt hit a durable canonical-write failure.
-    CanonicalCommit,
-    /// An active attempt could not commit its fused durable model-turn start
-    /// transition (request-scoped context + Surface advancement +
-    /// `RequestSnapshot` + `ModelRequestStarted` + start sequence binding).
-    RequestStart,
-    /// An active attempt could not append a required Event Journal fact.
-    EventJournal,
-    /// The background settlement owner exhausted its bounded terminal
-    /// publication budget.
-    BackgroundTerminalPublication,
-    /// The conversation-owned subagent settlement owner exhausted its
-    /// bounded terminal publication budget.
-    SubagentTerminalPublication,
-}
-
-impl DurableOperation {
-    /// Whether a failure of this operation is a transient storage failure
-    /// that earns one bounded retry.
-    fn is_transient(self) -> bool {
-        matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
-    }
-
-    /// The stable diagnostic name of the operation.
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::SelectPendingBatch => "select_pending_batch",
-            Self::AdoptPendingBatch => "adopt_pending_batch",
-            Self::PrepareAdoption => "prepare_adoption",
-            Self::IncompleteToolTurn => "incomplete_tool_turn",
-            Self::CanonicalCommit => "canonical_commit",
-            Self::RequestStart => "request_start",
-            Self::EventJournal => "event_journal",
-            Self::BackgroundTerminalPublication => "background_terminal_publication",
-            Self::SubagentTerminalPublication => "subagent_terminal_publication",
-        }
-    }
-}
-
+///
 /// The bounded transient retry allowance of one finite admission cycle.
 ///
 /// Each transient stage may fail once and receive one immediate re-kick. The
@@ -645,37 +596,23 @@ struct PendingDurabilityRetry {
 ///
 /// A storage failure that a required transition cannot proceed without is
 /// never silently swallowed and never retried forever. The admission-cycle
-/// budget records one allowance independently for select and adopt, while
-/// this state retains only the latest pending re-kick/diagnostic. A second
-/// failure of either transient stage in the same cycle moves the runtime into
-/// an explicit `DurabilityFailed` state in which no new durable
-/// admission/execution work may begin. A non-transient failure enters
-/// `DurabilityFailed` immediately.
+/// The coordinator-owned transient admission-cycle retry bookkeeping
+/// (Issue #63).
+///
+/// This is **not** the runtime durability-health authority: the absorbing
+/// `DurabilityFailed` fact lives in exactly one place, the runtime-owned
+/// [`DurabilityGate`](crate::runtime::types::DurabilityGate). The
+/// coordinator keeps only the finite-cycle retry allowances and the latest
+/// pending re-kick here; the decision to upgrade to the absorbing failure
+/// is made under the coordinator lock and committed through
+/// `DurabilityGate::commit_failure` — the one mutation API of the failure
+/// authority.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DurabilityHealth {
-    /// The current finite admission cycle, including its independent retry
-    /// budget and (when present) the latest re-kick diagnostic.
-    AdmissionCycle {
-        /// The independent select/adopt retry allowances for this cycle.
-        budget: AdmissionRetryBudget,
-        /// The latest transient failure whose re-kick is armed.
-        pending_retry: Option<PendingDurabilityRetry>,
-    },
-    /// Persistent failure after the bounded retry (or an immediately
-    /// non-transient failure): no new durable work may begin until the
-    /// runtime is reconstructed.
-    DurabilityFailed {
-        /// The operation that failed persistently.
-        operation: DurableOperation,
-        /// The failure diagnostic.
-        diagnostic: String,
-    },
-}
-
-impl DurabilityHealth {
-    fn is_failed(&self) -> bool {
-        matches!(self, Self::DurabilityFailed { .. })
-    }
+struct AdmissionDurabilityCycle {
+    /// The independent select/adopt retry allowances for this cycle.
+    budget: AdmissionRetryBudget,
+    /// The latest transient failure whose re-kick is armed.
+    pending_retry: Option<PendingDurabilityRetry>,
 }
 
 /// The one synchronized coordinator state (the admission linearization
@@ -722,8 +659,14 @@ struct CoordinatorState {
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
     recovered_continuation: bool,
-    /// The durable-authority health state (Issue #63, Finding 5).
-    durability_health: DurabilityHealth,
+    /// The coordinator-owned transient admission-cycle retry bookkeeping
+    /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
+    /// stored here: it lives in exactly one place, the runtime-owned
+    /// [`DurabilityGate`], which every reader (`submit_inbound`, `model_set`,
+    /// attempt admission, the registries, the shutdown diagnostic, the
+    /// observation) consults. This field only tracks the finite-cycle retry
+    /// allowances and the latest pending re-kick of the admission worker.
+    admission_durability_cycle: AdmissionDurabilityCycle,
 }
 
 /// The runtime admission worker's wake boundary.
@@ -1354,11 +1297,12 @@ impl RuntimeInner {
     /// Returns the durable failure that prevents this runtime from claiming
     /// successful quiescence, if one has been recorded.
     fn durability_failure_diagnostic(&self) -> Option<String> {
-        let state = self.lock_state();
-        match &state.durability_health {
-            DurabilityHealth::DurabilityFailed { diagnostic, .. } => Some(diagnostic.clone()),
-            DurabilityHealth::AdmissionCycle { .. } => None,
-        }
+        // The one authoritative absorbing failure fact lives in the
+        // runtime-owned DurabilityGate; the coordinator keeps no second
+        // failed-state copy.
+        self.durability_gate
+            .failure()
+            .map(|failure| failure.diagnostic)
     }
 
     /// Builds the `ContextRuntime` of one admitted attempt.
@@ -1405,58 +1349,42 @@ impl RuntimeInner {
     /// consumes the allowance for that stage in the current finite admission
     /// cycle, publishes a [`ConversationObservation::DurableFailure`], and
     /// arms exactly one bounded re-kick. A second failure of that stage in
-    /// the same cycle moves the runtime into the explicit
-    /// [`DurabilityHealth::DurabilityFailed`] state and publishes a
-    /// [`ConversationObservation::DurabilityFailed`]; no further re-kick is
-    /// armed, so a persistent or alternating fault cannot become a hot loop.
-    /// A failure of a different transient stage consumes its own allowance
-    /// without erasing the first stage's debt.
-    ///
-    /// A non-transient failure (a semantic contract failure or an
-    /// already-terminal durable failure) enters `DurabilityFailed`
-    /// immediately: retrying the identical transition is futile.
+    /// the same cycle — or any non-transient failure — upgrades to the
+    /// absorbing `DurabilityFailed` fact, committed through the one
+    /// authority ([`DurabilityGate::commit_failure`]) and published as a
+    /// [`ConversationObservation::DurabilityFailed`] exactly once; no
+    /// further re-kick is armed, so a persistent or alternating fault cannot
+    /// become a hot loop. A failure of a different transient stage consumes
+    /// its own allowance without erasing the first stage's debt.
     fn record_durability_failure(
         &self,
         state: &mut CoordinatorState,
         operation: DurableOperation,
         diagnostic: String,
     ) {
-        if state.durability_health.is_failed() {
-            // Already failed: no re-kick, no hot loop.
+        // Absorbing winner: once the one authoritative failure fact exists,
+        // later failures never re-commit it and never re-observe.
+        if self.durability_gate.is_failed() {
             return;
         }
         if !operation.is_transient() {
-            state.durability_health = DurabilityHealth::DurabilityFailed {
-                operation,
-                diagnostic: diagnostic.clone(),
-            };
-            // The shared frontier is updated at the same commit point, so
-            // the registries' new ownership commits observe the failed fact
-            // with one total order against this commit.
-            self.durability_gate.mark_failed(diagnostic.clone());
+            self.durability_gate
+                .commit_failure(operation, diagnostic.clone());
             self.observe(ConversationObservation::DurabilityFailed {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
             });
             return;
         }
-        let retry_armed = match &mut state.durability_health {
-            DurabilityHealth::AdmissionCycle {
-                budget,
-                pending_retry,
-            } => {
-                if budget.try_consume(operation) {
-                    *pending_retry = Some(PendingDurabilityRetry {
-                        operation,
-                        diagnostic: diagnostic.clone(),
-                    });
-                    true
-                } else {
-                    false
-                }
-            }
-            DurabilityHealth::DurabilityFailed { .. } => {
-                // Unreachable: guarded above.
+        let retry_armed = {
+            let cycle = &mut state.admission_durability_cycle;
+            if cycle.budget.try_consume(operation) {
+                cycle.pending_retry = Some(PendingDurabilityRetry {
+                    operation,
+                    diagnostic: diagnostic.clone(),
+                });
+                true
+            } else {
                 false
             }
         };
@@ -1466,14 +1394,8 @@ impl RuntimeInner {
             });
             self.wake.notify.notify_one();
         } else {
-            state.durability_health = DurabilityHealth::DurabilityFailed {
-                operation,
-                diagnostic: diagnostic.clone(),
-            };
-            // The shared frontier is updated at the same commit point, so
-            // the registries' new ownership commits observe the failed fact
-            // with one total order against this commit.
-            self.durability_gate.mark_failed(diagnostic.clone());
+            self.durability_gate
+                .commit_failure(operation, diagnostic.clone());
             self.observe(ConversationObservation::DurabilityFailed {
                 operation: operation.as_str().to_owned(),
                 diagnostic,
@@ -1485,12 +1407,10 @@ impl RuntimeInner {
     /// matching pending re-kick marker; it never resets the admission-cycle
     /// budget. A stage success is not a semantic completion boundary.
     fn record_durability_success(state: &mut CoordinatorState, operation: DurableOperation) {
-        if let DurabilityHealth::AdmissionCycle { pending_retry, .. } = &mut state.durability_health
-            && pending_retry
-                .as_ref()
-                .is_some_and(|pending| pending.operation == operation)
+        if let Some(pending_retry) = &mut state.admission_durability_cycle.pending_retry
+            && pending_retry.operation == operation
         {
-            *pending_retry = None;
+            state.admission_durability_cycle.pending_retry = None;
         }
     }
 
@@ -1500,14 +1420,8 @@ impl RuntimeInner {
     /// pending work or after the selected batch is durably adopted. Success
     /// of an intermediate select/adopt stage must retain the consumed bits.
     fn complete_admission_cycle(state: &mut CoordinatorState) {
-        if let DurabilityHealth::AdmissionCycle {
-            budget,
-            pending_retry,
-        } = &mut state.durability_health
-        {
-            *budget = AdmissionRetryBudget::default();
-            *pending_retry = None;
-        }
+        state.admission_durability_cycle.budget = AdmissionRetryBudget::default();
+        state.admission_durability_cycle.pending_retry = None;
     }
 
     /// Installs the observation bridge and captures the bootstrap seed at
@@ -1900,9 +1814,11 @@ impl RuntimeInner {
         if !self.lifecycle.is_running() || state.current_attempt.is_some() {
             return;
         }
-        // Persistent durable failure: no new admission may begin. The runtime
-        // is already in an explicit degraded state, so this is not a hot loop.
-        if state.durability_health.is_failed() {
+        // Persistent durable failure: no new admission may begin. The one
+        // authoritative failure fact lives in the runtime-owned DurabilityGate;
+        // this is not a hot loop because the fact is absorbing and the worker
+        // is not re-kicked once it exists.
+        if self.durability_gate.is_failed() {
             return;
         }
         // Live admission guard: the coordinator may only adopt inbound when
@@ -2569,8 +2485,9 @@ impl ConversationRuntime {
                 // it failed, in which case construction already returned and
                 // no runtime exists to be healthy. A previous process's crash
                 // never poisons a runtime whose classification and
-                // reconciliation succeeded.
-                durability_health: DurabilityHealth::AdmissionCycle {
+                // reconciliation succeeded. The absorbing DurabilityFailed
+                // fact itself lives only in the DurabilityGate.
+                admission_durability_cycle: AdmissionDurabilityCycle {
                     budget: AdmissionRetryBudget::default(),
                     pending_retry: None,
                 },
@@ -2913,16 +2830,19 @@ impl ConversationRuntime {
             return Err(InboundAdmissionError::EmptyContent);
         }
         // Issue #63 (Finding 1): the one coordinator lock is held across the
-        // lifecycle/shutdown check **and** the durable acceptance, so a
-        // successful acceptance and shutdown have one total ordering.
-        // Shutdown therefore linearizes either entirely before the
-        // acceptance (and the acceptance fails with `Shutdown`) or entirely
-        // after it (and the acceptance is a legal pre-shutdown success).
-        // Holding the coordinator lock here nests only the mailbox/store
-        // locks inside it, the same order the admission worker already
-        // takes; no mailbox/store → coordinator edge exists, so the lock
-        // graph stays acyclic.
-        let state = self.inner.lock_state();
+        // lifecycle/shutdown check, the durability-failure check, **and**
+        // the durable acceptance, so a successful acceptance and shutdown
+        // have one total ordering. Shutdown therefore linearizes either
+        // entirely before the acceptance (and the acceptance fails with
+        // `Shutdown`) or entirely after it (and the acceptance is a legal
+        // pre-shutdown success). Holding the coordinator lock here nests
+        // only the mailbox/store and the DurabilityGate locks inside it, the
+        // same order the admission worker already takes; no mailbox/store →
+        // coordinator edge exists, so the lock graph stays acyclic. The
+        // guard is deliberately kept alive (underscore binding) for the
+        // whole acceptance even though the absorbing failure fact itself is
+        // read from the DurabilityGate.
+        let _state = self.inner.lock_state();
         match self.inner.lifecycle.state() {
             ConversationLifecycleState::Inactive => {
                 return Err(InboundAdmissionError::Inactive);
@@ -2932,14 +2852,10 @@ impl ConversationRuntime {
             }
             ConversationLifecycleState::Running => {}
         }
-        if state.durability_health.is_failed() {
-            let message = match &state.durability_health {
-                DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
-                DurabilityHealth::AdmissionCycle { .. } => {
-                    unreachable!("is_failed implies DurabilityFailed")
-                }
-            };
-            return Err(InboundAdmissionError::DurabilityFailed { message });
+        if let Some(failure) = self.inner.durability_gate.failure() {
+            return Err(InboundAdmissionError::DurabilityFailed {
+                message: failure.diagnostic,
+            });
         }
         // Test-only gate: parked while holding the coordinator lock, after
         // the shutdown/activation decision and before the durable acceptance,
@@ -3091,14 +3007,10 @@ impl ConversationRuntime {
         if !self.inner.lifecycle.is_running() {
             return Err(ModelUpdateError::Inactive);
         }
-        if state.durability_health.is_failed() {
-            let message = match &state.durability_health {
-                DurabilityHealth::DurabilityFailed { diagnostic, .. } => diagnostic.clone(),
-                DurabilityHealth::AdmissionCycle { .. } => {
-                    unreachable!("is_failed implies DurabilityFailed")
-                }
-            };
-            return Err(ModelUpdateError::DurabilityFailed { message });
+        if let Some(failure) = self.inner.durability_gate.failure() {
+            return Err(ModelUpdateError::DurabilityFailed {
+                message: failure.diagnostic,
+            });
         }
         // Resolve into a scratch copy first: `SessionModelState::apply` is
         // itself transactional, and the context-policy check runs against the
@@ -3811,8 +3723,8 @@ mod tests {
 
     use super::{
         CancelAttemptError, ConversationContextConfig, ConversationRuntime,
-        ConversationRuntimeError, CoordinatorProbe, InboundAdmissionError, PendingObservations,
-        RuntimeConversationConfig,
+        ConversationRuntimeError, CoordinatorProbe, InboundAdmissionError, ModelUpdateError,
+        PendingObservations, RuntimeConversationConfig,
     };
     use crate::agent::{
         AgentCancellation, LifecycleError, PreToolDecision, PreToolPolicy, PreToolView,
@@ -3833,7 +3745,8 @@ mod tests {
     use crate::runtime::observation::ConversationObservation;
     use crate::runtime::request_history::RequestHistory;
     use crate::runtime::types::{
-        CancellationReason, ConversationLifecycleState, TokenMeasurement, TokenMeasurementSource,
+        CancellationReason, ConversationLifecycleState, DurableOperation, TokenMeasurement,
+        TokenMeasurementSource,
     };
     use crate::runtime_client::event::RuntimeClientEvent;
     use crate::runtime_client::host::{EventDelivery, RuntimeClientHost, RuntimeClientHostConfig};
@@ -7807,6 +7720,295 @@ mod tests {
         assert_eq!(
             runtime.lifecycle_state(),
             ConversationLifecycleState::Draining
+        );
+    }
+
+    /// Every reader of the runtime's durability failure observes the **one
+    /// authoritative absorbing fact** (Issue #60 single-source-of-truth):
+    /// after the real subagent terminal-publication exhaustion commits
+    /// `DurabilityFailed`, the gate's fact, the published observation, the
+    /// coordinator's fail-closed rejections (`submit_inbound`, `model_set`),
+    /// the subagent and background ownership refusals, and the shutdown
+    /// diagnostic all report the same operation and diagnostic. There is no
+    /// second failed-state storage anywhere.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)]
+    async fn every_reader_of_the_durability_failure_observes_the_single_authoritative_fact() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-subagent-single-authority",
+            ))
+            .expect("in-memory store"),
+        );
+        let admission_gate = Arc::new(super::Gate::default());
+        let (runtime, _model, subagents) = headless_runtime_over_store_with_subagents(
+            &dir,
+            "conv-subagent-single-authority",
+            store.clone(),
+            Some(admission_gate.clone()),
+        )
+        .await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+        admission_gate.arm();
+        runtime
+            .submit_inbound(text_content("hold admission worker"))
+            .expect("hold inbound");
+        within_liveness_guard(
+            "subagent runtime admission worker gate",
+            tokio::task::spawn_blocking({
+                let admission_gate = admission_gate.clone();
+                move || admission_gate.wait_entered()
+            }),
+        )
+        .await
+        .expect("admission gate task");
+
+        // The real production failure path: one owned child exhausts its
+        // bounded terminal-publication budget.
+        let (staged, mut peer) = stage_runtime_test_child(&dir.path().join("owned-child"));
+        subagents.push_staged_override(staged);
+        let outcome = subagents
+            .commit(
+                subagents
+                    .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                        profile: crate::runtime::subagent::SubagentProfile::Explore,
+                        task: "owned".to_owned(),
+                        context: None,
+                        tool_call_id: ToolCallId::new("call-owned"),
+                    })
+                    .await
+                    .expect("prepare"),
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+            .expect("commit");
+        assert!(matches!(
+            outcome,
+            crate::runtime::subagent::SubagentStartOutcome::Accepted(_)
+        ));
+        assert!(matches!(
+            crate::runtime::subagent::ipc::read_parent_frame(&mut peer)
+                .await
+                .expect("delegate frame"),
+            Some(crate::runtime::subagent::ipc::ParentFrame::Delegate(_))
+        ));
+        store.arm_fail_accept_times(3);
+        crate::runtime::subagent::ipc::write_child_frame(
+            &mut peer,
+            &crate::runtime::subagent::ipc::ChildFrame::Result(
+                crate::runtime::subagent::ipc::ResultFrame {
+                    status: crate::runtime::subagent::ipc::ChildResultStatus::Succeeded,
+                    content: Some("answer".to_owned()),
+                    diagnostic: None,
+                },
+            ),
+        )
+        .await
+        .expect("result");
+        let observations = await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { operation, .. }
+                    if operation == "subagent_terminal_publication"
+            )
+        })
+        .await;
+
+        // The one authoritative fact: stored in the runtime-owned gate, and
+        // only there.
+        let failure = runtime
+            .inner
+            .durability_gate
+            .failure()
+            .expect("the authoritative absorbing fact");
+        assert_eq!(
+            failure.operation,
+            DurableOperation::SubagentTerminalPublication
+        );
+        assert!(!failure.diagnostic.is_empty());
+        let observed = observations
+            .iter()
+            .find_map(|observation| match observation {
+                ConversationObservation::DurabilityFailed {
+                    operation,
+                    diagnostic,
+                } => Some((operation.as_str(), diagnostic.as_str())),
+                _ => None,
+            })
+            .expect("the DurabilityFailed observation");
+        assert_eq!(observed.0, failure.operation.as_str());
+        assert_eq!(observed.1, failure.diagnostic.as_str());
+        assert_eq!(
+            runtime.inner.durability_failure_diagnostic().as_deref(),
+            Some(failure.diagnostic.as_str())
+        );
+
+        // The coordinator's fail-closed rejections read the same fact.
+        match runtime.submit_inbound(text_content("late")) {
+            Err(InboundAdmissionError::DurabilityFailed { message }) => {
+                assert_eq!(message, failure.diagnostic);
+            }
+            other => {
+                panic!("submit_inbound must refuse with the authoritative diagnostic: {other:?}")
+            }
+        }
+        match runtime.model_set(crate::model::session::SessionModelConfig::of(
+            serde_json::from_value(serde_json::json!("local/model")).expect("model ref"),
+        )) {
+            Err(ModelUpdateError::DurabilityFailed { message }) => {
+                assert_eq!(message, failure.diagnostic);
+            }
+            other => panic!("model_set must refuse with the authoritative diagnostic: {other:?}"),
+        }
+
+        // The detached ownership planes read the same fact.
+        let (staged, _rejected_peer) = stage_runtime_test_child(&dir.path().join("rejected-child"));
+        subagents.push_staged_override(staged);
+        let prepared = subagents
+            .prepare(&crate::runtime::subagent::SubagentStartSpec {
+                profile: crate::runtime::subagent::SubagentProfile::Explore,
+                task: "rejected".to_owned(),
+                context: None,
+                tool_call_id: ToolCallId::new("call-rejected"),
+            })
+            .await
+            .expect("prepare");
+        match subagents
+            .commit(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .await
+        {
+            Err(crate::runtime::subagent::SubagentStartError::DurabilityFailed { detail }) => {
+                assert_eq!(detail, failure.diagnostic);
+            }
+            other => panic!(
+                "subagent ownership must refuse with the authoritative diagnostic: {other:?}"
+            ),
+        }
+        let executor: Arc<dyn crate::tools::executor::ToolExecutor> =
+            Arc::new(GatedBackgroundExecutor::new().0);
+        let invocation = crate::tools::types::ToolInvocation {
+            call_id: ToolCallId::new("call-rejected-bg"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: crate::tools::types::ToolInvocationMode::Background,
+            arguments: serde_json::json!({}),
+        };
+        let prepared = runtime
+            .tool_runtime()
+            .background()
+            .prepare_dispatch(
+                &invocation,
+                &executor,
+                crate::tools::environment::ToolEnvironment::new(),
+            )
+            .expect("prepare");
+        match runtime.tool_runtime().background().commit_dispatch(
+            prepared,
+            &crate::runtime::cancellation::CancellationSignal::new(),
+        ) {
+            Err(crate::tools::background::BackgroundDispatchError::DurabilityFailed { detail }) => {
+                assert_eq!(detail, failure.diagnostic);
+            }
+            other => panic!(
+                "background ownership must refuse with the authoritative diagnostic: {other:?}"
+            ),
+        }
+
+        admission_gate.release();
+    }
+
+    /// The absorbing winner is never replaced (Issue #60 single
+    /// source-of-truth): the first committed durability failure stays the
+    /// authoritative fact — a second failure neither rewrites its operation/
+    /// diagnostic nor publishes a second `DurabilityFailed` observation.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_second_durability_failure_never_replaces_the_absorbing_first() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                "conv-durability-absorbing",
+            ))
+            .expect("in-memory store"),
+        );
+        let (runtime, _model) =
+            headless_runtime_over_store(&dir, "conv-durability-absorbing", store.clone()).await;
+        let pending = Arc::new(PendingObservations::new());
+        runtime
+            .install_observation_bridge(pending.clone())
+            .expect("bridge");
+        runtime.activate();
+
+        // Failure A commits first through the single production commit seam.
+        runtime.force_durability_failure_for_test("first absorbing failure");
+        let observations = await_observation(&pending, |observation| {
+            matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )
+        })
+        .await;
+        assert_eq!(
+            observations
+                .iter()
+                .filter(|observation| matches!(
+                    observation,
+                    ConversationObservation::DurabilityFailed { .. }
+                ))
+                .count(),
+            1,
+            "the first commit publishes exactly one DurabilityFailed observation"
+        );
+        let failure = runtime
+            .inner
+            .durability_gate
+            .failure()
+            .expect("the authoritative absorbing fact");
+        assert_eq!(failure.operation, DurableOperation::EventJournal);
+        assert_eq!(failure.diagnostic, "first absorbing failure");
+
+        // Failure B arrives later through the same seam: the guard observes
+        // the absorbing winner and neither rewrites the fact nor publishes a
+        // second observation.
+        runtime.force_durability_failure_for_test("second failure must not win");
+        let failure = runtime
+            .inner
+            .durability_gate
+            .failure()
+            .expect("the authoritative absorbing fact");
+        assert_eq!(
+            failure.operation,
+            DurableOperation::EventJournal,
+            "the first winner stays the absorbing operation"
+        );
+        assert_eq!(
+            failure.diagnostic, "first absorbing failure",
+            "the first winner stays the absorbing diagnostic"
+        );
+        assert!(
+            !pending.drain().iter().any(|observation| matches!(
+                observation,
+                ConversationObservation::DurabilityFailed { .. }
+            )),
+            "no second DurabilityFailed observation is published"
+        );
+        assert_eq!(
+            runtime.inner.durability_failure_diagnostic().as_deref(),
+            Some("first absorbing failure"),
+            "the shutdown diagnostic reads the same absorbing fact"
+        );
+        // The single authoritative fact is still exactly one: there is no
+        // second storage to disagree.
+        assert_eq!(
+            runtime.inner.durability_gate.failure().map(|f| f.operation),
+            Some(DurableOperation::EventJournal)
         );
     }
 

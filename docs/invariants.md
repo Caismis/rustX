@@ -586,15 +586,23 @@ that a live child produced an Interrupted physical result.
   new subagent ownership and new background ownership are refused at the
   runtime-owned `DurabilityGate`, which the failure commit and every new
   ownership commit serialize on, so the two have one deterministic total
-  order. An ownership commit holds the gate across its durable write and
-  record publication — a failure that wins first makes the commit refuse
-  (the staged child/runner rolls back conclusively), an ownership that
-  wins first is already durably owned before the failure can be published,
-  and already-owned work (cancel, escalation, reap, terminal publication,
-  drain, failure reporting) never acquires the gate and retains its full
-  settlement authority. `DurabilityFailed` is a different dimension from
-  `Draining`: a degraded durable authority and a shutting-down runtime stay
-  separate, with separate permission sets.
+  order. The gate is not a projection of another health state: it **is** the
+  single authoritative storage of the absorbing durability-failure fact
+  (`DurabilityFailure { operation, diagnostic }`), committed through its one
+  mutation API (`DurabilityGate::commit_failure`) and read by every reader
+  — submit_inbound, model_set, attempt admission, the subagent and
+  background registries, the shutdown diagnostic, and the observation.
+  `ConversationRuntime` owns the durability *policy*; the coordinator keeps
+  only transient admission-cycle retry bookkeeping, never a second
+  failed-state authority. An ownership commit holds the gate across its
+  durable write and record publication — a failure that wins first makes
+  the commit refuse (the staged child/runner rolls back conclusively), an
+  ownership that wins first is already durably owned before the failure can
+  be published, and already-owned work (cancel, escalation, reap, terminal
+  publication, drain, failure reporting) never acquires the gate and
+  retains its full settlement authority. `DurabilityFailed` is a different
+  dimension from `Draining`: a degraded durable authority and a
+  shutting-down runtime stay separate, with separate permission sets.
 - **Terminal provenance is durable authority, not caller repetition.** A
   `SubagentTerminalPublished` fact may claim only the exact
   `child_agent_id` in the earlier `SubagentOwnershipCommitted` fact for that
