@@ -326,6 +326,7 @@ async fn bash_cd_cannot_redefine_the_skill_root() {
                     event_sink: None,
                 },
             ),
+            subagents: None,
         },
         rustx::tools::native::NativeToolPolicies::default(),
     )

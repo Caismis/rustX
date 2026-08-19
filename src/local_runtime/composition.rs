@@ -78,6 +78,8 @@ use std::sync::Arc;
 
 use crate::capabilities::{CapabilityCoordinator, CapabilityCoordinatorConfig};
 use crate::context::{DefaultTokenEstimator, TokenEstimator};
+use crate::message::content::TextBlock;
+use crate::message::types::{MessageBlock, SystemAuthority, SystemMessageBlock};
 use crate::model::catalog::{
     CredentialEnvironment, ModelCatalog, ModelCatalogError, ProcessCredentialEnvironment,
 };
@@ -91,6 +93,7 @@ use crate::runtime_client::endpoint::RuntimeClientEndpoint;
 use crate::runtime_client::host::{
     HostConstructionError, RuntimeClientHost, RuntimeClientHostConfig,
 };
+use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::native::{NativeToolResources, register_native_tools};
 use crate::tools::runtime::ConversationToolRuntime;
@@ -236,12 +239,35 @@ impl LocalConversationCore {
 
         // 7-8. The base tool registry with the explicit native composition,
         // using *this* conversation's background registry for the
-        // `background_task` intrinsic.
+        // `background_task` intrinsic and this conversation's subagent
+        // registry for the `subagent` intrinsic (Issue #60).
+        let subagents = crate::runtime::subagent::SubagentRegistry::new(
+            crate::runtime::subagent::SubagentRegistryConfig {
+                conversation_id: tool_runtime.conversation_id().clone(),
+                agent_id: session.agent_id.clone(),
+                mailbox: tool_runtime.mailbox(),
+                clock: Arc::new(crate::runtime::types::SystemClock),
+                spawn: crate::runtime::subagent::SubagentSpawnPlan {
+                    program: std::env::current_exe().map_err(|error| LocalRuntimeError::Io {
+                        path: PathBuf::from("<current exe>"),
+                        detail: error.to_string(),
+                    })?,
+                    models: paths.models.clone(),
+                    workspace: paths.workspace.clone(),
+                    runtime_root: paths.runtime_root.clone(),
+                    model: session.model.clone(),
+                    timezone: session.timezone,
+                    context: session.context_policy(),
+                },
+                max_active: 4,
+            },
+        );
         let mut base_registry = ToolRegistry::new();
         register_native_tools(
             &mut base_registry,
             NativeToolResources {
                 background: tool_runtime.background().clone(),
+                subagents: Some(subagents.clone()),
             },
             session.native_tools.to_policies(),
         )
@@ -295,6 +321,141 @@ impl LocalConversationCore {
             capability: capability.clone(),
             clock: None,
             initial_messages: Vec::new(),
+            subagents: Some(subagents),
+        })?;
+
+        Ok(Self {
+            runtime,
+            tool_runtime,
+            capability,
+        })
+    }
+
+    /// Composes the **subagent child** core from its typed startup
+    /// specification (Issue #60).
+    ///
+    /// This is the same semantic stack as [`LocalConversationCore::compose`]
+    /// — the real `ConversationRuntime`, Agent Loop, Context Assembly, Tool
+    /// Plane, and ModelAdapter — with the child-specific composition
+    /// differences made explicit and deny-by-construction:
+    ///
+    /// - the startup input is the typed [`SubagentChildSpec`], never a
+    ///   session configuration file;
+    /// - the base tool registry is exactly the profile's read-only set
+    ///   (`Read`/`Glob`/`Grep`), registered through
+    ///   [`register_subagent_child_tools`];
+    /// - the capability plane is **base-only**: no Skill discovery, no
+    ///   Python/Node environments, no MCP servers, and no `subagent` tool
+    ///   (recursive delegation is structurally absent);
+    /// - the profile persona enters the canonical history as one bootstrap
+    ///   `SystemMessageBlock` (authority `Platform`), never as a forged
+    ///   user message;
+    /// - the durable authority is the child-private store under
+    ///   [`SubagentChildSpec::runtime_root`], disjoint from the parent's
+    ///   store.
+    ///
+    /// The caller (the child driver) still owns activation: the returned
+    /// core is inert until `into_headless`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first composition failure, exactly like the ordinary
+    /// composition path.
+    pub fn compose_subagent_child(
+        spec: &crate::runtime::subagent::ipc::SubagentChildSpec,
+        dependencies: &LocalRuntimeDependencies,
+    ) -> Result<Self, LocalRuntimeError> {
+        // 1-3. The model catalog/binding plane, identical to the ordinary
+        // composition: the catalog file path is inherited from the parent.
+        let catalog_bytes = read_file(&spec.models)?;
+        let catalog = ModelCatalog::from_json_slice(&catalog_bytes)?;
+        let resolved = catalog.resolve(dependencies.credentials.as_ref())?;
+        let registry = ModelBindingRegistry::new(resolved)?;
+
+        // 4. The child's session model state, from the typed spec.
+        let model = SessionModelState::new(registry, spec.model.clone())?;
+
+        // 5-6. The child conversation tool runtime over the shared
+        // read-only workspace and the child-private runtime root. The
+        // child authorizes no environment entries.
+        let base_environment = ToolEnvironment::from_authorized(std::iter::empty())
+            .map_err(LocalSessionConfigError::Environment)
+            .map_err(LocalRuntimeError::Session)?;
+        let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
+            &spec.workspace,
+            spec.runtime_root.join("artifacts"),
+        );
+        runtime_config.environment = Some(base_environment.clone());
+        let tool_runtime = ConversationToolRuntime::from_config(
+            spec.child_conversation_id.clone(),
+            runtime_config,
+        )
+        .map_err(|error| LocalRuntimeError::ToolRuntime {
+            detail: format!("{error:?}"),
+        })?;
+
+        // 7-8. The deny-by-construction read-only base registry.
+        let mut base_registry = ToolRegistry::new();
+        crate::tools::native::register_subagent_child_tools(
+            &mut base_registry,
+            crate::tools::native::NativeToolPolicies::default(),
+        )
+        .map_err(|error| LocalRuntimeError::NativeTools {
+            detail: format!("{error:?}"),
+        })?;
+
+        // 9-11. The base-only capability plane: the exact frozen registry
+        // and nothing else.
+        let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+            conversation_id: tool_runtime.conversation_id().clone(),
+            workspace: tool_runtime.workspace().clone(),
+            base_tool_registry: Arc::new(base_registry),
+            mcp_servers: crate::tools::mcp::McpServerBindings::default(),
+            base_environment,
+            environment_store_root: spec.runtime_root.join("environments"),
+        })
+        .map_err(|error| LocalRuntimeError::Capability {
+            detail: format!("{error:?}"),
+        })?;
+        let candidate = capability.prepare_base_only_candidate().map_err(|error| {
+            LocalRuntimeError::Capability {
+                detail: format!("{error:?}"),
+            }
+        })?;
+        capability
+            .commit(candidate)
+            .map_err(|error| LocalRuntimeError::Capability {
+                detail: format!("{error:?}"),
+            })?;
+
+        // 12-13. The one child conversation runtime. The persona enters the
+        // canonical history as one platform-authority bootstrap system
+        // message — instructions, never a fabricated user turn.
+        let runtime = ConversationRuntime::new(RuntimeConversationConfig {
+            agent_id: spec.child_agent_id.clone(),
+            model,
+            timezone: spec.timezone,
+            context: ConversationContextConfig {
+                policy: spec.context,
+                estimator: Arc::clone(&dependencies.estimator),
+                status_composer: crate::context::AgentStatusComposer::default(),
+            },
+            tool_runtime: tool_runtime.clone(),
+            capability: capability.clone(),
+            clock: None,
+            initial_messages: vec![MessageBlock::System(SystemMessageBlock {
+                id: crate::runtime::identity::MessageId::new(format!(
+                    "{}-bootstrap-persona",
+                    spec.child_conversation_id
+                )),
+                authority: SystemAuthority::Platform,
+                content: vec![TextBlock {
+                    text: spec.persona.clone(),
+                }],
+            })],
+            // A child runtime has no subagent registry: recursive
+            // delegation is absent by construction.
+            subagents: None,
         })?;
 
         Ok(Self {

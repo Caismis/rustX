@@ -1,0 +1,397 @@
+//! The subagent child runtime driver (Issue #60): the `rustx
+//! --subagent-child` internal mode.
+//!
+//! The child is a real rustX runtime — the same `ConversationRuntime`,
+//! Agent Loop, Context Assembly, Tool Plane, and ModelAdapter as an
+//! interactive session — composed headlessly from the typed
+//! [`SubagentChildSpec`] that arrives over the control channel. The driver
+//! itself is a thin bounded loop:
+//!
+//! ```text
+//! fd 0 (inherited control channel)
+//!   -> Hello(spec)      version handshake; mismatch exits before compose
+//!   -> compose          the real runtime stack, deny-by-construction
+//!   -> Ready            composition and activation complete
+//!   -> Delegate(task)   the task enters through the child's ORDINARY
+//!                       durable inbound path (UserSource::Agent(parent))
+//!   -> observe          the attempt's canonical terminal event
+//!   -> Result(candidate) exactly once, bounded
+//!   -> drain + exit
+//! ```
+//!
+//! # Message-bus invariant (child side)
+//!
+//! IPC never appends to the child's canonical history: the delegated task
+//! becomes an ordinary durable inbound item through
+//! [`ConversationRuntime::submit_sourced_inbound`], and the result travels
+//! back as a **candidate** frame — terminal publication authority stays
+//! with the parent-side settlement owner.
+//!
+//! # Parent-lifetime containment (child side)
+//!
+//! The control channel is the liveness authority: EOF means the parent is
+//! gone, and the child then drains and exits without publishing a result
+//! (the parent's recovery classifies the durable ownership as
+//! interrupted). A `Cancel` frame requests the ordinary attempt
+//! cancellation path; the child never exits on the frame alone — it
+//! settles, reports, drains, and only then exits.
+
+use std::sync::Arc;
+
+use crate::events::types::RuntimeEvent;
+use crate::message::content::TextBlock;
+use crate::message::types::{MessageBlock, UserContentBlock, UserSource};
+use crate::runtime::identity::AttemptId;
+use crate::runtime::observation::{ConversationObservation, PendingObservations};
+use crate::runtime::subagent::MAX_RESULT_CONTENT_BYTES;
+use crate::runtime::subagent::ipc::{
+    ChildFrame, ChildResultStatus, DiagnosticFrame, ParentFrame, ReadyFrame, ResultFrame,
+    SUBAGENT_IPC_VERSION, SubagentChildSpec, read_parent_frame, write_child_frame,
+};
+
+use super::composition::{LocalConversationCore, LocalRuntimeDependencies};
+
+/// The process entry point of the internal subagent-child mode.
+///
+/// Returns the process exit code: `0` for a settled run (including a
+/// semantically failed or cancelled attempt — those are reported through
+/// the `Result` frame, not the exit code), `2` for a startup failure
+/// (already reported through `StartupError` when the channel allowed),
+/// and `3` for a control-protocol violation of the parent.
+pub async fn run_subagent_child() -> i32 {
+    let mut control = match take_control_channel() {
+        Ok(control) => control,
+        Err(detail) => {
+            eprintln!("subagent child: {detail}");
+            return 2;
+        }
+    };
+    let spec = match read_parent_frame(&mut control).await {
+        Ok(Some(ParentFrame::Hello(spec))) => {
+            if spec.protocol_version != SUBAGENT_IPC_VERSION {
+                let _ = write_child_frame(
+                    &mut control,
+                    &ChildFrame::StartupError(DiagnosticFrame {
+                        message: format!(
+                            "unsupported control protocol version {} (this build speaks \
+                             {SUBAGENT_IPC_VERSION})",
+                            spec.protocol_version
+                        ),
+                    }),
+                )
+                .await;
+                return 2;
+            }
+            *spec
+        }
+        Ok(Some(_)) => {
+            eprintln!("subagent child: the first control frame was not Hello");
+            return 3;
+        }
+        Ok(None) => {
+            // The parent died before the handshake: nothing to do.
+            return 0;
+        }
+        Err(error) => {
+            eprintln!("subagent child: {error}");
+            return 3;
+        }
+    };
+    match run_child(&mut control, spec).await {
+        Ok(()) => 0,
+        Err(ChildExit::Startup(message)) => {
+            let _ = write_child_frame(
+                &mut control,
+                &ChildFrame::StartupError(DiagnosticFrame {
+                    message: bound_diagnostic(message),
+                }),
+            )
+            .await;
+            2
+        }
+        Err(ChildExit::Protocol(message)) => {
+            eprintln!("subagent child: {message}");
+            3
+        }
+    }
+}
+
+/// The child's typed early exits.
+enum ChildExit {
+    /// Composition failed; reportable through `StartupError`.
+    Startup(String),
+    /// The parent violated the bounded control protocol.
+    Protocol(String),
+}
+
+/// The staged child run: compose, handshake, delegate, observe, report,
+/// drain.
+async fn run_child(
+    control: &mut tokio::net::UnixStream,
+    spec: SubagentChildSpec,
+) -> Result<(), ChildExit> {
+    let core =
+        LocalConversationCore::compose_subagent_child(&spec, &LocalRuntimeDependencies::default())
+            .map_err(|error| ChildExit::Startup(format!("{error:?}")))?;
+    // The observation bridge is installed over the still-inactive runtime,
+    // so the attempt's canonical terminal event can never be missed.
+    let observations = Arc::new(PendingObservations::new());
+    core.runtime()
+        .install_observation_bridge(Arc::clone(&observations))
+        .map_err(|error| ChildExit::Startup(format!("{error:?}")))?;
+    let runtime = core.runtime().clone();
+    let headless = core.into_headless();
+    drop(headless);
+    write_child_frame(
+        control,
+        &ChildFrame::Ready(ReadyFrame {
+            subagent_id: spec.subagent_id.clone(),
+        }),
+    )
+    .await
+    .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+
+    // The start gate: no semantic work before the delegation arrives.
+    let delegate = loop {
+        match read_parent_frame(control).await {
+            Ok(Some(ParentFrame::Delegate(delegate))) => break delegate,
+            Ok(Some(ParentFrame::Cancel)) | Ok(None) => {
+                // Cancelled (or orphaned) before any work began: drain and
+                // exit. The parent settles the cancelled/interrupted
+                // terminal itself from the physical outcome.
+                let _ = runtime.shutdown().await;
+                return Ok(());
+            }
+            Ok(Some(ParentFrame::Hello(_))) => {
+                return Err(ChildExit::Protocol(
+                    "a second Hello frame arrived".to_owned(),
+                ));
+            }
+            Err(error) => return Err(ChildExit::Protocol(error.to_string())),
+        }
+    };
+
+    // The delegated task enters through the child's ordinary durable
+    // inbound path. IPC transports the envelope; it never appends.
+    let mut content = Vec::new();
+    if let Some(context) = delegate.context {
+        content.push(UserContentBlock::Text(TextBlock {
+            text: format!("Context supplied by the delegating agent:\n{context}"),
+        }));
+    }
+    content.push(UserContentBlock::Text(TextBlock {
+        text: delegate.task,
+    }));
+    if let Err(error) = runtime.submit_sourced_inbound(
+        UserSource::Agent {
+            agent_id: spec.parent_agent_id.clone(),
+        },
+        content,
+    ) {
+        return report_and_drain(
+            control,
+            &runtime,
+            ResultFrame {
+                status: ChildResultStatus::Failed,
+                content: None,
+                diagnostic: Some(bound_diagnostic(format!(
+                    "the delegated task was refused by the child runtime: {error}"
+                ))),
+            },
+        )
+        .await;
+    }
+
+    // Observe the attempt to its canonical terminal event while serving
+    // Cancel frames through the ordinary cancellation path.
+    let terminal = await_terminal(control, &runtime, &observations).await?;
+    let frame = match terminal {
+        AttemptTerminal::Completed => {
+            let answer = final_answer(&runtime);
+            match answer {
+                Some(answer) => ResultFrame {
+                    status: ChildResultStatus::Succeeded,
+                    content: Some(answer),
+                    diagnostic: None,
+                },
+                None => ResultFrame {
+                    status: ChildResultStatus::Failed,
+                    content: None,
+                    diagnostic: Some("the attempt completed without a final answer".to_owned()),
+                },
+            }
+        }
+        AttemptTerminal::Cancelled => ResultFrame {
+            status: ChildResultStatus::Cancelled,
+            content: None,
+            diagnostic: None,
+        },
+        AttemptTerminal::Failed(diagnostic) => ResultFrame {
+            status: ChildResultStatus::Failed,
+            content: None,
+            diagnostic: Some(bound_diagnostic(diagnostic)),
+        },
+        AttemptTerminal::Orphaned => {
+            // The parent is gone: drain and exit without a result; the
+            // parent's recovery owns the interrupted classification.
+            let _ = runtime.shutdown().await;
+            return Ok(());
+        }
+    };
+    report_and_drain(control, &runtime, frame).await
+}
+
+/// Sends the one terminal result candidate and drains the runtime.
+async fn report_and_drain(
+    control: &mut tokio::net::UnixStream,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    frame: ResultFrame,
+) -> Result<(), ChildExit> {
+    write_child_frame(control, &ChildFrame::Result(frame))
+        .await
+        .map_err(|error| ChildExit::Protocol(error.to_string()))?;
+    let _ = runtime.shutdown().await;
+    Ok(())
+}
+
+/// The canonical terminal of the child's one attempt.
+enum AttemptTerminal {
+    /// `AttemptCompleted`.
+    Completed,
+    /// `AttemptCancelled`.
+    Cancelled,
+    /// `AttemptFailed`, `AttemptTimedOut`, or `AttemptLimitExceeded`, with
+    /// the bounded diagnostic.
+    Failed(String),
+    /// The parent died mid-attempt (control channel EOF).
+    Orphaned,
+}
+
+/// Drives the attempt to its terminal event, serving cancellation through
+/// the ordinary runtime path.
+async fn await_terminal(
+    control: &mut tokio::net::UnixStream,
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+    observations: &Arc<PendingObservations>,
+) -> Result<AttemptTerminal, ChildExit> {
+    let mut current_attempt: Option<AttemptId> = None;
+    loop {
+        tokio::select! {
+            frame = read_parent_frame(control) => {
+                match frame {
+                    Ok(Some(ParentFrame::Cancel)) => {
+                        if let Some(attempt_id) = &current_attempt {
+                            let _ = runtime.cancel_current_attempt(attempt_id);
+                        }
+                        // The frame is a request, not a terminal fact: the
+                        // canonical AttemptCancelled settles the attempt.
+                    }
+                    Ok(Some(_)) => {
+                        return Err(ChildExit::Protocol(
+                            "an unexpected control frame arrived during the attempt"
+                                .to_owned(),
+                        ));
+                    }
+                    Ok(None) => return Ok(AttemptTerminal::Orphaned),
+                    Err(error) => return Err(ChildExit::Protocol(error.to_string())),
+                }
+            }
+            () = observations.wait() => {
+                for observation in observations.drain() {
+                    match observation {
+                        ConversationObservation::AttemptAdmitted { attempt_id } => {
+                            current_attempt = Some(attempt_id);
+                        }
+                        ConversationObservation::Event { event, .. } => {
+                            match event {
+                                RuntimeEvent::AttemptCompleted { .. } => {
+                                    return Ok(AttemptTerminal::Completed);
+                                }
+                                RuntimeEvent::AttemptCancelled { .. } => {
+                                    return Ok(AttemptTerminal::Cancelled);
+                                }
+                                RuntimeEvent::AttemptFailed { error, .. } => {
+                                    return Ok(AttemptTerminal::Failed(format!(
+                                        "the child attempt failed: {error:?}"
+                                    )));
+                                }
+                                RuntimeEvent::AttemptTimedOut { .. } => {
+                                    return Ok(AttemptTerminal::Failed(
+                                        "the child attempt exceeded its time budget"
+                                            .to_owned(),
+                                    ));
+                                }
+                                RuntimeEvent::AttemptLimitExceeded { limit, .. } => {
+                                    return Ok(AttemptTerminal::Failed(format!(
+                                        "the child attempt exceeded its {limit:?} limit"
+                                    )));
+                                }
+                                _ => {}
+                            }
+                        }
+                        ConversationObservation::Shutdown => {
+                            return Ok(AttemptTerminal::Cancelled);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The bounded final assistant answer of the settled attempt.
+fn final_answer(
+    runtime: &crate::runtime::conversation_runtime::ConversationRuntime,
+) -> Option<String> {
+    let ledger = runtime.settled_ledger()?;
+    let answer = ledger.iter().rev().find_map(|message| match message {
+        MessageBlock::Assistant(assistant) => {
+            let text: String = assistant
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    crate::message::types::AssistantContentBlock::Text(text) => {
+                        Some(text.text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            if text.is_empty() { None } else { Some(text) }
+        }
+        _ => None,
+    })?;
+    let mut answer = answer;
+    if answer.len() > MAX_RESULT_CONTENT_BYTES {
+        answer.truncate(MAX_RESULT_CONTENT_BYTES);
+    }
+    Some(answer)
+}
+
+/// Caps one diagnostic at the result-content bound.
+fn bound_diagnostic(mut diagnostic: String) -> String {
+    if diagnostic.len() > MAX_RESULT_CONTENT_BYTES {
+        diagnostic.truncate(MAX_RESULT_CONTENT_BYTES);
+    }
+    diagnostic
+}
+
+/// Takes over the inherited control channel on fd 0.
+///
+/// # Safety shim
+///
+/// This is the one explicitly allowed `unsafe` shim of the subagent
+/// plane (see the `unsafe_code` policy in `Cargo.toml`): fd 0 is the
+/// connected, blocking `UnixStream` endpoint the parent passed as the
+/// child's standard input, and this call runs exactly once before any
+/// other code touches fd 0.
+#[allow(unsafe_code)]
+fn take_control_channel() -> std::io::Result<tokio::net::UnixStream> {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: the parent passes the connected control-channel endpoint as
+    // the child's fd 0 and this is the single takeover of it.
+    let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(0) };
+    std_stream.set_nonblocking(true)?;
+    tokio::net::UnixStream::from_std(std_stream)
+}

@@ -47,6 +47,7 @@ mod registration;
 // tool: it is never registered, never reaches the model, and exists only
 // because Glob and Grep must observe one filesystem universe.
 mod search;
+mod subagent;
 mod support;
 mod write;
 
@@ -76,6 +77,11 @@ pub struct NativeToolResources {
     /// The conversation background registry used by the `background_task`
     /// intrinsic.
     pub background: ConversationBackgroundRegistry,
+    /// The conversation subagent registry used by the `subagent` intrinsic
+    /// (Issue #60). `None` — for example inside a subagent child itself —
+    /// means the intrinsic is not registered at all, so recursive
+    /// delegation is absent by construction.
+    pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
 }
 
 /// The concrete, bounded per-tool execution-policy configuration of the six
@@ -145,11 +151,14 @@ pub fn register_native_tools(
     resources: NativeToolResources,
     policies: NativeToolPolicies,
 ) -> Result<(), ToolRegistryError> {
-    let NativeToolResources { background } = resources;
+    let NativeToolResources {
+        background,
+        subagents,
+    } = resources;
     // The explicit composition of the native tool plane: every entry is a
     // tool-owned registration, and this list is the only place that knows
     // which native capabilities exist.
-    let registrations = [
+    let mut registrations = vec![
         background_task::registration(background),
         read::registration(policies.read),
         write::registration(policies.write),
@@ -157,6 +166,43 @@ pub fn register_native_tools(
         glob::registration(policies.glob),
         grep::registration(policies.grep),
         bash::registration(policies.bash),
+    ];
+    // The `subagent` intrinsic exists only in a runtime that owns a
+    // subagent registry (never inside a child runtime).
+    if let Some(subagents) = subagents {
+        registrations.push(subagent::registration(subagents));
+    }
+    for NativeToolRegistration {
+        definition,
+        executor,
+    } in registrations
+    {
+        registry.register(definition, executor)?;
+    }
+    Ok(())
+}
+
+/// Registers exactly the deny-by-construction capability set of a subagent
+/// child (Issue #60).
+///
+/// The v1 `explore` profile is read-only: the child's `ToolRegistry`
+/// contains `Read`, `Glob`, and `Grep` and nothing else. There is no
+/// `subagent` tool in the child, so recursive delegation is structurally
+/// absent; there is no Write/Edit/Bash, no background execution, and no
+/// MCP/Python capability in the child composition path at all.
+///
+/// # Errors
+///
+/// Returns the specific [`ToolRegistryError`] of the first registration
+/// violation.
+pub fn register_subagent_child_tools(
+    registry: &mut ToolRegistry,
+    policies: NativeToolPolicies,
+) -> Result<(), ToolRegistryError> {
+    let registrations = [
+        read::registration(policies.read),
+        glob::registration(policies.glob),
+        grep::registration(policies.grep),
     ];
     for NativeToolRegistration {
         definition,

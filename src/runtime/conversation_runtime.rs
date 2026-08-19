@@ -473,6 +473,11 @@ pub struct RuntimeConversationConfig {
     pub clock: Option<Arc<dyn RuntimeClock>>,
     /// The canonical conversation history the runtime starts from.
     pub initial_messages: Vec<MessageBlock>,
+    /// The conversation-owned subagent registry (Issue #60), when this
+    /// runtime may delegate to child runtimes. A subagent child itself is
+    /// composed without one, so recursive delegation is absent by
+    /// construction.
+    pub subagents: Option<crate::runtime::subagent::SubagentRegistry>,
 }
 
 /// The runtime-owned current attempt handle.
@@ -953,7 +958,9 @@ pub(crate) struct RuntimeInner {
     /// `AgentExecution`. Request/event history is read through this handle.
     store: Arc<dyn ConversationStore>,
     capability: CapabilityCoordinator,
-    /// The one conversation-owned native interaction rendezvous (Issue #64).
+    /// The conversation-owned subagent registry (Issue #60), when this
+    /// runtime may delegate to child runtimes.
+    subagents: Option<crate::runtime::subagent::SubagentRegistry>,
     /// It owns pending identity/state and terminal response coordination, but
     /// never owns Agent Loop execution or canonical history.
     interaction: Arc<InteractionCoordinator>,
@@ -1106,6 +1113,13 @@ impl RuntimeInner {
                 );
             }
             self.tool_runtime.background().abort_prepared_for_drain();
+            // Same containment for the subagent plane (Issue #60):
+            // cancellation intent is committed synchronously; the registry
+            // and its driver tasks own escalation, reap, and terminal
+            // settlement, awaited by the drain task below.
+            if let Some(subagents) = &self.subagents {
+                subagents.cancel_all(CancellationReason::RuntimeShutdown);
+            }
             // In-flight capability preparation owns real MCP processes. The
             // *owner* is cancelled here (never the caller's future), so each
             // one drives its physical process to settlement before releasing
@@ -1179,6 +1193,25 @@ impl RuntimeInner {
         loop {
             self.wait_for_current_attempt().await;
 
+            // The subagent plane (Issue #60): cancellation intent is already
+            // committed (begin_drain); here the drain awaits every child's
+            // native terminal boundary — the driver task has reaped the
+            // process and the registry has settled its durable terminal or
+            // explicitly abandoned the publication.
+            if let Some(subagents) = &self.subagents {
+                let active = subagents.unsettled_snapshot();
+                if !active.is_empty() {
+                    for subagent in &active {
+                        let _ = subagents
+                            .cancel(&subagent.subagent_id, CancellationReason::RuntimeShutdown);
+                    }
+                    for subagent in active {
+                        subagents.wait_until_settled(&subagent.subagent_id).await;
+                    }
+                    continue;
+                }
+            }
+
             // Records whose durable terminal publication was abandoned are
             // excluded: their runners have returned, so cancelling and
             // awaiting them again would spin. They remain explicit evidence
@@ -1227,6 +1260,14 @@ impl RuntimeInner {
                 failures.insert(format!(
                     "background execution {execution_id}: the durable terminal publication is unresolved"
                 ));
+            }
+            if let Some(subagents) = &self.subagents {
+                for snapshot in subagents.abandoned_publications() {
+                    failures.insert(format!(
+                        "subagent {}: the durable terminal publication is unresolved",
+                        snapshot.subagent_id
+                    ));
+                }
             }
             if let Some(detail) = self.durability_failure_diagnostic() {
                 failures.insert(format!("durable authority: {detail}"));
@@ -2317,6 +2358,12 @@ impl ConversationRuntime {
             .tool_runtime
             .background()
             .restore_execution_sequence(recovery.highest_background_ordinal());
+        // The subagent ordinal is the same kind of durable identity domain
+        // (Issue #60): reseed above every ordinal already in durable
+        // authority before any start can race this.
+        if let Some(subagents) = &config.subagents {
+            subagents.restore_sequence_watermark(recovery.highest_subagent_ordinal());
+        }
         let recovered_continuation = matches!(
             recovery.resume(),
             crate::runtime::recovery::ResumeDisposition::ContinueAdoptedTurn
@@ -2335,6 +2382,7 @@ impl ConversationRuntime {
             mailbox,
             store,
             capability: config.capability,
+            subagents: config.subagents,
             interaction,
             lifecycle,
             clock,
@@ -2658,6 +2706,23 @@ impl ConversationRuntime {
         &self,
         content: Vec<UserContentBlock>,
     ) -> Result<InboundAdmission, InboundAdmissionError> {
+        self.submit_sourced_inbound(UserSource::Human, content)
+    }
+
+    /// Submits one ordinary inbound message under an explicit provenance.
+    ///
+    /// This is the exact same admission path as
+    /// [`ConversationRuntime::submit_inbound`] — the same lifecycle gate,
+    /// the same durability-health gate, the same one durable acceptance
+    /// linearization — with the provenance supplied by a trusted in-process
+    /// owner instead of fixed to `Human`. The subagent child runtime driver
+    /// (Issue #60) uses it to enter the delegated task with
+    /// `UserSource::Agent(parent)`; IPC itself never appends anything.
+    pub(crate) fn submit_sourced_inbound(
+        &self,
+        source: UserSource,
+        content: Vec<UserContentBlock>,
+    ) -> Result<InboundAdmission, InboundAdmissionError> {
         if content.is_empty() {
             return Err(InboundAdmissionError::EmptyContent);
         }
@@ -2716,7 +2781,7 @@ impl ConversationRuntime {
             .mailbox
             .accept_draft(InboundDraft {
                 message_id: None,
-                source: UserSource::Human,
+                source,
                 kind: InboundKind::Message,
                 content,
                 timestamp: self.inner.clock.now(),
@@ -2982,6 +3047,23 @@ impl ConversationRuntime {
     #[must_use]
     pub fn settlement_signal(&self) -> &tokio::sync::Notify {
         &self.inner.settlement
+    }
+
+    /// The runtime-owned Message Ledger records, or `None` while an attempt
+    /// owns the conversation state.
+    ///
+    /// This is a read-only handout of canonical state the runtime already
+    /// owns between attempts; the subagent child driver (Issue #60) reads
+    /// its final answer here after the attempt's canonical terminal event.
+    #[must_use]
+    pub(crate) fn settled_ledger(&self) -> Option<Vec<MessageBlock>> {
+        self.inner
+            .state
+            .lock()
+            .expect("runtime lock")
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.ledger().audit_records().to_vec())
     }
 }
 
@@ -3376,13 +3458,7 @@ impl ConversationRuntime {
     /// The runtime-owned Message Ledger records, or `None` while an attempt
     /// owns the conversation state.
     pub(crate) fn coordinator_ledger(&self) -> Option<Vec<MessageBlock>> {
-        self.inner
-            .state
-            .lock()
-            .expect("runtime lock")
-            .conversation
-            .as_ref()
-            .map(|conversation| conversation.ledger().audit_records().to_vec())
+        self.settled_ledger()
     }
 
     /// The runtime-owned active Surface identities, or `None` while an
@@ -3602,6 +3678,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            subagents: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -3678,6 +3755,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            subagents: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -4314,6 +4392,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect_err("mismatched ownership is rejected");
         assert!(matches!(
@@ -4369,6 +4448,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect_err("construction outside Tokio is rejected");
         assert!(matches!(
@@ -7391,6 +7471,7 @@ mod tests {
             capability: coordinator,
             clock: None,
             initial_messages,
+            subagents: None,
         };
         match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe),

@@ -39,6 +39,7 @@ mod registry;
 pub(crate) mod ipc;
 pub(crate) mod process;
 
+pub use process::SubagentSpawnPlan;
 pub use registry::{
     PreparedSubagent, SubagentAccepted, SubagentDurabilityFailureSink, SubagentObserver,
     SubagentRegistry, SubagentRegistryConfig, SubagentSnapshot, SubagentStartError,

@@ -1746,6 +1746,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::new(RuntimeClientHostConfig {
@@ -1816,6 +1817,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                subagents: None,
             },
             probe,
         )
@@ -4674,6 +4676,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         })
         .expect("conversation runtime");
         let host = RuntimeClientHost::with_probe(
@@ -4748,6 +4751,7 @@ mod tests {
                 capability: coordinator.clone(),
                 clock: Some(Arc::new(FixedRuntimeClock)),
                 initial_messages: Vec::new(),
+                subagents: None,
             },
             runtime_probe,
         )
@@ -4831,6 +4835,7 @@ mod tests {
             capability: coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         };
         let runtime = match probe {
             Some(probe) => ConversationRuntime::with_probe(config, probe).expect("runtime"),
@@ -5385,6 +5390,7 @@ mod tests {
             capability: fixture.coordinator.clone(),
             clock: Some(Arc::new(FixedRuntimeClock)),
             initial_messages: Vec::new(),
+            subagents: None,
         }
     }
 

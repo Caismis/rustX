@@ -368,10 +368,19 @@ pub struct SubagentRegistryConfig {
 
 /// The sole logical owner and registry of a conversation's subagent
 /// children.
+///
+/// Cheaply cloneable: every clone shares the one registry state, the same
+/// contract as the background registry.
 pub struct SubagentRegistry {
     config: SubagentRegistryConfig,
     state: Arc<Mutex<RegistryState>>,
     state_version: tokio::sync::watch::Sender<u64>,
+}
+
+impl Clone for SubagentRegistry {
+    fn clone(&self) -> Self {
+        self.clone_for_task()
+    }
 }
 
 impl SubagentRegistry {
@@ -396,11 +405,9 @@ impl SubagentRegistry {
     /// Reseeds the ordinal sequence from the durable authority during
     /// startup recovery, so a recovered conversation never reissues an
     /// ordinal that already entered durable authority.
-    pub fn restore_subagent_sequence(&self, subagent_id: &SubagentId) {
+    pub fn restore_sequence_watermark(&self, highest_ordinal: u64) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ordinal) = subagent_id.conversation_ordinal(&self.config.conversation_id) {
-            state.next_ordinal = state.next_ordinal.max(ordinal + 1);
-        }
+        state.next_ordinal = state.next_ordinal.max(highest_ordinal + 1);
     }
 
     /// Installs the observation seam and immediately emits the current

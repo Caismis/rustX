@@ -634,6 +634,7 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
         &mut registry,
         rustx::tools::native::NativeToolResources {
             background: runtime.background().clone(),
+            subagents: None,
         },
         rustx::tools::native::NativeToolPolicies::default(),
     )
