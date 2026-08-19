@@ -204,7 +204,8 @@ assistant text  ordinary Markdown, no banner
 reasoning       dimmed, or one `Thinking…` marker when hidden
 refusal         explicitly a refusal, never an answer
 tool_call       one correlated tool card
-tool result     folded into that card, not repeated
+tool result     folded into that card when folding preserves canonical
+                order, otherwise that card's continuation in place
 ```
 
 Canonical block order is preserved exactly: `reasoning, text, tool_call, text`
@@ -231,6 +232,43 @@ the assistant block that asked for the call and evolves in place:
 ◇ Bash · preparing        ->  ◐ Bash · running · 40/900  ->  ✓ Bash · ok · 2.8s · exit 0
 ```
 
+### One entity, canonical order
+
+rustX's canonical model permits a `tool_call` that is *not* the last block of
+its assistant message: `AssistantMessageBlock` holds a plain block vector, and
+`StructuralIndex::build` rejects only duplicate calls, duplicate results, and
+orphan results. So `text A, tool_call X, text B` followed by a result for `X`
+is a shape the TUI must render, not one it may assume away — and drawing that
+result inside the earlier `X` card would move it before `text B`.
+
+> **A committed tool result is folded into its call's card only when folding
+> cannot move it across unrelated canonical content.**
+
+Folding applies exactly when the owning assistant message ends in an unbroken
+run of `tool_call` blocks — the batch — so every fact between a call and its
+result is another call or result of that same batch. That is the common case
+and it renders as one card. When any non-`tool_call` content follows the first
+call of a message, *no* result of that message folds (folding only the trailing
+ones would reorder the results against each other). Each call is then drawn as
+two fragments of one entity:
+
+```text
+A
+
+◇ Bash · result below
+  $ cargo test
+
+B
+
+↳ ✓ Bash · ok · 2.8s · exit 0
+  $ cargo test
+  test result: ok. 842 passed
+```
+
+One identity, canonical order intact, and never the pre-#79 duplication of a
+raw call block plus a running card plus a separate result block. Expanding
+either fragment expands both: they are one card.
+
 ### Renderers may format, never decide
 
 > **Tool identity may select a presentation renderer.
@@ -249,10 +287,79 @@ usable.
 
 ### Visual collapse is not runtime truncation
 
-A collapsed card shows a bounded preview and says how many lines are hidden.
+A collapsed card bounds **both** the call detail and the result detail, and
+says how many lines are hidden in each. The card shell owns that bound, not
+the renderers — a renderer never receives the collapse context, so a huge MCP
+argument object, a large Edit diff, a forty-line Bash command, and a partially
+streamed argument fragment are all bounded without any renderer having to
+remember to do it, including renderers written later. The bands that carry
+identity and runtime truth are never bounded:
+
+```text
+header         glyph, title, runtime lifecycle    always visible
+subject        the one-line identity of the call  always visible
+call detail    argument JSON, a diff, a command   bounded when collapsed
+reason         failure / denial prose             always visible
+result summary runtime-published counts           always visible
+result detail  the body                           bounded when collapsed
+truncation     the runtime's own TruncationState  always visible
+```
+
+Each detail band has its own budget, so a verbose call never squeezes its
+result off the screen. A streaming fragment with no line structure is bounded
+by characters instead.
+
 Expanding re-renders facts the client already holds: no re-execution, no
-filesystem access, no network. The runtime's own `TruncationState` is a
-different fact, reported separately and always — expanding never undoes it.
+filesystem access, no network, no runtime request. The runtime's own
+`TruncationState` is a different fact, reported separately and always —
+expanding never undoes it.
+
+### Two identity domains, two preference sets
+
+```text
+ToolCallId       a logical model-issued tool call    foreground cards
+ToolExecutionId  a detached background execution     background cards
+```
+
+Both serialize as transparent strings and nothing forbids the same string
+appearing in both, so expansion state is kept in **two** sets rather than one
+string-keyed set. No naming convention (`call_*`, `exec_*`) is relied on
+anywhere — a wire spelling is not a type.
+
+```text
+/expand                       toggle the latest tool call
+/expand latest                the same
+/expand all                   expand every tool card and every background card
+/expand none                  collapse both domains
+/expand <tool-call-id>        toggle one foreground card
+/expand background <exec-id>  toggle one background card
+```
+
+A bare id addresses the `ToolCallId` domain, always: there is no search across
+both namespaces and no "first match wins".
+
+### Configured, effective, and attempt-frozen are three model facts
+
+```text
+configured   what the session asks for            SessionModelView.configured
+effective    what the runtime would actually use  SessionModelView.effective
+attempt      what the running attempt froze       AttemptModelView.primary
+```
+
+All three can differ at once and the UI never loses one. When they coincide the
+footer shows one bare model name; the moment any two differ every one of them
+is labelled — `cfg A · eff B · attempt C` — and all three are undroppable, so a
+narrow terminal wraps rather than omitting or truncating a model identity into
+a different, shorter, wrong one. The selector labels rows `configured`,
+`effective`, and `attempt` for the same reason, and uses the word `current`
+only when there is exactly one thing it can mean.
+
+Catalog metadata and live configuration are likewise never merged. A catalog
+row states what a model *offers*, including the profile the catalog would fall
+back to (`catalog default medium`). What the session asked for and what the
+runtime resolved are separate lines (`configured reasoning`, `effective
+reasoning`). A catalog default is never presented as current configuration, and
+no reasoning scale is invented for a capable model that declares no profiles.
 
 ### Reasoning visibility is not reasoning configuration
 
@@ -283,8 +390,8 @@ barrier rather than a delay for readiness, and no `setTimeout` used to
 establish an ordering. The presentation suites drive projection facts directly
 and assert on normalized strings — `transcript.test.ts`,
 `tool-correlation.test.ts`, `tool-card.test.ts`, `model-selector.test.ts`,
-`status.test.ts`, and `reconstruction.test.ts`, which rebuilds the whole
-visible UI from one fresh snapshot.
+`status.test.ts`, `identity-domains.test.ts`, and `reconstruction.test.ts`,
+which rebuilds the whole visible UI from one fresh snapshot.
 
 `test/integration.test.ts` drives the **real** `rustx` binary over the real
 stdio/JSONL transport against a local SSE provider fixture (no credentials, no

@@ -27,9 +27,11 @@
  * `InteractiveMode` exists here or anywhere in this package.
  *
  * The one thing the app owns that the projection does not is
- * {@link PresentationPreferences} — reasoning visibility and which tool cards
- * are expanded. Those are display choices, they are deliberately not written
- * into runtime state, and losing them on a rebuild costs nothing semantic.
+ * {@link PresentationPreferences} — reasoning visibility, and which cards are
+ * expanded in each of the two runtime identity domains (`ToolCallId` for
+ * foreground tool cards, `ToolExecutionId` for background ones). Those are
+ * display choices, they are deliberately not written into runtime state, and
+ * losing them on a rebuild costs nothing semantic.
  */
 
 import {
@@ -49,6 +51,7 @@ import { SlashCommandAutocompleteProvider } from "../commands/autocomplete.ts";
 import {
   CommandDispatcher,
   type DebugDiagnostics,
+  type ExpandTarget,
   type PreferenceChange,
 } from "../commands/dispatcher.ts";
 import {
@@ -73,9 +76,11 @@ import {
   type PresentationPreferences,
   defaultPreferences,
   withAllCollapsed,
-  withExpandedCalls,
+  withExpandedBackgroundExecutions,
+  withExpandedToolCalls,
   withReasoningVisible,
-  withToggledCall,
+  withToggledBackgroundExecution,
+  withToggledToolCall,
 } from "./preferences.ts";
 import { editorTheme, markdownTheme, style } from "./theme.ts";
 
@@ -358,7 +363,13 @@ export class RustxTuiApp {
         );
         break;
       case "expand_call":
-        this.#preferences = withToggledCall(this.#preferences, change.callId);
+        this.#preferences = withToggledToolCall(this.#preferences, change.callId);
+        break;
+      case "expand_background":
+        this.#preferences = withToggledBackgroundExecution(
+          this.#preferences,
+          change.executionId,
+        );
         break;
       case "expand":
         this.#preferences = this.#expandTarget(change.target);
@@ -372,14 +383,28 @@ export class RustxTuiApp {
     }
   }
 
-  #expandTarget(target: "all" | "none" | "latest"): PresentationPreferences {
+  /**
+   * The bulk expansion targets.
+   *
+   * `all` and `none` cover *both* identity domains — every renderable tool
+   * card keyed by `ToolCallId` and every renderable background card keyed by
+   * `ToolExecutionId`. Those sets are kept separate so a call id and an
+   * execution id that happen to serialize alike never cross-toggle.
+   */
+  #expandTarget(target: ExpandTarget): PresentationPreferences {
     const state = this.#session.state;
     if (target === "none" || state === undefined) {
       return withAllCollapsed(this.#preferences);
     }
     const calls = [...correlateTools(state).byCallId.keys()];
     if (target === "all") {
-      return withExpandedCalls(this.#preferences, calls);
+      const executions = state.background.map(
+        (execution) => execution.execution_id,
+      );
+      return withExpandedBackgroundExecutions(
+        withExpandedToolCalls(this.#preferences, calls),
+        executions,
+      );
     }
     // "latest" is the most recently correlated call, which is the one a user
     // pressing ctrl+o is looking at. Correlation order follows the transcript,
@@ -387,7 +412,7 @@ export class RustxTuiApp {
     const latest: ToolCallId | undefined = calls[calls.length - 1];
     return latest === undefined
       ? this.#preferences
-      : withToggledCall(this.#preferences, latest);
+      : withToggledToolCall(this.#preferences, latest);
   }
 
   #note(level: "info" | "error", text: string): void {

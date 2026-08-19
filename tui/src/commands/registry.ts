@@ -57,8 +57,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "/expand",
     description:
-      "Expand or collapse tool output. Purely visual: nothing is re-executed or re-fetched.",
-    argumentHint: "[<tool-call-id>|all|none]",
+      "Expand or collapse tool call and result detail. Purely visual: nothing is re-executed or re-fetched.",
+    argumentHint: "[latest|all|none|<tool-call-id>|background <execution-id>]",
   },
   {
     name: "/cancel",

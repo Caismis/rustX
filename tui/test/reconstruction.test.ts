@@ -20,7 +20,7 @@ import {
 } from "../src/ui/components/activity.ts";
 import { renderFooter, workingStatus } from "../src/ui/components/status.ts";
 import { renderTranscript } from "../src/ui/components/transcript.ts";
-import { withToggledCall } from "../src/ui/preferences.ts";
+import { withToggledToolCall } from "../src/ui/preferences.ts";
 import { plainText } from "../src/ui/theme.ts";
 import type { RuntimeClientSnapshot } from "../src/protocol/types.ts";
 import {
@@ -186,7 +186,7 @@ describe("snapshot reconstruction", () => {
     const collapsed = renderTranscript(state, prefs()).map(blockText);
     const expanded = renderTranscript(
       state,
-      withToggledCall(prefs(), "call-1"),
+      withToggledToolCall(prefs(), "call-1"),
     ).map(blockText);
 
     // Expanding changes how much of a result is drawn and nothing else: the

@@ -2847,7 +2847,9 @@ contracts and provider protocols. These invariants are frozen by M2:
   assistant text.
 
 - **Tool identity chooses presentation; runtime facts choose semantics.** A
-  stable tool identity may select a specialized presentation renderer, so
+  stable tool identity or origin may select *presentation* — a label, a group
+  heading, or a specialized renderer — and may never select or infer execution
+  semantics. So
   Bash renders as `$ cargo test --all` rather than as argument JSON. A
   renderer formats already-authoritative facts and nothing else: running,
   success, failure, denial, cancellation, timeout, interruption, progress,
@@ -2866,10 +2868,42 @@ contracts and provider protocols. These invariants are frozen by M2:
   equality, list position, timing, or textual adjacency, so two concurrent
   identical calls stay two entities.
 
-- **Client visual collapse is not runtime truncation.** Expanding a tool card
-  re-renders facts the client already holds; it never re-executes a tool,
-  re-reads a file, or fetches anything. The runtime's own `TruncationState`
-  is reported separately and unconditionally, and expanding does not undo it.
+- **A folded result never reorders canonical content.** rustX's canonical
+  model permits a `tool_call` that is not the last block of its assistant
+  message — `AssistantMessageBlock` is a plain block vector and
+  `StructuralIndex::build` rejects only duplicate calls, duplicate results,
+  and orphan results — so `text A, tool_call X, text B` followed by a result
+  for `X` is a shape the client renders rather than assumes away. A committed
+  tool result is folded into its call's card **only when folding cannot move
+  it across unrelated canonical content**: exactly when the owning assistant
+  message ends in an unbroken run of `tool_call` blocks, so every fact between
+  a call and its result belongs to that same batch. Otherwise no result of
+  that message folds, and each call is drawn as two fragments of one entity —
+  the call at its `tool_call` block, its terminal continuation at the
+  canonical result message. One identity, canonical order, and never the
+  pre-#79 duplication of a raw call block, a running card, and a result block.
+
+- **Client visual collapse is not runtime truncation.** A collapsed tool card
+  bounds *both* its call detail and its result detail, each with its own
+  budget; the card shell owns the bound, and no renderer receives the collapse
+  context, so a huge argument object, a large diff, a long command, or a
+  partially streamed fragment is bounded without any renderer opting in.
+  Identity, runtime lifecycle, failure and denial reasons, runtime-published
+  summaries, and the runtime's own `TruncationState` are never bounded.
+  Expanding re-renders facts the client already holds; it never re-executes a
+  tool, re-reads a file, fetches anything, or issues a runtime request, and it
+  does not undo the runtime's own truncation, which is reported separately and
+  unconditionally.
+
+- **Presentation identity preserves runtime identity domains.** `ToolCallId`
+  (a logical model-issued call) and `ToolExecutionId` (a detached background
+  execution) are distinct rustX identities that both happen to serialize as
+  transparent strings. Client expansion state keeps them in two separate sets,
+  so equal wire strings in different domains can never alias or cross-toggle.
+  No naming convention (`call_*`, `exec_*`) is relied on anywhere. `/expand
+  all` and `/expand none` mean both domains; a bare id addresses the
+  `ToolCallId` domain and a background execution is addressed explicitly, so
+  no parser searches one string across both namespaces.
 
 - **Reasoning visibility is not reasoning configuration.** Whether reasoning
   content is drawn is a client display preference. What rustX asks a provider
@@ -2878,9 +2912,9 @@ contracts and provider protocols. These invariants are frozen by M2:
   it never becomes assistant text and never disappears silently.
 
 - **Display preferences stay out of runtime state.** Reasoning visibility,
-  expanded cards, search text, selection, and focus live in the client and may
-  reset on a full rebuild. None is written into `PresentationState`, and none
-  changes a semantic fact.
+  expanded cards in either identity domain, search text, selection, and focus
+  live in the client and may reset on a full rebuild. None is written into
+  `PresentationState`, and none changes a semantic fact.
 
 - **Working status is proven, never timed.** A phase is shown only when a
   projection fact proves it — a pending interaction, a running or assembled
@@ -2904,6 +2938,25 @@ contracts and provider protocols. These invariants are frozen by M2:
   no selectable profile, and no universal off/low/medium/high scale is
   invented. `requestParams` stays opaque provider-owned JSON — displayed and
   passed, never interpreted.
+
+- **Configured, effective, and attempt-frozen models stay three facts.**
+  `SessionModelView.configured` is what the session asks for,
+  `SessionModelView.effective` is what the runtime would actually use, and
+  `AttemptModelView.primary` is what an admitted attempt froze. All three can
+  differ at once and none may be dropped, collapsed into a single "current",
+  or truncated into a shorter identity naming a different model. When they
+  coincide the presentation may compress; the moment any two differ every one
+  is labelled. Nothing may imply that a running attempt already moved to the
+  configured model.
+
+- **Catalog metadata is not runtime model configuration.** A `CatalogModelView`
+  describes what a model *offers*, including `defaultReasoningProfile`, which
+  is the catalog's fallback. What the session asked for
+  (`SessionModelConfig.reasoningProfile`) and what the runtime resolved
+  (`ModelInvocationView.reasoningProfile` / `reasoningEnabled`) are separate
+  facts, presented separately. A catalog default is never labelled as the
+  current configuration, and an absent configured profile is reported as
+  absent rather than borrowing the catalog's.
 
 - **No bypass of rustX.** There is no client-side shell, no filesystem read
   that injects content into a prompt, no client-side Skill execution, no

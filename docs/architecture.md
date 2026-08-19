@@ -3457,6 +3457,15 @@ identical calls remain two cards. The card renders at the assistant block that
 requested it, which is why the same call never appears simultaneously as
 transcript JSON, a running card, and a separate result block.
 
+*A folded result never reorders canonical content.* rustX's canonical model
+permits a `tool_call` that is not the last block of its assistant message, so a
+committed result is folded into its call's card **only when folding cannot move
+it across unrelated canonical content** — exactly when the owning assistant
+message ends in an unbroken run of `tool_call` blocks. Otherwise no result of
+that message folds, and the call is drawn as two fragments of one entity: the
+call at its `tool_call` block and its terminal continuation at the canonical
+result message.
+
 *Tool identity chooses presentation; runtime facts choose semantics.* A stable
 `ToolId` selects a specialized renderer — Bash, Read, Grep, Glob, Edit, Write
 today — so a shell call reads as `$ cargo test --all` instead of argument
@@ -3468,12 +3477,21 @@ recognise a shape returns nothing and the generic renderer takes over, so
 unknown, MCP, and Python tools are always fully usable.
 
 *Display preferences are not runtime state.* Reasoning visibility and which
-cards are expanded live in the app, not in `PresentationState`. Expanding a
-card re-renders facts the client already holds — it never re-executes a tool
-or fetches anything — and it is unrelated to the runtime's own
-`TruncationState`, which is always reported. Reasoning *visibility* is
+cards are expanded live in the app, not in `PresentationState`. A collapsed
+card bounds both its call detail and its result detail, each with its own
+budget, and the card shell owns that bound so no renderer can forget it;
+identity, runtime lifecycle, failure reasons, and the runtime's own
+`TruncationState` are never bounded. Expanding a card re-renders facts the
+client already holds — it never re-executes a tool or fetches anything — and it
+is unrelated to the runtime's own `TruncationState`, which is always reported.
+Expansion state is kept in two sets, one per runtime identity domain
+(`ToolCallId` for foreground cards, `ToolExecutionId` for background ones), so
+equal wire strings in different domains cannot alias. Reasoning *visibility* is
 likewise unrelated to the `reasoningProfile` / `reasoningEnabled` request
-configuration, which only `model_set` changes.
+configuration, which only `model_set` changes — and neither is the catalog's
+`defaultReasoningProfile`, which describes what a model offers rather than what
+this session configured. `configured`, `effective`, and the attempt's frozen
+model stay three separately displayed facts.
 
 **The projection is not a second runtime state machine.** Two total functions
 define the whole model — `replaceFromSnapshot(snapshot, cursor)` and

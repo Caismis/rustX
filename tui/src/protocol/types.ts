@@ -218,9 +218,18 @@ export type ToolReplayPolicy = "never" | "idempotent";
 /**
  * Where a tool comes from.
  *
- * This is a *label*. It may pick an icon or a group heading and nothing more:
- * execution semantics are Rust-owned, so no branch may key behaviour to a
- * tool's origin or name.
+ * A *presentation* fact:
+ *
+ * > Tool identity and origin may select presentation.
+ * > Tool identity and origin may never select or infer execution semantics.
+ *
+ * So an origin or a `ToolId` may pick a label, a group heading, or a
+ * specialized presentation renderer — the reason a Bash call reads as
+ * `$ cargo test --all` instead of argument JSON. It may never decide whether
+ * a call is running, succeeded, failed, was denied, cancelled, timed out or
+ * interrupted, may never change what is executed or how, and may never alter
+ * approval, concurrency, or replay behaviour. Those are Rust-owned and reach
+ * the client only as published facts.
  */
 export type ToolOrigin =
   | "builtin"

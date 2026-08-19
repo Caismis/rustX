@@ -90,6 +90,50 @@ export function workingStatus(state: PresentationState): string | undefined {
 // ---------------------------------------------------------------------------
 
 /**
+ * The model identities, each shown exactly when it is a distinct fact.
+ *
+ * Three runtime facts can differ at once and the footer must not lose one:
+ *
+ * ```text
+ * configured   what the session asks for            SessionModelView.configured
+ * effective    what the runtime would actually use  SessionModelView.effective
+ * attempt      what the running attempt froze       AttemptModelView.primary
+ * ```
+ *
+ * When they coincide the footer compresses to one bare model name, which is
+ * the common case. As soon as any two differ every one of them is labelled,
+ * so `cfg A · eff B · attempt C` is unambiguous and no reader can conclude
+ * that the running attempt already moved to the configured model.
+ *
+ * All three are priority 0: a narrow terminal drops other segments and
+ * wraps, but it never silently omits a model identity and never truncates one
+ * into a different, shorter, wrong identity.
+ */
+function modelSegments(state: PresentationState): Segment[] {
+  const configured = state.sessionModel.configured.model;
+  const effective = state.sessionModel.effective.model;
+  const attempt = state.attempt?.model.primary.model;
+
+  const distinct =
+    configured !== effective ||
+    (attempt !== undefined && attempt !== effective);
+  if (!distinct) {
+    return [{ text: role.accent(configured), priority: 0 }];
+  }
+
+  const segments: Segment[] = [
+    { text: role.accent(`cfg ${configured}`), priority: 0 },
+  ];
+  if (effective !== configured) {
+    segments.push({ text: role.accent(`eff ${effective}`), priority: 0 });
+  }
+  if (attempt !== undefined && attempt !== effective) {
+    segments.push({ text: role.pending(`attempt ${attempt}`), priority: 0 });
+  }
+  return segments;
+}
+
+/**
  * One footer segment.
  *
  * `priority` is how badly the segment deserves the space: 0 never drops, and
@@ -129,19 +173,9 @@ export function footerSegments(
   const segments: Segment[] = [];
   const attempt = state.attempt;
 
-  // The session's *desired* model. Always first, never dropped.
-  segments.push({ text: role.accent(state.sessionModel.configured.model), priority: 0 });
+  segments.push(...modelSegments(state));
 
   if (attempt !== undefined) {
-    // The attempt froze its model at admission. While it runs on A and the
-    // session has moved to B, both are shown; the footer never claims the
-    // running attempt already uses B.
-    if (attempt.model.primary.model !== state.sessionModel.effective.model) {
-      segments.push({
-        text: role.pending(`attempt ${attempt.model.primary.model}`),
-        priority: 0,
-      });
-    }
     segments.push({
       text:
         attempt.phase.type === "settled"

@@ -11,13 +11,17 @@
  * reasoning       dimmed, or one `Thinking…` marker when hidden
  * refusal         explicitly a refusal, never an answer
  * tool_call       one correlated tool card (see ./tool-card.ts)
- * tool result     folded into that card, not repeated
+ * tool result     folded into that card when folding preserves canonical
+ *                 order, otherwise that card's continuation at its own
+ *                 canonical position — never repeated, never reordered
  * system          dimmed diagnostic with its authority
  * ```
  *
  * Canonical block order is preserved exactly. When a model emits
  * `reasoning, text, tool_call, text`, that is what the reader sees, in that
- * sequence, streaming and committed alike.
+ * sequence, streaming and committed alike — and when the result of that
+ * `tool_call` commits, it appears *after* the trailing text, because that is
+ * where the canonical conversation puts it.
  *
  * Two things this file must never do: invent content the provider did not
  * publish (an absent reasoning body stays absent), and let a presentation
@@ -37,10 +41,14 @@ import {
   type ToolCorrelation,
   correlateTools,
   isFoldedToolResult,
+  isSplitToolCall,
 } from "../../presentation/tools.ts";
-import { type PresentationPreferences, isExpanded } from "../preferences.ts";
+import {
+  type PresentationPreferences,
+  isToolCallExpanded,
+} from "../preferences.ts";
 import { role, style } from "../theme.ts";
-import { renderToolCard } from "./tool-card.ts";
+import { type ToolCardPart, renderToolCard } from "./tool-card.ts";
 
 /**
  * One rendered transcript block.
@@ -187,7 +195,7 @@ function renderCommitted(
             blocks.push(refusalBlock(key, block.text));
             break;
           case "tool_call":
-            blocks.push(toolBlock(key, block.id, context));
+            blocks.push(toolBlock(key, block.id, context, anchorPart(context, block.id)));
             break;
           case "image":
             blocks.push({ kind: "text", key, text: role.meta("(image)") });
@@ -200,15 +208,25 @@ function renderCommitted(
       return blocks;
     }
 
-    case "tool":
-      // The canonical result is presented inside its call's card. Rendering it
-      // again here is exactly the duplication Issue #79 removes. A result
-      // whose call has *no* transcript anchor — the assistant message was
-      // never committed — still has to be visible, so it renders its own card
-      // in place.
-      return isFoldedToolResult(context.correlation, message.tool_call_id)
-        ? []
-        : [toolBlock(entry.key, message.tool_call_id, context)];
+    case "tool": {
+      // Three cases, all decided by the correlation's fold invariant:
+      //
+      //   folded          the call's card already shows this result
+      //   split           the call's card is above; this is its continuation
+      //   no anchor       the assistant message was never committed, so this
+      //                   result is the only place the call is visible
+      //
+      // Rendering a folded result again is the duplication Issue #79 removes;
+      // folding an unfoldable one would move it across canonical content.
+      const callId = message.tool_call_id;
+      if (isFoldedToolResult(context.correlation, callId)) {
+        return [];
+      }
+      const part: ToolCardPart = context.correlation.anchoredCalls.has(callId)
+        ? "continuation"
+        : "full";
+      return [toolBlock(entry.key, callId, context, part)];
+    }
 
     case "system":
       return [
@@ -270,7 +288,9 @@ function renderStreaming(
         blocks.push(refusalBlock(key, block.text));
         break;
       case "tool_call":
-        blocks.push(toolBlock(key, block.callId, context));
+        blocks.push(
+          toolBlock(key, block.callId, context, anchorPart(context, block.callId)),
+        );
         break;
       default:
         break;
@@ -317,10 +337,21 @@ function refusalBlock(key: string, text: string): TranscriptBlock {
   };
 }
 
+/**
+ * How a call's own `tool_call` anchor is drawn.
+ *
+ * `call` when a committed result exists that may not fold into it: the result
+ * follows below, at its canonical position, as this card's continuation.
+ */
+function anchorPart(context: TranscriptContext, callId: string): ToolCardPart {
+  return isSplitToolCall(context.correlation, callId) ? "call" : "full";
+}
+
 function toolBlock(
   key: string,
   callId: string,
   context: TranscriptContext,
+  part: ToolCardPart = "full",
 ): TranscriptBlock {
   const tool = context.correlation.byCallId.get(callId);
   if (tool === undefined) {
@@ -331,10 +362,16 @@ function toolBlock(
   return {
     kind: "text",
     key,
-    text: renderToolCard(tool, {
-      expanded: isExpanded(context.preferences, callId),
-      previewLines: context.preferences.previewLines,
-    }),
+    text: renderToolCard(
+      tool,
+      {
+        // One expansion state for the whole entity: expanding a split call
+        // expands both of its parts, because they are one card.
+        expanded: isToolCallExpanded(context.preferences, callId),
+        previewLines: context.preferences.previewLines,
+      },
+      part,
+    ),
   };
 }
 

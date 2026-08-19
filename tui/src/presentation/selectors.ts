@@ -11,6 +11,15 @@
  * presentation renderer; it may never pick an execution semantic, because
  * those are Rust-owned.
  *
+ * Model facts live in three separate domains and the selectors keep them
+ * separate:
+ *
+ * ```text
+ * catalog     what a model offers        CatalogModelView
+ * configured  what the session asked for SessionModelView.configured
+ * effective   what the runtime will use  SessionModelView.effective
+ * ```
+ *
  * The working indicator and the footer live in `ui/components/status.ts`
  * because they are presentation compositions rather than derivations, and the
  * model selector reads the catalog directly.
@@ -19,6 +28,7 @@
 import type {
   BackgroundLifecycle,
   ModelInvocationView,
+  SessionModelConfig,
   RuntimeClientBackgroundExecution,
   RuntimeClientOutcome,
   RuntimeClientSkill,
@@ -128,6 +138,23 @@ export function describeReasoning(invocation: ModelInvocationView): string {
   return invocation.reasoningEnabled
     ? "on (runtime default, no selectable profile)"
     : "off (runtime default, no selectable profile)";
+}
+
+/**
+ * The reasoning profile the session *asked for*, as configured.
+ *
+ * Deliberately separate from {@link describeReasoning}, which reports what is
+ * effective, and from a catalog entry's `defaultReasoningProfile`, which is
+ * what the catalog would fall back to. Those are three different facts and
+ * the UI must never present one as another: a catalog default is not evidence
+ * that the session configured anything.
+ */
+export function describeConfiguredReasoning(
+  configured: SessionModelConfig,
+): string {
+  return configured.reasoningProfile === undefined
+    ? "not configured (the runtime decides)"
+    : `profile ${configured.reasoningProfile}`;
 }
 
 /**

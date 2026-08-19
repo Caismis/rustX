@@ -14,7 +14,10 @@ import type { CorrelatedTool } from "../src/presentation/tools.ts";
 import type { ToolExecutionResult } from "../src/protocol/types.ts";
 import { renderToolCard } from "../src/ui/components/tool-card.ts";
 import { hasSpecializedRenderer } from "../src/ui/components/tool-renderers.ts";
-import { DEFAULT_PREVIEW_LINES } from "../src/ui/preferences.ts";
+import {
+  DEFAULT_PREVIEW_LINES,
+  RAW_FRAGMENT_PREVIEW_CHARS,
+} from "../src/ui/preferences.ts";
 import { plainText } from "../src/ui/theme.ts";
 import { toolResult } from "./support/fixtures.ts";
 
@@ -164,6 +167,225 @@ describe("progressive disclosure", () => {
     const rendered = card({ lifecycle: settled({ content: [] }) });
     assert.match(rendered.split("\n")[0] ?? "", /ok/);
     assert.equal(rendered.split("\n").length, 1);
+  });
+});
+
+describe("progressive disclosure bounds call details too", () => {
+  /**
+   * A collapsed card must stay concise whatever the *call* looks like, not
+   * only whatever the result looks like. The bound is owned by the card
+   * shell, so it applies to every renderer — including ones written later.
+   *
+   * Expanding is pure presentation throughout: each case renders the same
+   * `CorrelatedTool` twice, with nothing but the collapse flag changed.
+   */
+  function lineCount(rendered: string): number {
+    return rendered.split("\n").length;
+  }
+
+  it("bounds a huge generic argument object", () => {
+    const items = Array.from({ length: 300 }, (_, index) => `item-${index}`);
+    const argumentsText = JSON.stringify({ items }, null, 0);
+    const collapsed = card({
+      toolId: "tool-mcp-bulk",
+      name: "bulk",
+      argumentsText,
+      lifecycle: { type: "running" },
+    });
+    assert.ok(
+      lineCount(collapsed) <= DEFAULT_PREVIEW_LINES + 3,
+      `collapsed card was ${lineCount(collapsed)} lines`,
+    );
+    assert.match(collapsed, /… \d+ more argument lines · ctrl\+o to expand/);
+    assert.ok(!collapsed.includes("item-299"), "the full object is not printed");
+
+    const opened = card(
+      {
+        toolId: "tool-mcp-bulk",
+        name: "bulk",
+        argumentsText,
+        lifecycle: { type: "running" },
+      },
+      expanded,
+    );
+    // Every argument fact the client already holds, and nothing more: the
+    // expansion reads the same `argumentsText` string.
+    assert.match(opened, /item-0/);
+    assert.match(opened, /item-299/);
+    assert.ok(!/more argument lines/.test(opened));
+  });
+
+  it("bounds a large Edit diff instead of dumping it", () => {
+    const oldText = Array.from({ length: 60 }, (_, i) => `old ${i}`).join("\n");
+    const newText = Array.from({ length: 60 }, (_, i) => `new ${i}`).join("\n");
+    const call = {
+      toolId: "tool-edit",
+      name: "edit",
+      argumentsText: JSON.stringify({
+        path: "src/lib.rs",
+        edits: [{ oldText, newText }],
+      }),
+      lifecycle: { type: "assembled" as const },
+    };
+
+    const collapsed = card(call);
+    assert.match(collapsed, /Edit/);
+    assert.match(collapsed, /src\/lib\.rs/, "the subject stays visible");
+    assert.match(collapsed, /1 replacement/, "the runtime-derived count stays visible");
+    assert.ok(
+      lineCount(collapsed) <= DEFAULT_PREVIEW_LINES + 3,
+      `collapsed Edit card was ${lineCount(collapsed)} lines`,
+    );
+    assert.ok(!collapsed.includes("new 59"), "the whole diff is not dumped");
+    assert.match(collapsed, /… \d+ more argument lines/);
+
+    const opened = card(call, expanded);
+    assert.match(opened, /^\s*- old 59$/m);
+    assert.match(opened, /^\s*\+ new 59$/m);
+  });
+
+  it("bounds a large multiline Bash command", () => {
+    const command = [
+      "set -euo pipefail",
+      ...Array.from({ length: 40 }, (_, i) => `echo step-${i}`),
+    ].join("\n");
+    const call = {
+      toolId: "tool-bash",
+      name: "bash",
+      argumentsText: JSON.stringify({ command }),
+      lifecycle: { type: "running" as const },
+    };
+
+    const collapsed = card(call);
+    assert.match(collapsed, /\$ set -euo pipefail/, "the first line identifies the call");
+    assert.match(collapsed, /running/, "the runtime lifecycle is never hidden");
+    assert.ok(
+      lineCount(collapsed) <= DEFAULT_PREVIEW_LINES + 3,
+      `collapsed Bash card was ${lineCount(collapsed)} lines`,
+    );
+    assert.ok(!collapsed.includes("echo step-39"));
+
+    assert.match(card(call, expanded), /echo step-39/);
+  });
+
+  it("bounds a long partially streamed argument fragment", () => {
+    // Not JSON yet, and with no line structure to bound: the raw fallback is
+    // bounded by characters so a streaming fragment cannot fill the terminal.
+    const fragment = `{"query":"${"x".repeat(4_000)}`;
+    const call = {
+      toolId: "tool-mcp-search",
+      name: "search",
+      argumentsText: fragment,
+      lifecycle: { type: "assembled" as const },
+    };
+
+    const collapsed = card(call);
+    assert.ok(
+      collapsed.length < RAW_FRAGMENT_PREVIEW_CHARS + 200,
+      `collapsed fragment card was ${collapsed.length} characters`,
+    );
+    assert.match(collapsed, /… \d+ more characters · ctrl\+o to expand/);
+    assert.match(collapsed, /search/, "the identity survives the bound");
+
+    const opened = card(call, expanded);
+    assert.ok(opened.includes("x".repeat(4_000)));
+    assert.ok(!/more characters/.test(opened));
+  });
+
+  it("bounds call and result independently on one card", () => {
+    const command = Array.from({ length: 40 }, (_, i) => `echo call-${i}`).join("\n");
+    const output = Array.from({ length: 40 }, (_, i) => `result-${i}`).join("\n");
+    const call = {
+      toolId: "tool-bash",
+      name: "bash",
+      argumentsText: JSON.stringify({ command }),
+      lifecycle: settled({
+        content: [
+          {
+            type: "json" as const,
+            value: { exit_code: 0, stdout: output, stderr: "", combined: output },
+          },
+        ],
+        exit_code: 0,
+      }),
+    };
+
+    const collapsed = card(call);
+    // Neither band may be starved by the other, and neither may be unbounded.
+    assert.match(collapsed, /… \d+ more argument lines/);
+    assert.match(collapsed, /… \d+ more lines/);
+    assert.match(collapsed, /echo call-0/);
+    assert.match(collapsed, /result-0/);
+    assert.ok(!collapsed.includes("echo call-39"));
+    assert.ok(!collapsed.includes("result-39"));
+    assert.ok(
+      lineCount(collapsed) <= 2 * DEFAULT_PREVIEW_LINES + 6,
+      `collapsed card was ${lineCount(collapsed)} lines`,
+    );
+
+    const opened = card(call, expanded);
+    assert.match(opened, /echo call-39/);
+    assert.match(opened, /result-39/);
+  });
+
+  it("bounds a runtime failure reason without hiding its beginning", () => {
+    const error = Array.from({ length: 40 }, (_, i) => `reason ${i}`).join("\n");
+    const call = {
+      lifecycle: settled({ status: { type: "failed" as const, error }, content: [] }),
+    };
+    const collapsed = card(call);
+    assert.match(collapsed.split("\n")[0] ?? "", /failed/, "the settlement is never hidden");
+    assert.match(collapsed, /reason 0/, "the explanation starts on screen");
+    assert.match(collapsed, /… \d+ more reason lines/);
+    assert.ok(!collapsed.includes("reason 39"));
+    assert.match(card(call, expanded), /reason 39/);
+  });
+
+  it("keeps the subject band to one line whatever the arguments contain", () => {
+    // A published path with an embedded newline must not turn the
+    // always-visible band into an unbounded one.
+    const rendered = card({
+      toolId: "tool-write",
+      name: "write",
+      argumentsText: JSON.stringify({
+        path: `a.rs\n${"b\n".repeat(50)}`,
+        content: "x",
+      }),
+    });
+    assert.match(rendered, /^ {2}a\.rs …$/m);
+    assert.ok(rendered.split("\n").length <= DEFAULT_PREVIEW_LINES + 3);
+  });
+
+  it("bounds many non-textual result markers as body", () => {
+    const rendered = card({
+      lifecycle: settled({
+        content: Array.from({ length: 40 }, (_, index) => ({
+          type: "file" as const,
+          path: `out-${index}.txt`,
+        })),
+      }),
+    });
+    assert.match(rendered, /\(file\)/);
+    assert.match(rendered, /… \d+ more lines/);
+    assert.ok(rendered.split("\n").length <= DEFAULT_PREVIEW_LINES + 3);
+  });
+
+  it("keeps identity, status, reason, and runtime truncation visible when collapsed", () => {
+    const items = Array.from({ length: 200 }, (_, index) => `item-${index}`);
+    const collapsed = card({
+      toolId: "tool-mcp-bulk",
+      name: "bulk",
+      argumentsText: JSON.stringify({ items }),
+      lifecycle: settled({
+        status: { type: "denied", reason: "human denied" },
+        content: [{ type: "text", text: Array.from({ length: 50 }, (_, i) => `o${i}`).join("\n") }],
+        truncation: { truncated: true, original_bytes: 9_001 },
+      }),
+    });
+    assert.match(collapsed, /bulk/);
+    assert.match(collapsed, /denied \(human denied\)/);
+    assert.match(collapsed, /human denied/);
+    assert.match(collapsed, /runtime-truncated result \(from 9001 bytes\)/);
   });
 });
 

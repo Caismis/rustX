@@ -25,6 +25,7 @@ import { RuntimeRequestError } from "../runtime/connection.ts";
 import {
   activeBackground,
   capabilitySummary,
+  describeConfiguredReasoning,
   describeReasoning,
   originLabel,
   outcomeLabel,
@@ -38,6 +39,8 @@ import type {
   ApprovalDecision,
   CatalogModelView,
   InteractionResponse,
+  ToolCallId,
+  ToolExecutionId,
 } from "../protocol/types.ts";
 
 /** What the dispatcher wants the UI to do next. */
@@ -61,8 +64,19 @@ export type CommandOutcome =
  */
 export type PreferenceChange =
   | { type: "reasoning"; visible?: boolean }
-  | { type: "expand"; target: "all" | "none" | "latest" }
-  | { type: "expand_call"; callId: string };
+  | { type: "expand"; target: ExpandTarget }
+  /** One foreground card, addressed by its `ToolCallId`. */
+  | { type: "expand_call"; callId: ToolCallId }
+  /** One background card, addressed by its `ToolExecutionId`. */
+  | { type: "expand_background"; executionId: ToolExecutionId };
+
+/**
+ * A bulk expansion target.
+ *
+ * `all` and `none` mean both identity domains — every renderable tool card and
+ * every renderable background card — because that is what the words say.
+ */
+export type ExpandTarget = "all" | "none" | "latest";
 
 export interface DispatcherContext {
   session: RuntimeClientSession;
@@ -311,18 +325,47 @@ function reasoningPreference(argument: string): CommandOutcome {
 }
 
 /**
- * `/expand [<tool-call-id>|all|none]` — a visual collapse preference.
+ * `/expand` — a visual collapse preference over both identity domains.
  *
- * Expanding shows more of a result the client already holds. It never
- * re-executes a tool, never re-reads anything, and never undoes the runtime's
- * own result truncation, which is a separate fact the card always reports.
+ * ```text
+ * /expand                       toggle the latest tool call
+ * /expand latest                the same
+ * /expand all                   expand every tool card and every background card
+ * /expand none                  collapse both domains
+ * /expand <tool-call-id>        toggle one foreground card
+ * /expand background <exec-id>  toggle one background card
+ * ```
+ *
+ * A bare id addresses the `ToolCallId` domain, always. There is no search
+ * across both namespaces and no "first match wins": the two domains are
+ * distinct rustX identities, so addressing a background execution says so.
+ *
+ * Expanding shows more of a *call* or a *result* the client already holds. It
+ * never re-executes a tool, never re-reads anything, and never undoes the
+ * runtime's own result truncation, which is a separate fact the card always
+ * reports.
  */
 function expandPreference(argument: string): CommandOutcome {
-  if (argument === "") {
+  if (argument === "" || argument === "latest") {
     return { kind: "preference", preference: { type: "expand", target: "latest" } };
   }
   if (argument === "all" || argument === "none") {
     return { kind: "preference", preference: { type: "expand", target: argument } };
+  }
+  const [head, ...rest] = argument.split(/\s+/);
+  if (head === "background" || head === "bg") {
+    const executionId = rest.join(" ");
+    if (executionId.length === 0) {
+      return {
+        kind: "message",
+        level: "error",
+        text: "usage: /expand background <execution-id>",
+      };
+    }
+    return {
+      kind: "preference",
+      preference: { type: "expand_background", executionId },
+    };
   }
   return { kind: "preference", preference: { type: "expand_call", callId: argument } };
 }
@@ -364,7 +407,20 @@ export function renderHelp(): string {
 
 /**
  * `/model` — the authoritative session model, and the running attempt's
- * frozen model when they differ.
+ * frozen model.
+ *
+ * Three model identities and two reasoning facts, each named for what it is:
+ *
+ * ```text
+ * configured            SessionModelView.configured.model
+ * effective             SessionModelView.effective.model
+ * attempt               AttemptModelView.primary.model
+ * configured reasoning  SessionModelConfig.reasoningProfile
+ * effective reasoning   ModelInvocationView.reasoningProfile/reasoningEnabled
+ * ```
+ *
+ * They are always all printed, even when they coincide, because `/model show`
+ * is the place a user goes to find out whether they do.
  */
 export function renderModel(state: PresentationState): string {
   const session = state.sessionModel;
@@ -374,7 +430,10 @@ export function renderModel(state: PresentationState): string {
     `- effective: \`${session.effective.model}\` via ${session.effective.protocol}`,
     `- context window: ${session.effective.contextWindow}`,
     `- max output tokens: ${session.effective.maxOutputTokens} (model maximum ${session.effective.modelMaxOutputTokens})`,
-    `- reasoning: ${describeReasoning(session.effective)}`,
+    // Configured and effective reasoning are separate facts: the session asks,
+    // the runtime resolves, and a catalog default is neither of them.
+    `- configured reasoning: ${describeConfiguredReasoning(session.configured)}`,
+    `- effective reasoning: ${describeReasoning(session.effective)}`,
     `- capabilities: ${capabilitySummary(session.effective)}`,
   ];
 
@@ -413,10 +472,16 @@ export function renderModel(state: PresentationState): string {
       "### Active attempt model (frozen at admission)",
       `- attempt: \`${attempt.attemptId}\` (${attempt.phase.type})`,
       `- model: \`${attempt.model.primary.model}\``,
+      `- reasoning: ${describeReasoning(attempt.model.primary)}`,
     );
     if (attempt.model.primary.model !== session.effective.model) {
       lines.push(
-        `- the session moved to \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+        `- the session's effective model is \`${session.effective.model}\`; this attempt keeps the model it froze.`,
+      );
+    }
+    if (session.configured.model !== session.effective.model) {
+      lines.push(
+        `- the session is configured for \`${session.configured.model}\`, which is not what it would use today.`,
       );
     }
   }

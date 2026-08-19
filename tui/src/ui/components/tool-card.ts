@@ -24,52 +24,149 @@
  *
  * The specialized renderer chosen by tool identity formats the *arguments*
  * and the *result body* and nothing else, so it cannot reach the status line.
+ *
+ * ## The shell owns progressive disclosure
+ *
+ * A card is laid out in bands, and only two of them are ever bounded:
+ *
+ * ```text
+ * header        glyph, title, runtime lifecycle   always visible
+ * subject       the one-line identity of the call always visible
+ * call detail   argument JSON, a diff, a command  bounded when collapsed
+ * reason        failure / denial prose            always visible
+ * result summary runtime-published counts         always visible
+ * result detail the body                          bounded when collapsed
+ * truncation    the runtime's own TruncationState always visible
+ * ```
+ *
+ * Both detail bands get their own budget rather than sharing one, so a call
+ * with a huge argument object never squeezes its result off the screen (and
+ * the reverse). Renderers never see the collapse context, which is what makes
+ * the bound impossible for a present or future renderer to forget.
+ *
+ * ## Cards split when, and only when, folding would reorder canonical facts
+ *
+ * A card may be drawn in three parts, chosen by the transcript, never by this
+ * module:
+ *
+ * ```text
+ * "full"          call and result in one card at the call's position
+ * "call"          the call alone, at the call's position
+ * "continuation"  the settled result alone, at the result's position
+ * ```
+ *
+ * The invariant is in {@link ../../presentation/tools.ts}: a committed result
+ * folds into its call card only when folding cannot move it across unrelated
+ * canonical content. When it cannot fold, the same entity renders as a `call`
+ * part at the `tool_call` block and a `continuation` part at the canonical
+ * result message — one identity, two fragments, canonical order intact, and
+ * never the old duplicated call/result log blocks.
  */
 
 import type { ToolExecutionResult } from "../../protocol/types.ts";
 import type { CorrelatedTool, ToolLifecycle } from "../../presentation/tools.ts";
+import { RAW_FRAGMENT_PREVIEW_CHARS } from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import {
   type ToolCallPresentation,
   type ToolPresentationRenderer,
   type ToolRenderContext,
+  type ToolResultPresentation,
   genericRenderer,
   genericResultLines,
   parseArguments,
+  preview,
+  previewText,
   rendererFor,
+  toLines,
 } from "./tool-renderers.ts";
 
-/** Renders one correlated tool call as one card. */
+/**
+ * Which part of one entity's card to draw.
+ *
+ * Chosen by the transcript from the canonical fold invariant, never inferred
+ * here: this module renders what it is told to render.
+ */
+export type ToolCardPart = "full" | "call" | "continuation";
+
+/** Renders one correlated tool call as one card, or as one part of one. */
 export function renderToolCard(
   tool: CorrelatedTool,
   context: ToolRenderContext,
+  part: ToolCardPart = "full",
 ): string {
   const args = parseArguments(tool.argumentsText);
   const renderer = rendererFor(tool.toolId);
-
-  const call = presentCall(renderer.renderCall(args), tool);
+  const call = presentCall(renderer.renderCall(args), tool, context);
   const lines: string[] = [];
 
-  lines.push(
-    `${statusGlyph(tool.lifecycle)} ${role.toolTitle(style.bold(call.title))}${statusSuffix(tool.lifecycle)}`,
-  );
-  if (call.subject !== undefined && call.subject.length > 0) {
-    lines.push(`  ${call.subject}`);
+  if (part === "continuation") {
+    // The terminal continuation of the same entity, at the canonical position
+    // of the committed result. It repeats the call's identity — title and
+    // subject — so it reads as that call settling rather than as a second
+    // tool record, and it carries the runtime lifecycle.
+    lines.push(
+      `${role.chrome("↳")} ${statusGlyph(tool.lifecycle)} ${role.toolTitle(style.bold(call.title))}${statusSuffix(tool.lifecycle)}`,
+    );
+    pushSubject(lines, call);
+    pushResult(lines, renderer, tool, args, context);
+    return lines.join("\n");
   }
-  for (const line of call.lines ?? []) {
+
+  // The `call` part carries no lifecycle suffix on purpose. Its result is
+  // rendered below, at the result's own canonical position, and restating the
+  // settlement here would report one runtime fact twice.
+  lines.push(
+    `${part === "call" ? role.meta("◇") : statusGlyph(tool.lifecycle)} ${role.toolTitle(style.bold(call.title))}${
+      part === "call" ? `${role.chrome(" · ")}${role.meta("result below")}` : statusSuffix(tool.lifecycle)
+    }`,
+  );
+  pushSubject(lines, call);
+  for (const line of preview(call.detail ?? [], context, "argument line")) {
     lines.push(`  ${line}`);
   }
 
-  if (tool.lifecycle.type === "settled") {
-    for (const line of resultBody(renderer, tool.lifecycle.result, args, context)) {
-      lines.push(`  ${line}`);
-    }
-    for (const line of terminalDetail(tool.lifecycle.result)) {
-      lines.push(`  ${line}`);
-    }
+  if (part === "full") {
+    pushResult(lines, renderer, tool, args, context);
   }
-
   return lines.join("\n");
+}
+
+/**
+ * The subject band, which is one line by contract and one line in fact.
+ *
+ * A renderer builds a subject from published arguments — a path, a command's
+ * first line, a pattern — and a published string may contain a newline. The
+ * shell enforces the band rather than trusting every renderer to, so an
+ * argument with embedded newlines cannot turn the always-visible band into an
+ * unbounded one.
+ */
+function pushSubject(lines: string[], call: ToolCallPresentation): void {
+  if (call.subject === undefined || call.subject.length === 0) {
+    return;
+  }
+  const [first, ...rest] = call.subject.split("\n");
+  lines.push(`  ${first ?? ""}${rest.length === 0 ? "" : role.meta(" …")}`);
+}
+
+/** The settled bands: reason, summary, bounded body, runtime truncation. */
+function pushResult(
+  lines: string[],
+  renderer: ToolPresentationRenderer,
+  tool: CorrelatedTool,
+  args: unknown,
+  context: ToolRenderContext,
+): void {
+  if (tool.lifecycle.type !== "settled") {
+    return;
+  }
+  const result = tool.lifecycle.result;
+  for (const line of resultBody(renderer, result, args, context)) {
+    lines.push(`  ${line}`);
+  }
+  for (const line of terminalDetail(result)) {
+    lines.push(`  ${line}`);
+  }
 }
 
 /**
@@ -82,6 +179,7 @@ export function renderToolCard(
 function presentCall(
   presentation: ToolCallPresentation | undefined,
   tool: CorrelatedTool,
+  context: ToolRenderContext,
 ): ToolCallPresentation {
   const fallbackTitle = tool.name || tool.toolId;
   if (presentation === undefined) {
@@ -91,7 +189,7 @@ function presentCall(
     return {
       title: fallbackTitle,
       subject: generic?.subject,
-      lines: generic?.lines ?? rawArgumentLines(tool),
+      detail: generic?.detail ?? rawArgumentLines(tool, context),
     };
   }
   return {
@@ -100,10 +198,23 @@ function presentCall(
   };
 }
 
-/** Arguments that are not JSON yet are still shown, verbatim and bounded. */
-function rawArgumentLines(tool: CorrelatedTool): string[] {
+/**
+ * Arguments that are not JSON yet, shown verbatim and bounded.
+ *
+ * A streaming fragment has no line structure to bound, so this band is bounded
+ * by characters. It is bounded *here*, before the line budget applies, so a
+ * single 100 kB fragment cannot pass through as "one line".
+ */
+function rawArgumentLines(
+  tool: CorrelatedTool,
+  context: ToolRenderContext,
+): string[] {
   const text = tool.argumentsText.trim();
-  return text.length === 0 ? [] : [role.meta(text)];
+  // Character bound first, then hand ordinary lines to the shell's line
+  // budget: a fragment is bounded whether its bulk is width or height.
+  return previewText(text, context, RAW_FRAGMENT_PREVIEW_CHARS)
+    .flatMap((chunk) => chunk.split("\n"))
+    .map((line) => role.meta(line));
 }
 
 function resultBody(
@@ -112,19 +223,27 @@ function resultBody(
   args: unknown,
   context: ToolRenderContext,
 ): string[] {
-  const specialized = renderer.renderResult?.(result, args, context);
-  const body = specialized ?? genericResultLines(result, context);
+  const specialized: ToolResultPresentation | undefined =
+    renderer.renderResult?.(result, args);
+  const body = specialized ?? genericResultLines(result);
 
   // A failure or denial reason is runtime-published prose and is always
-  // shown, whatever the renderer decided about the body.
+  // shown, whatever the renderer decided about the body. It is prose the
+  // runtime wrote, so it gets its own budget rather than none at all: the
+  // beginning of the explanation is always on screen, and a pathologically
+  // long one still cannot fill the terminal.
   const reason: string[] = [];
   if (result.status.type === "failed") {
-    reason.push(role.error(result.status.error));
+    reason.push(...toLines(result.status.error).map((line) => role.error(line)));
   }
   if (result.status.type === "denied") {
-    reason.push(role.warning(result.status.reason));
+    reason.push(...toLines(result.status.reason).map((line) => role.warning(line)));
   }
-  return [...reason, ...body];
+  return [
+    ...preview(reason, context, "reason line"),
+    ...(body.summary ?? []),
+    ...preview(body.detail ?? [], context),
+  ];
 }
 
 /**

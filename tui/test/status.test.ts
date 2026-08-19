@@ -168,12 +168,12 @@ describe("footer", () => {
       }),
       "connected",
     );
-    assert.match(rendered, /beta\/model-b/, "the desired session model");
+    assert.match(rendered, /cfg beta\/model-b/, "the desired session model");
     assert.match(rendered, /attempt alpha\/model-a/, "the frozen attempt model");
     assert.match(rendered, /running · turn 2/);
   });
 
-  it("collapses to one model when both agree", () => {
+  it("collapses to one model when all of them agree", () => {
     const rendered = footer(
       stateOf({
         model: sessionModel("alpha/model-a"),
@@ -182,6 +182,62 @@ describe("footer", () => {
       "connected",
     );
     assert.ok(!rendered.includes("attempt alpha/model-a"));
+    assert.ok(!rendered.includes("cfg "), "no labels are needed when nothing differs");
+    assert.match(rendered, /alpha\/model-a/);
+  });
+
+  it("shows the effective model when the session cannot use what it configured", () => {
+    // Configured A, effective B, no attempt: both are runtime facts and the
+    // footer must not silently present one as the other.
+    const rendered = footer(
+      stateOf({
+        model: {
+          ...sessionModel("beta/model-b"),
+          configured: { model: "alpha/model-a" },
+        },
+      }),
+      "connected",
+    );
+    assert.match(rendered, /cfg alpha\/model-a/);
+    assert.match(rendered, /eff beta\/model-b/);
+  });
+
+  it("keeps configured, effective, and attempt when all three differ", () => {
+    const rendered = footer(
+      stateOf({
+        model: {
+          ...sessionModel("beta/model-b"),
+          configured: { model: "alpha/model-a" },
+        },
+        attempt: attemptView({ model: attemptModel("gamma/model-c") }),
+      }),
+      "connected",
+    );
+    assert.match(rendered, /cfg alpha\/model-a/);
+    assert.match(rendered, /eff beta\/model-b/, "the effective model is never dropped");
+    assert.match(rendered, /attempt gamma\/model-c/);
+  });
+
+  it("never drops a model identity to make a narrow terminal fit", () => {
+    // The layout degrades by dropping optional segments and by wrapping. It
+    // may not drop a model identity, and it may not truncate one into a
+    // shorter identity that names a different model.
+    const rendered = footer(
+      stateOf({
+        model: {
+          ...sessionModel("beta/model-b"),
+          configured: { model: "alpha/model-a" },
+        },
+        attempt: attemptView({ model: attemptModel("gamma/model-c") }),
+        capabilities: { revision: 3 },
+      }),
+      "connected",
+      24,
+    );
+    assert.match(rendered, /cfg alpha\/model-a/);
+    assert.match(rendered, /eff beta\/model-b/);
+    assert.match(rendered, /attempt gamma\/model-c/);
+    assert.ok(!rendered.includes("…"), "an identity is never elided into a prefix");
   });
 
   it("shows a settled attempt's outcome rather than a phase", () => {

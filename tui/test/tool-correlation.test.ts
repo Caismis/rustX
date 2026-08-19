@@ -164,6 +164,194 @@ describe("correlation identity", () => {
   });
 });
 
+describe("tool-result chronology", () => {
+  /**
+   * The fold invariant, proven at the level a reader sees.
+   *
+   * > A committed tool result is folded into its call's card only when
+   * > folding cannot move it across unrelated canonical content.
+   *
+   * rustX's canonical model permits `text, tool_call, text` — an
+   * `AssistantMessageBlock` is a plain block vector, and `StructuralIndex`
+   * rejects only duplicate calls, duplicate results, and orphan results — so
+   * this is a shape the TUI must render, not a shape it may assume away.
+   */
+  it("keeps a later result after intervening text, as one split card", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "text", text: "A" },
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
+          { type: "text", text: "B" },
+        ]),
+        toolMessage("m2", "call-1", "tool-bash", toolResult({
+          content: [{ type: "text", text: "842 passed" }],
+          exit_code: 0,
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    // Canonical order: A, the call, B, the result. Exactly what is drawn.
+    assert.equal(rendered.length, 4);
+    assert.equal(rendered[0], "A");
+    assert.match(rendered[1] ?? "", /Bash/);
+    assert.match(rendered[1] ?? "", /\$ cargo test/);
+    assert.match(rendered[1] ?? "", /result below/);
+    assert.equal(rendered[2], "B");
+    assert.match(rendered[3] ?? "", /↳/, "the result is the same card continuing");
+    assert.match(rendered[3] ?? "", /Bash/);
+    assert.match(rendered[3] ?? "", /842 passed/);
+
+    // One identity, two fragments — never the pre-#79 duplication of a raw
+    // call block, a separate running card, and a separate result block.
+    assert.ok(!(rendered[1] ?? "").includes("842 passed"), "no reordering");
+    assert.ok(!(rendered[3] ?? "").includes("result below"));
+    assert.ok(!rendered.some((block) => block.includes('"command"')));
+  });
+
+  it("still folds when the call is the last block of its message", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "text", text: "A" },
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "cargo test" }),
+        ]),
+        toolMessage("m2", "call-1", "tool-bash"),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 2, "one text block and one whole card");
+    assert.equal(rendered[0], "A");
+    assert.match(rendered[1] ?? "", /ok/);
+    assert.ok(!(rendered[1] ?? "").includes("result below"));
+    assert.ok(!(rendered[1] ?? "").includes("↳"));
+  });
+
+  it("folds a whole trailing batch of parallel calls", () => {
+    // Calls and results of one batch are related content, so folding moves
+    // nothing across anything unrelated and each call stays one card.
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          { type: "text", text: "A" },
+          toolCallBlock("call-a", "tool-bash", "bash", { command: "one" }),
+          toolCallBlock("call-b", "tool-bash", "bash", { command: "two" }),
+        ]),
+        toolMessage("m2", "call-a", "tool-bash"),
+        toolMessage("m3", "call-b", "tool-bash"),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 3);
+    assert.match(rendered[1] ?? "", /\$ one/);
+    assert.match(rendered[1] ?? "", /ok/);
+    assert.match(rendered[2] ?? "", /\$ two/);
+    assert.match(rendered[2] ?? "", /ok/);
+    assert.ok(!rendered.some((block) => block.includes("↳")));
+  });
+
+  it("splits every call of a mixed message, never only the trailing ones", () => {
+    // Folding just `call-b` would draw its result before `call-a`'s, which
+    // canonical order puts first. The decision is per message for that reason.
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-a", "tool-bash", "bash", { command: "one" }),
+          { type: "text", text: "B" },
+          toolCallBlock("call-b", "tool-bash", "bash", { command: "two" }),
+        ]),
+        toolMessage("m2", "call-a", "tool-bash", toolResult({
+          content: [{ type: "text", text: "first result" }],
+        })),
+        toolMessage("m3", "call-b", "tool-bash", toolResult({
+          content: [{ type: "text", text: "second result" }],
+        })),
+      ],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 5);
+    assert.match(rendered[0] ?? "", /\$ one/);
+    assert.equal(rendered[1], "B");
+    assert.match(rendered[2] ?? "", /\$ two/);
+    assert.match(rendered[3] ?? "", /first result/);
+    assert.match(rendered[4] ?? "", /second result/);
+  });
+
+  it("draws a whole card when the result has no call anchor at all", () => {
+    // The assistant message was never committed, so the result is the only
+    // place this call is visible and it may not render as a fragment.
+    const state = stateOf({
+      messages: [toolMessage("m1", "call-1", "tool-bash")],
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    assert.equal(rendered.length, 1);
+    assert.ok(!(rendered[0] ?? "").includes("↳"));
+    assert.match(rendered[0] ?? "", /ok/);
+  });
+
+  it("expands both fragments of a split card as one entity", () => {
+    const body = Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n");
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-1", "tool-bash", "bash", {
+            command: Array.from({ length: 30 }, (_, i) => `echo ${i}`).join("\n"),
+          }),
+          { type: "text", text: "B" },
+        ]),
+        toolMessage("m2", "call-1", "tool-bash", toolResult({
+          content: [{ type: "text", text: body }],
+        })),
+      ],
+    });
+    const collapsed = renderTranscript(state, prefs()).map(blockText);
+    assert.ok(!collapsed.some((block) => block.includes("echo 29")));
+    assert.ok(!collapsed.some((block) => block.includes("line 29")));
+
+    const opened = renderTranscript(
+      state,
+      prefs({ expandedToolCalls: new Set(["call-1"]) }),
+    ).map(blockText);
+    assert.ok(opened.some((block) => block.includes("echo 29")));
+    assert.ok(opened.some((block) => block.includes("line 29")));
+  });
+
+  it("splits a streaming call the same way once its result commits", () => {
+    const state = stateOf({
+      messages: [
+        assistantBlocks("m1", [
+          toolCallBlock("call-1", "tool-bash", "bash", { command: "ls" }),
+          { type: "text", text: "B" },
+        ]),
+        toolMessage("m2", "call-1", "tool-bash"),
+      ],
+      attempt: attemptView({
+        foreground: [
+          foreground("call-1", "tool-bash", "bash", {
+            type: "settled",
+            arguments: '{"command":"ls"}',
+            result: toolResult(),
+          }),
+        ],
+      }),
+    });
+    const rendered = renderTranscript(state, prefs()).map(blockText);
+
+    // The foreground projection agrees the call settled; that does not move
+    // the result's canonical position.
+    assert.equal(rendered.length, 3);
+    assert.match(rendered[0] ?? "", /result below/);
+    assert.ok(!(rendered[0] ?? "").includes("ok"));
+    assert.equal(rendered[1], "B");
+    assert.match(rendered[2] ?? "", /↳/);
+  });
+});
+
 describe("lifecycle progression", () => {
   /** Drives the reducer through one call's full event sequence. */
   function driveToRunning() {

@@ -5,15 +5,29 @@
  * Select model
  * Search: sonnet▌
  *
- * ❯ alpha/claude-sonnet-x                              current
+ * ❯ alpha/claude-sonnet-x                              configured
  *     Messages · 200k ctx · 8k out · tools · text,image
- *     reasoning: low medium high (default medium)
- *   beta/gpt-x
+ *     catalog reasoning: low medium high (catalog default medium)
+ *   beta/gpt-x                                         effective
  *     Responses · 272k ctx · 16k out · tools · text
- *     reasoning: unsupported
+ *     catalog reasoning: unsupported
+ *
+ * configured  alpha/claude-sonnet-x
+ * effective   beta/gpt-x
+ * attempt     gamma/older-x · frozen at admission
+ * configured reasoning  profile high
+ * effective reasoning   on (profile medium)
  *
  * ↑↓ navigate · Enter select · Esc close
  * ```
+ *
+ * Two kinds of fact share this overlay and are never merged. A row describes
+ * the **catalog**: what a model offers, and which reasoning profile the
+ * catalog would fall back to. The context block below describes the
+ * **session and the attempt**: what was configured, what is effective, and
+ * what a running attempt froze. A catalog default is never labelled as the
+ * current configuration, and a row is never labelled `current` when
+ * `current` could mean either configured or effective.
  *
  * Every value shown is a `CatalogModelView` field the runtime published
  * through `model_catalog_get`. This component does not read `models.json`,
@@ -37,9 +51,14 @@ import {
 
 import type {
   CatalogModelView,
+  ModelRef,
   SessionModelView,
 } from "../../protocol/types.ts";
 import type { AttemptPresentation } from "../../presentation/state.ts";
+import {
+  describeConfiguredReasoning,
+  describeReasoning,
+} from "../../presentation/selectors.ts";
 import { role, style, plainText, plainWidth } from "../theme.ts";
 
 /** How many rows the list shows before it scrolls. */
@@ -188,11 +207,8 @@ export class ModelSelector implements Component, Focusable {
   ): string[] {
     const marker = selected ? role.accent("❯") : " ";
     const name = selected ? style.bold(model.model) : model.model;
-    const current =
-      model.model === this.#sessionModel.configured.model
-        ? ` ${role.success("current")}`
-        : "";
-    const head = `${marker} ${name}${current}`;
+    const roles = this.#rolesOf(model.model);
+    const head = `${marker} ${name}${roles.length === 0 ? "" : ` ${role.success(roles.join(" · "))}`}`;
     const rows = [truncate(head, width)];
     // Details only for the highlighted row, so the list stays scannable.
     if (selected) {
@@ -203,6 +219,36 @@ export class ModelSelector implements Component, Focusable {
   }
 
   /**
+   * Which session/attempt roles one catalog row currently holds.
+   *
+   * `current` is used only when there is exactly one thing it can mean —
+   * configured, effective, and any attempt all point at this row. The moment
+   * they diverge every role is named, so a row is never ambiguous about
+   * whether it is what was asked for or what is actually in use.
+   */
+  #rolesOf(model: ModelRef): string[] {
+    const configured = this.#sessionModel.configured.model;
+    const effective = this.#sessionModel.effective.model;
+    const attempt = this.#attempt?.model.primary.model;
+    const unified =
+      configured === effective && (attempt === undefined || attempt === effective);
+    if (unified) {
+      return model === configured ? ["current"] : [];
+    }
+    const roles: string[] = [];
+    if (model === configured) {
+      roles.push("configured");
+    }
+    if (model === effective) {
+      roles.push("effective");
+    }
+    if (attempt !== undefined && model === attempt) {
+      roles.push("attempt");
+    }
+    return roles;
+  }
+
+  /**
    * The configured/effective/attempt-frozen model context.
    *
    * The three identities are distinct rustX facts and the selector says so
@@ -210,19 +256,42 @@ export class ModelSelector implements Component, Focusable {
    * left believing the running attempt switched with it.
    */
   #renderContext(): string[] {
-    const lines: string[] = [
-      role.meta(
-        `configured ${this.#sessionModel.configured.model} · effective ${this.#sessionModel.effective.model}`,
-      ),
-    ];
+    const session = this.#sessionModel;
+    const configured = session.configured.model;
+    const effective = session.effective.model;
+    const lines: string[] = [];
+    if (configured === effective) {
+      lines.push(role.meta(`configured · effective  ${configured}`));
+    } else {
+      // Two distinct runtime facts, so two distinct lines. Collapsing them
+      // into one "current" would hide that the session cannot use what it
+      // asked for.
+      lines.push(role.meta(`configured  ${configured}`));
+      lines.push(role.meta(`effective   ${effective}`));
+    }
+
     const attempt = this.#attempt;
-    if (attempt !== undefined && attempt.phase.type !== "settled") {
+    if (attempt !== undefined) {
+      const frozen = attempt.model.primary.model;
       lines.push(
-        role.pending(
-          `the running attempt stays on ${attempt.model.primary.model}; a change applies to the next attempt`,
-        ),
+        attempt.phase.type === "settled"
+          ? role.meta(`attempt     ${frozen} · frozen at admission (settled)`)
+          : role.pending(
+              `attempt     ${frozen} · frozen at admission; a change applies to the next attempt`,
+            ),
       );
     }
+
+    // The session's own reasoning configuration, which is neither a catalog
+    // default nor something this overlay may change: only `model_set` does.
+    lines.push(
+      role.meta(
+        `configured reasoning  ${describeConfiguredReasoning(session.configured)}`,
+      ),
+    );
+    lines.push(
+      role.meta(`effective reasoning   ${describeReasoning(session.effective)}`),
+    );
     return lines;
   }
 }
@@ -241,27 +310,29 @@ export function capabilityLine(model: CatalogModelView): string {
 }
 
 /**
- * The reasoning profiles the catalog published, exactly as published.
+ * The reasoning profiles the *catalog* published, exactly as published.
  *
  * Three genuinely different cases, kept different: unsupported, supported
  * with selectable profiles, and supported with none.
  */
 export function reasoningLine(model: CatalogModelView): string {
   if (!model.effectiveCapabilities.reasoning) {
-    return "reasoning: unsupported";
+    return "catalog reasoning: unsupported";
   }
   const profiles = model.reasoningProfiles ?? [];
   if (profiles.length === 0) {
-    return "reasoning: supported, no selectable profile";
+    return "catalog reasoning: supported, no selectable profile";
   }
   const names = profiles
     .map((profile) => (profile.enabled ? profile.id : `${profile.id} (off)`))
     .join(" ");
+  // Explicitly the *catalog's* fallback. It is not evidence that the session
+  // configured this profile, and the context block below says what it did.
   const fallback =
     model.defaultReasoningProfile === undefined
       ? ""
-      : ` (default ${model.defaultReasoningProfile})`;
-  return `reasoning: ${names}${fallback}`;
+      : ` (catalog default ${model.defaultReasoningProfile})`;
+  return `catalog reasoning: ${names}${fallback}`;
 }
 
 /** The protocol name, shortened for a list row. Cosmetic only. */

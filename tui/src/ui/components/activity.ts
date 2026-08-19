@@ -14,6 +14,10 @@
  * Background executions and interactions stay runtime-owned. Hiding a card
  * cancels nothing, an empty section is not evidence of settlement, and this
  * client never simulates either lifecycle locally.
+ *
+ * Background cards are keyed by `ToolExecutionId` and foreground cards by
+ * `ToolCallId`. Those are two runtime identity domains, so their expansion
+ * preferences are two sets — never one string set both would index.
  */
 
 import type {
@@ -27,7 +31,11 @@ import {
   isBackgroundTerminal,
   originLabel,
 } from "../../presentation/selectors.ts";
-import { type PresentationPreferences, isExpanded } from "../preferences.ts";
+import {
+  type PresentationPreferences,
+  isBackgroundExecutionExpanded,
+  isToolCallExpanded,
+} from "../preferences.ts";
 import { role, style } from "../theme.ts";
 import { renderToolCard, describeProgress, statusLabel } from "./tool-card.ts";
 import { formatJson, preview } from "./tool-renderers.ts";
@@ -50,7 +58,7 @@ export function renderOrphanExecutions(
     role.meta("Executions from an uncommitted turn"),
     ...correlation.orphans.map((tool) =>
       renderToolCard(tool, {
-        expanded: isExpanded(preferences, tool.callId),
+        expanded: isToolCallExpanded(preferences, tool.callId),
         previewLines: preferences.previewLines,
       }),
     ),
@@ -103,8 +111,11 @@ export function renderBackground(
         body.push(...formatJson(content.value));
       }
     }
+    // Keyed by `ToolExecutionId`, in its own preference domain: a foreground
+    // `ToolCallId` that happens to serialize to the same string is a different
+    // identity and never expands this card.
     for (const line of preview(body, {
-      expanded: isExpanded(preferences, execution.execution_id),
+      expanded: isBackgroundExecutionExpanded(preferences, execution.execution_id),
       previewLines: preferences.previewLines,
     })) {
       lines.push(`  ${line}`);

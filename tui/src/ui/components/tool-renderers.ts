@@ -16,8 +16,14 @@
  *
  * A renderer may:
  *   format a title, the published arguments, the normalized result content,
- *   a deterministic diff derivable from those arguments, and a bounded
- *   preview of any of it.
+ *   and a deterministic diff derivable from those arguments.
+ *
+ * A renderer does **not** decide how much of that is shown. Every renderer
+ * here is context-free: it separates what must always be visible (a title, a
+ * one-line subject, a runtime-published summary) from verbose *detail*, and
+ * the card shell in {@link ./tool-card.ts} applies the collapse budget to the
+ * detail. That keeps progressive disclosure in one place instead of asking
+ * every present and future renderer to remember to truncate itself.
  *
  * A renderer may not:
  *   execute anything, touch the filesystem, shell out, make a network
@@ -35,17 +41,36 @@
 import type { ToolExecutionResult, ToolId } from "../../protocol/types.ts";
 import { role, style } from "../theme.ts";
 
-/** What a renderer says about the call itself. */
+/**
+ * What a renderer says about the call itself.
+ *
+ * `subject` is the one-line identity of the call and is always drawn.
+ * `detail` is everything verbose — argument JSON, a diff, the continuation
+ * lines of a multiline command — and is what the card shell bounds.
+ */
 export interface ToolCallPresentation {
   /** The display title, e.g. `Bash`. */
   title: string;
-  /** The one-line subject, e.g. `$ cargo test --all`. */
+  /** The one-line subject, e.g. `$ cargo test --all`. Always visible. */
   subject?: string;
-  /** Further lines describing the call, e.g. a deterministic diff. */
-  lines?: string[];
+  /** Verbose call detail, e.g. a deterministic diff. Bounded when collapsed. */
+  detail?: string[];
 }
 
-/** How much of a long body a collapsed card shows. */
+/**
+ * What a renderer says about the settled result.
+ *
+ * `summary` is runtime-published shape a reader needs even when collapsed —
+ * `2 matches`, `applied 1 replacement`, `(no output)`. `detail` is the body.
+ */
+export interface ToolResultPresentation {
+  /** Short runtime-published summary lines. Always visible. */
+  summary?: string[];
+  /** The verbose result body. Bounded when collapsed. */
+  detail?: string[];
+}
+
+/** How much of a long detail section a collapsed card shows. */
 export interface ToolRenderContext {
   expanded: boolean;
   previewLines: number;
@@ -56,15 +81,16 @@ export interface ToolRenderContext {
  *
  * Both methods are total over "shapes I understand" and return `undefined`
  * for everything else, which is what makes the generic fallback mandatory
- * rather than aspirational.
+ * rather than aspirational. Neither receives a {@link ToolRenderContext}: a
+ * renderer cannot see whether its card is expanded, so it cannot participate
+ * in — or forget to participate in — progressive disclosure.
  */
 export interface ToolPresentationRenderer {
   renderCall(args: unknown): ToolCallPresentation | undefined;
   renderResult?(
     result: ToolExecutionResult,
     args: unknown,
-    context: ToolRenderContext,
-  ): string[] | undefined;
+  ): ToolResultPresentation | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,14 +132,17 @@ export function toLines(body: string): string[] {
 }
 
 /**
- * Bounds a body for a collapsed card.
+ * Bounds one detail section for a collapsed card.
  *
  * This is a *client visual collapse* and says nothing about the runtime's own
  * `TruncationState`, which the card reports separately and unconditionally.
+ * `noun` names what was hidden so a card carrying both a long call detail and
+ * a long result says which is which.
  */
 export function preview(
   lines: string[],
   context: ToolRenderContext,
+  noun = "line",
 ): string[] {
   if (context.expanded || lines.length <= context.previewLines) {
     return lines;
@@ -121,7 +150,29 @@ export function preview(
   const hidden = lines.length - context.previewLines;
   return [
     ...lines.slice(0, context.previewLines),
-    role.meta(`… ${hidden} more ${hidden === 1 ? "line" : "lines"} · ctrl+o to expand`),
+    role.meta(`… ${hidden} more ${hidden === 1 ? noun : `${noun}s`} · ctrl+o to expand`),
+  ];
+}
+
+/**
+ * Bounds one unbroken string for a collapsed card.
+ *
+ * A partially streamed argument fragment has no line structure to bound, so
+ * the raw fallback is bounded by characters instead. Expanding shows the whole
+ * fragment the client already holds; nothing is re-fetched to produce it.
+ */
+export function previewText(
+  value: string,
+  context: ToolRenderContext,
+  budget: number,
+): string[] {
+  if (context.expanded || value.length <= budget) {
+    return value.length === 0 ? [] : [value];
+  }
+  const hidden = value.length - budget;
+  return [
+    value.slice(0, budget),
+    role.meta(`… ${hidden} more characters · ctrl+o to expand`),
   ];
 }
 
@@ -176,13 +227,16 @@ export const genericRenderer: ToolPresentationRenderer = {
     }
     const fields = record(args);
     if (fields === undefined) {
-      return { title: "", lines: formatJson(args) };
+      return { title: "", detail: formatJson(args) };
     }
     const keys = Object.keys(fields);
     if (keys.length === 0) {
       return { title: "" };
     }
-    return { title: "", lines: formatJson(fields) };
+    // Arbitrarily large argument objects are normal for MCP and Python tools.
+    // The whole object is formatted here and bounded by the card shell, so a
+    // few hundred lines of JSON never dominate a collapsed card.
+    return { title: "", detail: formatJson(fields) };
   },
 };
 
@@ -195,22 +249,23 @@ export const genericRenderer: ToolPresentationRenderer = {
  */
 export function genericResultLines(
   result: ToolExecutionResult,
-  context: ToolRenderContext,
-): string[] {
-  const lines = resultText(result);
+): ToolResultPresentation {
+  const detail = resultText(result);
   const json = resultJson(result);
   if (json !== undefined) {
-    lines.push(...formatJson(json));
+    detail.push(...formatJson(json));
   }
+  // Non-textual content markers are body, not summary: a result carrying a
+  // hundred file blocks is a hundred lines of detail and is bounded as such.
   for (const content of result.content ?? []) {
     if (content.type === "file") {
-      lines.push(role.meta("(file)"));
+      detail.push(role.meta("(file)"));
     }
     if (content.type === "image") {
-      lines.push(role.meta("(image)"));
+      detail.push(role.meta("(image)"));
     }
   }
-  return preview(lines, context);
+  return { detail };
 }
 
 // ---------------------------------------------------------------------------
@@ -235,10 +290,12 @@ const bashRenderer: ToolPresentationRenderer = {
       subject: `${role.chrome("$")} ${first ?? ""}${
         timeout === undefined ? "" : ` ${role.meta(`(timeout ${timeout}s)`)}`
       }`,
-      lines: rest.map((line) => `  ${line}`),
+      // The remaining lines of a multiline command are call *detail*: the
+      // first line identifies the call, the rest is bounded by the shell.
+      detail: rest.map((line) => `  ${line}`),
     };
   },
-  renderResult(result, _args, context) {
+  renderResult(result, _args) {
     // Bash publishes `{exit_code, stdout, stderr, combined}`. The combined
     // stream is what a person reads; the exit code is shown by the card
     // shell, from the runtime's own `exit_code` field.
@@ -254,9 +311,9 @@ const bashRenderer: ToolPresentationRenderer = {
         ? toLines(combined)
         : [...toLines(stdout ?? ""), ...toLines(stderr ?? "")];
     if (body.length === 0) {
-      return [role.meta("(no output)")];
+      return { summary: [role.meta("(no output)")] };
     }
-    return preview(body, context);
+    return { detail: body };
   },
 };
 
@@ -275,15 +332,15 @@ const readRenderer: ToolPresentationRenderer = {
       // Only the window the model actually asked for is stated. The runtime's
       // own defaults are not restated here, because a default is a runtime
       // decision and this client is not its second owner.
-      lines: window(offset, limit),
+      detail: window(offset, limit),
     };
   },
-  renderResult(result, _args, context) {
+  renderResult(result, _args) {
     const body = resultText(result);
     if (body.length === 0) {
       return undefined;
     }
-    return preview(body, context);
+    return { detail: body };
   },
 };
 
@@ -325,10 +382,10 @@ const grepRenderer: ToolPresentationRenderer = {
     return {
       title: "Grep",
       subject: style.yellow(JSON.stringify(pattern)),
-      lines: scope.length === 0 ? [] : [role.meta(scope.join(" · "))],
+      detail: scope.length === 0 ? [] : [role.meta(scope.join(" · "))],
     };
   },
-  renderResult(result, _args, context) {
+  renderResult(result, _args) {
     const payload = record(resultJson(result));
     const matches = payload?.["matches"];
     if (!Array.isArray(matches)) {
@@ -344,7 +401,9 @@ const grepRenderer: ToolPresentationRenderer = {
       const body = text(entry?.["text"]) ?? "";
       return `${role.accent(path)}${line === undefined ? "" : role.chrome(`:${line}`)} ${body.trim()}`;
     });
-    return [summary, ...preview(rows, context)];
+    // The count is a runtime-published fact and stays visible when collapsed;
+    // the rows are the detail the shell bounds.
+    return { summary: [summary], detail: rows };
   },
 };
 
@@ -359,10 +418,10 @@ const globRenderer: ToolPresentationRenderer = {
     return {
       title: "Glob",
       subject: style.yellow(pattern),
-      lines: path === undefined ? [] : [role.meta(path)],
+      detail: path === undefined ? [] : [role.meta(path)],
     };
   },
-  renderResult(result, _args, context) {
+  renderResult(result, _args) {
     const payload = record(resultJson(result));
     const results = payload?.["results"];
     if (!Array.isArray(results)) {
@@ -371,13 +430,10 @@ const globRenderer: ToolPresentationRenderer = {
     const summary = role.meta(
       `${results.length} ${results.length === 1 ? "path" : "paths"}`,
     );
-    return [
-      summary,
-      ...preview(
-        results.map((entry) => text(entry) ?? String(entry)),
-        context,
-      ),
-    ];
+    return {
+      summary: [summary],
+      detail: results.map((entry) => text(entry) ?? String(entry)),
+    };
   },
 };
 
@@ -392,7 +448,7 @@ const editRenderer: ToolPresentationRenderer = {
     // The diff is built only from what the model published. The workspace is
     // never read to reconstruct surrounding context — the TUI has no
     // filesystem access and must not acquire one to draw a nicer card.
-    const lines: string[] = [
+    const detail: string[] = [
       role.meta(
         `${edits.length} ${edits.length === 1 ? "replacement" : "replacements"}`,
       ),
@@ -404,10 +460,12 @@ const editRenderer: ToolPresentationRenderer = {
       if (oldText === undefined || newText === undefined) {
         continue;
       }
-      lines.push(...toLines(oldText).map((line) => style.red(`- ${line}`)));
-      lines.push(...toLines(newText).map((line) => style.green(`+ ${line}`)));
+      detail.push(...toLines(oldText).map((line) => style.red(`- ${line}`)));
+      detail.push(...toLines(newText).map((line) => style.green(`+ ${line}`)));
     }
-    return { title: "Edit", subject: path, lines };
+    // A large replacement produces a large diff. It is call detail, so the
+    // card shell bounds it: a collapsed Edit card never dumps a whole file.
+    return { title: "Edit", subject: path, detail };
   },
   renderResult(result, _args) {
     const payload = record(resultJson(result));
@@ -415,11 +473,13 @@ const editRenderer: ToolPresentationRenderer = {
     if (replacements === undefined) {
       return undefined;
     }
-    return [
-      role.meta(
-        `applied ${replacements} ${replacements === 1 ? "replacement" : "replacements"}`,
-      ),
-    ];
+    return {
+      summary: [
+        role.meta(
+          `applied ${replacements} ${replacements === 1 ? "replacement" : "replacements"}`,
+        ),
+      ],
+    };
   },
 };
 
@@ -435,7 +495,7 @@ const writeRenderer: ToolPresentationRenderer = {
     return {
       title: "Write",
       subject: path,
-      lines: [
+      detail: [
         role.meta(`${lineCount} ${lineCount === 1 ? "line" : "lines"}`),
       ],
     };
@@ -447,7 +507,11 @@ const writeRenderer: ToolPresentationRenderer = {
     if (bytes === undefined) {
       return undefined;
     }
-    return [role.meta(`wrote ${bytes} bytes${path === undefined ? "" : ` to ${path}`}`)];
+    return {
+      summary: [
+        role.meta(`wrote ${bytes} bytes${path === undefined ? "" : ` to ${path}`}`),
+      ],
+    };
   },
 };
 
