@@ -251,13 +251,19 @@ mod tests {
     #[test]
     fn absolute_host_paths_outside_every_root_are_rejected() {
         let roots = roots();
+        // A real absolute file outside every authorized root (a fresh
+        // tempdir), so the assertion does not depend on a platform-specific
+        // host path existing.
+        let outside = tempfile::tempdir().expect("outside");
+        fs::write(outside.path().join("outside.txt"), "outside").expect("outside file");
+        let outside_locator = absolute(&outside.path().join("outside.txt"));
         for operation in [LocatorOperation::Read, LocatorOperation::Mutate] {
             assert!(
                 matches!(
                     resolve(
                         &roots.workspace,
                         &roots.tool_output,
-                        "/etc/hostname",
+                        &outside_locator,
                         operation
                     ),
                     Err(LocatorError::OutsideAuthorizedRoots(_))

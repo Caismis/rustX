@@ -141,7 +141,10 @@ mod tests {
             .expect("canonical")
             .join("a/b/f.txt");
         assert_eq!(workspace.relative(&canonical).as_deref(), Some("a/b/f.txt"));
-        assert_eq!(workspace.relative(dir.path()).as_deref(), Some(""));
+        // The root itself resolves to the empty relative path. Compare
+        // against the canonical root (on macOS /var is a /private/var link).
+        let canonical_root = dir.path().canonicalize().expect("canonical root");
+        assert_eq!(workspace.relative(&canonical_root).as_deref(), Some(""));
         assert_eq!(workspace.relative(Path::new("/etc")), None);
     }
 }

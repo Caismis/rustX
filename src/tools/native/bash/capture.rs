@@ -416,7 +416,14 @@ mod tests {
         assert!(settled.truncated);
         assert_eq!(settled.total_bytes, 71);
         let spill = settled.spill_path.expect("the spill locator");
-        assert_eq!(spill, root.join("output_1.log"));
+        // The store canonicalizes its root once at construction, so compare
+        // against the canonical root (on macOS /var is a /private/var link).
+        let canonical_root = root.canonicalize().expect("canonical root");
+        assert_eq!(spill, canonical_root.join("output_1.log"));
+        assert!(
+            spill.starts_with(store().root()),
+            "the spill locator lives under the canonical managed root"
+        );
         let mut expected = vec![b'a'; 60];
         expected.extend_from_slice(b"cross-after");
         assert_eq!(
