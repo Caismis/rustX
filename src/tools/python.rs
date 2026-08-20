@@ -21,6 +21,7 @@
 //! ├── python-tool-envs/<PythonToolEnvironmentDigest>/
 //! │   └── RUSTX_ENV_MANIFEST.json     # exact deterministic input lock
 //! ├── python-tool-bindings/<ToolVersionId>/<PythonToolEnvironmentDigest>.json
+//! ├── uv-cache/                       # store-private uv cache (scratch state)
 //! └── python-invocations/execution-N/ # per-invocation writable execution
 //!                                     # materialization (deleted at settlement)
 //! ```
@@ -1037,6 +1038,14 @@ async fn materialize_environment(
         environment_entries.push((
             "UV_PROJECT_ENVIRONMENT".to_owned(),
             final_root.display().to_string(),
+        ));
+        // The uv cache is store-private scratch state: without this pin,
+        // a cache lookup could resolve relative to the working directory
+        // and write `.cache/uv` into the immutable published ToolVersion
+        // source, corrupting its canonical bytes.
+        environment_entries.push((
+            "UV_CACHE_DIR".to_owned(),
+            inner.root.join("uv-cache").display().to_string(),
         ));
         // The exact interpreter selection: uv must materialize with the same
         // runtime whose identity entered the environment digest. Project-local
