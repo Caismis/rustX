@@ -317,9 +317,71 @@ async fn run_bash(
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
+    // Background executions own a live-output file from the dispatch
+    // commit point on (Issue #86): the file was allocated and advertised
+    // BEFORE this executor began, so every terminal result of this
+    // invocation — including failures before any process exists — must
+    // structurally account for that runtime-owned output lifecycle. The
+    // lifecycle is therefore established first: the sink is opened before
+    // input parsing, platform checks, or spawning, and every early
+    // failure below settles through the typed continuation.
+    let background = matches!(invocation.mode, ToolInvocationMode::Background);
+    let background_output = if background {
+        let Some(execution_id) = context.execution_id else {
+            // Without an execution identity no dispatch ever committed
+            // and no live-output locator was allocated or advertised:
+            // this is the one background path where no BackgroundOutput
+            // lifecycle exists, so `managed_output: None` is truthful.
+            return failed_result(
+                "a background bash invocation requires the runtime execution identity of its \
+                 dispatch; background dispatch goes through the conversation background registry",
+            );
+        };
+        let locator = context.tool_output.background_output_path(execution_id);
+        match context
+            .tool_output
+            .open_background_output_sink(execution_id)
+        {
+            Ok(sink) => Some(EstablishedBackgroundOutput { locator, sink }),
+            Err(error) => {
+                // The advertised live-output sink cannot even be opened:
+                // output storage is unreliable from the start. The
+                // already-advertised locator is retained structurally as
+                // explicitly PARTIAL — never complete, never forgotten,
+                // never hidden inside an error string.
+                return failed_with_continuation(
+                    format!(
+                        "the background output file {} cannot be opened for appending \
+                         ({error}); the command was not started",
+                        locator.display()
+                    ),
+                    ManagedOutputContinuation::Partial {
+                        locator,
+                        diagnostic: format!(
+                            "the advertised live-output sink cannot be opened: {error}"
+                        ),
+                    },
+                );
+            }
+        }
+    } else {
+        None
+    };
     let input = match BashInput::parse(&invocation.arguments) {
         Ok(input) => input,
-        Err(error) => return failed_result(error),
+        Err(error) => {
+            return match background_output {
+                // The command never started: no subprocess textual output
+                // could exist, the advertised file exists and is empty,
+                // and the open sink proves output storage healthy — the
+                // empty live output is a COMPLETE observation of the
+                // execution's textual output while the execution itself
+                // Failed. Status and output completeness are independent
+                // axes.
+                Some(established) => failed_with_complete_empty_output(error, established),
+                None => failed_result(error),
+            };
+        }
     };
     let command = input.command.as_str();
     let explicit_timeout = input.explicit_timeout();
@@ -336,11 +398,74 @@ async fn run_bash(
 
     #[cfg(not(unix))]
     {
-        let _ = (context, timeout);
-        return failed_result("bash requires a Unix platform with /bin/bash");
+        let _ = timeout;
+        return match background_output {
+            Some(established) => failed_with_complete_empty_output(
+                "bash requires a Unix platform with /bin/bash".to_owned(),
+                established,
+            ),
+            None => failed_result("bash requires a Unix platform with /bin/bash"),
+        };
     }
     #[cfg(unix)]
-    run_bash_unix(command, timeout, invocation.mode, context, control).await
+    run_bash_unix(
+        command,
+        timeout,
+        invocation.mode,
+        context,
+        control,
+        background_output,
+    )
+    .await
+}
+
+/// The established background live-output lifecycle of one invocation
+/// (Issue #86): the dispatch-allocated, already-advertised absolute
+/// locator plus its healthy open append sink. Once this exists, every
+/// terminal result of the invocation accounts for the locator
+/// structurally.
+struct EstablishedBackgroundOutput {
+    /// The dispatch-allocated, already-advertised absolute locator.
+    locator: std::path::PathBuf,
+    /// The healthy open append sink: proof that output storage works.
+    #[cfg_attr(not(unix), allow(dead_code))] // only the Unix pipeline appends
+    sink: crate::tools::managed_output::BackgroundOutput,
+}
+
+/// A lifecycle-aware failed Bash result: `continuation` is the typed
+/// managed-output truth the caller derived from the facts of the
+/// failure. Execution status and output completeness are independent
+/// axes.
+fn failed_with_continuation(
+    error: String,
+    continuation: ManagedOutputContinuation,
+) -> ToolExecutionResult {
+    ToolExecutionResult {
+        status: ToolExecutionStatus::Failed { error },
+        content: Vec::new(),
+        duration_ms: 0,
+        exit_code: None,
+        artifacts: Vec::new(),
+        truncation: None,
+        managed_output: Some(continuation),
+    }
+}
+
+/// The `Failed + Complete` early-failure shape: the command never started
+/// (input/setup/platform/spawn failure before any subprocess existed), the
+/// advertised live-output file exists and is empty, and output storage is
+/// healthy (the sink is open), so the empty file is a COMPLETE observation
+/// of the execution's textual output.
+fn failed_with_complete_empty_output(
+    error: String,
+    established: EstablishedBackgroundOutput,
+) -> ToolExecutionResult {
+    failed_with_continuation(
+        error,
+        ManagedOutputContinuation::Complete {
+            locator: established.locator,
+        },
+    )
 }
 
 /// The Unix-only half of [`run_bash`]: spawns the invocation supervisor
@@ -354,41 +479,15 @@ async fn run_bash_unix(
     mode: ToolInvocationMode,
     context: &ToolExecutionContext<'_>,
     control: Option<&BashTestControl>,
+    background_output: Option<EstablishedBackgroundOutput>,
 ) -> ToolExecutionResult {
     #[cfg(not(test))]
     let _ = control;
-    // Background executions own a live-output file from the dispatch commit
-    // point on (Issue #86): the file was allocated and advertised before
-    // this executor began, and every decoded output fragment is appended
-    // from the first byte on, so the model can Read/Grep the output while
-    // the execution runs. The sink is opened before the process spawns: if
-    // the advertised path cannot be written, the invocation fails
-    // explicitly without starting unobservable work.
     let background = matches!(mode, ToolInvocationMode::Background);
-    let background_sink = if background {
-        let Some(execution_id) = context.execution_id else {
-            return failed_result(
-                "a background bash invocation requires the runtime execution identity of its \
-                 dispatch; background dispatch goes through the conversation background registry",
-            );
-        };
-        match context
-            .tool_output
-            .open_background_output_sink(execution_id)
-        {
-            Ok(sink) => Some(sink),
-            Err(error) => {
-                let path = context.tool_output.background_output_path(execution_id);
-                return failed_result(format!(
-                    "the background output file {} cannot be opened for appending ({error}); the \
-                     command was not started and no complete output is available",
-                    path.display()
-                ));
-            }
-        }
-    } else {
-        None
-    };
+    // The background live-output lifecycle was established by the caller
+    // before any failure path (Issue #86): every decoded output fragment
+    // is appended to the dispatch-allocated file from the first byte on,
+    // so the model can Read/Grep the output while the execution runs.
     // The process-ownership half of the invocation (supervisor spawn, the
     // control protocol, cancellation/timeout settlement, catastrophic
     // containment, and the direct-child reap) lives in the shared internal
@@ -410,7 +509,20 @@ async fn run_bash_unix(
     let (mut runner, stdout_pipe, stderr_pipe) =
         match SupervisedCommandRunner::spawn(&spec, runner_control) {
             Ok(parts) => parts,
-            Err(error) => return failed_result(supervisor_spawn_failure(&error)),
+            Err(error) => {
+                return match background_output {
+                    // Every spawn error is raised before the supervisor
+                    // process exists, so no subprocess textual output
+                    // could have been produced: with the sink already
+                    // open (healthy storage), the advertised empty file
+                    // is the complete observation of textual output.
+                    Some(established) => failed_with_complete_empty_output(
+                        supervisor_spawn_failure(&error),
+                        established,
+                    ),
+                    None => failed_result(supervisor_spawn_failure(&error)),
+                };
+            }
         };
 
     let stdout_capture = Arc::new(Mutex::new(PreviewCapture::new(BASH_STREAM_PREVIEW_BYTES)));
@@ -423,7 +535,8 @@ async fn run_bash_unix(
     // dispatch allocated and advertised, from the first fragment on.
     let mut foreground_capture = None;
     let mut background_capture = None;
-    let mut combined_task = if let Some(sink) = background_sink {
+    let mut combined_task = if let Some(established) = background_output {
+        let sink = established.sink;
         #[cfg(test)]
         let append_watch: AppendWatch = control.map(|control| control.background_appends.clone());
         #[cfg(not(test))]

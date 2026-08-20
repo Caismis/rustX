@@ -2288,6 +2288,7 @@ mod tests {
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
     use crate::tools::types::{
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
+        ToolResultContent,
     };
     use crate::tools::workspace::Workspace;
 
@@ -2314,9 +2315,11 @@ mod tests {
     }
 
     struct TestRegistry {
-        _dir: tempfile::TempDir,
         registry: ConversationBackgroundRegistry,
         mailbox: ConversationInboundMailbox,
+        // Declared LAST: fields drop in declaration order, so the registry
+        // and its handles drop before the temporary directory is removed.
+        _dir: tempfile::TempDir,
     }
 
     fn registry(conversation_id: &str) -> TestRegistry {
@@ -3814,6 +3817,331 @@ mod tests {
             "the partial locator survives bounding: {text}"
         );
         assert!(!text.contains("Complete output:"), "{text}");
+    }
+
+    /// A background sink-OPEN failure after the dispatch advertised the
+    /// path never forgets the runtime-owned output lifecycle (Issue #86):
+    /// the execution settles Failed, and the typed continuation retains
+    /// the exact advertised locator as explicitly PARTIAL — never
+    /// complete, never `None`, never hidden inside an error string.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)] // the settlement assertion is deliberately exhaustive
+    async fn a_background_sink_open_failure_retains_the_advertised_locator_as_partial() {
+        let fixture = registry("conv-sink-open-fail");
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(
+                crate::tools::native::BashTestControl::new(),
+            ));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-sink-open"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": "echo never-started"}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        // The dispatch owns the live-output file from here on; force the
+        // executor's sink open to fail deterministically AFTER the
+        // allocation, before the executor task starts.
+        fixture
+            .registry
+            .resources()
+            .tool_output
+            .set_force_open_failures(true);
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let accepted = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let advertised = accepted["output_path"]
+            .as_str()
+            .expect("the advertised live-output locator")
+            .to_owned();
+
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(
+            terminal.state,
+            BackgroundLifecycle::Failed,
+            "a sink-open failure settles the execution Failed"
+        );
+        let result = terminal.result.expect("terminal result");
+        let ToolExecutionStatus::Failed { error } = &result.status else {
+            panic!("the execution settles Failed, got {:?}", result.status);
+        };
+        assert!(error.contains("cannot be opened"), "{error}");
+        // The typed metadata retains exactly the advertised locator as
+        // explicitly partial — output storage was unreliable, so the file
+        // can never be claimed complete.
+        let Some(crate::tools::types::ManagedOutputContinuation::Partial {
+            locator,
+            diagnostic,
+        }) = &result.managed_output
+        else {
+            panic!(
+                "the advertised locator survives as typed PARTIAL, got {:?}",
+                result.managed_output
+            );
+        };
+        assert_eq!(
+            locator.to_str().expect("utf8 path"),
+            advertised,
+            "the exact dispatch locator is retained"
+        );
+        assert!(
+            diagnostic.contains("cannot be opened"),
+            "the diagnostic names the storage failure: {diagnostic}"
+        );
+        // The canonical terminal message repeats the exact locator,
+        // labels it truthfully, and never claims complete output.
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        assert!(text.contains("settled: failed"), "{text}");
+        assert!(
+            text.contains(&format!("Partial output only: {advertised}")),
+            "the terminal message repeats the exact locator as partial: {text}"
+        );
+        assert!(!text.contains("Complete output:"), "{text}");
+        assert!(
+            std::fs::read_dir(
+                fixture
+                    .registry
+                    .resources()
+                    .tool_output
+                    .root()
+                    .join("results")
+            )
+            .expect("results dir")
+            .next()
+            .is_none(),
+            "no second result spill exists"
+        );
+    }
+
+    /// A supervisor spawn failure before any subprocess exists: the
+    /// execution settles Failed, and because no textual output could have
+    /// been produced and output storage is healthy (the sink was open),
+    /// the empty live-output file is the COMPLETE observation of the
+    /// execution's textual output — status and output completeness are
+    /// independent axes.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_background_spawn_failure_settles_failed_with_complete_empty_output() {
+        let fixture = registry("conv-spawn-fail");
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(
+                crate::tools::native::BashTestControl::new().fail_supervisor_spawn(),
+            ));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-spawn-fail"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            arguments: serde_json::json!({"command": "echo never-started"}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let accepted = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let advertised = accepted["output_path"]
+            .as_str()
+            .expect("the advertised live-output locator")
+            .to_owned();
+
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Failed);
+        let result = terminal.result.expect("terminal result");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "the execution settles Failed, got {:?}",
+            result.status
+        );
+        // The injected spawn failure fires before the supervisor process
+        // exists, so no subprocess output could have existed: the empty
+        // advertised file is the complete textual output.
+        assert_eq!(
+            result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&advertised),
+            }),
+            "Failed execution + complete empty output channel"
+        );
+        assert_eq!(
+            std::fs::read(&advertised).expect("the advertised file exists"),
+            b"",
+            "the live-output file exists and is empty"
+        );
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        assert!(text.contains("settled: failed"), "{text}");
+        assert!(
+            text.contains(&format!("Complete output: {advertised}")),
+            "the terminal inbound repeats the exact locator: {text}"
+        );
+        assert!(
+            std::fs::read_dir(
+                fixture
+                    .registry
+                    .resources()
+                    .tool_output
+                    .root()
+                    .join("results")
+            )
+            .expect("results dir")
+            .next()
+            .is_none(),
+            "no second result spill exists"
+        );
+    }
+
+    /// The earliest normal Bash return path — input parsing — also runs
+    /// after background ownership committed: the execution settles Failed
+    /// with the advertised locator still participating in the typed
+    /// settlement (complete empty output, storage healthy); no generic
+    /// `managed_output: None` escape exists post-accept.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_background_input_parse_failure_retains_the_advertised_locator() {
+        let fixture = registry("conv-parse-fail");
+        let executor: Arc<dyn ToolExecutor> =
+            Arc::new(crate::tools::native::BashTool::with_test_control(
+                crate::tools::native::BashTestControl::new(),
+            ));
+        let invocation = ToolInvocation {
+            call_id: ToolCallId::new("call-parse-fail"),
+            tool_id: ToolId::new("tool-bash"),
+            tool_name: "bash".to_owned(),
+            mode: ToolInvocationMode::Background,
+            // No `command`: BashInput parsing fails after the dispatch
+            // committed.
+            arguments: serde_json::json!({}),
+        };
+        let prepared = fixture
+            .registry
+            .prepare_dispatch(&invocation, &executor, ToolEnvironment::new())
+            .expect("prepare");
+        let outcome = fixture
+            .registry
+            .commit_dispatch(
+                prepared,
+                &crate::runtime::cancellation::CancellationSignal::new(),
+            )
+            .expect("commit");
+        let BackgroundDispatchOutcome::Accepted {
+            execution_id,
+            result,
+        } = outcome
+        else {
+            panic!("accepted");
+        };
+        let accepted = match &result.content[0] {
+            ToolResultContent::Json { value } => value.clone(),
+            other => panic!("expected JSON, got {other:?}"),
+        };
+        let advertised = accepted["output_path"]
+            .as_str()
+            .expect("the advertised live-output locator")
+            .to_owned();
+
+        let terminal = wait_for_terminal(&fixture, &execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Failed);
+        let result = terminal.result.expect("terminal result");
+        assert!(
+            matches!(result.status, ToolExecutionStatus::Failed { .. }),
+            "a parse failure settles Failed, got {:?}",
+            result.status
+        );
+        assert_eq!(
+            result.managed_output,
+            Some(crate::tools::types::ManagedOutputContinuation::Complete {
+                locator: std::path::PathBuf::from(&advertised),
+            }),
+            "the advertised locator participates in the typed settlement"
+        );
+        assert_eq!(
+            std::fs::read(&advertised).expect("the advertised file exists"),
+            b"",
+            "no subprocess output could exist: the file is empty"
+        );
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("terminal batch");
+        let message = batch.items()[0].message();
+        let text = match &message.content[..] {
+            [crate::message::types::UserContentBlock::Text(text)] => text.text.clone(),
+            blocks => panic!("the terminal inbound is text-only: {blocks:?}"),
+        };
+        assert!(text.contains("settled: failed"), "{text}");
+        assert!(
+            text.contains(&format!("Complete output: {advertised}")),
+            "the terminal publication repeats the same locator: {text}"
+        );
+        assert!(
+            std::fs::read_dir(
+                fixture
+                    .registry
+                    .resources()
+                    .tool_output
+                    .root()
+                    .join("results")
+            )
+            .expect("results dir")
+            .next()
+            .is_none(),
+            "no duplicate result spill exists"
+        );
     }
 
     /// Result bounding never truncates away the runtime-owned continuation

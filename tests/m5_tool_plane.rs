@@ -2033,3 +2033,35 @@ fn default_native_policies_are_conservative_for_every_ordinary_tool() {
         );
     }
 }
+
+/// The `tool_runtime` test fixture owns its isolated storage root by RAII:
+/// the runtime is constructed and genuinely usable inside the root, and
+/// dropping the fixture drops the runtime FIRST and removes the whole
+/// directory SECOND — repeated suite runs never leak orphaned temporary
+/// storage roots.
+#[test]
+fn tool_runtime_fixture_owns_and_removes_its_storage_root() {
+    let fixture = common::tool_runtime("conv-raii-ownership");
+    // The runtime canonicalizes every storage root once at construction, so
+    // the fixture root is compared in its canonical form too (on macOS the
+    // temp dir is reached through the /var -> /private/var symlink).
+    let root = std::fs::canonicalize(fixture.storage_root()).expect("canonical root");
+    assert!(root.exists(), "the storage root exists");
+    // The runtime genuinely uses the directory: a lazy result spill of the
+    // managed tool-output store is allocated and written inside the root.
+    let mut spill = fixture.tool_output().open_spill().expect("spill");
+    spill.write_all("owned output").expect("write");
+    let spill_path = spill.path().to_path_buf();
+    drop(spill);
+    assert!(
+        spill_path.starts_with(&root) && spill_path.exists(),
+        "the runtime wrote real storage inside the fixture root"
+    );
+
+    drop(fixture);
+
+    assert!(
+        !root.exists(),
+        "dropping the fixture removes the whole storage root"
+    );
+}

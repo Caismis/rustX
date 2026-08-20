@@ -125,6 +125,16 @@
 //!   settles the invocation as an explicit failure whose typed
 //!   continuation is honestly partial, never a false complete-output
 //!   claim.
+//! - Every post-accept settlement retains the advertised locator in the
+//!   typed continuation — execution status and output completeness are
+//!   independent axes, and no early return path escapes with
+//!   `managed_output: None` once the background dispatch committed. A
+//!   settlement whose storage was healthy and whose subprocess never
+//!   started (input parse failure, non-unix refusal, supervisor spawn
+//!   failure) settles Failed with the locator as COMPLETE EMPTY output;
+//!   a settlement whose sink could not be opened settles Failed with the
+//!   locator as explicitly PARTIAL and a diagnostic naming the storage
+//!   failure.
 //!
 //! Non-zero exits are failed tool results with the exit code preserved —
 //! never attempt-level runtime failures.

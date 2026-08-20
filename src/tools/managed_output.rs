@@ -438,6 +438,15 @@ impl ManagedToolOutput {
         &self,
         execution_id: &ToolExecutionId,
     ) -> std::io::Result<BackgroundOutput> {
+        #[cfg(test)]
+        if self
+            .state
+            .lock()
+            .expect("managed tool-output allocation lock poisoned")
+            .force_open_failures
+        {
+            return Err(std::io::Error::other("test-forced output open failure"));
+        }
         let path = self.background_output_path(execution_id);
         let file = File::options().append(true).open(&path)?;
         #[cfg(test)]

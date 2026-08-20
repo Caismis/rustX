@@ -667,32 +667,23 @@ mod tests {
     use crate::runtime::identity::ConversationId;
     use std::fs;
 
-    fn unique_dir(name: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "rustx-crt-{}-{}-{}",
-            name,
-            std::process::id(),
-            std::thread::current().name().unwrap_or("t")
-        ))
-    }
-
     #[test]
     fn construction_validates_the_workspace_root() {
-        let dir = unique_dir("ws-root");
+        let dir = tempfile::tempdir().expect("temp dir");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
             &dir,
-            dir.join("artifacts"),
+            dir.path().join("artifacts"),
         );
         assert!(
             runtime.is_err(),
             "a missing workspace root must be rejected"
         );
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("runtime");
         assert_eq!(runtime.conversation_id(), &ConversationId::new("conv-1"));
@@ -702,12 +693,11 @@ mod tests {
             runtime.mailbox().conversation_id(),
             &ConversationId::new("conv-1")
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn artifact_root_equal_to_workspace_is_rejected() {
-        let dir = unique_dir("overlap-equal");
+        let dir = tempfile::tempdir().expect("temp dir");
         fs::create_dir_all(&dir).expect("create");
         let error = ConversationToolRuntime::new(ConversationId::new("conv-1"), &dir, &dir)
             .expect_err("equal roots must be rejected");
@@ -715,75 +705,79 @@ mod tests {
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn artifact_root_nested_inside_workspace_is_rejected() {
-        let dir = unique_dir("overlap-nested");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("workspace/artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("workspace/artifacts"),
         )
         .expect_err("nested artifact root must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn workspace_root_nested_inside_artifact_root_is_rejected() {
-        let dir = unique_dir("overlap-reverse");
-        fs::create_dir_all(dir.join("artifacts/workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("artifacts/workspace")).expect("create");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("artifacts/workspace"),
-            dir.join("artifacts"),
+            dir.path().join("artifacts/workspace"),
+            dir.path().join("artifacts"),
         )
         .expect_err("the workspace root inside the artifact root must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[cfg(unix)]
     #[test]
     fn symlinked_artifact_root_resolving_inside_workspace_is_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = unique_dir("overlap-symlink");
-        fs::create_dir_all(dir.join("workspace/real")).expect("create");
-        symlink(dir.join("workspace/real"), dir.join("linked-artifacts")).expect("symlink");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace/real")).expect("create");
+        symlink(
+            dir.path().join("workspace/real"),
+            dir.path().join("linked-artifacts"),
+        )
+        .expect("symlink");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("linked-artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("linked-artifacts"),
         )
         .expect_err("a symlinked artifact root inside the workspace must be rejected");
         assert!(matches!(
             error,
             ConversationRuntimeError::OverlappingStorage { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[cfg(unix)]
     #[test]
     fn a_tool_output_symlink_to_the_workspace_is_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = unique_dir("tool-output-alias-workspace");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
-        fs::create_dir_all(dir.join("artifacts")).expect("create");
-        symlink(dir.join("workspace"), dir.join("artifacts/tool-output")).expect("symlink");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        symlink(
+            dir.path().join("workspace"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect_err("a tool-output symlink to the workspace must be rejected");
         assert!(
@@ -795,21 +789,24 @@ mod tests {
             ),
             "got {error:?}"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[cfg(unix)]
     #[test]
     fn a_tool_output_symlink_to_the_artifact_root_is_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = unique_dir("tool-output-alias-artifacts");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
-        fs::create_dir_all(dir.join("artifacts")).expect("create");
-        symlink(dir.join("artifacts"), dir.join("artifacts/tool-output")).expect("symlink");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        symlink(
+            dir.path().join("artifacts"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect_err("a tool-output symlink to the artifact root must be rejected");
         assert!(
@@ -821,22 +818,25 @@ mod tests {
             ),
             "got {error:?}"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[cfg(unix)]
     #[test]
     fn a_tool_output_symlink_to_an_external_directory_is_rejected() {
         use std::os::unix::fs::symlink;
-        let dir = unique_dir("tool-output-alias-external");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
-        fs::create_dir_all(dir.join("artifacts")).expect("create");
-        fs::create_dir_all(dir.join("external")).expect("create");
-        symlink(dir.join("external"), dir.join("artifacts/tool-output")).expect("symlink");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
+        fs::create_dir_all(dir.path().join("artifacts")).expect("create");
+        fs::create_dir_all(dir.path().join("external")).expect("create");
+        symlink(
+            dir.path().join("external"),
+            dir.path().join("artifacts/tool-output"),
+        )
+        .expect("symlink");
         let error = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect_err("a tool-output symlink to an external directory must be rejected");
         assert!(
@@ -848,7 +848,6 @@ mod tests {
             ),
             "got {error:?}"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     /// A normal real `tool-output/` directory satisfies the composition
@@ -857,12 +856,12 @@ mod tests {
     /// enforces it read-only.
     #[test]
     fn a_real_tool_output_directory_is_accepted_and_read_only() {
-        let dir = unique_dir("tool-output-real");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("a real tool-output directory is accepted");
         let managed = runtime.tool_output().root().to_path_buf();
@@ -896,19 +895,18 @@ mod tests {
             ),
             "the managed root is read-only"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     /// A pre-existing real `tool-output/` directory with retained spills is
     /// accepted: reconstruction over the same storage root works.
     #[test]
     fn reconstruction_over_a_retained_tool_output_root_is_accepted() {
-        let dir = unique_dir("tool-output-restart");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let first = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("first runtime");
         let mut spill = first.tool_output().open_spill().expect("first spill");
@@ -919,8 +917,8 @@ mod tests {
 
         let second = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("reconstruction over the retained root");
         let mut spill = second.tool_output().open_spill().expect("second spill");
@@ -936,22 +934,20 @@ mod tests {
             std::fs::read_to_string(&new_path).expect("new spill"),
             "new bytes"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn sibling_storage_layout_is_accepted() {
-        let dir = unique_dir("sibling");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-1"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("sibling roots are disjoint");
         assert!(runtime.workspace().root().is_dir());
         assert!(runtime.artifacts().root().is_dir());
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
@@ -959,8 +955,8 @@ mod tests {
         use crate::durable::{
             ConversationStore, ConversationStoreBinding, SqliteConversationStore,
         };
-        let dir = unique_dir("binding");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
             SqliteConversationStore::in_memory(ConversationId::new("conv-A")).expect("store"),
         );
@@ -969,7 +965,10 @@ mod tests {
             ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
                 durable_binding: Some(binding),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+                ..ConversationRuntimeConfig::new(
+                    dir.path().join("workspace"),
+                    dir.path().join("artifacts"),
+                )
             },
         )
         .expect("runtime");
@@ -991,14 +990,13 @@ mod tests {
             .expect("accept through derived mailbox");
         assert_eq!(accepted.get(), 1);
         assert_eq!(store.load_pending().expect("pending").len(), 1);
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     #[test]
     fn a_binding_for_another_conversation_is_rejected_before_background_setup() {
         use crate::durable::{ConversationStoreBinding, SqliteConversationStore};
-        let dir = unique_dir("binding-mismatch");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let store = std::sync::Arc::new(
             SqliteConversationStore::in_memory(ConversationId::new("conv-B")).expect("store"),
         );
@@ -1006,7 +1004,10 @@ mod tests {
             ConversationId::new("conv-A"),
             ConversationRuntimeConfig {
                 durable_binding: Some(ConversationStoreBinding::new(store)),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
+                ..ConversationRuntimeConfig::new(
+                    dir.path().join("workspace"),
+                    dir.path().join("artifacts"),
+                )
             },
         )
         .expect_err("a binding for another conversation must be rejected");
@@ -1014,19 +1015,18 @@ mod tests {
             error,
             ConversationRuntimeError::DurableConversationMismatch { .. }
         ));
-        fs::remove_dir_all(&dir).expect("remove");
     }
 
     /// An omitted binding constructs the canonical file-backed authority and
     /// derives its mailbox from that same authority.
     #[test]
     fn omitted_mailbox_constructs_the_canonical_conversation_mailbox() {
-        let dir = unique_dir("mailbox-omitted");
-        fs::create_dir_all(dir.join("workspace")).expect("create");
+        let dir = tempfile::tempdir().expect("temp dir");
+        fs::create_dir_all(dir.path().join("workspace")).expect("create");
         let runtime = ConversationToolRuntime::new(
             ConversationId::new("conv-A"),
-            dir.join("workspace"),
-            dir.join("artifacts"),
+            dir.path().join("workspace"),
+            dir.path().join("artifacts"),
         )
         .expect("runtime");
         assert_eq!(
@@ -1034,6 +1034,5 @@ mod tests {
             &ConversationId::new("conv-A"),
             "the canonical mailbox belongs to the runtime's own conversation"
         );
-        fs::remove_dir_all(&dir).expect("remove");
     }
 }

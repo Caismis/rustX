@@ -1300,7 +1300,23 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   result is a different oversized payload than the live execution output.
   An output-storage failure of an already-advertised background path
   settles the execution as an explicit failure that names the file as
-  partial output — never as a false "complete output" claim. Every
+  partial output — never as a false "complete output" claim.
+- The advertised background live-output locator participates in EVERY
+  terminal settlement after the dispatch commits — execution status and
+  output completeness are independent axes, and no post-accept Bash
+  return path escapes with `managed_output: None`. A settlement whose
+  storage was healthy and whose subprocess never started (input parse
+  failure, non-unix refusal, supervisor spawn failure) settles Failed
+  with the locator as COMPLETE EMPTY output: the zero bytes in the
+  already-advertised file are the complete textual output of an
+  execution that produced none. A settlement whose storage was NOT
+  healthy (the sink could not be opened after the dispatch committed)
+  settles Failed with the locator as explicitly PARTIAL and a diagnostic
+  naming the storage failure — never falsely Complete, never dropped.
+  Foreground Bash keeps its own spill lifecycle (lazy allocation, no
+  file below the preview bound, allocation failure is an invocation
+  failure); the post-accept axis invariant is a background-execution
+  property rooted at the dispatch commit. Every
   advertised path holds valid UTF-8 text: each byte stream is decoded
   with its own incremental UTF-8 decoder (invalid sequences become
   U+FFFD) before fragments are multiplexed, so a sequence split across
@@ -1308,6 +1324,17 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   always work on advertised paths. Genuine semantic artifacts
   (real files a tool produces for the user) keep the existing
   `ArtifactStore`/`FileReference` publication path.
+- Test infrastructure owns every `ConversationToolRuntime` storage root by
+  RAII: `common::tool_runtime`/`tool_runtime_with_store` (integration and
+  scripted suites alike) return a fixture that holds the runtime and a
+  `TempDir` whose drop removes the root AFTER the runtime drops (declared
+  in that order); the fixture is deliberately not `Clone`, so a raw
+  runtime handle can never outlive its storage owner. No test creates a
+  raw `std::env::temp_dir()` storage root anymore — the pre-RAII
+  `rustx-tool-runtime-*` dirs (and their in-crate duplicates
+  `rustx-agent-crate-tests-*`, `rustx-crt-*`, `rustx-art-*`,
+  `rustx-reg-*`) that accumulated in `/tmp` are gone, and nothing
+  recreates them.
 - Tool-owned structured content and runtime-owned managed-output metadata
   are different domains with different typed fields.
   `ToolResultContent::Json` is arbitrary tool-owned structured data:

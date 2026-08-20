@@ -3803,6 +3803,7 @@ mod tests {
     };
     use crate::runtime::inbound::InitialTurnTrigger;
     use crate::runtime::types::CancellationReason;
+    use crate::scripted_suites::common::{tool_runtime, tool_runtime_with_store};
     use crate::scripted_suites::support::model::scripted_session_model;
     use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
     use crate::tools::limits::{
@@ -4117,33 +4118,6 @@ mod tests {
     /// A deterministic context runtime derived from the same immutable model
     /// snapshot as the execution. The window is far larger than any scripted
     /// request, so no compaction ever triggers in these tests.
-    /// A conversation tool runtime over a temporary workspace.
-    fn tool_runtime() -> crate::tools::runtime::ConversationToolRuntime {
-        tool_runtime_with_store(None)
-    }
-
-    /// A conversation tool runtime over a temporary workspace with an
-    /// optional explicitly configured durable authority.
-    fn tool_runtime_with_store(
-        store: Option<Arc<dyn ConversationStore>>,
-    ) -> crate::tools::runtime::ConversationToolRuntime {
-        use crate::tools::runtime::ConversationRuntimeConfig;
-        let dir = std::env::temp_dir().join(format!(
-            "rustx-agent-crate-tests-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("worker")
-        ));
-        let _ = std::fs::create_dir_all(dir.join("workspace"));
-        crate::tools::runtime::ConversationToolRuntime::from_config(
-            ConversationId::new("conv-1"),
-            ConversationRuntimeConfig {
-                durable_binding: store.map(crate::durable::ConversationStoreBinding::new),
-                ..ConversationRuntimeConfig::new(dir.join("workspace"), dir.join("artifacts"))
-            },
-        )
-        .expect("tool runtime")
-    }
-
     fn runtime(adapter: &Arc<ScriptedAdapter>) -> ContextRuntime {
         ContextRuntime::for_attempt(
             crate::context::SessionContextPolicy {
@@ -4370,7 +4344,7 @@ mod tests {
     async fn capability_lease_owner_matches_runtime_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, coordinator, lease) = capability_lease(ToolRegistry::new(), &tool_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
 
@@ -4405,7 +4379,7 @@ mod tests {
         store.arm_request_start_fault_script([
             crate::durable::sqlite::RequestStartFaultOperation::BeforeContextAppend,
         ]);
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -4482,7 +4456,7 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let mut tools = ToolRegistry::new();
         tools
             .register(
@@ -4629,7 +4603,7 @@ mod tests {
                 .expect("in-memory store"),
         );
         store.arm_fail_next_terminal_event();
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -4710,7 +4684,7 @@ mod tests {
     async fn capability_lease_rejects_different_conversation_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let owner_runtime = tool_runtime();
+        let owner_runtime = tool_runtime("conv-1");
         let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
@@ -4750,7 +4724,7 @@ mod tests {
     async fn capability_lease_rejects_different_workspace_before_execution() {
         let adapter = Arc::new(ScriptedAdapter::new(Vec::new()));
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let owner_runtime = tool_runtime();
+        let owner_runtime = tool_runtime("conv-1");
         let (_dir, coordinator, lease) =
             capability_lease(ToolRegistry::new(), &owner_runtime).await;
         assert_eq!(coordinator.active_attempts(), 1);
@@ -4816,7 +4790,7 @@ mod tests {
             assert!(controller_cancellation.is_cancelled());
             pre_start.release();
         });
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let mut execution = AgentExecution::new(
@@ -4897,7 +4871,7 @@ mod tests {
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let (pause, _, pre_commit) = StartBoundaryPause::install(false, true);
         let mut pre_commit = pre_commit.expect("pre-commit phase installed");
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let mut execution = AgentExecution::new(
@@ -5009,7 +4983,7 @@ mod tests {
             &request.model,
         )
         .expect("valid context runtime");
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
@@ -5107,7 +5081,7 @@ mod tests {
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
         let mut pre_start = pre_start.expect("pre-start phase installed");
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let mut execution = AgentExecution::new(
             request(&adapter),
@@ -5191,10 +5165,15 @@ mod tests {
             let mut pre_start = pre_start.expect("pre-start phase installed");
             // Each iteration gets its own in-memory durable authority; the
             // default temp-dir store would be shared across iterations.
-            let tool_runtime = tool_runtime_with_store(Some(Arc::new(
-                crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
+            let tool_runtime = tool_runtime_with_store(
+                "conv-1",
+                Some(Arc::new(
+                    crate::durable::SqliteConversationStore::in_memory(ConversationId::new(
+                        "conv-1",
+                    ))
                     .expect("store"),
-            )));
+                )),
+            );
             let (_dir, _coordinator, lease) =
                 capability_lease(ToolRegistry::new(), &tool_runtime).await;
             let evaluations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -5460,7 +5439,7 @@ mod tests {
             controller_cancellation.cancel();
             release.send_replace(true);
         });
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let result = AgentExecution::new(
@@ -5518,7 +5497,7 @@ mod tests {
             .expect("canonical inbound history");
         request.initial_turn_trigger = InitialTurnTrigger::FreshInbound(fresh);
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) =
             capability_lease(ToolRegistry::new(), &tool_runtime).await;
         let result = AgentExecution::new(
@@ -5581,7 +5560,7 @@ mod tests {
         let (pause, reached_rx, release_tx) = ContinuationBoundaryPause::install();
         let controller = boundary_controller(reached_rx, release_tx, cancellation.clone());
 
-        let tool_runtime = tool_runtime();
+        let tool_runtime = tool_runtime("conv-1");
         let (_dir, _coordinator, lease) = capability_lease(tools, &tool_runtime).await;
         let execution = AgentExecution::new(
             request(&adapter),
@@ -5667,7 +5646,7 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-a", "A"))
@@ -5836,7 +5815,7 @@ mod tests {
             crate::durable::SqliteConversationStore::in_memory(ConversationId::new("conv-1"))
                 .expect("in-memory store"),
         );
-        let tool_runtime = tool_runtime_with_store(Some(store.clone()));
+        let tool_runtime = tool_runtime_with_store("conv-1", Some(store.clone()));
         let mailbox = tool_runtime.mailbox();
         mailbox
             .enqueue(inbound_message("msg-human", "hello"))

@@ -1049,12 +1049,7 @@ mod tests {
                 }))
             }
         }
-        let dir = std::env::temp_dir().join(format!(
-            "rustx-reg-{}-{}",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("worker")
-        ));
-        let _ = std::fs::create_dir_all(&dir);
+        let dir = tempfile::tempdir().expect("temp dir");
         let received = Arc::new(Mutex::new(Vec::new()));
         let mut registry = ToolRegistry::new();
         registry
@@ -1084,12 +1079,12 @@ mod tests {
         let workspace = Workspace::new(&dir).expect("workspace");
         let artifacts = ArtifactStore::new(
             crate::runtime::identity::ConversationId::new("conv-1"),
-            dir.join("artifacts"),
+            dir.path().join("artifacts"),
         )
         .expect("store");
         let tool_output = crate::tools::managed_output::ManagedToolOutput::new(
             crate::runtime::identity::ConversationId::new("conv-1"),
-            dir.join("tool-output"),
+            dir.path().join("tool-output"),
         )
         .expect("managed tool output");
         let reporter = Capturing;
@@ -1116,6 +1111,5 @@ mod tests {
             vec![json!({"path": "a.txt"})],
             "the executor receives only the stripped business arguments"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
